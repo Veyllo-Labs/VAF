@@ -78,7 +78,32 @@ class AgentWorkflowBuilderTool(BaseTool):
         "To run something NOW use action='run_temp'. "
         "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
-        "and a 'tool' (e.g. coding_agent, web_search, research_agent, write_file)."
+        "and a 'tool' (e.g. coding_agent, web_search, research_agent, write_file).\n\n"
+        "VARIABLE ANCHORING (automatic):\n"
+        "The engine automatically prepends all original workflow variables as "
+        "'IMMUTABLE DESIGN PILLARS' to every coding_agent/research_agent/document_writer/"
+        "librarian_agent task. You MUST still reference variables in step inputs "
+        "({patent_id}, {genre} etc.) — anchoring is a safety net, not a replacement.\n\n"
+        "LIVING DOCUMENT PATTERN (recommended for 5+ step workflows):\n"
+        "Instead of chaining {prev_step_output} through all steps (which causes drift), "
+        "write a shared JSON file that all steps read and update:\n"
+        "  Step 1: coding_agent → reads variables, writes /tmp/{workflow_id}/design.json\n"
+        "  Step 2: coding_agent → reads design.json, adds its section, writes it back\n"
+        "  Step N: coding_agent → always reads the FULL design.json (never loses Step 1 data)\n"
+        "Use write_file + read_file tools for this. Avoid {prev_step_output} for large content.\n\n"
+        "ASSERTIONS (output verification + selective retry):\n"
+        "Each step can declare assertions to verify its output. On failure, only that step "
+        "retries (with a correction hint) — not the whole workflow:\n"
+        "  'assertions': [{'contains': '{patent_id}', 'error': 'Patent number missing from output'}]\n"
+        "  'max_assertion_retries': 1  # default\n"
+        "Supported operators: 'contains', 'not_contains'. Use {variable} in the expected value.\n\n"
+        "CONSISTENCY REVIEW PATTERN (every 3-4 steps in complex workflows):\n"
+        "Insert a check step that verifies original params are still honoured:\n"
+        "  {'tool': 'coding_agent', 'description': 'Consistency Check',\n"
+        "   'input': 'Check that {genre} and {core_mechanic} are correctly reflected in "
+        "{prev_output}. Output ONLY \"OK\" if correct, else \"FAIL: [reason]\"',\n"
+        "   'assertions': [{'not_contains': 'FAIL', 'error': 'Consistency check failed'}],\n"
+        "   'on_failure': 'step_to_redo'}"
     )
 
     # ── Contract ──────────────────────────────────────────────────────────────
@@ -162,6 +187,22 @@ class AgentWorkflowBuilderTool(BaseTool):
                         "tool":        {"type": "string"},
                         "output":      {"type": "string"},
                         "description": {"type": "string"},
+                        "on_success":  {"type": "string", "description": "Jump to this step's output_name on success."},
+                        "on_failure":  {"type": "string", "description": "Jump to this step's output_name on failure (suppresses abort)."},
+                        "optional":    {"type": "boolean", "description": "Skip on failure instead of aborting."},
+                        "assertions":  {
+                            "type": "array",
+                            "description": "Output checks — if any fail, the step retries with a correction hint.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "contains":     {"type": "string", "description": "Expected substring in output. Supports {variable}."},
+                                    "not_contains": {"type": "string", "description": "Substring that must NOT appear in output."},
+                                    "error":        {"type": "string", "description": "Message shown when this assertion fails."},
+                                },
+                            },
+                        },
+                        "max_assertion_retries": {"type": "integer", "description": "How many times to retry on assertion failure (default: 1)."},
                     },
                     "required": ["input"],
                 },

@@ -4522,11 +4522,14 @@ class Agent:
             if n in self.tools and n not in valid_from_llm:
                 valid_from_llm.append(n)
         
-        # Fallback: if LLM chatted instead of listing, scan response for tool name substrings
-        # Deduplicate and limit to prevents runaway context if LLM is repetitive
-        if not valid_from_llm and clean_str:
+        # Fallback: if LLM chatted instead of listing, scan response for tool name substrings.
+        # When using reasoning models (DeepSeek Reasoner, R1) the tool decision lands inside
+        # <think>…</think> blocks; clean_str is empty after stripping those.  Fall back to
+        # scanning the original selected_tools_str so reasoning-model routing still works.
+        _scan_target = clean_str if clean_str else selected_tools_str
+        if not valid_from_llm and _scan_target:
             for t in sorted(self.tools.keys(), key=len, reverse=True):
-                if t in clean_str and t not in valid_from_llm:
+                if t in _scan_target and t not in valid_from_llm:
                     valid_from_llm.append(t)
                 if len(valid_from_llm) >= 20: # Safety cap
                     break
@@ -4939,6 +4942,14 @@ class Agent:
                 
                 # Convert back to list
                 selected_tools = list(tools_set)
+
+            # Cap the number of tools to keep the context window clean.
+            # list_tools / search_tools are pinned and don't count against the cap.
+            _router_max = int(self.config.get("router_max_tools", 12))
+            if selected_tools and len(selected_tools) > _router_max:
+                _pinned = {t for t in ("list_tools", "search_tools") if t in selected_tools}
+                _rest = [t for t in selected_tools if t not in _pinned]
+                selected_tools = list(_pinned) + _rest[:max(0, _router_max - len(_pinned))]
 
             # SAFETY NET: If router returns empty list, fallback to sensible tools
             # Otherwise the model gets 0 tools and hallucinates using them.

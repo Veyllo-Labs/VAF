@@ -54,6 +54,8 @@ class WorkflowStep:
     args_template: Optional[Dict[str, Any]] = None  # Multi-arg tool inputs (safer than JSON strings)
     on_success: Optional[str] = None    # Jump to step with this output_name (or index) on success
     on_failure: Optional[str] = None    # Jump to step with this output_name (or index) on failure (suppresses abort)
+    assertions: Optional[List[Dict[str, str]]] = None  # Output checks: [{"contains": "{var}", "error": "msg"}]
+    max_assertion_retries: int = 1      # How many times to retry this step on assertion failure
 
     # Runtime state
     status: StepStatus = StepStatus.PENDING
@@ -302,6 +304,29 @@ class WorkflowEngine:
                         UI.event("Workflow", f"  [INFO] Truncated {key} input: {len(value)} → {MAX_INPUT_SIZE} chars", style="dim")
                         args[key] = truncated
                 
+                # ── Variable Anchoring: pin original vars to every sub-agent task ──
+                # Prevents "Stille Post" (telephone game) — original workflow variables
+                # are injected as IMMUTABLE DESIGN PILLARS so later steps can't drift.
+                _ANCHOR_TOOLS = {"coding_agent", "research_agent", "document_writer", "librarian_agent"}
+                _orig_vars = {k: v for k, v in (variables or {}).items()}
+                if step.tool in _ANCHOR_TOOLS and _orig_vars and "task" in args:
+                    _anchor_lines = "\n".join(
+                        f"  {k}: {str(v)[:150]}" for k, v in _orig_vars.items()
+                    )
+                    _correction_hint = getattr(step, '_assert_correction', None)
+                    _correction_block = (
+                        f"\n\n[CORRECTION REQUIRED — Previous attempt failed]\n"
+                        f"{_correction_hint}"
+                        if _correction_hint else ""
+                    )
+                    args["task"] = (
+                        f"## IMMUTABLE DESIGN PILLARS — DO NOT DEVIATE FROM THESE\n"
+                        f"{_anchor_lines}\n\n"
+                        f"---\n\n"
+                        + args["task"]
+                        + _correction_block
+                    )
+
                 # Snapshot outputs before tool execution (for retry on failure)
                 outputs_snapshot = {k: v for k, v in outputs.items()}
                 
@@ -613,6 +638,47 @@ class WorkflowEngine:
                     _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
                     _jump_count += 1
                     continue
+
+                # ── Assertion Gate: Selective Step-Retry ──────────────────────────
+                if step.assertions:
+                    _assert_retry = getattr(step, '_assert_retry_count', 0)
+                    _assert_failures = []
+                    for _a in step.assertions:
+                        _op = "contains" if "contains" in _a else "not_contains"
+                        _expected = self._resolve_template(_a[_op], outputs)
+                        _in_result = _expected in str(result)
+                        if _op == "contains" and not _in_result:
+                            _assert_failures.append(_a.get("error", f"Output must contain: '{_expected}'"))
+                        elif _op == "not_contains" and _in_result:
+                            _assert_failures.append(_a.get("error", f"Output must not contain: '{_expected}'"))
+
+                    if _assert_failures:
+                        _msg = "; ".join(_assert_failures)
+                        UI.event("Workflow", f"  [ASSERT FAIL] {_msg}", style="warning")
+
+                        if _assert_retry < step.max_assertion_retries:
+                            step._assert_retry_count = _assert_retry + 1
+                            step._assert_correction = (
+                                f"The following conditions must be met in your output:\n"
+                                + "\n".join(f"  - {f}" for f in _assert_failures)
+                            )
+                            step.status = StepStatus.PENDING
+                            outputs = {k: v for k, v in outputs_snapshot.items()}
+                            # Stay on current step — _step_idx is not advanced
+                            self.callback("start", step, i, len(steps))
+                            continue
+                        else:
+                            UI.event("Workflow", f"  [ASSERT FAIL] Max retries reached — step failed", style="error")
+                            step.status = StepStatus.FAILED
+                            step.error = f"Assertion failed after {step.max_assertion_retries} retries: {_msg}"
+                            step.duration = time.time() - step_start
+                            error = step.error
+                            self.callback("error", step, i, len(steps))
+                            if stop_on_error and not step.optional and not step.on_failure:
+                                break
+                            _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
+                            _jump_count += 1
+                            continue
 
                 step.status = StepStatus.SUCCESS
                 step.result = result
@@ -1010,6 +1076,8 @@ def create_workflow(template: Dict[str, Any]) -> List[WorkflowStep]:
             condition=step_def.get("condition"),
             on_success=step_def.get("on_success"),
             on_failure=step_def.get("on_failure"),
+            assertions=step_def.get("assertions"),
+            max_assertion_retries=step_def.get("max_assertion_retries", 1),
         ))
     return steps
 

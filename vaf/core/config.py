@@ -63,6 +63,11 @@ class Config:
         # Auto-start local llama-server (disable if only using APIs)
         "auto_start_local_server": True,
 
+        # Tool Router cap — max number of tools passed to the agent per turn.
+        # list_tools and search_tools are always included on top of this limit.
+        # Lower = faster LLM inference + less context pollution. Range: 1–100.
+        "router_max_tools": 12,
+
         # UX toggles (opt-in; off by default – user must enable)
         # Auto open web search source links in the user's default browser (tabs)
         "ux_auto_open_links": False,

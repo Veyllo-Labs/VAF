@@ -155,6 +155,53 @@ create_agent_workflow(
 - The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones.
 - Each step's `output` is available as `{variable}` in subsequent steps.
 
+##### Step fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | string | Prompt/instruction. Supports `{variable}` substitution. **Required.** |
+| `tool` | string | Tool name (e.g. `coding_agent`, `web_search`). Default: `coding_agent`. |
+| `output` | string | Variable name for this step's result. Default: `step_N_output`. |
+| `description` | string | Label shown in progress display. |
+| `on_success` | string | Jump to this step's `output` name on success. |
+| `on_failure` | string | Jump to this step's `output` name on failure (suppresses abort). |
+| `optional` | bool | Skip on failure instead of aborting. |
+| `assertions` | list | Output checks — failed assertions retry only this step (not the whole workflow). |
+| `max_assertion_retries` | int | How many times to retry on assertion failure. Default: `1`. |
+
+##### Assertions (selective step-retry)
+
+```python
+{"input": "Write a patent valuation report for {patent_id}.",
+ "tool": "research_agent",
+ "output": "report",
+ "assertions": [
+     {"contains": "{patent_id}", "error": "Patent ID missing from report"},
+     {"not_contains": "EP 3 456",  "error": "Wrong patent cited"},
+ ],
+ "max_assertion_retries": 2}
+```
+
+On assertion failure the engine retries **only that step** with a correction hint prepended — previous steps are not re-run.
+
+##### Variable Anchoring (automatic)
+
+For `coding_agent`, `research_agent`, `document_writer`, and `librarian_agent` steps the engine **automatically prepends** all original workflow `variables` as `## IMMUTABLE DESIGN PILLARS` to the task text. This prevents later steps from losing track of values like `patent_id` or `genre` that were set at workflow start.
+
+##### Living Document Pattern (for 5+ step workflows)
+
+Instead of chaining `{prev_step_output}` (which causes drift in long workflows), write a shared file all steps read and update:
+
+```python
+steps=[
+    {"input": "Read {patent_id} spec. Write findings to /tmp/{wf_id}/report.json",
+     "tool": "coding_agent", "output": "step1"},
+    {"input": "Read /tmp/{wf_id}/report.json, add valuation section, write it back.",
+     "tool": "coding_agent", "output": "step2"},
+    # Step N always reads the full, growing report.json — nothing is lost.
+]
+```
+
 #### `create` — persistent workflow (admin-only)
 
 ```python
@@ -244,4 +291,4 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-05-22*

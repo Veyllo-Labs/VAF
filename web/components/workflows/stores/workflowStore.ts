@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { Edge, Node } from 'reactflow';
 
 export interface VAFStep {
@@ -38,7 +39,9 @@ interface WorkflowState {
   clearWorkflow: () => void;
 }
 
-export const useWorkflowStore = create<WorkflowState>((set, get) => ({
+export const useWorkflowStore = create<WorkflowState>()(
+  persist(
+    (set, get) => ({
   isOpen: false,
   workflow: null,
   nodes: [],
@@ -117,4 +120,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   openWorkflow: () => set({ isOpen: true }),
   closeWorkflow: () => set({ isOpen: false }), // Keep data
   clearWorkflow: () => set({ isOpen: false, workflow: null, nodes: [], edges: [], consoleLines: [] }),
-}));
+    }),
+    {
+      name: 'vaf-workflow-state',
+      storage: createJSONStorage(() => sessionStorage),
+      // Persist everything except actions (functions can't be serialised)
+      partialize: (state) => ({
+        isOpen: state.isOpen,
+        workflow: state.workflow,
+        nodes: state.nodes,
+        edges: state.edges,
+        consoleLines: state.consoleLines,
+      }),
+    }
+  )
+);

@@ -136,7 +136,17 @@ The Code Viewer is a Monaco-based (VS Code engine) code editor in the right pane
 
 **Agent context:** While the Code Viewer is open, the full file content (up to 30 000 chars) is sent with every chat message via `codeViewerFile`. The backend stores it in `session.runtime_state["code_viewer_file"]` and the headless runner injects it into `effective_input` as a numbered-line block (`--- CURRENTLY OPEN IN CODE VIEWER: <name> ---`) before calling the agent. This means the file content is never stored in the message history (avoiding raw-text bleed into the chat UI on reload). Content comes from the already-loaded viewer state, so it works for both server-path files and browser-dragged files. A small chip (filename + line count) appears on the sent user message to indicate which file was attached.
 
-**File routing:** `isCodeFile(path)` checks the extension to decide whether a file opens in Code Viewer (code files) or Document Editor (documents). The file-picker `accept` list includes all code extensions so dragging or selecting `.py`, `.ts`, etc. works out of the box.
+**File routing:** `.html`/`.htm` files created by the agent open in the **HTML Viewer** (see §7a below). Other code files open in the Code Viewer. Documents open in the Document Editor.
+
+### 7a. HTML Viewer
+
+A dedicated viewer for HTML files (reports, generated web pages). Opens automatically when the agent creates a `.html` or `.htm` file — shown as an **orange chip** in the chat (distinct from violet code chips and blue download chips).
+
+**Features:**
+- **Preview mode** (default): native iframe render with `allow-scripts allow-forms` — JavaScript-heavy reports (Chart.js, D3, etc.) work correctly.
+- **Source mode**: Monaco editor (read-only, HTML syntax highlighting) — toggle with the `Preview / Source` buttons in the header.
+- **Download button**: saves the file locally as `text/html`.
+- Loads file content via `/api/file?path=…` if only a path is given (no pre-loaded content).
 
 ### 8. Document Editor
 

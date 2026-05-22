@@ -140,6 +140,17 @@ Model: search_tools(query="calendar appointment")
 
 **Always available:** `search_tools` (and `list_tools`) are injected into every restricted tool set: the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), and the emergency fallback list — so the model always has a discovery path.
 
+**Tool cap (`router_max_tools`):** After the router selects tools (and core/discovery tools are added), the list is capped at `router_max_tools` (default: **12**). `list_tools` and `search_tools` are **always kept** and do not count against the cap. This prevents context pollution when many tools are registered.
+
+```json
+// ~/.vaf/config.json
+{ "router_max_tools": 12 }
+```
+
+Range: 1–100. Raise it if agents report missing tools; lower it to reduce token overhead.
+
+**Reasoning model compatibility:** When the router uses a reasoning model (DeepSeek Reasoner, R1) the tool selection often lands inside `<think>…</think>` blocks rather than in the response content. The parser strips think-tags first, then falls back to scanning the full raw response (including reasoning) for tool name substrings — so routing works correctly regardless of model type.
+
 ### `_active_tools` state machine
 
 | Value | Meaning |

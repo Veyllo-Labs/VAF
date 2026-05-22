@@ -19,6 +19,7 @@ import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
 import CodeViewer, { isCodeFile } from '@/components/CodeViewer';
+import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
@@ -1038,8 +1039,13 @@ function VAFDashboardContent() {
         });
     }, [defaultViewerState]);
 
-    // Code Viewer state (VS Code-like editor panel for .py/.js/.html etc.)
+    // Code Viewer state (VS Code-like editor panel for .py/.js/.ts etc.)
     const [codeViewerState, setCodeViewerState] = useState<{ isOpen: boolean; filePath: string; title?: string; initialContent?: string; liveRefresh?: boolean; loadedContent?: string }>({
+        isOpen: false, filePath: '',
+    });
+
+    // HTML Viewer state (native iframe preview for .html/.htm files)
+    const [htmlViewerState, setHtmlViewerState] = useState<{ isOpen: boolean; filePath: string; title?: string; initialContent?: string }>({
         isOpen: false, filePath: '',
     });
 
@@ -4176,11 +4182,20 @@ function VAFDashboardContent() {
                                                             {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
-                                                            {/* File chips: code files → CodeViewer, others → download */}
+                                                            {/* File chips: html → HtmlViewer, code → CodeViewer, others → download */}
                                                             {isBot && msg.downloadFiles && msg.downloadFiles.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2">
                                                                     {msg.downloadFiles.map((f, fi) => (
-                                                                        isCodeFile(f.path) ? (
+                                                                        isHtmlFile(f.path) ? (
+                                                                            <button
+                                                                                key={fi}
+                                                                                onClick={() => { setHtmlViewerState({ isOpen: true, filePath: f.path, title: f.name }); setShowSubAgentPanel(true); }}
+                                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-orange-200 bg-orange-50 text-orange-700 text-xs font-medium hover:bg-orange-100 transition-colors"
+                                                                            >
+                                                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                                                                                {f.name}
+                                                                            </button>
+                                                                        ) : isCodeFile(f.path) ? (
                                                                             <button
                                                                                 key={fi}
                                                                                 onClick={() => { setCodeViewerState({ isOpen: true, filePath: f.path, title: f.name }); setShowSubAgentPanel(true); }}
@@ -4555,13 +4570,21 @@ function VAFDashboardContent() {
                         <div
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
-                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen)
+                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen)
                                     ? "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
                             )}
-                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen}
+                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen && !htmlViewerState.isOpen}
                         >
-                            {codeViewerState.isOpen ? (
+                            {htmlViewerState.isOpen ? (
+                                <HtmlViewer
+                                    isOpen={htmlViewerState.isOpen}
+                                    filePath={htmlViewerState.filePath}
+                                    title={htmlViewerState.title}
+                                    initialContent={htmlViewerState.initialContent}
+                                    onClose={() => setHtmlViewerState(prev => ({ ...prev, isOpen: false }))}
+                                />
+                            ) : codeViewerState.isOpen ? (
                                 <CodeViewer
                                     isOpen={codeViewerState.isOpen}
                                     filePath={codeViewerState.filePath}

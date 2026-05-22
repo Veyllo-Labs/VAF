@@ -63,8 +63,19 @@ cmd_status() {
     # Docker containers
     echo ""
     info "Docker containers:"
-    if "$DOCKER" ps --format "  {{.Names}}\t{{.Status}}" 2>/dev/null | grep "vaf-"; then
-        :
+    CONTAINER_LIST=$("$DOCKER" ps --format "{{.Names}}\t{{.Status}}" 2>/dev/null | grep "vaf-" || true)
+    if [ -n "$CONTAINER_LIST" ]; then
+        while IFS= read -r line; do
+            NAME=$(echo "$line" | cut -f1)
+            STATUS=$(echo "$line" | cut -f2-)
+            if echo "$STATUS" | grep -qi "unhealthy"; then
+                warn "$NAME  →  $STATUS"
+            elif echo "$STATUS" | grep -qi "health: starting"; then
+                info "$NAME  →  $STATUS"
+            else
+                echo -e "  ${GREEN}[OK]${NC}  $NAME  →  $STATUS"
+            fi
+        done <<< "$CONTAINER_LIST"
     else
         warn "No VAF Docker containers active"
     fi
@@ -104,6 +115,15 @@ cmd_start() {
             "$DOCKER" compose -f "$COMPOSE_FILE" up -d 2>/dev/null && ok "Docker containers started" || warn "Could not start Docker containers"
         else
             ok "Docker containers already running"
+        fi
+        # Warn about unhealthy containers
+        UNHEALTHY=$("$DOCKER" ps --format "{{.Names}}\t{{.Status}}" 2>/dev/null | grep "vaf-" | grep -i "unhealthy" || true)
+        if [ -n "$UNHEALTHY" ]; then
+            while IFS= read -r line; do
+                NAME=$(echo "$line" | cut -f1)
+                STATUS=$(echo "$line" | cut -f2-)
+                warn "Container unhealthy: $NAME ($STATUS)"
+            done <<< "$UNHEALTHY"
         fi
     else
         warn "Docker not reachable — Memory System unavailable"
@@ -232,6 +252,14 @@ cmd_stop() {
             ok "Port $PORT released"
         fi
     done
+
+    # 7. Stop Docker containers
+    if "$DOCKER" info &>/dev/null; then
+        if "$DOCKER" ps --format "{{.Names}}" 2>/dev/null | grep -q "vaf-"; then
+            info "Stopping Docker containers..."
+            "$DOCKER" compose -f "$COMPOSE_FILE" down 2>/dev/null && ok "Docker containers stopped" || warn "Could not stop Docker containers"
+        fi
+    fi
 
     ok "VAF fully stopped"
     echo ""

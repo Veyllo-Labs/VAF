@@ -87,13 +87,15 @@ Use `vaf.sh` in the project root:
 
 **stop:**
 - Sends SIGTERM to VAF process, waits up to 10 seconds
-- Stops llama-server cleanly
-- Releases ports 8001 and 8080
+- Stops Next.js frontend and llama-server cleanly
+- Releases ports 8001, 8080 and 3000
+- Stops all Docker containers (`docker compose down`)
 - Fallback: SIGKILL if process does not respond
 
 **status:**
 - Shows whether VAF and llama-server are running
 - Shows status of all Docker containers
+- Warns with `[!!]` if any container is `unhealthy`
 
 ### Docker containers (standalone)
 

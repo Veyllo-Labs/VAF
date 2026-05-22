@@ -1208,6 +1208,9 @@ function VAFDashboardContent() {
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const sessionScrollPositions = useRef<Record<string, { scrollTop: number; wasAtBottom: boolean }>>({});
+    const isAtBottomRef = useRef(true);
+    const pendingScrollRestore = useRef<{ scrollTop: number; wasAtBottom: boolean } | 'bottom' | null>(null);
 
     const artifactDirtyRef = useRef(false);
     const artifactLastEditRef = useRef(0);
@@ -1357,6 +1360,13 @@ function VAFDashboardContent() {
         // 1. Save current session state before switching (messages + animation). Document Viewer is already keyed by session in state.
         if (currentSessionId) {
             sessionCache.current[currentSessionId] = messages;
+            const container = containerRef.current;
+            if (container) {
+                sessionScrollPositions.current[currentSessionId] = {
+                    scrollTop: container.scrollTop,
+                    wasAtBottom: isAtBottomRef.current,
+                };
+            }
             sessionLoadingStates.current[currentSessionId] = {
                 loading,
                 isGenerating,
@@ -1377,6 +1387,7 @@ function VAFDashboardContent() {
         expectNewAssistantAfterToolRef.current = false;
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
+        pendingScrollRestore.current = sessionScrollPositions.current[id] ?? 'bottom';
 
         // 4. Restore animation state for target session (or default to idle)
         const targetState = sessionLoadingStates.current[id];
@@ -2765,8 +2776,36 @@ function VAFDashboardContent() {
     }, [input, ws, status]);
 
     useEffect(() => {
-        if (scrollRef.current) scrollRef.current.scrollIntoView({ behavior: 'smooth' });
+        if (pendingScrollRestore.current !== null) {
+            const restore = pendingScrollRestore.current;
+            pendingScrollRestore.current = null;
+            requestAnimationFrame(() => {
+                const container = containerRef.current;
+                if (!container) return;
+                if (restore === 'bottom' || restore.wasAtBottom) {
+                    container.scrollTop = container.scrollHeight;
+                    isAtBottomRef.current = true;
+                } else {
+                    container.scrollTop = restore.scrollTop;
+                    isAtBottomRef.current = false;
+                }
+            });
+        } else if (isAtBottomRef.current) {
+            scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
     }, [messages, loading]);
+
+    // Track whether the user is scrolled to the bottom
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const handleScroll = () => {
+            const { scrollTop, scrollHeight, clientHeight } = container;
+            isAtBottomRef.current = scrollTop + clientHeight >= scrollHeight - 50;
+        };
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        return () => container.removeEventListener('scroll', handleScroll);
+    }, []);
 
     // Keep inputValueRef in sync so WebSocket handlers see latest input (e.g. STT append)
     useEffect(() => {

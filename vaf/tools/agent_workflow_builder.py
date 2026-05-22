@@ -63,16 +63,22 @@ from vaf.tools.base import BaseTool
 class AgentWorkflowBuilderTool(BaseTool):
     name = "create_agent_workflow"
     description = (
-        "Create and execute workflows to solve complex multi-step tasks.\n\n"
-        "Two primary modes:\n"
-        "  run_temp — Define a workflow plan and execute it immediately. "
-        "No file is saved; the plan is discarded after it runs. "
-        "Use this when a task is too complex for a single tool call but you "
-        "don't need to save the workflow for future use.\n"
-        "  create   — Save a workflow permanently so it can be re-used via "
-        "execute_workflow() or from the Workflows tab in the WebUI.\n\n"
-        "Each step has an 'input' prompt (supports {variable} substitution) "
-        "and a 'tool' to call (e.g. coding_agent, web_search, research_agent)."
+        "Plan and run multi-step workflows. Use action='run_temp' for any complex "
+        "task that needs more than one tool — it runs immediately and leaves nothing on disk.\n\n"
+        "WHEN TO USE WHICH ACTION:\n"
+        "  run_temp — RIGHT NOW task, ad-hoc, no saving. This is the default choice for "
+        "complex multi-step work (research → analyse → write report, etc.). "
+        "The workflow runs immediately and is discarded when done.\n"
+        "  create   — Save a workflow PERMANENTLY so it can be re-used later via "
+        "execute_workflow or from the WebUI Workflows tab. Admin-only. "
+        "Only use this if the user explicitly wants a reusable workflow.\n"
+        "  list     — Show workflows the agent has saved.\n"
+        "  delete   — Remove a saved workflow.\n\n"
+        "DO NOT use action='execute' — that does not exist. "
+        "To run something NOW use action='run_temp'. "
+        "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
+        "Each step needs an 'input' (supports {variable} substitution from prior steps) "
+        "and a 'tool' (e.g. coding_agent, web_search, research_agent, write_file)."
     )
 
     # ── Contract ──────────────────────────────────────────────────────────────
@@ -322,6 +328,15 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "status":   _STATUS.get(event, "running"),
                 "progress": int((current / total) * 100),
             })
+            # Emit a step-header line to the terminal so the user sees which tool
+            # is running even for tools that produce no stdout (web_search, etc.).
+            if event == "start":
+                label = step.description or step.tool
+                _push({
+                    "type":       "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line":       f"\u2500\u2500\u2500 Step {current}/{total}: {label} [{step.tool}] \u2500\u2500\u2500",
+                })
 
         # ── Stdout / stderr wrapper ───────────────────────────────────────────
         class _WebStreamWriter:
@@ -374,15 +389,24 @@ class AgentWorkflowBuilderTool(BaseTool):
 
         _orig_stdout = sys.stdout
         _orig_stderr = sys.stderr
+        # VAF_IN_WORKFLOW_TERMINAL activates simple_mode in coding_agent:
+        # instead of the Rich Live TUI it prints "[Coder] ..." to sys.stdout,
+        # which _WebStreamWriter then captures and forwards as workflow_output_stream.
+        _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
         try:
             sys.stdout = _WebStreamWriter(sys.stdout)
             sys.stderr = _WebStreamWriter(sys.stderr)
+            os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
             result = engine.execute(steps, variables=variables)
         except Exception as exc:
             return f"Error executing temporary workflow '{name}': {exc}"
         finally:
             sys.stdout = _orig_stdout
             sys.stderr = _orig_stderr
+            if _prev_wf_terminal is None:
+                os.environ.pop("VAF_IN_WORKFLOW_TERMINAL", None)
+            else:
+                os.environ["VAF_IN_WORKFLOW_TERMINAL"] = _prev_wf_terminal
 
         if result.paused:
             return (

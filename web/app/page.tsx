@@ -4407,12 +4407,21 @@ function VAFDashboardContent() {
                                             <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
                                                 <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
                                                 <div className="space-y-2">
-                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number }, i: number) => (
+                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string } }, i: number) => {
+                                                        const src = s.metadata?.source;
+                                                        const isFilename = src && /\.[a-z]{2,5}$/i.test(src);
+                                                        return (
                                                         <div key={i} className="text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
-                                                            {s.score !== undefined && <span className="text-violet-600 font-mono">{(s.score * 100).toFixed(0)}%</span>}
-                                                            <div className="mt-1 line-clamp-3">{(s.full_text ?? s.text ?? '').slice(0, 300)}{((s.full_text ?? s.text ?? '').length > 300 ? '…' : '')}</div>
+                                                            <div className="flex items-center justify-between gap-2 mb-1">
+                                                                {isFilename && (
+                                                                    <span className="text-gray-500 font-medium truncate text-[11px]" title={src}>{src}</span>
+                                                                )}
+                                                                {s.score !== undefined && <span className="text-violet-600 font-mono shrink-0 ml-auto">{(s.score * 100).toFixed(0)}%</span>}
+                                                            </div>
+                                                            <div className="line-clamp-3">{(s.full_text ?? s.text ?? '').slice(0, 300)}{((s.full_text ?? s.text ?? '').length > 300 ? '…' : '')}</div>
                                                         </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         </div>

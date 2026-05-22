@@ -5,6 +5,7 @@ The engine executes a sequence of tool calls, automatically passing
 outputs from one step as inputs to the next.
 """
 
+import os
 import re
 import time
 import uuid
@@ -148,6 +149,52 @@ class WorkflowEngine:
                 outputs[key] = value
         final_output = None
         error = None
+
+        # ── Shared Workflow Project Path ───────────────────────────────────────
+        # Generate ONE project directory for the entire workflow run. All coding_agent
+        # and document_writer steps will use it automatically (via auto-inject below)
+        # so each step doesn't create its own scattered directory.
+        # Also exposed as {workflow_project_path} for use in step templates.
+        _workflow_project_path: Optional[str] = None
+        if "workflow_project_path" not in outputs:
+            try:
+                import re as _re
+                from vaf.core.platform import Platform as _Platform
+                _docs = _Platform.documents_dir()
+
+                # User-scope prefix — same logic as coder._generate_project_directory
+                _user_prefix = ""
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id as _get_sid2
+                    _sid2 = _get_sid2()
+                    if _sid2:
+                        from vaf.core.session import SessionManager as _SM2
+                        _s2 = _SM2().load(_sid2)
+                        _uid2 = (_s2.metadata or {}).get("user_scope_id", "")
+                        if _uid2:
+                            _user_prefix = _uid2[:8]
+                except Exception:
+                    pass
+                if not _user_prefix and self.user_scope_id:
+                    _user_prefix = self.user_scope_id[:8]
+
+                _proj_root = (
+                    os.path.join(_docs, "VAF_Projects", _user_prefix)
+                    if _user_prefix
+                    else os.path.join(_docs, "VAF_Projects")
+                )
+
+                # Derive a clean directory name from the workflow name
+                _wf_label = getattr(self, "_workflow_name", "") or "Workflow"
+                _wf_dir = _re.sub(r'[^a-zA-Z0-9 _-]', '', _wf_label).strip()[:40] or "Workflow"
+                _workflow_project_path = os.path.join(_proj_root, _wf_dir)
+                os.makedirs(_workflow_project_path, exist_ok=True)
+                outputs["workflow_project_path"] = _workflow_project_path
+                UI.event("Workflow", f"  [INFO] Shared project path: {_workflow_project_path}", style="dim")
+            except Exception as _e:
+                UI.event("Workflow", f"  [WARN] Could not create shared project path: {_e}", style="warning")
+        else:
+            _workflow_project_path = outputs["workflow_project_path"]
         
         # Don't show "Starting workflow" message - will show Step 1/N instead
         
@@ -327,6 +374,12 @@ class WorkflowEngine:
                         + _correction_block
                     )
 
+                # ── Auto-inject shared project_path for coding_agent / document_writer ──
+                # Prevents each step from creating its own scattered project directory.
+                _PROJ_TOOLS = {"coding_agent", "document_writer"}
+                if step.tool in _PROJ_TOOLS and _workflow_project_path and "project_path" not in args:
+                    args["project_path"] = _workflow_project_path
+
                 # Snapshot outputs before tool execution (for retry on failure)
                 outputs_snapshot = {k: v for k, v in outputs.items()}
                 
@@ -336,7 +389,6 @@ class WorkflowEngine:
                 # When running inside the workflow engine, those animations can spam the
                 # output because workflow execution isn't always a "true" interactive TTY.
                 # We set an env flag so tools can gracefully switch to a non-Live mode.
-                import os
                 prev_in_workflow = os.environ.get("VAF_IN_WORKFLOW")
                 os.environ["VAF_IN_WORKFLOW"] = "1"
 

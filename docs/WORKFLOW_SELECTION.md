@@ -169,6 +169,32 @@ create_agent_workflow(
 | `assertions` | list | Output checks — failed assertions retry only this step (not the whole workflow). |
 | `max_assertion_retries` | int | How many times to retry on assertion failure. Default: `1`. |
 
+##### Available tools per step
+
+| Tool | Best for |
+|------|----------|
+| `coding_agent` | Write/edit code, generate HTML/CSS/JS, structured files, analysis scripts. **Default.** |
+| `research_agent` | Deep research (10+ sources), patent analysis, market studies, technical reports. |
+| `document_writer` | Professional Word/PDF documents (contracts, reports, letters). |
+| `librarian_agent` | File system: read/list/search files in directories. |
+| `web_search` | Quick single lookup (news, facts, prices). |
+| `write_file` | Write raw content to a specific path. |
+| `read_file` | Read a file (e.g. output from a previous step). |
+| `python_sandbox` | Data processing, calculations, Python scripts. |
+
+**Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
+
+##### Shared project path (`{workflow_project_path}`)
+
+At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/Patent Workflow/`) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
+
+The path is also available as `{workflow_project_path}` in step input templates:
+
+```python
+{"input": "Read the JSON from {workflow_project_path}/patent.json and build an HTML report.",
+ "tool": "coding_agent", "output": "report"}
+```
+
 ##### Assertions (selective step-retry)
 
 ```python

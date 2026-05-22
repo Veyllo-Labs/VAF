@@ -78,7 +78,23 @@ class AgentWorkflowBuilderTool(BaseTool):
         "To run something NOW use action='run_temp'. "
         "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
-        "and a 'tool' (e.g. coding_agent, web_search, research_agent, write_file).\n\n"
+        "and a 'tool'. AVAILABLE SUB-AGENTS AND TOOLS FOR STEPS:\n"
+        "  coding_agent    — Write/edit code, create HTML/CSS/JS, generate structured files, "
+        "run analysis scripts. Default tool. Gets a shared project_path automatically.\n"
+        "  research_agent  — Deep multi-source research (10+ sources), detailed reports, "
+        "market analysis, technical deep-dives. Use for: patent research, market studies, "
+        "competitive analysis. Args: topic (required), depth, language.\n"
+        "  document_writer — Create professional Word/PDF documents (contracts, reports, letters). "
+        "Gets the shared project_path automatically.\n"
+        "  librarian_agent — File system operations: read/list/search files in directories. "
+        "Use for: reading existing project files, finding documents.\n"
+        "  web_search      — Quick web search (1-3 sources). Use for: news, facts, prices.\n"
+        "  write_file      — Write raw content to a specific file path.\n"
+        "  read_file       — Read a file. Use for: reading outputs from previous steps.\n"
+        "  python_sandbox  — Execute Python code. Use for: data processing, calculations.\n\n"
+        "RULE: Prefer research_agent for patent/market/technical research, "
+        "coding_agent for file generation and analysis scripts. "
+        "Do NOT use coding_agent for research that needs 10+ web sources.\n\n"
         "VARIABLE ANCHORING (automatic):\n"
         "The engine automatically prepends all original workflow variables as "
         "'IMMUTABLE DESIGN PILLARS' to every coding_agent/research_agent/document_writer/"
@@ -284,12 +300,17 @@ class AgentWorkflowBuilderTool(BaseTool):
                 return f"Error: step {i + 1} must be an object with at least an 'input' field."
             if not s.get("input", "").strip():
                 return f"Error: step {i + 1} is missing a non-empty 'input' field."
-            normalised.append({
+            step_dict: dict = {
                 "input":       s["input"],
                 "tool":        s.get("tool", "coding_agent"),
                 "output":      s.get("output") or f"step_{i + 1}_output",
                 "description": s.get("description") or f"Step {i + 1}",
-            })
+            }
+            for _f in ("on_success", "on_failure", "optional", "condition",
+                       "assertions", "max_assertion_retries", "args"):
+                if _f in s:
+                    step_dict[_f] = s[_f]
+            normalised.append(step_dict)
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:
@@ -516,12 +537,17 @@ class AgentWorkflowBuilderTool(BaseTool):
         for i, s in enumerate(raw_steps if isinstance(raw_steps, list) else []):
             if not isinstance(s, dict) or not s.get("input", "").strip():
                 return f"Error: step {i + 1} missing non-empty 'input' field."
-            normalised.append({
+            step_dict2: dict = {
                 "input":       s["input"],
                 "tool":        s.get("tool", "coding_agent"),
                 "output":      s.get("output") or f"step_{i + 1}_output",
                 "description": s.get("description") or f"Step {i + 1}",
-            })
+            }
+            for _f in ("on_success", "on_failure", "optional", "condition",
+                       "assertions", "max_assertion_retries", "args"):
+                if _f in s:
+                    step_dict2[_f] = s[_f]
+            normalised.append(step_dict2)
 
         wf_dict = {
             "name":        name,

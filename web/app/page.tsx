@@ -4407,9 +4407,10 @@ function VAFDashboardContent() {
                                             <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
                                                 <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
                                                 <div className="space-y-2">
-                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string } }, i: number) => {
+                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
                                                         const src = s.metadata?.source;
                                                         const isFilename = src && /\.[a-z]{2,5}$/i.test(src);
+                                                        const tags = s.metadata?.tags;
                                                         return (
                                                         <div key={i} className="text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
                                                             <div className="flex items-center justify-between gap-2 mb-1">
@@ -4418,6 +4419,13 @@ function VAFDashboardContent() {
                                                                 )}
                                                                 {s.score !== undefined && <span className="text-violet-600 font-mono shrink-0 ml-auto">{(s.score * 100).toFixed(0)}%</span>}
                                                             </div>
+                                                            {tags && tags.length > 0 && (
+                                                                <div className="flex flex-wrap gap-1 mb-1">
+                                                                    {tags.map((t, ti) => (
+                                                                        <span key={ti} className="text-[10px] bg-violet-50 text-violet-600 border border-violet-200 px-1 py-0.5 rounded">#{t}</span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
                                                             <div className="line-clamp-3">{(s.full_text ?? s.text ?? '').slice(0, 300)}{((s.full_text ?? s.text ?? '').length > 300 ? '…' : '')}</div>
                                                         </div>
                                                         );

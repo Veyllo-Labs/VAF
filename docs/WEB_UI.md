@@ -305,7 +305,7 @@ Sent when the agent calls `replace_editor_selection` or when a text-targeted edi
       "text": "Snippet text...",
       "full_text": "Full text...",
       "score": 0.85,
-      "metadata": {"source": "file.txt", "title": "My Note"}
+      "metadata": {"source": "file.txt", "title": "My Note", "tags": ["work", "important"]}
     }
   ]
 }

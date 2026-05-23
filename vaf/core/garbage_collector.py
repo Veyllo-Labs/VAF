@@ -146,6 +146,7 @@ class GarbageCollector:
         self._clean_cache_dir(cutoff, stats)
         self._clean_old_thinking_sessions(stats)
         self._clean_old_thinking_run_logs(cutoff, stats)
+        self._clean_subagent_debug_logs(cutoff, stats)
 
         return stats
 
@@ -206,6 +207,33 @@ class GarbageCollector:
             for entry in log_dir.rglob("*.json"):
                 if entry.is_file():
                     self._delete_if_old(entry, cutoff, stats)
+        except PermissionError:
+            stats["errors"] += 1
+
+    # -- Sub-agent debug session directories (logs/debug/**/) ----------------
+
+    def _clean_subagent_debug_logs(self, cutoff: datetime, stats: Dict[str, int]) -> None:
+        """Delete sub-agent debug session directories older than gc_max_age_hours (by mtime).
+
+        Covers logs/debug/{agent_type}/{session_id}/ folders created by the subagent
+        debug logger. Each session is a directory; we remove the whole directory when its
+        mtime is older than cutoff.
+        """
+        try:
+            from vaf.core.log_helper import get_app_log_dir
+            debug_dir = get_app_log_dir() / "debug"
+        except Exception:
+            return
+        if not debug_dir.exists():
+            return
+        try:
+            for agent_dir in debug_dir.iterdir():
+                if not agent_dir.is_dir():
+                    continue
+                for session_dir in agent_dir.iterdir():
+                    if not session_dir.is_dir():
+                        continue
+                    self._delete_dir_if_old(session_dir, cutoff, stats)
         except PermissionError:
             stats["errors"] += 1
 

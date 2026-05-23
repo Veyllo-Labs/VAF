@@ -282,4 +282,57 @@ class LearnDocumentTool(BaseTool):
             except Exception as e:
                 return f"Error storing memory (page {page_num}): {e}"
 
+        # Create (or update) one root "document index" memory so the whole document
+        # appears as a single deletable unit in the Memory UI (type=document_index, amber node).
+        # If an index with the same doc_tag already exists (re-ingest), update it in place
+        # instead of creating a duplicate.
+        if stored > 0:
+            async def _ingest_index() -> None:
+                from sqlalchemy import select, and_
+                from vaf.memory.database import get_db
+                from vaf.memory.rag import RagPipeline
+                from vaf.memory.models import Memory
+                async with get_db() as db:
+                    # Check for existing document_index with same doc_tag
+                    conditions = [
+                        Memory.is_deleted == False,  # noqa: E712
+                        Memory.meta["doc_tag"].as_string() == doc_tag,
+                    ]
+                    if user_scope_id is not None:
+                        conditions.append(Memory.user_scope_id == user_scope_id)
+                    result = await db.execute(select(Memory).where(and_(*conditions)))
+                    existing = result.scalar_one_or_none()
+
+                    if existing is not None:
+                        # Update page_count in place — no duplicate node
+                        meta = dict(existing.meta or {})
+                        meta["page_count"] = stored
+                        existing.meta = meta
+                    else:
+                        pipeline = RagPipeline(db)
+                        await pipeline.ingest(
+                            content=(
+                                f"Document index: {document_title}. "
+                                f"Contains {stored} pages of extracted knowledge."
+                            ),
+                            metadata={
+                                "type": "document_index",
+                                "tags": [doc_tag],
+                                "source": "learn_document",
+                                "title": document_title,
+                                "doc_tag": doc_tag,
+                                "page_count": stored,
+                            },
+                            user_scope_id=user_scope_id,
+                            auto_connect=False,
+                        )
+
+            try:
+                _run_async_in_new_loop(_ingest_index())
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    f"learn_document: failed to create document_index for {doc_tag}: {e}"
+                )
+
         return f"Stored {stored} pages from «{document_title}» under tag {doc_tag}."

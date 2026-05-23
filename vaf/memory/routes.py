@@ -412,6 +412,29 @@ async def update_memory(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@memory_router.delete("/by-doc-tag/{doc_tag}")
+async def delete_by_doc_tag(
+    doc_tag: str,
+    hard: bool = Query(default=False),
+    user_scope_id: Optional[UUID] = Depends(get_current_user_scope),
+):
+    """
+    Delete all memories associated with a document tag (page entries + document_index).
+
+    Uses JSONB @> containment to find all memories tagged with doc_tag.
+    Default: soft delete. Pass ?hard=true for permanent deletion.
+    """
+    try:
+        async with get_db() as db:
+            pipeline = RagPipeline(db)
+            count = await pipeline.delete_by_tag(doc_tag, soft=not hard, user_scope_id=user_scope_id)
+            await get_cache().invalidate_graph()
+            return {"status": "deleted", "doc_tag": doc_tag, "count": count, "hard": hard}
+    except Exception as e:
+        logger.error(f"Failed to delete by doc tag {doc_tag!r}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @memory_router.delete("/{memory_id}")
 async def delete_memory(
     memory_id: str,

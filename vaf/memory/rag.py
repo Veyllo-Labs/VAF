@@ -855,9 +855,45 @@ Always cite which source(s) you used."""
             await self.db.delete(memory)
         
         logger.info(f"Deleted memory {memory_id} (soft={soft})")
-        
+
         return True
-    
+
+    async def delete_by_tag(
+        self,
+        tag: str,
+        soft: bool = True,
+        user_scope_id: Optional[UUID] = None,
+    ) -> int:
+        """
+        Delete all non-deleted memories that carry the given tag.
+
+        Uses PostgreSQL JSONB array containment (@>) to find memories whose
+        meta->'tags' array includes the given tag value.
+
+        Returns:
+            Count of memories deleted / marked deleted.
+        """
+        conditions = [
+            Memory.is_deleted == False,  # noqa: E712
+            Memory.meta["tags"].contains(f'["{tag}"]'),
+        ]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+
+        result = await self.db.execute(select(Memory).where(and_(*conditions)))
+        memories = result.scalars().all()
+
+        count = 0
+        for memory in memories:
+            if soft:
+                memory.is_deleted = True
+            else:
+                await self.db.delete(memory)
+            count += 1
+
+        logger.info(f"delete_by_tag tag={tag!r} soft={soft} count={count}")
+        return count
+
     async def list_memories(
         self,
         limit: int = 50,

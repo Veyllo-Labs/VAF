@@ -758,6 +758,7 @@ function VAFDashboardContent() {
     const messagesRef = useRef<Message[]>([]); // Ref to access messages in WebSocket callback
     useEffect(() => { messagesRef.current = messages; }, [messages]);
 
+
     const [status, setStatus] = useState('connecting');
     const [modelLoaded, setModelLoaded] = useState<boolean | null>(null);
     const [modelProvider, setModelProvider] = useState<string | null>(null);
@@ -916,6 +917,48 @@ function VAFDashboardContent() {
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
     // xraySection state removed - Context Window modal now shows only overview diagram
+
+    // Memoize filtered messages so typing in the input box doesn't re-process
+    // all messages on every keystroke (parseContent + ReactMarkdown are expensive).
+    // Recomputes only when messages or currentSessionId/sessions change.
+    const filteredMessages = useMemo(() => {
+        const isThinkingSession = (sessions.find(s => s.id === currentSessionId) as Session | undefined)?.source === 'thinking';
+        return messages
+            .filter(m => !String(m?.content ?? '').includes('__CMD__'))
+            .filter(m => {
+                if (!isThinkingSession) return true;
+                if ((m.role === 'system' || m.role === 'user') && isThinkingModePrompt(String(m.content ?? ''))) return false;
+                return true;
+            });
+    }, [messages, currentSessionId, sessions]);
+
+    // Virtual window: show last N user-prompt pairs (user msg + all responses/tools until next user).
+    // User can load earlier pairs by clicking the banner at the top.
+    const MSG_TURNS = 8; // number of user prompts to keep visible
+    const [msgOffset, setMsgOffset] = useState(0); // extra turns to reveal (added when clicking banner)
+    const [expandedMsgs, setExpandedMsgs] = useState<Set<number>>(new Set());
+    const toggleMsgExpanded = (idx: number) => setExpandedMsgs(prev => {
+        const next = new Set(prev);
+        next.has(idx) ? next.delete(idx) : next.add(idx);
+        return next;
+    });
+    // Reset offset when session changes so we always start at the bottom.
+    useEffect(() => { setMsgOffset(0); }, [currentSessionId]);
+    const visibleMessages = useMemo(() => {
+        // Find indices of all user messages in filteredMessages
+        const userIdxs = filteredMessages
+            .map((m, i) => (m.role === 'user' ? i : -1))
+            .filter(i => i >= 0);
+        const totalTurns = userIdxs.length;
+        const visibleTurns = MSG_TURNS + msgOffset;
+        if (totalTurns <= visibleTurns) return filteredMessages; // everything fits
+        // Cut from the (totalTurns - visibleTurns)-th user message onward
+        const cutTurnIdx = totalTurns - visibleTurns;
+        const start = userIdxs[cutTurnIdx];
+        return filteredMessages.slice(start);
+    }, [filteredMessages, msgOffset]);
+    const MSG_PAGE_SIZE = MSG_TURNS; // alias used by navigator click handler
+    const hiddenCount = filteredMessages.length - visibleMessages.length;
 
     const contextBreakdown = useMemo(() => {
         if (!contextStats) return null;
@@ -3873,13 +3916,32 @@ function VAFDashboardContent() {
                                         <div className="w-64 max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-2xl shadow-xl flex flex-col-reverse">
                                             {[...userPrompts].reverse().map((m, i) => {
                                                 const realIdx = userPrompts.length - 1 - i;
+                                                // Find the index of this message in filteredMessages
+                                                const msgFiltIdx = filteredMessages.indexOf(m);
                                                 return (
                                                     <button
                                                         key={realIdx}
                                                         type="button"
                                                         onClick={() => {
-                                                            const nodes = containerRef.current?.querySelectorAll('[data-role="user"]');
-                                                            nodes?.[realIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                            // Ensure the target message is in the visible window.
+                                                            // visibleMessages = filteredMessages.slice(start) where
+                                                            // start = max(0, filteredMessages.length - MSG_PAGE_SIZE - msgOffset)
+                                                            const start = Math.max(0, filteredMessages.length - MSG_PAGE_SIZE - msgOffset);
+                                                            if (msgFiltIdx >= 0 && msgFiltIdx < start) {
+                                                                // Message is outside the visible window — expand offset so it becomes visible.
+                                                                const neededOffset = filteredMessages.length - MSG_PAGE_SIZE - msgFiltIdx;
+                                                                setMsgOffset(Math.max(0, neededOffset));
+                                                                // Scroll after React re-renders with the new offset.
+                                                                setTimeout(() => {
+                                                                    const trueIdx = messages.indexOf(m);
+                                                                    const el = containerRef.current?.querySelector(`[data-msg-idx="${trueIdx}"]`);
+                                                                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                                }, 80);
+                                                            } else {
+                                                                const trueIdx = messages.indexOf(m);
+                                                                const el = containerRef.current?.querySelector(`[data-msg-idx="${trueIdx}"]`);
+                                                                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                            }
                                                         }}
                                                         className="text-left px-4 py-3 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 truncate shrink-0 border-t border-gray-100 first:border-0 transition-colors duration-100"
                                                         title={String(m.content ?? '')}
@@ -3904,18 +3966,21 @@ function VAFDashboardContent() {
                                 )}
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                                 {/* Empty state welcome is shown in the centered input block below */}
+
+                                {/* Load earlier messages banner */}
+                                {hiddenCount > 0 && (
+                                    <button
+                                        onClick={() => setMsgOffset(o => o + MSG_TURNS)}
+                                        className="w-full py-2 px-4 mb-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                                    >
+                                        ↑ {hiddenCount} earlier message{hiddenCount !== 1 ? 's' : ''} — click to load more
+                                    </button>
+                                )}
+
                                 {(() => {
-                                    const isThinkingSession = (sessions.find(s => s.id === currentSessionId) as Session | undefined)?.source === 'thinking';
-                                    const filteredMessages = messages
-                                        .filter(m => !String(m?.content ?? '').includes('__CMD__'))
-                                        .filter(m => {
-                                            if (!isThinkingSession) return true;
-                                            if ((m.role === 'system' || m.role === 'user') && isThinkingModePrompt(String(m.content ?? ''))) return false;
-                                            return true;
-                                        });
-                                    return filteredMessages.map((msg, i) => {
+                                    return visibleMessages.map((msg, i) => {
                                         const trueIndex = messages.indexOf(msg);
-                                        const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
+                                        const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
                                         const showDaySeparator = prevMsg !== null && !isSameDay(prevMsg.timestamp, msg.timestamp);
                                         return (
                                             <Fragment key={trueIndex}>
@@ -3933,9 +3998,9 @@ function VAFDashboardContent() {
 
                                                     // Render System Steps (Timeline Style)
                                                     if (msg.role === 'system') {
-                                                        const isLast = i === filteredMessages.length - 1;
+                                                        const isLast = i === visibleMessages.length - 1;
                                                         const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
-                                                        const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                        const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
                                                             <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <SystemStep
@@ -3955,7 +4020,7 @@ function VAFDashboardContent() {
                                                         msg.content.replace(/^\[Error\]\s*/i, '').trim() === apiEmptyErrorText
                                                     );
                                                     if (isApiEmptyError) {
-                                                        const prevWasSystemApiErr = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                        const prevWasSystemApiErr = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
                                                             <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystemApiErr ? "pt-0" : "pt-4")}>
                                                                 <SystemStep message={`System: ${apiEmptyErrorText}`} />
@@ -3967,7 +4032,7 @@ function VAFDashboardContent() {
                                                     if (msg.role === 'tool') {
                                                         const toolLower = (msg.toolName || '').toLowerCase();
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
-                                                        const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                        const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
                                                             <div className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <div className="w-full max-w-[85%] flex gap-4">
@@ -4017,7 +4082,7 @@ function VAFDashboardContent() {
 
                                                     const { thought, answer, isThinkingComplete } = parseContent(msg.content);
                                                     const isBot = msg.role === 'assistant';
-                                                    const isLastMessage = i === filteredMessages.length - 1;
+                                                    const isLastMessage = i === visibleMessages.length - 1;
                                                     // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                                     // For non-last messages, always treat as complete
                                                     const thinkingDone = !isLastMessage || isThinkingComplete;
@@ -4029,7 +4094,7 @@ function VAFDashboardContent() {
                                                     // Filter out tool_calls JSON from bot answers
                                                     const cleanAnswer = isBot ? stripToolCallsJSON(answer) : answer;
                                                     // Add top margin if following a system step
-                                                    const prevWasSystem = i > 0 && filteredMessages[i - 1].role === 'system';
+                                                    const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                     // Only show the speech bubble when there is visible content (avoid empty bubbles)
                                                     const hasBubbleContent = !isBot
                                                         ? !!(displayAnswer || (displayFiles && displayFiles.length > 0))
@@ -4083,7 +4148,21 @@ function VAFDashboardContent() {
                                                                         <div className="relative group flex items-end">
                                                                             <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
                                                                                 isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 text-white rounded-tr-none")}>
-                                                                                <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? cleanAnswer : displayAnswer}</ChatMarkdown></div>
+                                                                                {!isBot && displayAnswer.length > 1169 ? (
+                                                                                    <>
+                                                                                        <div className="chat-markdown">
+                                                                                            <ChatMarkdown dark>{expandedMsgs.has(trueIndex) ? displayAnswer : displayAnswer.slice(0, 1169) + '…'}</ChatMarkdown>
+                                                                                        </div>
+                                                                                        <button
+                                                                                            onClick={() => toggleMsgExpanded(trueIndex)}
+                                                                                            className="mt-2 text-xs text-gray-400 hover:text-white transition-colors"
+                                                                                        >
+                                                                                            {expandedMsgs.has(trueIndex) ? '▲ Show less' : `▼ Show more (${displayAnswer.length.toLocaleString()} chars)`}
+                                                                                        </button>
+                                                                                    </>
+                                                                                ) : (
+                                                                                    <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? cleanAnswer : displayAnswer}</ChatMarkdown></div>
+                                                                                )}
                                                                             </div>
                                                                             {isBot && (
                                                                                 <button
@@ -4179,7 +4258,7 @@ function VAFDashboardContent() {
                                                                 </div>
                                                             )}
                                                             {/* Show status steps below the active message if streaming */}
-                                                            {loading && isBot && i === filteredMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
+                                                            {loading && isBot && i === visibleMessages.length - 1 && statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && (
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
                                                             {/* File chips: html → HtmlViewer, code → CodeViewer, others → download */}
@@ -4223,7 +4302,7 @@ function VAFDashboardContent() {
                                                     );
 
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>

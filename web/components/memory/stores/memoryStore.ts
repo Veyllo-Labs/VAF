@@ -18,6 +18,8 @@ export interface MemoryMetadata {
     type?: string;
     source?: string;
     created_at?: string;
+    doc_tag?: string;
+    page_count?: number;
 }
 
 export interface Memory {
@@ -44,6 +46,7 @@ export interface MemoryNode {
         createdAt?: string | null;
         updatedAt?: string | null;
         chunkCount?: number;
+        pageCount?: number;
         isHighlighted?: boolean;
         relevance?: number;
         hasParent?: boolean;
@@ -136,6 +139,7 @@ interface MemoryActions {
     createMemory: (content: string, metadata?: Partial<MemoryMetadata>) => Promise<Memory | null>;
     updateMemory: (id: string, content?: string, metadata?: Partial<MemoryMetadata>) => Promise<Memory | null>;
     deleteMemory: (id: string, hard?: boolean) => Promise<boolean>;
+    deleteByDocTag: (docTag: string, hard?: boolean) => Promise<number>;
 
     // Tag management
     addTagToMemory: (memoryId: string, tag: string) => Promise<boolean>;
@@ -336,6 +340,26 @@ export const useMemoryStore = create<MemoryState & MemoryActions>((set, get) => 
         }
     },
     
+    deleteByDocTag: async (docTag, hard = false) => {
+        set({ isLoading: true, error: null });
+        try {
+            const response = await fetch(
+                `${getMemoryApiBase()}/api/memory/by-doc-tag/${encodeURIComponent(docTag)}?hard=${hard}`,
+                { method: 'DELETE' }
+            );
+            if (!response.ok) throw new Error('Failed to delete document');
+            const data = await response.json();
+            set({ selectedMemory: null, selectedNodeId: null });
+            await get().fetchGraph();
+            await get().fetchStats();
+            set({ isLoading: false });
+            return (data as { count?: number }).count ?? 0;
+        } catch (error) {
+            set({ error: (error as Error).message, isLoading: false });
+            return 0;
+        }
+    },
+
     // Tag management
     addTagToMemory: async (memoryId, tag) => {
         try {

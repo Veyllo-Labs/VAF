@@ -418,14 +418,16 @@ $player.Close()
             else:
                 # Linux: Try multiple players (mpg123 for MP3, aplay for WAV)
                 if file_path.lower().endswith('.mp3'):
-                    # Try mpg123 first, then mpv, then ffplay
-                    players = ['mpg123', 'mpv', 'ffplay']
+                    # Try mpg123 first, then mpv, then ffplay, then cvlc/vlc
+                    players = ['mpg123', 'mpv', 'ffplay', 'cvlc', 'vlc']
                     for player in players:
                         try:
                             if player == 'mpv':
                                 cmd = [player, '--no-video', '--really-quiet', file_path]
                             elif player == 'ffplay':
                                 cmd = [player, '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path]
+                            elif player in ('cvlc', 'vlc'):
+                                cmd = [player, '--intf', 'dummy', '--play-and-exit', '-q', file_path]
                             else:
                                 cmd = [player, '-q', file_path]
                             

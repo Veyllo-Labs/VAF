@@ -118,6 +118,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
         setSelectedNodeId,
         updateMemory,
         deleteMemory,
+        deleteByDocTag,
         isLoading,
         error
     } = useMemoryStore();
@@ -215,9 +216,14 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
     const handleDelete = async () => {
         if (!selectedMemory) return;
 
-        const success = await deleteMemory(selectedMemory.id, false);
-        if (success) {
-            onClose?.();
+        if (selectedMemory.metadata?.type === 'document_index') {
+            const docTag = selectedMemory.metadata?.doc_tag;
+            if (!docTag) return;
+            const count = await deleteByDocTag(docTag, false);
+            if (count > 0) onClose?.();
+        } else {
+            const success = await deleteMemory(selectedMemory.id, false);
+            if (success) onClose?.();
         }
     };
 
@@ -350,7 +356,10 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                     <div className="flex items-center gap-2 mb-2">
                         <AlertTriangle className="w-4 h-4 text-red-600" />
                         <span className="text-sm font-medium text-red-800">
-                            Delete this memory?
+                            {selectedMemory?.metadata?.type === 'document_index'
+                                ? `Delete entire document «${selectedMemory.metadata.title}»? This removes all ${selectedMemory.metadata.page_count ?? '?'} pages from long-term memory.`
+                                : 'Delete this memory?'
+                            }
                         </span>
                     </div>
                     <div className="flex gap-2">

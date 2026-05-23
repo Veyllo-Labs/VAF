@@ -1059,6 +1059,30 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             if sidebar_name_list:
                                 context_header += f"Attached: {sidebar_name_list}\n"
 
+                            # Warn the agent when any attachment exceeded the indexing size limit.
+                            _max_attach_chars = int(Config.get("attachment_rag_max_chars_per_doc", 24000) or 24000)
+                            _truncated_docs = [
+                                d for d in sidebar_docs
+                                if len(str((d or {}).get("content") or "")) > _max_attach_chars
+                            ]
+                            if _truncated_docs:
+                                _trunc_names = ", ".join(
+                                    str((d or {}).get("name") or "unknown") for d in _truncated_docs
+                                )
+                                _warn = (
+                                    f"\n⚠️ ATTACHMENT SIZE WARNING: The following document(s) exceed the "
+                                    f"{_max_attach_chars:,} character limit. "
+                                    f"Content beyond the limit has been lost. "
+                                    f"To process the full document use: learn_document(path=\"<path>\").\n"
+                                    f"Truncated: {_trunc_names}\n"
+                                )
+                                for _td in _truncated_docs:
+                                    _td_path = str((_td or {}).get("path") or "")
+                                    _td_name = str((_td or {}).get("name") or "unknown")
+                                    if _td_path:
+                                        _warn += f'  → {_td_name}: learn_document(path="{_td_path}")\n'
+                                context_header += _warn
+
                             # Hybrid retrieval lane: query session-scoped attachment index instead of
                             # prepending full attachment content every turn.
                             snippet_lines = []

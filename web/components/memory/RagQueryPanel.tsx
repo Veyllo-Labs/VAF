@@ -154,10 +154,6 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-1">
-                                            <FileText className="w-3 h-3 text-gray-400" />
-                                            <span className="text-sm font-medium text-gray-800 truncate">
-                                                {source.metadata?.title || 'Untitled'}
-                                            </span>
                                             <span className={cn(
                                                 'px-1.5 py-0.5 rounded text-[10px] font-medium',
                                                 source.score >= 0.8
@@ -168,19 +164,15 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                                             )}>
                                                 {Math.round(source.score * 100)}%
                                             </span>
+                                            {source.metadata?.tags && source.metadata.tags.length > 0 && source.metadata.tags.slice(0, 3).map((tag: string) => (
+                                                <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">
+                                                    #{tag}
+                                                </span>
+                                            ))}
                                         </div>
                                         <p className="text-xs text-gray-600 line-clamp-2">
                                             {source.text}
                                         </p>
-                                        {source.metadata?.tags && source.metadata.tags.length > 0 && (
-                                            <div className="flex flex-wrap gap-1 mt-1">
-                                                {source.metadata.tags.slice(0, 3).map((tag: string) => (
-                                                    <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">
-                                                        #{tag}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        )}
                                     </div>
                                     <ExternalLink className="w-4 h-4 text-gray-400 flex-shrink-0" />
                                 </div>

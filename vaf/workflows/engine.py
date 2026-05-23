@@ -369,6 +369,11 @@ class WorkflowEngine:
                     args["task"] = (
                         f"## IMMUTABLE DESIGN PILLARS — DO NOT DEVIATE FROM THESE\n"
                         f"{_anchor_lines}\n\n"
+                        f"## STRICT FACTUAL DATA POLICY\n"
+                        f"NEVER invent, guess, or hallucinate specific facts (names, IDs, dates, numbers, companies).\n"
+                        f"If a specific fact cannot be confirmed via search results or tool output:\n"
+                        f"  Write exactly: [DATA NOT FOUND: <what was not found>]\n"
+                        f"A short accurate output is always better than a longer hallucinated one.\n\n"
                         f"---\n\n"
                         + args["task"]
                         + _correction_block
@@ -951,6 +956,9 @@ class WorkflowEngine:
             "webfetch": "url",
             "coding_agent": "task",
             "librarian_agent": "task",
+            "document_agent": "task",
+            "document_writer": "task",
+            "research_agent": "topic",
             "read_file": "path",
             "write_file": "content",  # Usually needs path too
             "bash": "command",

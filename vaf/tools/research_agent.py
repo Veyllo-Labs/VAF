@@ -14,6 +14,7 @@ import json
 import re
 import threading
 import time
+import concurrent.futures
 import unicodedata
 import hashlib
 from dataclasses import dataclass
@@ -687,6 +688,20 @@ class ResearchAgentTool(BaseTool):
                 except: pass
 
             global_quality_warning = ""
+
+            # ── Stage 5: Query Profile (once before section loop) ────────────
+            tui.set_stage("Profiling topic...")
+            tui.log("Generating query profile...")
+            _query_profile = self._generate_query_profile(topic, lang)
+            _profile_fallback_queries = _query_profile.get("fallback_queries", [])
+            _profile_exclusions = _query_profile.get("exclusion_concepts", [])
+            if _debug_lg:
+                _debug_lg.event("query_profile_generated",
+                               required=_query_profile.get("required_concepts", []),
+                               exclusions=_profile_exclusions,
+                               fallbacks=_profile_fallback_queries)
+            # ─────────────────────────────────────────────────────────────────
+
             _loop_start = time.time()
 
             for idx, spec in enumerate(specs, 1):
@@ -734,15 +749,28 @@ class ResearchAgentTool(BaseTool):
                     raw_results = None
                     _initial_had_results = False
                     try:
-                        raw_results = _web_search_with_timeout(
-                            web, timeout_sec=_WEB_SEARCH_TIMEOUT,
-                            query=section_query, max_results=max_results * 3, deep=deep,
-                            open_in_browser=False, return_raw=True,
+                        # ── Stage 1: Multi-Query Augmentation + Parallel Search ──
+                        tui.log(f"augment_queries: {spec.title}")
+                        augmented_queries = self._augment_queries(
+                            topic=topic,
+                            base_query=section_query,
+                            lang=lang,
+                            n=4,
                         )
+                        tui.log(f"parallel_search: {len(augmented_queries)} queries")
+                        raw_results = self._search_parallel(
+                            web=web,
+                            queries=augmented_queries,
+                            max_results_per=max_results * 2,
+                            deep=deep,
+                            timeout_sec=45,
+                        )
+                        # ─────────────────────────────────────────────────────────
                         _n = len(raw_results) if isinstance(raw_results, list) else 0
                         _initial_had_results = _n > 0
                         if _debug_lg:
-                            _debug_lg.event("web_search_complete", section_idx=idx, num_results=_n)
+                            _debug_lg.event("web_search_complete", section_idx=idx,
+                                           num_results=_n, queries=augmented_queries)
                     except Exception as e:
                         tui.log(f"Error in web_search (return_raw): {str(e)[:100]}")
                         if _debug_lg:
@@ -775,6 +803,16 @@ class ResearchAgentTool(BaseTool):
                         results = fallback_result if isinstance(fallback_result, str) else "No results found."
                         sources = _extract_urls(results)
                     else:
+                        # ── Stage 4: Keyword Gate (fast regex, no LLM) ───────────
+                        raw_results = self._apply_keyword_gate(
+                            results=raw_results,
+                            topic=topic,
+                            section_title=spec.title,
+                            exclusion_concepts=_profile_exclusions,
+                        )
+                        tui.log(f"keyword_gate: {len(raw_results)} results remain")
+                        # ─────────────────────────────────────────────────────────
+
                         filtered_results, lowest_score, quality_warning = filter_results_by_quality(
                             raw_results, min_score=7, max_results=max_results
                         )
@@ -796,6 +834,54 @@ class ResearchAgentTool(BaseTool):
                             if len(filtered_low) > len(filtered_results):
                                 filtered_results = filtered_low
                                 quality_warning = "Warning: Information is based on unverified sources. Please verify critically."
+
+                        # ── Stage 2: Graceful Degradation (when < 3 results) ─────
+                        if len(filtered_results) < 3:
+                            tui.log(f"Graceful degradation: running fallback queries")
+                            _emit_progress(
+                                f"[{idx}/{len(specs)}] {spec.title}: fallback search...", style="dim"
+                            )
+                            _fallback_qs = _profile_fallback_queries[:3] or [
+                                topic,
+                                f"{topic} overview",
+                                f"{topic} {spec.title.lower()}",
+                            ]
+                            fallback_raw = self._search_parallel(
+                                web=web,
+                                queries=_fallback_qs,
+                                max_results_per=max_results * 2,
+                                deep=deep,
+                                timeout_sec=45,
+                            )
+                            if isinstance(fallback_raw, list) and fallback_raw:
+                                existing_hrefs = {
+                                    r.get("href", "") or r.get("link", "")
+                                    for r in filtered_results
+                                }
+                                for fr in fallback_raw:
+                                    fhref = fr.get("href", "") or fr.get("link", "")
+                                    if not fhref or fhref not in existing_hrefs:
+                                        filtered_results.append(fr)
+                                        if fhref:
+                                            existing_hrefs.add(fhref)
+                                tui.log(f"After fallback: {len(filtered_results)} results")
+                                if _debug_lg:
+                                    _debug_lg.event("graceful_degradation_complete",
+                                                   section_idx=idx,
+                                                   fallback_count=len(fallback_raw),
+                                                   total_after=len(filtered_results))
+                        # ─────────────────────────────────────────────────────────
+
+                        # ── Stage 3: LLM Relevance Pre-Filter (≥4 results only) ──
+                        if len(filtered_results) >= 4:
+                            filtered_results = self._filter_by_relevance(
+                                topic=topic,
+                                section_title=spec.title,
+                                results=filtered_results,
+                                lang=lang,
+                            )
+                            tui.log(f"relevance_filter: {len(filtered_results)} results kept")
+                        # ─────────────────────────────────────────────────────────
 
                         if quality_warning:
                             if quality_warning not in global_quality_warning:
@@ -1247,6 +1333,251 @@ class ResearchAgentTool(BaseTool):
             SectionSpec("Conclusion", "conclusion summary")
         ]
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PaperNavigator-inspired search improvements (Stages 1–5)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _generate_query_profile(self, topic: str, lang: str) -> Dict:
+        """Stage 5: One-time LLM call before the section loop to build a topic profile.
+
+        Returns dict with required_concepts, optional_concepts, exclusion_concepts,
+        fallback_queries.  On any failure returns {} so all callers degrade gracefully.
+        """
+        prompt = (
+            f"You are a research planner. For the topic: \"{topic}\" (language: {lang})\n"
+            "Return ONLY valid JSON with these keys:\n"
+            "  required_concepts: list of 3-5 essential terms that good search results MUST contain\n"
+            "  optional_concepts: list of 3-5 helpful but non-mandatory terms\n"
+            "  exclusion_concepts: list of 2-4 terms that indicate an IRRELEVANT result\n"
+            "  fallback_queries: list of 3 alternative search queries if the main query fails\n"
+            "Return ONLY the JSON object, no explanation."
+        )
+        try:
+            response = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.1,
+            )
+            if not response:
+                return {}
+            start = response.find("{")
+            end = response.rfind("}") + 1
+            if start < 0 or end <= start:
+                return {}
+            parsed = json.loads(response[start:end])
+            result = {}
+            for key in ("required_concepts", "optional_concepts", "exclusion_concepts", "fallback_queries"):
+                val = parsed.get(key, [])
+                result[key] = [str(v) for v in val] if isinstance(val, list) else []
+            return result
+        except Exception:
+            return {}
+
+    def _augment_queries(self, topic: str, base_query: str, lang: str, n: int = 4) -> List[str]:
+        """Stage 1a: Generate n-1 alternative search queries for a section via LLM.
+
+        Always returns a list with base_query as the first element (fallback-safe).
+        """
+        prompt = (
+            f"Generate {n - 1} alternative web search queries for researching this topic.\n"
+            f"Main topic: \"{topic}\"\n"
+            f"Base query: \"{base_query}\"\n"
+            f"Language: {lang}\n"
+            "Rules:\n"
+            "- Each query must use different keywords or angles than the base query\n"
+            "- Queries should be 3-8 words, suitable for a web search engine\n"
+            "- Return ONLY a JSON list of strings, no explanation\n"
+            f"Example: [\"{base_query} overview\", \"{topic} technical details\"]"
+        )
+        try:
+            response = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=150,
+                temperature=0.3,
+            )
+            if not response:
+                return [base_query]
+            start = response.find("[")
+            end = response.rfind("]") + 1
+            if start < 0 or end <= start:
+                return [base_query]
+            variants = json.loads(response[start:end])
+            if not isinstance(variants, list):
+                return [base_query]
+            queries = [base_query]
+            for v in variants:
+                v = str(v).strip()
+                if v and v.lower() != base_query.lower() and len(queries) < n:
+                    queries.append(v)
+            return queries
+        except Exception:
+            return [base_query]
+
+    def _search_parallel(
+        self,
+        web: "WebSearchTool",
+        queries: List[str],
+        max_results_per: int,
+        deep: bool,
+        timeout_sec: int,
+    ) -> List[Dict]:
+        """Stage 1b: Run multiple search queries in parallel via ThreadPoolExecutor.
+
+        Merges results and deduplicates by href. Results without href are always kept.
+        """
+        if not queries:
+            return []
+
+        seen_hrefs: set = set()
+        merged: List[Dict] = []
+        lock = threading.Lock()
+
+        def _search_one(query: str) -> List[Dict]:
+            holder: Dict[str, Any] = {"result": None}
+
+            def _worker():
+                try:
+                    holder["result"] = web.run(
+                        query=query,
+                        max_results=max_results_per,
+                        deep=deep,
+                        open_in_browser=False,
+                        return_raw=True,
+                    )
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_worker, daemon=True)
+            t.start()
+            t.join(timeout=timeout_sec)
+            raw = holder["result"]
+            return raw if isinstance(raw, list) else []
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(queries), 4)) as executor:
+                futures = {executor.submit(_search_one, q): q for q in queries}
+                for fut in concurrent.futures.as_completed(futures, timeout=60):
+                    try:
+                        results = fut.result()
+                    except Exception:
+                        results = []
+                    with lock:
+                        for r in results:
+                            href = r.get("href", "") or r.get("link", "")
+                            if not href:
+                                merged.append(r)
+                            elif href not in seen_hrefs:
+                                seen_hrefs.add(href)
+                                merged.append(r)
+        except concurrent.futures.TimeoutError:
+            pass
+        except Exception:
+            pass
+
+        return merged
+
+    def _apply_keyword_gate(
+        self,
+        results: List[Dict],
+        topic: str,
+        section_title: str,
+        exclusion_concepts: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """Stage 4: Fast regex pre-filter — runs before quality filtering, no LLM cost.
+
+        Keeps results that have ≥2 keyword hits and no exclusion term.
+        Safety valve: if fewer than 2 results would pass, returns original list unchanged.
+        """
+        STOPWORDS = {
+            "a", "an", "the", "and", "or", "of", "in", "on", "at", "to",
+            "for", "with", "by", "from", "is", "are", "was", "were", "be",
+            "been", "being", "have", "has", "had", "do", "does", "did",
+            "will", "would", "could", "should", "may", "might", "shall",
+            "this", "that", "these", "those", "it", "its", "not", "as",
+            "what", "how", "when", "where", "which", "who", "about",
+            "der", "die", "das", "ein", "eine", "und", "oder", "von",
+            "mit", "für", "ist", "sind", "war", "wurde", "werden", "als",
+            "auch", "noch", "nach", "bei", "über", "auf", "aus",
+        }
+
+        if not results:
+            return results
+
+        raw_terms = f"{topic} {section_title}".lower()
+        keywords = [
+            w for w in re.findall(r"[\w\u00C0-\u024F]{3,}", raw_terms, re.UNICODE)
+            if w not in STOPWORDS
+        ]
+
+        if len(keywords) < 2:
+            return results
+
+        exclusions = [e.lower() for e in (exclusion_concepts or [])]
+
+        def _passes(result: Dict) -> bool:
+            text = (
+                (result.get("body", "") or "") + " " +
+                (result.get("title", "") or "")
+            ).lower()
+            for excl in exclusions:
+                if excl and re.search(r"\b" + re.escape(excl) + r"\b", text):
+                    return False
+            hits = sum(1 for kw in keywords if kw in text)
+            return hits >= 2
+
+        passed = [r for r in results if _passes(r)]
+        return passed if len(passed) >= 2 else results
+
+    def _filter_by_relevance(
+        self,
+        topic: str,
+        section_title: str,
+        results: List[Dict],
+        lang: str,
+    ) -> List[Dict]:
+        """Stage 3: LLM batch relevance filter — one cheap call for all snippets.
+
+        Only runs when len(results) >= 4. Falls back to returning original list on
+        any failure or if the LLM marks everything irrelevant.
+        """
+        if len(results) < 4:
+            return results
+
+        lines = []
+        for i, r in enumerate(results, 1):
+            title = (r.get("title", "") or "")[:80]
+            body = (r.get("body", "") or "")[:120]
+            lines.append(f"[{i}] {title}: {body}")
+
+        prompt = (
+            f"Topic: \"{topic}\"\nSection: \"{section_title}\"\n"
+            "For each numbered result, reply YES if relevant to the topic+section, NO if not.\n"
+            "Format: 1:YES, 2:NO, 3:YES  (comma-separated, NO extra text)\n\n"
+            + "\n".join(lines)
+        )
+
+        try:
+            response = self.query_llm(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=80,
+                temperature=0.0,
+            )
+            if not response:
+                return results
+
+            keep_indices: set = set()
+            for match in re.finditer(r"(\d+)\s*[:.]\s*(YES|NO)", response.upper()):
+                if match.group(2) == "YES":
+                    keep_indices.add(int(match.group(1)))
+
+            if not keep_indices:
+                return results
+
+            filtered = [r for i, r in enumerate(results, 1) if i in keep_indices]
+            return filtered if filtered else results
+        except Exception:
+            return results
+
     def _summarize_section_html(
         self,
         topic: str,
@@ -1296,9 +1627,16 @@ class ResearchAgentTool(BaseTool):
             f"{lang_instruction}\n"
             f"Length requirement: at least {min_words_target} words.\n"
             f"{extra}\n"
+            "CRITICAL FACTUAL INTEGRITY RULE (OVERRIDES ALL OTHER INSTRUCTIONS):\n"
+            "Specific facts — proper names, ID numbers, patent numbers, company names, inventor names,\n"
+            "filing dates, registration numbers, statistics — MUST come VERBATIM from the search results.\n"
+            "If a specific fact is NOT explicitly stated in the search results provided:\n"
+            "  DO NOT generate it, guess it, or fill it in from training knowledge.\n"
+            "  Instead write: <em>[Data not found in search results]</em>\n"
+            "A short accurate report is FAR better than a long hallucinated one.\n\n"
             "CITATION GUIDELINES:\n"
-            "1. Support claims with provided search results where possible.\n"
-            "2. If a claim is important but not directly supported by sources, mark it with '[Unverified]'.\n"
+            "1. Support every claim with an explicit search result. Quote the source inline.\n"
+            "2. If a claim cannot be supported by the provided search results, use <em>[Not found in sources]</em>.\n"
             "3. At the end of the section, add a small 'Sources' paragraph listing domain names of used sources.\n"
             "Return ONLY an HTML fragment (no <html>, no <head>, no <body>).\n"
         )

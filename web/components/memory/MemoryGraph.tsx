@@ -34,7 +34,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useMemoryStore, MemoryNode, MemoryEdge } from './stores/memoryStore';
-import { FileText, Tag, Calendar, Link2, RefreshCw } from 'lucide-react';
+import { FileText, Tag, Calendar, Link2, RefreshCw, BookOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Constants for collision detection
@@ -152,6 +152,7 @@ const TYPE_STROKE_COLORS: Record<string, string> = {
     document: '#c084fc',
     code: '#4ade80',
     knowledge: '#14b8a6',
+    document_index: '#f59e0b',
 };
 const DEFAULT_STROKE = '#9ca3af';
 
@@ -186,6 +187,7 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
         conversation: 'border-orange-400 bg-orange-50',  // compaction (15 msgs)
         memory_flush: 'border-orange-400 bg-orange-50',  // legacy compaction – same as conversation
         knowledge: 'border-teal-400 bg-teal-50',         // learned durable knowledge
+        document_index: 'border-amber-500 bg-amber-50',  // book root node (learn_document)
         default: 'border-gray-400 bg-gray-50'
     };
 
@@ -231,7 +233,10 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
             {/* Header */}
             <div className="px-3 py-2 border-b border-gray-200 bg-white/50 rounded-t-xl">
                 <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                    {data.type === 'document_index'
+                        ? <BookOpen className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                        : <FileText className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                    }
                     <span className="font-medium text-sm text-gray-800 truncate">
                         {data.label}
                     </span>
@@ -279,8 +284,17 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
                 {/* Footer meta */}
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <div className="flex items-center gap-1">
-                        <Link2 className="w-3 h-3" />
-                        <span>{data.chunkCount} chunks</span>
+                        {data.type === 'document_index' ? (
+                            <>
+                                <BookOpen className="w-3 h-3" />
+                                <span>{data.pageCount ?? data.chunkCount} pages</span>
+                            </>
+                        ) : (
+                            <>
+                                <Link2 className="w-3 h-3" />
+                                <span>{data.chunkCount} chunks</span>
+                            </>
+                        )}
                     </div>
                     {data.createdAt && (
                         <div className="flex items-center gap-1">

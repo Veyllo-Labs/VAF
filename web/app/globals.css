@@ -55,6 +55,15 @@
   background: #cbd5e1;
 }
 
+/* Custom Cursor — hide default on desktop */
+@media (pointer: fine) {
+  *,
+  *::before,
+  *::after {
+    cursor: none !important;
+  }
+}
+
 /* Scrollbar unsichtbar (z. B. Sidebar Chat-Liste), Scroll bleibt möglich */
 .scrollbar-hide {
   scrollbar-width: none; /* Firefox */

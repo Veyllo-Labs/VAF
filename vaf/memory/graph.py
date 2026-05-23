@@ -96,6 +96,7 @@ class GraphManager:
             "document": "#c084fc",
             "code": "#4ade80",
             "knowledge": "#14b8a6",
+            "document_index": "#f59e0b",
         }
         default_stroke = "#9ca3af"
         memory_id_to_type = {str(m.id): (m.meta or {}).get("type", "note") for m in memories}
@@ -138,6 +139,7 @@ class GraphManager:
                     "createdAt": memory.created_at.isoformat() if memory.created_at else None,
                     "updatedAt": memory.updated_at.isoformat() if memory.updated_at else None,
                     "chunkCount": len(memory.chunks) if memory.chunks else 0,
+                    "pageCount": (memory.meta or {}).get("page_count", 0),
                     "isHighlighted": memory_id_str in highlight_set,
                     "relevance": relevance,
                     "hasParent": memory.parent_id is not None,

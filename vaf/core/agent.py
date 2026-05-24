@@ -209,6 +209,10 @@ class Agent:
                     "openrouter": "anthropic/claude-3.5-sonnet",
                 }
                 api_model = api_defaults.get(self.provider, self.provider)
+            # Hybrid mode: use VAF_TOOL_MODEL when set (e.g. pro model for sub-agents in workflows)
+            _tool_model_env = os.environ.get("VAF_TOOL_MODEL", "").strip()
+            if _tool_model_env:
+                api_model = _tool_model_env
             self.model_display_name = api_model
         elif hasattr(self, 'filename'):
             fname = self.filename.lower()

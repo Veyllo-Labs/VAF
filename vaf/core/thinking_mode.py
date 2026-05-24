@@ -1655,6 +1655,13 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     except Exception:
         pass
 
+    # Do not think while a workflow is executing in the main process.
+    # The engine sets VAF_IN_WORKFLOW_TERMINAL=1 for the duration of a run.
+    import os as _os
+    if _os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes"):
+        logger.debug("Thinking skipped: workflow is currently running (VAF_IN_WORKFLOW_TERMINAL)")
+        return False
+
     # Acquire internal lock
     run_id = acquire_lock(user_scope_id, max_duration_minutes=max_duration)
     if run_id is None:

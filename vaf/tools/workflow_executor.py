@@ -206,10 +206,14 @@ class ExecuteWorkflowTool(BaseTool):
             _orig_stdout = sys.stdout
             _orig_stderr = sys.stderr
             _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
+            _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
+            _subagent_model = Config.get("subagent_model", "")
             try:
                 sys.stdout = _WebStreamWriter(sys.stdout)
                 sys.stderr = _WebStreamWriter(sys.stderr)
                 os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
+                if _subagent_model:
+                    os.environ["VAF_TOOL_MODEL"] = _subagent_model
                 result = engine.execute(steps, variables=variables)
             except Exception as exc:
                 return f"❌ Error executing workflow '{workflow_id}': {exc}"
@@ -220,6 +224,10 @@ class ExecuteWorkflowTool(BaseTool):
                     os.environ.pop("VAF_IN_WORKFLOW_TERMINAL", None)
                 else:
                     os.environ["VAF_IN_WORKFLOW_TERMINAL"] = _prev_wf_terminal
+                if _prev_tool_model is None:
+                    os.environ.pop("VAF_TOOL_MODEL", None)
+                else:
+                    os.environ["VAF_TOOL_MODEL"] = _prev_tool_model
 
             if result.success:
                 return f"✅ Workflow '{template['name']}' completed successfully!\n\n{result.final_output}"

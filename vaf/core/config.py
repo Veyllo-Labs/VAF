@@ -59,6 +59,7 @@ class Config:
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
         "subagent_use_separate_provider": False,
+        "subagent_model": "",  # Hybrid mode: model for tools/workflows (empty = same as main chat)
         
         # Auto-start local llama-server (disable if only using APIs)
         "auto_start_local_server": True,

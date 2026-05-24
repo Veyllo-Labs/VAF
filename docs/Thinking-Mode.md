@@ -11,6 +11,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Max 1 Message & History Sync:** The agent may send at most one message per run. **New:** Any question asked by the Thinking Agent is automatically persisted to the user's main chat history. This ensures that when the user replies, the normal agent has the full context of what was asked.
 - **Per user:** Idle is tracked per logical user (handling all UUID/username aliases). One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
 - **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
+- **Workflow Guard:** Thinking mode does not start while a workflow is executing (`VAF_IN_WORKFLOW_TERMINAL=1`). This prevents idle messages from interrupting long-running workflow steps.
 - **Locking:** Uses a global file-based lock system with PID verification to prevent parallel runs. See [Singleton Task Locking in PROCESS_MANAGEMENT.md](PROCESS_MANAGEMENT.md#singleton-task-locking).
 - **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
 - **Output:** Runs are logged to `logs/vaf_think_YYYY-MM-DD.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.

@@ -253,7 +253,7 @@ const CATEGORIES = [
 const PROVIDERS = [
     { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o' },
     { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-3-5-sonnet-20241022' },
-    { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', staticModels: ['deepseek-v4-flash'] },
+    { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', staticModels: ['deepseek-v4-flash', 'deepseek-v4-0324', 'deepseek-auto'] },
     { id: 'google', label: 'Google', defaultModel: 'gemini-1.5-flash-latest' },
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
 ];
@@ -2311,6 +2311,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 { value: 'openrouter', label: 'OpenRouter' },
                                                 { value: 'local', label: 'Local' },
                                             ]}
+                                        />
+                                    </div>
+                                    <div className="mt-3">
+                                        <Input
+                                            label="Tool / Workflow Model"
+                                            value={localConfig.subagent_model || ''}
+                                            onChange={(v: string) => handleChange('subagent_model', v)}
+                                            placeholder="Same as main chat (hybrid: use deepseek-v4-0324)"
                                         />
                                     </div>
                                     <div className="h-4" />

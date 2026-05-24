@@ -161,6 +161,11 @@ class BaseTool(ABC):
             # Fallback to generic model setting if provider-specific is empty
             if not model:
                model = config.get("model", "")
+            # Hybrid mode: VAF_TOOL_MODEL overrides the model for tools/sub-agents during workflow runs
+            import os as _os
+            _tool_model = _os.environ.get("VAF_TOOL_MODEL", "").strip()
+            if _tool_model:
+                model = _tool_model
         else:
             # Local provider uses the main model setting
             model = config.get("model", "")

@@ -483,6 +483,15 @@ class APIBackendManager:
                     default_models.get(self.provider_name, "gpt-4o"),
                 )
 
+        # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows
+        if self.provider_name == "deepseek" and str(model or "").lower() == "deepseek-auto":
+            in_workflow = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+            if in_workflow:
+                # Use explicit subagent_model if configured, else default to v4-0324 (pro)
+                model = self.config.get("subagent_model", "").strip() or "deepseek-v4-0324"
+            else:
+                model = "deepseek-v4-flash"
+
         # DeepSeek Reasoner/R1: no function calling support; API returns 400 if tools passed
         if self.provider_name == "deepseek" and model:
             m = (model or "").lower()
@@ -598,7 +607,7 @@ class APIBackendManager:
         models = {
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
             "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-            "deepseek": ["deepseek-v4-flash"],
+            "deepseek": ["deepseek-v4-flash", "deepseek-v4-0324", "deepseek-auto"],
             "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
             "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],
             "local": ["llama3", "mistral", "codellama"]

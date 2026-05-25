@@ -2340,6 +2340,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                 </Section>
 
+                                <Section title={tAdvanced('attachments')}>
+                                    <Switch
+                                        label={tAdvanced('hierarchicalIndexing')}
+                                        description={tAdvanced('hierarchicalIndexingDesc')}
+                                        checked={localConfig.attachment_rag_hierarchical_enabled ?? false}
+                                        onChange={(v: boolean) => handleChange('attachment_rag_hierarchical_enabled', v)}
+                                    />
+                                </Section>
+
                                 <Section title={tAdvanced('thinker')}>
                                     <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
                                     <Select

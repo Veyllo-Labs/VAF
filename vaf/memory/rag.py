@@ -14,7 +14,8 @@ from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
 from dataclasses import dataclass
-from sqlalchemy import select, and_, or_, func, text, delete
+from sqlalchemy import select, and_, or_, func, text, delete, cast
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
@@ -875,7 +876,7 @@ Always cite which source(s) you used."""
         """
         conditions = [
             Memory.is_deleted == False,  # noqa: E712
-            Memory.meta["tags"].contains(f'["{tag}"]'),
+            Memory.meta.contains({"tags": [tag]}),
         ]
         if user_scope_id is not None:
             conditions.append(Memory.user_scope_id == user_scope_id)

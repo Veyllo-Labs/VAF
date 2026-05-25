@@ -81,8 +81,126 @@ function rectsOverlap(
     );
 }
 
+// Helper: Multi-cluster sunflower — one flower per memory type.
+// Tags are placed as an aura around their primary cluster, or between clusters for cross-references.
+function applyMultiClusterLayout(nodes: Node[], storeEdges: MemoryEdge[]): Node[] {
+    const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+    const INNER_SCALE = 200;
+    const TAG_AURA_GAP = 160; // distance from cluster edge to tag ring
+
+    const memNodes = nodes.filter(n => n.type !== 'tagNode');
+    const tagNodes = nodes.filter(n => n.type === 'tagNode');
+
+    // Group memory nodes by type in legend order
+    const TYPE_ORDER = ['note', 'document', 'code', 'conversation', 'memory_flush', 'knowledge', 'document_index'];
+    const typeGroups = new Map<string, Node[]>();
+    for (const node of memNodes) {
+        const t = (node.data.type as string) ?? 'note';
+        if (!typeGroups.has(t)) typeGroups.set(t, []);
+        typeGroups.get(t)!.push(node);
+    }
+    const groups: [string, Node[]][] = [
+        ...TYPE_ORDER.filter(t => typeGroups.has(t)).map(t => [t, typeGroups.get(t)!] as [string, Node[]]),
+        ...[...typeGroups.entries()].filter(([t]) => !TYPE_ORDER.includes(t)),
+    ];
+
+    const numGroups = groups.length;
+    if (numGroups === 0) return nodes;
+
+    const maxNodes = Math.max(...groups.map(([, ns]) => ns.length));
+    const clusterR = INNER_SCALE * Math.sqrt(maxNodes + 1) + 120;
+    const metaRadius = numGroups === 1 ? 0 : clusterR * 1.8;
+
+    const tagKey = (n: Node) =>
+        ((n.data.tags as string[] | undefined) ?? []).slice().sort().join('|');
+
+    const result: Node[] = [];
+    const clusterCenters = new Map<string, { x: number; y: number }>();
+
+    // Place memory nodes in their type-cluster
+    groups.forEach(([type, typeNodes], gi) => {
+        const clusterAngle = (gi / numGroups) * 2 * Math.PI - Math.PI / 2;
+        const cx = metaRadius * Math.cos(clusterAngle);
+        const cy = metaRadius * Math.sin(clusterAngle);
+        clusterCenters.set(type, { x: cx, y: cy });
+
+        [...typeNodes]
+            .sort((a, b) => tagKey(a).localeCompare(tagKey(b)))
+            .forEach((node, i) => {
+                const r = i === 0 ? 0 : INNER_SCALE * Math.sqrt(i);
+                const angle = i * GOLDEN_ANGLE;
+                result.push({ ...node, position: { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) } });
+            });
+    });
+
+    // Build nodeId → memoryType map for edge-based tag routing
+    const nodeTypeMap = new Map(memNodes.map(n => [n.id, (n.data.type as string) ?? 'note']));
+
+    // For each tag: collect which memory types it connects to
+    const tagToTypes = new Map<string, Set<string>>();
+    for (const edge of storeEdges) {
+        for (const [tagId, otherId] of [[edge.source, edge.target], [edge.target, edge.source]] as [string, string][]) {
+            if (!tagId.startsWith('tag-')) continue;
+            const memType = nodeTypeMap.get(otherId);
+            if (!memType) continue;
+            if (!tagToTypes.has(tagId)) tagToTypes.set(tagId, new Set());
+            tagToTypes.get(tagId)!.add(memType);
+        }
+    }
+
+    // Counters per cluster for golden-angle distribution in aura ring
+    const auraCount = new Map<string, number>();
+    // Counters per cross-cluster key to spread overlapping cross tags
+    const crossCount = new Map<string, number>();
+
+    tagNodes.forEach((tagNode, fi) => {
+        const types = tagToTypes.get(tagNode.id) ?? new Set<string>();
+
+        if (types.size === 0) {
+            // Unconnected tag → outermost ring
+            const outerR = metaRadius + clusterR + TAG_AURA_GAP + 200;
+            const angle = (fi / Math.max(tagNodes.length, 1)) * 2 * Math.PI;
+            result.push({ ...tagNode, position: { x: outerR * Math.cos(angle), y: outerR * Math.sin(angle) } });
+            return;
+        }
+
+        if (types.size === 1) {
+            // Single-cluster tag → aura ring around that cluster
+            const [primaryType] = types;
+            const center = clusterCenters.get(primaryType) ?? { x: 0, y: 0 };
+            const idx = auraCount.get(primaryType) ?? 0;
+            auraCount.set(primaryType, idx + 1);
+            const r = clusterR + TAG_AURA_GAP;
+            const angle = idx * GOLDEN_ANGLE;
+            result.push({ ...tagNode, position: { x: center.x + r * Math.cos(angle), y: center.y + r * Math.sin(angle) } });
+        } else {
+            // Cross-cluster tag → centroid between the involved cluster centers
+            let cx = 0, cy = 0;
+            for (const t of types) {
+                const c = clusterCenters.get(t) ?? { x: 0, y: 0 };
+                cx += c.x; cy += c.y;
+            }
+            cx /= types.size; cy /= types.size;
+
+            const crossKey = [...types].sort().join('|');
+            const idx = crossCount.get(crossKey) ?? 0;
+            crossCount.set(crossKey, idx + 1);
+            // Spread multiple cross-tags in a small ring around the centroid
+            const spreadR = 80 + idx * 60;
+            const spreadAngle = idx * GOLDEN_ANGLE;
+            result.push({
+                ...tagNode,
+                position: { x: cx + spreadR * Math.cos(spreadAngle), y: cy + spreadR * Math.sin(spreadAngle) },
+            });
+        }
+    });
+
+    return result;
+}
+
 // Helper: Apply collision detection to prevent overlapping
 function applyCollisionDetection(nodes: Node[]): Node[] {
+    if (nodes.length > 50) return nodes;
     const result = [...nodes];
     const maxIterations = 50;
 
@@ -179,7 +297,7 @@ function MemoryConnectionLine(props: {
 }
 
 // Custom Memory Node Component
-const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
+const MemoryNodeComponent = React.memo(({ data, selected }: NodeProps) => {
     const typeColors: Record<string, string> = {
         note: 'border-blue-400 bg-blue-50',           // memory_save, auto_capture
         document: 'border-purple-400 bg-purple-50',
@@ -306,10 +424,16 @@ const MemoryNodeComponent = ({ data, selected }: NodeProps) => {
             </div>
         </div>
     );
-};
+}, (prev, next) =>
+    prev.selected === next.selected &&
+    prev.data.isFaded === next.data.isFaded &&
+    prev.data.isHighlighted === next.data.isHighlighted &&
+    prev.data.label === next.data.label &&
+    prev.data.relevance === next.data.relevance
+);
 
 // Custom Tag Master Node Component - Rectangular style matching popup design
-const TagNodeComponent = ({ data, selected }: NodeProps) => {
+const TagNodeComponent = React.memo(({ data, selected }: NodeProps) => {
     const isFaded = data.isFaded;
 
     return (
@@ -386,7 +510,13 @@ const TagNodeComponent = ({ data, selected }: NodeProps) => {
             </div>
         </div>
     );
-};
+}, (prev, next) =>
+    prev.selected === next.selected &&
+    prev.data.isFaded === next.data.isFaded &&
+    prev.data.isHighlighted === next.data.isHighlighted &&
+    prev.data.label === next.data.label &&
+    prev.data.memoryCount === next.data.memoryCount
+);
 
 // Node types for ReactFlow
 const nodeTypes: NodeTypes = {
@@ -495,7 +625,6 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             const savedPos = savedPositionsRef.current[node.id];
             const position = savedPos || node.position;
 
-            // Determine if this node should be faded (unconnected) or highlighted (connected)
             const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
             const isHighlightedFromSelection = selectedNodeId !== null && connectedNodeIds.has(node.id);
             const isHighlighted = isHighlightedFromSelection || (selectedNodeId === null && !!node.data.isHighlighted);
@@ -513,24 +642,28 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             };
         });
 
-        // Apply collision detection only if no saved positions exist
+        // Apply layout only if no saved positions exist
         const hasSavedPositions = Object.keys(savedPositionsRef.current).length > 0;
         if (!hasSavedPositions && nodes.length > 0) {
-            nodes = applyCollisionDetection(nodes) as typeof nodes;
+            nodes = nodes.length <= 12
+                ? applyCollisionDetection(nodes) as typeof nodes
+                : applyMultiClusterLayout(nodes, storeEdges) as typeof nodes;
         }
 
         return nodes;
     }, [storeNodes, selectedNodeId, connectedNodeIds]);
 
     // Convert store edges to ReactFlow format. Nur Memory↔Tag; keine Memory↔Memory.
-    const initialEdges: Edge[] = useMemo(() =>
-        storeEdges
+    const initialEdges: Edge[] = useMemo(() => {
+        if (!showTagConnections) return [];
+
+        // Pre-build O(1) lookup to avoid O(n) find() inside the map
+        const nodeTypeById = new Map(storeNodes.map(n => [n.id, n.data?.type ?? 'default']));
+
+        return storeEdges
             .filter(edge => edge.data.connectionType === 'tag')
-            .filter(edge => showTagConnections)
             .map(edge => {
-                // Edge color matches source memory's type (for tag & semantic: source is memory)
-                const sourceNode = storeNodes.find(n => n.id === edge.source);
-                const memoryType = sourceNode?.data?.type ?? 'default';
+                const memoryType = nodeTypeById.get(edge.source) ?? 'default';
                 const strokeColor = TYPE_STROKE_COLORS[memoryType] ?? DEFAULT_STROKE;
 
                 // Fade edges that are not connected to selected node
@@ -544,13 +677,13 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     id: edge.id,
                     source: edge.source,
                     target: edge.target,
-                    type: edge.type,
-                    animated: edge.animated,
+                    type: 'straight',
+                    animated: false,
                     style: {
                         strokeWidth: edge.style.strokeWidth,
                         opacity: isFaded ? 0.15 : edge.style.opacity,
                         stroke: strokeColor,
-                        strokeDasharray: isTagEdge ? '5,5' : undefined,
+                        strokeDasharray: undefined,
                     },
                     markerEnd: !isTagEdge ? {
                         type: MarkerType.ArrowClosed,
@@ -564,38 +697,16 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                         fontWeight: isTagEdge ? 500 : 400,
                     },
                 };
-            }),
-        [storeEdges, storeNodes, showTagConnections, selectedNodeId, connectedNodeIds]
-    );
+            });
+    }, [storeEdges, storeNodes, showTagConnections, selectedNodeId, connectedNodeIds]);
 
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-    // Update local state when store changes or selection changes
-    useEffect(() => {
-        setNodes(currentNodes =>
-            currentNodes.map(node => {
-                const isFaded = selectedNodeId !== null && !connectedNodeIds.has(node.id);
-                const isHighlightedFromSelection = selectedNodeId !== null && connectedNodeIds.has(node.id);
-                const ragHighlight = storeNodes.find(n => n.id === node.id)?.data?.isHighlighted ?? false;
-                const isHighlighted = isHighlightedFromSelection || (selectedNodeId === null && ragHighlight);
-                return {
-                    ...node,
-                    data: {
-                        ...node.data,
-                        isFaded,
-                        isHighlighted,
-                    },
-                    selected: node.id === selectedNodeId,
-                };
-            })
-        );
-    }, [selectedNodeId, connectedNodeIds, storeNodes, setNodes]);
-
-    // Update when store nodes change (new data from backend)
+    // Update when store nodes change or selection changes
     useEffect(() => {
         setNodes(initialNodes);
-    }, [storeNodes, setNodes]);
+    }, [initialNodes, setNodes]);
 
     useEffect(() => {
         setEdges(initialEdges);
@@ -757,17 +868,10 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                     type: 'smoothstep',
                 }}
             >
-                <Background color="#e5e7eb" gap={20} />
+                <Background color="#e5e7eb" gap={nodes.length > 50 ? 60 : 20} />
                 <Controls className="bg-white rounded-lg shadow-lg" />
                 <MiniMap
-                    nodeColor={(node) => {
-                        // Tag nodes purple; highlighted tag = brighter purple, highlighted memory = yellow
-                        if (node.data?.isTagNode && node.data?.isHighlighted) return '#a78bfa';
-                        if (node.data?.isTagNode) return '#8b5cf6';
-                        if (node.data?.isHighlighted) return '#eab308';
-                        if (node.selected) return '#374151';
-                        return '#9ca3af';
-                    }}
+                    nodeColor={(node) => node.type === 'tagNode' ? '#8b5cf6' : '#9ca3af'}
                     maskColor="rgba(0, 0, 0, 0.1)"
                     className="bg-white rounded-lg shadow-lg"
                 />

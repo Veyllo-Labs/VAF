@@ -192,7 +192,12 @@ class Config:
         "attachment_rag_max_chars_per_doc": 24000,                 # Max chars per attached doc indexed into ephemeral lane
         "attachment_rag_snippet_chars": 900,                        # Max chars per retrieved attachment snippet inserted into prompt
         "attachment_rag_max_rss_gb": 4.0,                           # Hard guard: kill attachment lane when process RSS exceeds this limit
-        
+        # Hierarchical document indexing (two-tier: section summaries → chunks)
+        "attachment_rag_hierarchical_enabled": False,               # Opt-in: build section index for large structured docs (vector mode only)
+        "attachment_rag_hierarchical_min_chars": 4000,              # Min doc length to activate hierarchical indexing (chars)
+        "attachment_rag_hierarchical_max_sections": 15,             # Max sections to index per document (2-50)
+        "attachment_rag_hierarchical_coarse_k": 3,                  # Top-k sections selected in Tier 1 retrieval (1-10)
+
         # Redis Cache Settings
         "redis_url": "redis://localhost:6379/0",                   # Redis connection URL
         "redis_enabled": True,                                     # Enable Redis caching

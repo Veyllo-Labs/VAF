@@ -483,10 +483,13 @@ class APIBackendManager:
                     default_models.get(self.provider_name, "gpt-4o"),
                 )
 
-        # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows
+        # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows/compaction
         if self.provider_name == "deepseek" and str(model or "").lower() == "deepseek-auto":
-            in_workflow = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
-            if in_workflow:
+            _pro_context = (
+                os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+                or os.environ.get("VAF_COMPACTION_IN_PROGRESS", "").strip() in ("1", "true", "yes")
+            )
+            if _pro_context:
                 # Use explicit subagent_model if configured, else default to v4-0324 (pro)
                 model = self.config.get("subagent_model", "").strip() or "deepseek-v4-0324"
             else:

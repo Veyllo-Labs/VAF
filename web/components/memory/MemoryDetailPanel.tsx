@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useMemoryStore, Memory } from './stores/memoryStore';
 import {
     X, Edit2, Trash2, Save, Tag, Calendar, Link2,
-    ChevronDown, ChevronUp, FileText, AlertTriangle, Hash
+    ChevronDown, ChevronUp, FileText, AlertTriangle, Hash, CheckSquare, Square
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -26,41 +26,161 @@ interface MemoryDetailPanelProps {
     onToggleExpand?: (expanded: boolean) => void;
 }
 
+const TYPE_LABELS: Record<string, string> = {
+    note: 'Notes', document: 'Documents', code: 'Code',
+    conversation: 'Conversations', knowledge: 'Knowledge', document_index: 'Document Index',
+};
+
 // Tag Details Component
 function TagDetailsView({
     tagNode,
     connectedMemories,
     onMemoryClick,
+    onDeleteMemories,
+    onRemoveTagFromMemories,
+    isLoading,
 }: {
     tagNode: { id: string; data: { label: string; tag: string; memoryCount: number } };
     connectedMemories: Array<{ id: string; label: string; type?: string }>;
     onMemoryClick: (memoryId: string) => void;
+    onDeleteMemories: (ids: string[]) => Promise<void>;
+    onRemoveTagFromMemories: (ids: string[], tag: string) => Promise<void>;
+    isLoading: boolean;
 }) {
+    const [deleteMode, setDeleteMode] = useState(false);
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+    const [isDoing, setIsDoing] = useState(false);
+
+    // Group by type
+    const grouped = useMemo(() => {
+        const map = new Map<string, typeof connectedMemories>();
+        for (const m of connectedMemories) {
+            const t = m.type ?? 'note';
+            if (!map.has(t)) map.set(t, []);
+            map.get(t)!.push(m);
+        }
+        return map;
+    }, [connectedMemories]);
+
+    const toggleAll = () => {
+        if (selected.size === connectedMemories.length) {
+            setSelected(new Set());
+        } else {
+            setSelected(new Set(connectedMemories.map(m => m.id)));
+        }
+    };
+
+    const toggle = (id: string) => {
+        const next = new Set(selected);
+        next.has(id) ? next.delete(id) : next.add(id);
+        setSelected(next);
+    };
+
+    const handleConfirm = async () => {
+        if (selected.size === 0) return;
+        setIsDoing(true);
+        const toDelete = [...selected];
+        const toKeep = connectedMemories.filter(m => !selected.has(m.id)).map(m => m.id);
+        await onDeleteMemories(toDelete);
+        if (toKeep.length > 0) {
+            await onRemoveTagFromMemories(toKeep, tagNode.data.tag);
+        }
+        setIsDoing(false);
+        setDeleteMode(false);
+        setSelected(new Set());
+    };
+
+    if (deleteMode) {
+        return (
+            <div className="space-y-3">
+                <div className="flex items-center gap-2 pb-3 border-b border-red-200">
+                    <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                    <p className="text-sm font-medium text-red-700">
+                        Wähle Memories zum Löschen aus
+                    </p>
+                </div>
+                <p className="text-xs text-gray-500">
+                    Abgewählte Memories behalten — ihr Tag <span className="font-mono">#{tagNode.data.tag}</span> wird entfernt.
+                </p>
+
+                {/* Select all */}
+                <button onClick={toggleAll} className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900">
+                    {selected.size === connectedMemories.length
+                        ? <CheckSquare className="w-4 h-4 text-red-500" />
+                        : <Square className="w-4 h-4" />}
+                    Alle auswählen ({selected.size}/{connectedMemories.length})
+                </button>
+
+                {/* Grouped list */}
+                <div className="max-h-[300px] overflow-y-auto space-y-3">
+                    {[...grouped.entries()].map(([type, memories]) => (
+                        <div key={type}>
+                            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">
+                                {TYPE_LABELS[type] ?? type}
+                            </p>
+                            {memories.map(m => (
+                                <label key={m.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer">
+                                    {selected.has(m.id)
+                                        ? <CheckSquare className="w-4 h-4 text-red-500 flex-shrink-0" />
+                                        : <Square className="w-4 h-4 text-gray-300 flex-shrink-0" />}
+                                    <input type="checkbox" className="sr-only" checked={selected.has(m.id)} onChange={() => toggle(m.id)} />
+                                    <span className="text-sm text-gray-700 truncate">{m.label}</span>
+                                </label>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-2 border-t border-gray-200">
+                    <button
+                        onClick={handleConfirm}
+                        disabled={selected.size === 0 || isDoing}
+                        className="flex-1 px-3 py-2 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-40 transition-colors"
+                    >
+                        {isDoing ? 'Läuft...' : `${selected.size} löschen`}
+                    </button>
+                    <button
+                        onClick={() => { setDeleteMode(false); setSelected(new Set()); }}
+                        className="px-3 py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                    >
+                        Abbrechen
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-4">
             {/* Tag Info */}
-            <div className="flex items-center gap-3 pb-3 border-b border-gray-200">
-                <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
-                    <Hash className="w-5 h-5 text-purple-600" />
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+                        <Hash className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <div>
+                        <h4 className="font-medium text-gray-900">{tagNode.data.label}</h4>
+                        <p className="text-xs text-gray-500">Tag Master Node</p>
+                    </div>
                 </div>
-                <div>
-                    <h4 className="font-medium text-gray-900">{tagNode.data.label}</h4>
-                    <p className="text-xs text-gray-500">Tag Master Node</p>
-                </div>
+                <button
+                    onClick={() => { setDeleteMode(true); setSelected(new Set(connectedMemories.map(m => m.id))); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Tag löschen
+                </button>
             </div>
 
             {/* Stats */}
             <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-purple-50 rounded-lg">
-                    <div className="text-2xl font-bold text-purple-700">
-                        {tagNode.data.memoryCount || 0}
-                    </div>
+                    <div className="text-2xl font-bold text-purple-700">{tagNode.data.memoryCount || 0}</div>
                     <div className="text-xs text-purple-600">Connected Memories</div>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-lg">
-                    <div className="text-2xl font-bold text-gray-700">
-                        {connectedMemories.length}
-                    </div>
+                    <div className="text-2xl font-bold text-gray-700">{connectedMemories.length}</div>
                     <div className="text-xs text-gray-600">Visible Connections</div>
                 </div>
             </div>
@@ -80,25 +200,20 @@ function TagDetailsView({
                                 className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
                             >
                                 <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                <span className="text-sm text-gray-700 truncate">
-                                    {memory.label}
-                                </span>
+                                <span className="text-sm text-gray-700 truncate">{memory.label}</span>
                                 {memory.type && (
                                     <span className="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-500 rounded ml-auto">
-                                        {memory.type}
+                                        {TYPE_LABELS[memory.type] ?? memory.type}
                                     </span>
                                 )}
                             </button>
                         ))
                     ) : (
-                        <p className="text-xs text-gray-400 text-center py-4">
-                            No connected memories
-                        </p>
+                        <p className="text-xs text-gray-400 text-center py-4">No connected memories</p>
                     )}
                 </div>
             </div>
 
-            {/* Tip */}
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
                 <p className="text-xs text-purple-700">
                     <span className="font-medium">Tip:</span> Drag from a memory node to this tag to add the tag to that memory.
@@ -119,6 +234,7 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
         updateMemory,
         deleteMemory,
         deleteByDocTag,
+        removeTagFromMemory,
         isLoading,
         error
     } = useMemoryStore();
@@ -269,6 +385,13 @@ export default function MemoryDetailPanel({ className, onClose, onToggleExpand }
                             tagNode={selectedNode as any}
                             connectedMemories={connectedMemories}
                             onMemoryClick={handleMemoryClick}
+                            isLoading={isLoading}
+                            onDeleteMemories={async (ids) => {
+                                for (const id of ids) await deleteMemory(id, false);
+                            }}
+                            onRemoveTagFromMemories={async (ids, tag) => {
+                                for (const id of ids) await removeTagFromMemory(id, tag);
+                            }}
                         />
                     </div>
                 )}

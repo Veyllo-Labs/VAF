@@ -32,6 +32,9 @@ function detectLanguage(filePath: string): string {
 // ── Code-file extensions that should open in this viewer ─────────────────────
 const CODE_EXTENSIONS = new Set(Object.keys(EXT_TO_LANG));
 CODE_EXTENSIONS.add('dockerfile');
+// txt and csv are data/text files → route to DocumentViewer, not CodeViewer
+CODE_EXTENSIONS.delete('txt');
+CODE_EXTENSIONS.delete('csv');
 
 export function isCodeFile(filePath: string): boolean {
   const name = filePath.split('/').pop()?.toLowerCase() ?? '';

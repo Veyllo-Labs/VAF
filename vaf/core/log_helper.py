@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from vaf.core.platform import Platform
 
 # Domains get a single {domain}.log file each; use prefixes like [COMPACTION], [EMIT] inside messages.
-ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend")
+ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach")
 
 
 def is_debug_logging_enabled() -> bool:
@@ -162,6 +162,29 @@ def append_domain_log_always(domain: str, message: str) -> None:
         ts = datetime.now().isoformat()
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
+    except Exception:
+        pass
+
+
+def log_attachment(event: str, **kwargs) -> None:
+    """
+    Always-on attachment diagnostic log → attach_YYYY-MM-DD.log.
+    Helps diagnose why specific PDFs fail to be seen by the agent.
+    GC deletes old log files automatically (gc_max_age_hours config).
+
+    Usage:
+        log_attachment("FILE_RECEIVED", session="xxx", name="foo.pdf", size_bytes=1234567)
+        log_attachment("EXTRACT_DONE", name="foo.pdf", content_len=450, preview="### PDF: foo...")
+        log_attachment("SAVE_OK", session="xxx", docs=1)
+        log_attachment("AGENT_SEES", session="xxx", docs=1, names=["foo.pdf"])
+    """
+    try:
+        path = get_dated_log_path("attach", "log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().isoformat()
+        parts = [f"{k}={v!r}" for k, v in kwargs.items()]
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} [{event}] {' '.join(parts)}\n")
     except Exception:
         pass
 

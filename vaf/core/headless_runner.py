@@ -1043,6 +1043,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     try:
                         session_for_sidebar = session_mgr.load(task.session_id)
                         sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
+                        append_domain_log("rag", f"SIDEBAR_CHECK session={task.session_id} docs={len(sidebar_docs)} names={[str((d or {}).get('name','?'))[:40] for d in sidebar_docs[:3]]}")
+                        from vaf.core.log_helper import log_attachment as _log_attach
+                        _log_attach("AGENT_SEES", session=task.session_id, docs=len(sidebar_docs),
+                            names=[str((d or {}).get('name','?'))[:60] for d in sidebar_docs[:5]],
+                            content_lens=[len(str((d or {}).get('content') or '')) for d in sidebar_docs[:5]])
                         if sidebar_docs:
                             sidebar_names = [str((d or {}).get("name") or "").strip() for d in sidebar_docs]
                             sidebar_names = [n for n in sidebar_names if n]
@@ -1127,8 +1132,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 effective_input = effective_input + "\n\n" + sidebar_block
                             else:
                                 effective_input = sidebar_block + "\n\n" + (input_text or "")
-                    except FileNotFoundError:
-                        pass  # no session yet, use raw input_text
+                    except Exception as _sidebar_err:
+                        append_domain_log("rag", f"SIDEBAR_CHECK_ERR session={task.session_id} err={_sidebar_err!r}")
+                        pass  # no session or corrupted session file, use raw input_text
 
                     # Code viewer: inject current open file with numbered lines into this turn only.
                     # Content is stored in runtime_state by web_server.py and cleared here after use.

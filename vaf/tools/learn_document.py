@@ -122,6 +122,84 @@ def _split_txt_md(path: Path, max_sections: int) -> List[Tuple[int, str]]:
     return parts
 
 
+def _merge_thin_pages(pages: List[Tuple[int, str]], min_chars: int = 80) -> List[Tuple[int, str]]:
+    """Merge consecutive pages with fewer than min_chars of stripped text into the next page."""
+    if not pages:
+        return pages
+    result: List[Tuple[int, str]] = []
+    pending_num: int | None = None
+    pending_text: str = ""
+    for page_num, text in pages:
+        stripped = text.strip()
+        if pending_text:
+            combined = pending_text + "\n\n" + stripped if stripped else pending_text
+            if len(stripped) < min_chars:
+                pending_text = combined
+            else:
+                result.append((pending_num, combined))
+                pending_num = None
+                pending_text = ""
+        else:
+            if len(stripped) < min_chars:
+                pending_num = page_num
+                pending_text = stripped
+            else:
+                result.append((page_num, text))
+    if pending_text:
+        if result:
+            prev_num, prev_text = result[-1]
+            result[-1] = (prev_num, prev_text + "\n\n" + pending_text)
+        else:
+            result.append((pending_num, pending_text))
+    return result
+
+
+_ANALYSIS_PROMPT_TEMPLATE = (
+    "You are a document analysis assistant. Given the pages of a document below, "
+    "produce a JSON object with these keys:\n"
+    '  "doc_summary": a 2-sentence overview of the entire document,\n'
+    '  "doc_tags": a list of 5 to 8 lowercase semantic tags describing the document topics,\n'
+    '  "pages": a list of objects, one per page, each with:\n'
+    '      "page": the page number (integer),\n'
+    '      "title": a descriptive 5-10 word title for that page,\n'
+    '      "content": 1-3 sentences capturing the key facts of that page.\n'
+    "Output ONLY the JSON object. Do not include any explanation or markdown fences.\n\n"
+    "=== Document: {doc_title} ===\n\n"
+    "{pages_block}"
+)
+
+
+def _analyze_document_llm(
+    pages: List[Tuple[int, str]],
+    doc_title: str,
+    generate_fn,
+    preview_chars: int = 400,
+) -> dict:
+    """Make one LLM call to analyze all pages. Returns parsed dict or {} on any failure."""
+    if not pages or generate_fn is None:
+        return {}
+    pages_block_parts = []
+    for page_num, text in pages:
+        preview = text.strip()[:preview_chars]
+        pages_block_parts.append(f"--- Page {page_num} ---\n{preview}")
+    pages_block = "\n\n".join(pages_block_parts)
+    prompt = _ANALYSIS_PROMPT_TEMPLATE.format(doc_title=doc_title, pages_block=pages_block)
+    try:
+        raw = generate_fn(prompt)
+    except Exception:
+        return {}
+    raw = (raw or "").strip()
+    # Strip markdown code fences if present
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    raw = raw.strip()
+    try:
+        import json
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
 def _run_async_in_new_loop(coro):
     """Run a coroutine in a new thread with its own event loop."""
     import asyncio
@@ -155,12 +233,6 @@ EXTRACTION_PROMPT_TEMPLATE = """Extract the key facts and knowledge from the fol
 
 
 class LearnDocumentTool(BaseTool):
-    """
-    Learn a document into long-term memory (RAG). Reads the file, splits by page or section,
-    runs a short LLM extraction per part, and stores each extraction as one memory with
-    type=document and a single document tag so the agent can recall the document later.
-    """
-
     name = "learn_document"
     permission_level = "write"
     side_effect_class = "irreversible"
@@ -173,14 +245,8 @@ class LearnDocumentTool(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "path": {
-                "type": "string",
-                "description": "Full path to the document (PDF, .txt, or .md).",
-            },
-            "document_title": {
-                "type": "string",
-                "description": "Optional short title for the document (e.g. 'Tora'). Used as tag doc-<title>. If omitted, derived from filename.",
-            },
+            "path": {"type": "string", "description": "Full path to the document (PDF, .txt, or .md)."},
+            "document_title": {"type": "string", "description": "Optional short title for the document (e.g. 'Tora'). Used as tag doc-<title>. If omitted, derived from filename."},
         },
         "required": ["path"],
     }
@@ -237,6 +303,8 @@ class LearnDocumentTool(BaseTool):
         else:
             return f"Error: Unsupported format. Use .pdf, .txt, or .md (got {suffix})."
 
+        parts = _merge_thin_pages(parts)
+
         if not parts:
             return "Error: No text could be extracted from the document (empty or unsupported)."
 
@@ -247,9 +315,21 @@ class LearnDocumentTool(BaseTool):
             def generate(prompt: str) -> str:
                 return agent._generate_for_compaction(prompt)
 
+        analysis = _analyze_document_llm(parts, document_title, generate)
+        doc_summary = (analysis.get("doc_summary") or "").strip()
+        llm_tags = [str(t).strip().lower() for t in (analysis.get("doc_tags") or []) if str(t).strip()]
+        page_analysis = {
+            int(p.get("page", 0)): p
+            for p in (analysis.get("pages") or [])
+            if isinstance(p, dict) and p.get("page")
+        }
+
         stored = 0
         for page_num, text in parts:
-            prompt = EXTRACTION_PROMPT_TEMPLATE.format(page_text=text)
+            pa = page_analysis.get(page_num, {})
+            page_title = (pa.get("title") or "").strip() or f"{document_title} \u2013 Page {page_num}"
+            ctx = f"Document context: {doc_summary}\n\n" if doc_summary else ""
+            prompt = ctx + EXTRACTION_PROMPT_TEMPLATE.format(page_text=text)
             try:
                 extraction = generate(prompt)
             except Exception as e:
@@ -258,19 +338,27 @@ class LearnDocumentTool(BaseTool):
             if not extraction:
                 continue
 
-            async def _ingest_one() -> None:
+            _page_title = page_title
+            _page_num = page_num
+
+            async def _ingest_one(
+                _extraction=extraction,
+                _page_title=_page_title,
+                _page_num=_page_num,
+            ) -> None:
                 from vaf.memory.database import get_db
                 from vaf.memory.rag import RagPipeline
                 async with get_db() as db:
                     pipeline = RagPipeline(db)
                     await pipeline.ingest(
-                        content=extraction,
+                        content=_extraction,
                         metadata={
                             "type": "document",
-                            "tags": [doc_tag],
+                            "tags": list(dict.fromkeys([doc_tag] + llm_tags)),
                             "source": "learn_document",
-                            "title": f"{document_title} – Page {page_num}",
-                            "page": page_num,
+                            "title": _page_title,
+                            "page": _page_num,
+                            "doc_tag": doc_tag,
                         },
                         user_scope_id=user_scope_id,
                         auto_connect=False,
@@ -282,10 +370,6 @@ class LearnDocumentTool(BaseTool):
             except Exception as e:
                 return f"Error storing memory (page {page_num}): {e}"
 
-        # Create (or update) one root "document index" memory so the whole document
-        # appears as a single deletable unit in the Memory UI (type=document_index, amber node).
-        # If an index with the same doc_tag already exists (re-ingest), update it in place
-        # instead of creating a duplicate.
         if stored > 0:
             async def _ingest_index() -> None:
                 from sqlalchemy import select, and_
@@ -293,9 +377,9 @@ class LearnDocumentTool(BaseTool):
                 from vaf.memory.rag import RagPipeline
                 from vaf.memory.models import Memory
                 async with get_db() as db:
-                    # Check for existing document_index with same doc_tag
                     conditions = [
-                        Memory.is_deleted == False,  # noqa: E712
+                        Memory.is_deleted == False,
+                        Memory.meta["type"].as_string() == "document_index",
                         Memory.meta["doc_tag"].as_string() == doc_tag,
                     ]
                     if user_scope_id is not None:
@@ -304,25 +388,31 @@ class LearnDocumentTool(BaseTool):
                     existing = result.scalar_one_or_none()
 
                     if existing is not None:
-                        # Update page_count in place — no duplicate node
                         meta = dict(existing.meta or {})
                         meta["page_count"] = stored
+                        if doc_summary:
+                            meta["doc_summary"] = doc_summary
                         existing.meta = meta
                     else:
+                        index_content = f"Document index: {document_title}."
+                        if doc_summary:
+                            index_content += f" {doc_summary}"
+                        index_content += f" Contains {stored} pages of extracted knowledge."
+                        index_tags = list(dict.fromkeys([doc_tag] + llm_tags))
+                        index_meta: dict = {
+                            "type": "document_index",
+                            "tags": index_tags,
+                            "source": "learn_document",
+                            "title": document_title,
+                            "doc_tag": doc_tag,
+                            "page_count": stored,
+                        }
+                        if doc_summary:
+                            index_meta["doc_summary"] = doc_summary
                         pipeline = RagPipeline(db)
                         await pipeline.ingest(
-                            content=(
-                                f"Document index: {document_title}. "
-                                f"Contains {stored} pages of extracted knowledge."
-                            ),
-                            metadata={
-                                "type": "document_index",
-                                "tags": [doc_tag],
-                                "source": "learn_document",
-                                "title": document_title,
-                                "doc_tag": doc_tag,
-                                "page_count": stored,
-                            },
+                            content=index_content,
+                            metadata=index_meta,
                             user_scope_id=user_scope_id,
                             auto_connect=False,
                         )
@@ -335,4 +425,4 @@ class LearnDocumentTool(BaseTool):
                     f"learn_document: failed to create document_index for {doc_tag}: {e}"
                 )
 
-        return f"Stored {stored} pages from «{document_title}» under tag {doc_tag}."
+        return f"Stored {stored} pages from \u00ab{document_title}\u00bb under tag {doc_tag}."

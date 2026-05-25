@@ -314,16 +314,23 @@ class MemorySaveTool(BaseTool):
             "tags": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional tags for filtering."
+                "description": "One or more tags to categorize this memory (e.g. ['user', 'preference'] or ['project', 'decision']). Required — at least one tag must be provided."
             }
         },
-        "required": ["content"]
+        "required": ["content", "tags"]
     }
 
     def run(self, **kwargs) -> str:
         content = (kwargs.get("content") or "").strip()
         if not content:
             return "Error: content is required and cannot be empty."
+        tags = kwargs.get("tags")
+        if not tags or not isinstance(tags, list) or not any(str(t).strip() for t in tags):
+            return (
+                "Error: tags is required. Provide at least one tag to categorize this memory "
+                "(e.g. tags=[\"user\"] or tags=[\"project\", \"decision\"]). "
+                "Good tags make memories retrievable later."
+            )
         user_scope_id = kwargs.get("user_scope_id")
         # Allow None = global scope (e.g. Web UI without login); memories still stored and visible on /memory
         if user_scope_id is not None and isinstance(user_scope_id, str):
@@ -332,9 +339,6 @@ class MemorySaveTool(BaseTool):
             except (ValueError, TypeError):
                 return "Error: Invalid user_scope_id."
         title = (kwargs.get("title") or "").strip() or None
-        tags = kwargs.get("tags")
-        if tags is not None and not isinstance(tags, list):
-            tags = None
         metadata = {"source": "memory_save", "type": "note"}
         if title:
             metadata["title"] = title

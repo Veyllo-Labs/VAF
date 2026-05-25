@@ -158,11 +158,38 @@ Use separate thresholds for vector and lexical scoring in the attachment lane:
 | `attachment_rag_hybrid_enabled` | `true` | In vector mode, combine vector + lexical candidates with RRF fusion. |
 | `attachment_rag_hybrid_lexical_k` | `16` (dynamic default) | Max lexical candidates retained before fusion in attachment hybrid mode. |
 | `attachment_rag_hybrid_lexical_scan_limit` | `96` | Max attachment rows scanned for lexical candidates before filtering/ranking. |
+| `attachment_rag_hierarchical_enabled` | `false` | Enable two-tier hierarchical indexing for large structured documents (vector mode only; see below). |
+| `attachment_rag_hierarchical_min_chars` | `4000` | Minimum document length in characters to activate hierarchical indexing. Shorter docs use flat chunking. |
+| `attachment_rag_hierarchical_max_sections` | `15` | Maximum number of sections indexed per document. |
+| `attachment_rag_hierarchical_coarse_k` | `3` | Number of sections selected in the Tier 1 coarse search before Tier 2 chunk search. |
 
 Practical guidance:
 - Start with `attachment_rag_lexical_min_score=0.05` as a conservative floor.
 - Raise only if lexical-only noise starts dominating fused top-k.
 - Keep `attachment_rag_threshold` and `attachment_rag_lexical_min_score` independent; they are different score scales.
+
+### Hierarchical Attachment Indexing
+
+When `attachment_rag_hierarchical_enabled=true`, large structured documents (patents, contracts, financial reports) are indexed using a **two-tier hierarchy** instead of flat chunking. This prevents hallucinations caused by chunks with no structural context.
+
+**How it works:**
+
+1. **Section detection** — the document is split into sections using markdown headers (`## Title`), page markers, or paragraph breaks. Sections shorter than 500 chars are merged; sections longer than 5 000 chars are split at sentence boundaries.
+2. **Section summaries (Tier 1)** — one LLM call per section generates a 1-2 sentence summary. Each section is stored as a `Memory` row whose embedding encodes the summary. If the LLM call fails, the first 300 chars of the section are used as a fallback.
+3. **Chunk index (Tier 2)** — the section's full text is chunked normally (512-token chunks, 50-token overlap) and stored as `Chunk` rows linked to the section Memory.
+
+**Retrieval:**
+- Query is embedded → cosine search over **section embeddings** → top `coarse_k` sections selected
+- Cosine search over **chunks** scoped to those sections only → top-k chunks returned
+- Each result includes `[Section Title]\n<section summary>\n\n<chunk text>` so the LLM gets structural context alongside the raw excerpt
+
+**Fallback chain** — hierarchical mode is silently bypassed and flat chunking is used when:
+- `attachment_rag_safe_mode=true` (safe mode always takes precedence)
+- Document length < `attachment_rag_hierarchical_min_chars`
+- Fewer than 2 sections detected (plain prose, no structure)
+- Any error during hierarchical ingest or retrieval
+
+**Requirements:** vector mode (`attachment_rag_safe_mode=false`) must be enabled. Recommended to raise `attachment_rag_op_timeout_sec` to ≥ 60 for documents with many sections, as section summary LLM calls run during ingest.
 
 ### Session Compaction (background)
 

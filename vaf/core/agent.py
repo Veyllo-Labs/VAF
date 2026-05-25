@@ -2851,6 +2851,8 @@ class Agent:
         temp_history = [{"role": "user", "content": user_prompt}]
         content = ""
         self._compaction_in_progress = True
+        _prev_compaction_env = os.environ.get("VAF_COMPACTION_IN_PROGRESS")
+        os.environ["VAF_COMPACTION_IN_PROGRESS"] = "1"
         try:
             if self.use_server:
                 import requests
@@ -2888,6 +2890,10 @@ class Agent:
             logging.getLogger(__name__).warning("Compaction LLM call failed: %s", e)
         finally:
             self._compaction_in_progress = False
+            if _prev_compaction_env is None:
+                os.environ.pop("VAF_COMPACTION_IN_PROGRESS", None)
+            else:
+                os.environ["VAF_COMPACTION_IN_PROGRESS"] = _prev_compaction_env
         return (content or "").strip()
 
     def _generate_for_document_extraction(self, user_prompt: str) -> str:
@@ -2901,6 +2907,8 @@ class Agent:
         temp_history = [{"role": "user", "content": user_prompt}]
         content = ""
         self._compaction_in_progress = True
+        _prev_doc_ext_env = os.environ.get("VAF_COMPACTION_IN_PROGRESS")
+        os.environ["VAF_COMPACTION_IN_PROGRESS"] = "1"
         try:
             if self.use_server:
                 import requests
@@ -2938,6 +2946,10 @@ class Agent:
             logging.getLogger(__name__).warning("Document extraction LLM call failed: %s", e)
         finally:
             self._compaction_in_progress = False
+            if _prev_doc_ext_env is None:
+                os.environ.pop("VAF_COMPACTION_IN_PROGRESS", None)
+            else:
+                os.environ["VAF_COMPACTION_IN_PROGRESS"] = _prev_doc_ext_env
         return (content or "").strip()
 
     def manage_context(self):

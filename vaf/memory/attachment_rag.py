@@ -345,6 +345,194 @@ def _vector_coalesce_enabled() -> bool:
     return bool(Config.get("attachment_rag_vector_coalesce_enabled", True))
 
 
+# ── Hierarchical indexing helpers ─────────────────────────────────────────────
+
+_HEADER_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
+_PAGE_MARKER_RE = re.compile(
+    r"(?:^|\n)(?:[-─═]{4,}|Page\s+\d+\b|CHAPTER\s+\d+\b|_{8,})",
+    re.IGNORECASE,
+)
+_PARA_BREAK_RE = re.compile(r"\n{2,}")
+
+
+def _split_into_sections(
+    text: str,
+    min_section_chars: int = 500,
+    max_section_chars: int = 5000,
+) -> List[Dict[str, Any]]:
+    """
+    Split document text into titled sections.
+    Returns [{"title": str, "text": str, "index": int}, ...] or [] to signal flat fallback.
+    Detection priority: markdown headers → page markers → paragraph breaks.
+    """
+    text = text or ""
+    if not text.strip():
+        return []
+
+    def _boundaries_from_headers(t: str):
+        matches = list(_HEADER_RE.finditer(t))
+        if len(matches) < 2:
+            return None, None
+        return [m.start() for m in matches], [m.group(2).strip() for m in matches]
+
+    def _boundaries_from_page_markers(t: str):
+        matches = list(_PAGE_MARKER_RE.finditer(t))
+        if len(matches) < 2:
+            return None, None
+        return [m.start() for m in matches], None
+
+    def _boundaries_from_para_breaks(t: str):
+        matches = list(_PARA_BREAK_RE.finditer(t))
+        if len(matches) < 2:
+            return None, None
+        return [m.start() for m in matches], None
+
+    boundaries, explicit_titles = _boundaries_from_headers(text)
+    if boundaries is None:
+        boundaries, explicit_titles = _boundaries_from_page_markers(text)
+    if boundaries is None:
+        boundaries, explicit_titles = _boundaries_from_para_breaks(text)
+    if boundaries is None or len(boundaries) < 2:
+        return []
+
+    # Build raw sections from consecutive boundary pairs
+    boundaries_with_end = sorted(set([0] + boundaries)) + [len(text)]
+    raw_sections: List[Dict[str, Any]] = []
+    for idx, (start, end) in enumerate(zip(boundaries_with_end, boundaries_with_end[1:])):
+        body = text[start:end].strip()
+        if not body:
+            continue
+        if explicit_titles and idx < len(explicit_titles):
+            title = explicit_titles[idx]
+        else:
+            first_line = body.split("\n")[0].strip()
+            title = first_line[:80] if first_line else f"Section {idx + 1}"
+        raw_sections.append({"title": title, "text": body, "index": idx})
+
+    # Merge sections shorter than min_section_chars into preceding section
+    merged: List[Dict[str, Any]] = []
+    for sec in raw_sections:
+        if merged and len(sec["text"]) < min_section_chars:
+            merged[-1]["text"] += "\n\n" + sec["text"]
+        else:
+            merged.append(dict(sec))
+
+    # Split sections longer than max_section_chars at nearest sentence boundary
+    final: List[Dict[str, Any]] = []
+    for sec in merged:
+        text_block = sec["text"]
+        while len(text_block) > max_section_chars:
+            split_at = max_section_chars
+            # Search backward for sentence boundary
+            for delim in (".", "!", "?"):
+                pos = text_block.rfind(delim, max_section_chars // 2, split_at)
+                if pos > 0:
+                    split_at = pos + 1
+                    break
+            final.append({"title": sec["title"], "text": text_block[:split_at].strip(), "index": len(final)})
+            text_block = text_block[split_at:].strip()
+        if text_block:
+            final.append({"title": sec["title"], "text": text_block, "index": len(final)})
+
+    # Re-index and validate
+    for i, s in enumerate(final):
+        s["index"] = i
+    return final if len(final) >= 2 else []
+
+
+def _summarize_section_llm(
+    section_text: str,
+    section_title: str,
+    *,
+    timeout_sec: int = 8,
+) -> str:
+    """
+    Generate a 1-2 sentence LLM summary for a section.
+    Never raises — falls back to first 300 chars of section text.
+    """
+    fallback = (section_text or "").strip()[:300]
+    try:
+        from vaf.core.api_backend import APIBackendManager
+        provider = str(Config.get("provider", "local") or "local")
+        backend = APIBackendManager(provider)
+        prompt = (
+            f"Summarize the following document section in 1-2 sentences.\n"
+            f"Section title: {section_title}\n\n"
+            f"{section_text[:2000]}\n\n"
+            f"Output only the summary, no preamble."
+        )
+        raw_chunks = list(
+            backend.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=120,
+                stream=False,
+            )
+        )
+        result = "".join(c if isinstance(c, str) else str(c) for c in raw_chunks if c).strip()
+        return result if result else fallback
+    except Exception:
+        return fallback
+
+
+async def _hierarchical_ingest_doc(
+    doc_name: str,
+    content: str,
+    session_id: str,
+    user_scope_id: Optional[UUID],
+    expires_at: str,
+    now_iso: str,
+    pipeline: Any,
+    op_timeout: int,
+) -> Dict[str, Any]:
+    """
+    Index a document using two-tier hierarchical structure:
+    - Tier 1: one Memory row per section (embedding = LLM summary)
+    - Tier 2: chunks of section text linked to the section Memory
+    Returns {"sections": int, "chunks": int, "method": "hierarchical"|"flat_fallback"}.
+    """
+    max_sections = max(2, min(50, int(Config.get("attachment_rag_hierarchical_max_sections", 15) or 15)))
+    sections = _split_into_sections(content, min_section_chars=500, max_section_chars=5000)
+
+    if len(sections) < 2:
+        return {"sections": 0, "chunks": 0, "method": "flat_fallback"}
+
+    per_sec_timeout = max(3, min(8, op_timeout // max(1, len(sections))))
+    total_sections = 0
+
+    for sec in sections[:max_sections]:
+        summary = _summarize_section_llm(sec["text"], sec["title"], timeout_sec=per_sec_timeout)
+        section_meta = {
+            # title = summary so that Memory.embedding encodes the section semantics
+            "title": summary,
+            "type": "attachment_section",
+            "source": ATTACHMENT_SOURCE,
+            "session_id": str(session_id),
+            "attachment_name": doc_name,
+            "section_index": sec["index"],
+            "section_title": sec["title"],
+            "section_summary": summary,
+            "expires_at": expires_at,
+            "indexed_at": now_iso,
+        }
+        await asyncio.wait_for(
+            pipeline.ingest(
+                content=sec["text"],
+                metadata=section_meta,
+                parent_id=None,
+                auto_connect=False,
+                user_scope_id=user_scope_id,
+            ),
+            timeout=per_sec_timeout + 5,
+        )
+        total_sections += 1
+
+    return {"sections": total_sections, "chunks": total_sections, "method": "hierarchical"}
+
+
+# ── End hierarchical helpers ───────────────────────────────────────────────────
+
+
 async def _replace_session_vector_once_async(
     *,
     session_id: str,
@@ -367,6 +555,9 @@ async def _replace_session_vector_once_async(
             deleted_old = await db.execute(delete(Memory).where(and_(*delete_filters)))
             indexed = 0
 
+            hierarchical_enabled = bool(Config.get("attachment_rag_hierarchical_enabled", False))
+            hierarchical_min_chars = max(500, int(Config.get("attachment_rag_hierarchical_min_chars", 4000) or 4000))
+
             for i, doc in enumerate(documents):
                 name = str((doc or {}).get("name") or f"Attachment {i + 1}").strip()
                 content = str((doc or {}).get("content") or "").strip()
@@ -378,6 +569,38 @@ async def _replace_session_vector_once_async(
                     content = content[:max_chars].rstrip() + "\n\n... [attachment truncated]"
                     truncated = True
 
+                from vaf.memory.rag import RagPipeline
+
+                pipeline = RagPipeline(db)
+
+                # Hierarchical path: build section-level index for large structured docs
+                use_hierarchical = hierarchical_enabled and len(content) >= hierarchical_min_chars
+                if use_hierarchical:
+                    try:
+                        h = await asyncio.wait_for(
+                            _hierarchical_ingest_doc(
+                                doc_name=name,
+                                content=content,
+                                session_id=session_id,
+                                user_scope_id=user_scope_id,
+                                expires_at=expires_at,
+                                now_iso=now_iso,
+                                pipeline=pipeline,
+                                op_timeout=op_timeout,
+                            ),
+                            timeout=op_timeout,
+                        )
+                        if h["method"] == "hierarchical":
+                            indexed += 1
+                            append_domain_log(
+                                "rag",
+                                f"ATTACH_HIER_INDEX doc={name!r} sections={h['sections']} chunks={h['chunks']}",
+                            )
+                            continue  # skip flat ingest below
+                    except Exception as hier_exc:
+                        append_domain_log("rag", f"ATTACH_HIER_INDEX_FAIL doc={name!r} err={hier_exc} falling_back_to_flat")
+
+                # Flat ingest (default path or hierarchical fallback)
                 meta = {
                     "title": f"Attachment: {name}",
                     "type": "attachment_ephemeral",
@@ -388,9 +611,6 @@ async def _replace_session_vector_once_async(
                     "indexed_at": now_iso,
                     "truncated": truncated,
                 }
-                from vaf.memory.rag import RagPipeline
-
-                pipeline = RagPipeline(db)
                 await asyncio.wait_for(
                     pipeline.ingest(
                         content=content,
@@ -817,12 +1037,103 @@ async def _search_session_async(
         op_timeout = _op_timeout_sec()
         async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
             from vaf.memory.rag import RagPipeline
+            from vaf.memory.models import Chunk as _Chunk
 
             hybrid_enabled = bool(Config.get("attachment_rag_hybrid_enabled", True))
             hybrid_rrf_k = int(Config.get("attachment_rag_hybrid_rrf_k", 60) or 60)
             hybrid_rrf_k = max(1, min(500, hybrid_rrf_k))
             vector_k = int(Config.get("attachment_rag_hybrid_vector_k", max(k * 4, 16)) or max(k * 4, 16))
             vector_k = max(k, min(80, vector_k))
+
+            # ── Two-tier hierarchical retrieval ──────────────────────────────
+            # Detect whether this session was indexed hierarchically
+            _hier_probe = (
+                select(Memory.id)
+                .where(
+                    and_(
+                        Memory.meta["source"].astext == ATTACHMENT_SOURCE,
+                        Memory.meta["session_id"].astext == str(session_id),
+                        Memory.meta["type"].astext == "attachment_section",
+                        *_scope_filters(user_scope_id),
+                    )
+                )
+                .limit(1)
+            )
+            has_hierarchical = (await db.execute(_hier_probe)).scalar() is not None
+
+            if has_hierarchical:
+                try:
+                    coarse_k = max(1, min(10, int(Config.get("attachment_rag_hierarchical_coarse_k", 3) or 3)))
+                    from vaf.memory.embeddings import get_embedding_service as _get_emb
+                    q_vec = await asyncio.wait_for(_get_emb().embed(q), timeout=op_timeout)
+                    max_distance = 1.0 - vector_threshold
+
+                    # Tier 1: cosine search over section Memory.embedding
+                    _tier1_stmt = (
+                        select(Memory, Memory.embedding.cosine_distance(q_vec).label("dist"))
+                        .where(
+                            and_(
+                                Memory.meta["source"].astext == ATTACHMENT_SOURCE,
+                                Memory.meta["session_id"].astext == str(session_id),
+                                Memory.meta["type"].astext == "attachment_section",
+                                Memory.embedding.isnot(None),
+                                *_scope_filters(user_scope_id),
+                            )
+                        )
+                        .order_by("dist")
+                        .limit(coarse_k)
+                    )
+                    tier1_rows = (await db.execute(_tier1_stmt)).all()
+
+                    if tier1_rows:
+                        top_section_ids = [row[0].id for row in tier1_rows]
+                        sec_meta_map = {str(row[0].id): row[0].meta or {} for row in tier1_rows}
+
+                        # Tier 2: chunk search scoped to the top sections only
+                        _tier2_stmt = (
+                            select(_Chunk, _Chunk.embedding.cosine_distance(q_vec).label("dist"), Memory)
+                            .join(Memory, _Chunk.memory_id == Memory.id)
+                            .where(
+                                and_(
+                                    _Chunk.memory_id.in_(top_section_ids),
+                                    _Chunk.embedding.cosine_distance(q_vec) < max_distance,
+                                )
+                            )
+                            .order_by("dist")
+                            .limit(vector_k)
+                        )
+                        tier2_rows = (await db.execute(_tier2_stmt)).all()
+
+                        hier_results: List[Dict[str, Any]] = []
+                        for row in tier2_rows:
+                            chunk, _dist, mem = row[0], row[1], row[2]
+                            sm = sec_meta_map.get(str(mem.id), mem.meta or {})
+                            sec_title = str(sm.get("section_title") or "Section")
+                            sec_summary = str(sm.get("section_summary") or "")
+                            attachment_name = str(sm.get("attachment_name") or "Attachment")
+                            prefix = f"[{sec_title}]\n{sec_summary}\n\n" if sec_summary else f"[{sec_title}]\n"
+                            body = prefix + (chunk.text or "").strip()
+                            if len(body) > snippet_chars:
+                                body = body[:snippet_chars].rstrip() + "\n... [truncated]"
+                            hier_results.append(
+                                {
+                                    "text": body,
+                                    "score": float(1.0 - _dist),
+                                    "attachment_name": attachment_name,
+                                }
+                            )
+
+                        if hier_results:
+                            append_domain_log(
+                                "rag",
+                                f"ATTACH_HIER_SEARCH session={session_id} scope={user_scope_id} "
+                                f"tier1_sections={len(tier1_rows)} tier2_chunks={len(hier_results)} k={k}",
+                            )
+                            return hier_results[:k]
+                        # tier2 empty → fall through to flat search
+                except Exception as hier_search_exc:
+                    append_domain_log("rag", f"ATTACH_HIER_SEARCH_FAIL session={session_id} err={hier_search_exc} falling_back_to_flat")
+            # ── End two-tier hierarchical retrieval ───────────────────────────
 
             pipeline = RagPipeline(db)
             sources = await asyncio.wait_for(

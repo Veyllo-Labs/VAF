@@ -1989,6 +1989,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             artifact_payload = _build_artifact_payload(loaded, sid)
             if artifact_payload:
                 await websocket.send_json(artifact_payload)
+            # Restore sidebar documents from session on connect (so UI recovers after page refresh)
+            try:
+                _saved_sidebar = (getattr(loaded, "runtime_state", None) or {}).get("sidebar_documents") or []
+                if _saved_sidebar:
+                    _slim_sidebar = [{k: v for k, v in d.items() if k != "data"} for d in _saved_sidebar]
+                    await websocket.send_json({
+                        "type": "sidebar_documents_restored",
+                        "contents": _slim_sidebar,
+                        "sessionId": sid,
+                    })
+            except Exception:
+                pass
         except Exception as e:
             log("WebServer", f"Auto-load session failed: {e}")
 
@@ -2126,20 +2138,35 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if artifact_payload:
                             await websocket.send_json(artifact_payload)
 
+                        # Restore sidebar documents from session — without base64 data (too large).
+                        # The frontend can re-show attached document names from the saved slim entries.
+                        try:
+                            _saved_sidebar = (getattr(loaded, "runtime_state", None) or {}).get("sidebar_documents") or []
+                            if _saved_sidebar:
+                                # Strip data field to keep the WS response small
+                                _slim_sidebar = [{k: v for k, v in d.items() if k != "data"} for d in _saved_sidebar]
+                                await websocket.send_json({
+                                    "type": "sidebar_documents_restored",
+                                    "contents": _slim_sidebar,
+                                    "sessionId": sid,
+                                })
+                        except Exception:
+                            pass
+
                         # 4. Send initial estimated stats (so UI is not empty)
                         try:
                             # Estimate based on loaded history
                             total_chars = sum(len(str(m.get("content", ""))) for m in frontend_messages)
                             est_tokens = total_chars // 3  # Rough estimate
-                            
+
                             # Get max context from config
                             cfg = Config.load()
                             max_ctx = cfg.get("n_ctx", 8192)
                             is_api = cfg.get("provider", "local") != "local"
-                            
+
                             if is_api and max_ctx <= 16384:
                                 max_ctx = 128000
-                                
+
                             stats = {
                                 "used": est_tokens,
                                 "total": max_ctx,
@@ -2152,6 +2179,32 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             })
                         except Exception as e:
                             print(f"[WebServer] Stats estimation error: {e}")
+
+                        # 5. Send context_status with persisted user_turn_count so the
+                        #    compaction progress bar is correct immediately after load/restart.
+                        try:
+                            from vaf.core.config import Config as _Cfg
+                            _compaction_interval = int(_Cfg.get("memory_compaction_interval", 15))
+                            _runtime = getattr(loaded, "runtime_state", None) or {}
+                            _user_turn_count = _runtime.get("user_turn_count", 0)
+                            if _user_turn_count == 0:
+                                # Fallback: count from saved messages
+                                _user_turn_count = sum(
+                                    1 for m in loaded.messages
+                                    if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "user"
+                                )
+                            await websocket.send_json({
+                                "type": "context_status",
+                                "sessionId": sid,
+                                "stats": {
+                                    "user_turn_count": _user_turn_count,
+                                    "compaction_interval": _compaction_interval,
+                                    "compaction_progress": round((_user_turn_count % _compaction_interval) / _compaction_interval * 100) if _compaction_interval else 0,
+                                    "message_count": len(loaded.messages),
+                                }
+                            })
+                        except Exception as e:
+                            print(f"[WebServer] context_status on load error: {e}")
 
                     except Exception as e:
                         import traceback
@@ -2847,36 +2900,43 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
-                        # Ensure sidebar documents are in session before queueing (so headless has context)
+                        # Ensure sidebar documents are in session before queueing (so headless has context).
+                        # NOTE: the frontend now sends only name+mimeType (no base64) so we skip
+                        # process_files_to_sidebar_list unless a payload entry actually has file data.
+                        # Documents are already in the session from the earlier set_sidebar_documents WS call.
                         if sidebar_docs_payload:
                             try:
-                                contents = await process_files_to_sidebar_list(sidebar_docs_payload)
-                                if contents:
-                                    try:
-                                        loaded = session_mgr.load(session_id)
-                                    except FileNotFoundError:
-                                        loaded = Session(
-                                            id=session_id,
-                                            name=f"Session {session_id}",
-                                            runtime_state={"sidebar_documents": contents},
-                                        )
-                                        session_mgr.save(loaded, sync_state=False)
-                                    else:
-                                        if not getattr(loaded, "runtime_state", None):
-                                            loaded.runtime_state = {}
-                                        loaded.runtime_state["sidebar_documents"] = contents
-                                        session_mgr.save(loaded, sync_state=False)
-                                    log("WebServer", f"Injected {len(contents)} sidebar doc(s) for session {session_id} before chat")
-                                    if bool(Config.get("attachment_rag_enabled", False)):
+                                has_data = any(doc.get("data") for doc in sidebar_docs_payload)
+                                if has_data:
+                                    contents = await process_files_to_sidebar_list(sidebar_docs_payload)
+                                    if contents:
+                                        _slim = [{k: v for k, v in doc.items() if k != "data"} for doc in contents]
                                         try:
-                                            from vaf.memory.attachment_rag import index_session_attachments_async
-                                            await index_session_attachments_async(
-                                                session_id=session_id,
-                                                user_scope_id=user_scope_id,
-                                                documents=contents,
+                                            loaded = session_mgr.load(session_id)
+                                        except FileNotFoundError:
+                                            loaded = Session(
+                                                id=session_id,
+                                                name=f"Session {session_id}",
+                                                runtime_state={"sidebar_documents": _slim},
                                             )
-                                        except Exception as e:
-                                            log("WebServer", f"attachment index (chat inject) failed: {e}")
+                                            session_mgr.save(loaded, sync_state=False)
+                                        else:
+                                            if not getattr(loaded, "runtime_state", None):
+                                                loaded.runtime_state = {}
+                                            loaded.runtime_state["sidebar_documents"] = _slim
+                                            session_mgr.save(loaded, sync_state=False)
+                                        log("WebServer", f"Injected {len(contents)} sidebar doc(s) for session {session_id} before chat")
+                                        if bool(Config.get("attachment_rag_enabled", False)):
+                                            try:
+                                                from vaf.memory.attachment_rag import index_session_attachments_async
+                                                await index_session_attachments_async(
+                                                    session_id=session_id,
+                                                    user_scope_id=user_scope_id,
+                                                    documents=contents,
+                                                )
+                                            except Exception as e:
+                                                log("WebServer", f"attachment index (chat inject) failed: {e}")
+                                # else: no file data — session already has documents from set_sidebar_documents
                             except Exception as e:
                                 log("WebServer", f"sidebar_documents on chat failed: {e}")
 
@@ -2943,9 +3003,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                         session_id = f"web-default-{safe_scope}"
                     documents = cmd.get("documents") or []
+                    from vaf.core.log_helper import log_attachment
+                    log_attachment("WS_RECEIVED", session=session_id, doc_count=len(documents),
+                        doc_names=[d.get("name","?") for d in documents[:5]])
                     contents = []
                     try:
                         if not documents:
+                            log_attachment("CLEAR_PATH", session=session_id)
                             loaded = session_mgr.load(session_id)
                             if not getattr(loaded, "runtime_state", None):
                                 loaded.runtime_state = {}
@@ -2963,12 +3027,51 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "sessionId": session_id
                             })
                         else:
+                            log_attachment("PROCESS_START", session=session_id, doc_count=len(documents))
                             contents = await process_files_to_sidebar_list(documents)
-                            loaded = session_mgr.load(session_id)
+                            log_attachment("PROCESS_DONE", session=session_id, results=len(contents),
+                                content_lens=[len(c.get("content","")) for c in contents],
+                                content_types=[
+                                    "ERROR" if "[ERROR]" in (c.get("content",""))[:80]
+                                    else "SCANNED" if "[Scanned PDF" in (c.get("content",""))[:200]
+                                    else "OK"
+                                    for c in contents
+                                ])
+                            for _dc in contents:
+                                _dc_name = _dc.get("name", "?")
+                                _dc_content = _dc.get("content", "")
+                                log("WebServer", f"set_sidebar_documents: doc={_dc_name!r} content_len={len(_dc_content)} preview={repr(_dc_content[:120])}")
+                            try:
+                                loaded = session_mgr.load(session_id)
+                            except Exception as _load_err:
+                                # Corrupted or 0-byte session file (pre-atomic-write crash).
+                                # Create a minimal in-memory session so sidebar_documents can be saved.
+                                log_attachment("SESSION_LOAD_FAILED", session=session_id, error=str(_load_err))
+                                log("WebServer", f"set_sidebar_documents: session load failed ({_load_err!r}), creating minimal session for {session_id}")
+                                loaded = Session(id=session_id, name=f"Session {session_id}")
+                                loaded.metadata["user_scope_id"] = str(user_scope_id or "")
                             if not getattr(loaded, "runtime_state", None):
                                 loaded.runtime_state = {}
-                            loaded.runtime_state["sidebar_documents"] = contents
+                            # Strip base64 data before persisting to session runtime_state.
+                            # The 'data' field can be 10-25 MB for large PDFs, bloating the
+                            # session JSON file and slowing every subsequent session read/write.
+                            # The frontend already received 'data' in the WS response below;
+                            # the headless_runner only needs 'content' (extracted text).
+                            def _sanitize_str(s):
+                                """Strip lone Unicode surrogates (lone surrogates from PDF emoji)  
+                                that break UTF-8 JSON serialization in session.save()."""
+                                if not isinstance(s, str):
+                                    return s
+                                return s.encode("utf-8", errors="replace").decode("utf-8")
+                            _slim = [
+                                {k: (_sanitize_str(v) if k == "content" else v)
+                                 for k, v in doc.items() if k != "data"}
+                                for doc in contents
+                            ]
+                            loaded.runtime_state["sidebar_documents"] = _slim
                             session_mgr.save(loaded, sync_state=False)
+                            log_attachment("SAVE_OK", session=session_id, docs=len(_slim),
+                                names=[d.get("name","?") for d in _slim])
                             if bool(Config.get("attachment_rag_enabled", False)):
                                 try:
                                     from vaf.memory.attachment_rag import index_session_attachments_async
@@ -2985,6 +3088,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "sessionId": session_id
                             })
                     except FileNotFoundError:
+                        # Session file missing — still do RAG ops but do NOT write a new
+                        # empty session to disk. Creating Session(id=session_id, messages=[])
+                        # and saving it would overwrite a valid session that was being written
+                        # concurrently, destroying the user's chat history.
+                        # The session is always created by the WS connection handler; sidebar
+                        # state is transient and will be re-synced on the next attachment.
                         if not documents:
                             if bool(Config.get("attachment_rag_enabled", False)):
                                 try:
@@ -3003,22 +3112,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     )
                                 except Exception as e:
                                     log("WebServer", f"attachment index failed (new session): {e}")
-                        new_sess = Session(
-                            id=session_id,
-                            name=f"Session {session_id}",
-                            runtime_state={"sidebar_documents": contents}
-                        )
-                        session_mgr.save(new_sess, sync_state=False)
                         await websocket.send_json({
                             "type": "sidebar_documents_set",
                             "contents": contents,
                             "sessionId": session_id
                         })
                     except Exception as e:
-                        log("WebServer", f"set_sidebar_documents failed: {e}")
+                        import traceback as _tb
+                        _tb_str = _tb.format_exc()
+                        log("WebServer", f"set_sidebar_documents FAILED: {e}\n{_tb_str}")
+                        log_attachment("SAVE_FAILED", session=session_id, error=str(e),
+                            tb=_tb_str[-400:])
+                        # Use whatever contents were computed before the failure.
+                        # Sending [] here would wipe the user's attached documents from
+                        # the viewer even when file extraction succeeded but session save
+                        # raised (e.g. stale corrupt JSON from before the atomic-write fix).
                         await websocket.send_json({
                             "type": "sidebar_documents_set",
-                            "contents": [],
+                            "contents": contents,
                             "sessionId": session_id,
                             "error": str(e)
                         })
@@ -4471,6 +4582,7 @@ async def process_files_to_sidebar_list(files: list) -> list:
     if not files:
         return []
 
+    from vaf.core.log_helper import log_attachment
     results = []
     for file_obj in files:
         try:
@@ -4486,6 +4598,11 @@ async def process_files_to_sidebar_list(files: list) -> list:
             file_ext = Path(filename).suffix or ".txt"
             if _is_temp_like_filename(filename):
                 filename = f"Dokument{file_ext}"
+
+            log_attachment("FILE_RECEIVED",
+                name=filename, mime=mime_type, ext=file_ext,
+                base64_len=len(base64_part), decoded_bytes=len(decoded_data))
+
             with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=file_ext, delete=False) as temp_file:
                 temp_file.write(decoded_data)
                 temp_path = temp_file.name
@@ -4493,7 +4610,28 @@ async def process_files_to_sidebar_list(files: list) -> list:
             try:
                 from vaf.tools.librarian import LibrarianTool
                 librarian = LibrarianTool()
-                content = librarian._read_file(Path(temp_path), enable_chunking=True)
+                # Run in a thread — PDF parsing (PyPDF2) is CPU-bound and blocks the
+                # event loop, which delays WebSocket streaming for the entire duration.
+                content = await asyncio.to_thread(librarian._read_file, Path(temp_path), True)
+                # Strip lone Unicode surrogates (e.g. \u{DE16} from PDF emoji).
+                # They survive json.dumps but crash UTF-8 encoding in WebSocket sends,
+                # session file writes, and API request serialization.
+                if content:
+                    content = content.encode("utf-8", errors="replace").decode("utf-8")
+
+                # Classify content type for diagnostics
+                _ctype = "TEXT"
+                if "[ERROR]" in (content or "")[:80]:
+                    _ctype = "ERROR"
+                elif "[Scanned PDF" in (content or "")[:200]:
+                    _ctype = "SCANNED_NO_TEXT"
+                elif "[INFO]" in (content or "")[:80] and "Auto-Chunk" in (content or "")[:200]:
+                    _ctype = "CHUNKED"
+                log_attachment("EXTRACT_DONE",
+                    name=filename, content_type=_ctype,
+                    content_len=len(content or ""),
+                    preview=repr((content or "")[:300]))
+
                 entry = {
                     "name": filename,
                     "content": content,
@@ -4537,9 +4675,11 @@ async def process_files_to_sidebar_list(files: list) -> list:
                 except Exception:
                     pass
         except Exception as e:
+            import traceback as _tb2
             err_name = file_obj.get("name", "unknown")
             if _is_temp_like_filename(err_name):
                 err_name = "Dokument" + (Path(err_name).suffix or ".txt")
+            log_attachment("FILE_ERROR", name=err_name, error=str(e), tb=_tb2.format_exc()[-300:])
             results.append({
                 "name": err_name,
                 "content": f"[ERROR] Failed to process file: {str(e)}",
@@ -4570,14 +4710,21 @@ def run_server(host="127.0.0.1", port=8001):
             log("WebServer", f"SSL auto-generation failed, falling back to HTTP: {e}")
             ssl_cert, ssl_key = "", ""
 
+    # Allow large PDF/file attachments: base64-encoded image-heavy PDFs can easily exceed
+    # uvicorn's default ws_max_size (16 MB), causing the server to close the WebSocket
+    # connection mid-upload (frontend shows "Verbindung wird wiederhergestellt").
+    ws_max_size = 200 * 1024 * 1024  # 200 MB
+
     if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
         config = uvicorn.Config(
             app=app, host=host, port=port, loop="asyncio", log_level="error",
-            ssl_certfile=ssl_cert, ssl_keyfile=ssl_key
+            ssl_certfile=ssl_cert, ssl_keyfile=ssl_key,
+            ws_max_size=ws_max_size,
         )
         log("WebServer", f"Starting with TLS (HTTPS/WSS) on {host}:{port}")
     else:
-        config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error")
+        config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error",
+                                ws_max_size=ws_max_size)
         if tls_enabled:
             log("WebServer", f"WARNING: TLS enabled but no certificates available, running HTTP on {host}:{port}")
     server = uvicorn.Server(config)

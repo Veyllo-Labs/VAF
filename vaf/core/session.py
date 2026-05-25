@@ -244,14 +244,29 @@ class SessionManager:
         
         # Serialize
         data = json.dumps(session.to_dict(), indent=2, ensure_ascii=False)
-        
-        if compress:
-            with gzip.open(filepath, 'wt', encoding='utf-8') as f:
-                f.write(data)
-        else:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(data)
-        
+        # Strip lone Unicode surrogates (e.g. from PDF emoji extracted by PyPDF2).
+        # json.dumps(ensure_ascii=False) produces them as literal surrogate codepoints
+        # which UTF-8 cannot encode, causing UnicodeEncodeError on file write.
+        data = data.encode("utf-8", errors="replace").decode("utf-8")
+
+        # Atomic write: write to a hidden temp file then rename so a crash/interrupt
+        # never leaves a 0-byte or half-written session file on disk.
+        tmp_filepath = self.storage_dir / f".{session.id}.tmp"
+        try:
+            if compress:
+                with gzip.open(tmp_filepath, 'wt', encoding='utf-8') as f:
+                    f.write(data)
+            else:
+                with open(tmp_filepath, 'w', encoding='utf-8') as f:
+                    f.write(data)
+            tmp_filepath.replace(filepath)  # atomic rename on POSIX
+        except Exception:
+            try:
+                tmp_filepath.unlink()
+            except Exception:
+                pass
+            raise
+
         return filepath
     
     def load(self, session_id: str, restore_state: bool = True) -> Session:

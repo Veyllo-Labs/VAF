@@ -1704,7 +1704,9 @@ function VAFDashboardContent() {
                     setPendingContactReplies(prev => prev.filter(p => p.replyId !== data.replyId));
                 }
                 else if (data.type === 'context_status') {
-                    setContextStats(data.stats);
+                    // Merge into existing contextStats so partial updates (e.g. load_session
+                    // sending only user_turn_count) don't wipe token counts set by 'stats'.
+                    setContextStats((prev: any) => ({ ...(prev || {}), ...data.stats }));
                 }
                 else if (data.type === 'real_context_payload') {
                     setRealContext(data);
@@ -2088,6 +2090,30 @@ function VAFDashboardContent() {
                     if (sid) setDocumentViewerStateForSession(sid, updater);
                     else setDocumentViewerState(updater);
                     if (contents.length > 0) setShowSubAgentPanel(true);
+                }
+                else if (data.type === 'sidebar_documents_restored') {
+                    // Server sends previously-saved sidebar documents when a session is loaded
+                    // (e.g. after page refresh). Only restore if the sidebar is currently empty
+                    // so we don't overwrite a freshly-attached document.
+                    const contents = (data.contents || []) as Array<{ name: string; content: string; mimeType?: string }>;
+                    const sid = data.sessionId || activeSessionId;
+                    if (contents.length > 0) {
+                        const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
+                            if (prev.documents.length > 0) return prev; // already has docs, don't overwrite
+                            return {
+                                isOpen: true,
+                                documents: contents.map((c, i) => ({
+                                    id: `doc-${i}-${crypto.randomUUID().slice(0, 8)}`,
+                                    name: c.name,
+                                    content: c.content ?? '',
+                                    ...(c.mimeType != null && { mimeType: c.mimeType }),
+                                })),
+                            };
+                        };
+                        if (sid) setDocumentViewerStateForSession(sid, updater);
+                        else setDocumentViewerState(updater);
+                        setShowSubAgentPanel(true);
+                    }
                 }
                 else if (data.type === 'subagent_update') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
@@ -2967,8 +2993,10 @@ function VAFDashboardContent() {
             return;
         }
 
-        const sidebarPayload = documentViewerState.documents.filter(d => d.data).length > 0
-            ? documentViewerState.documents.filter(d => d.data).map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType || '' }))
+        // Only send name+mimeType (no base64) — backend already has content from set_sidebar_documents.
+        // Sending base64 on every message caused double-processing of large PDFs and WS message bloat.
+        const sidebarPayload = documentViewerState.documents.length > 0
+            ? documentViewerState.documents.map(d => ({ name: d.name, mimeType: d.mimeType || '' }))
             : undefined;
         const editorDoc =
             documentEditorState.isOpen && (documentEditorState.docxModel || documentEditorState.content)
@@ -4486,15 +4514,20 @@ function VAFDashboardContent() {
                                             <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
                                                 <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
                                                 <div className="space-y-2">
-                                                    {ragResults.sources.slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
+                                                    {[...ragResults.sources].sort((a: { score?: number }, b: { score?: number }) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
                                                         const src = s.metadata?.source;
-                                                        const isFilename = src && /\.[a-z]{2,5}$/i.test(src);
+                                                        const title = s.metadata?.title;
+                                                        const displayLabel = title
+                                                            ? title.replace(/^Attachment:\s*/i, '').slice(0, 60)
+                                                            : src
+                                                                ? src.replace(/^memory\//, '')
+                                                                : null;
                                                         const tags = s.metadata?.tags;
                                                         return (
                                                         <div key={i} className="text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
                                                             <div className="flex items-center justify-between gap-2 mb-1">
-                                                                {isFilename && (
-                                                                    <span className="text-gray-500 font-medium truncate text-[11px]" title={src}>{src}</span>
+                                                                {displayLabel && (
+                                                                    <span className="text-gray-400 truncate text-[10px] max-w-[180px]" title={title ?? src ?? ''}>{displayLabel}</span>
                                                                 )}
                                                                 {s.score !== undefined && <span className="text-violet-600 font-mono shrink-0 ml-auto">{(s.score * 100).toFixed(0)}%</span>}
                                                             </div>

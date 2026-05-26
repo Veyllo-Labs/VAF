@@ -158,6 +158,65 @@ class AutomationTask:
 MIN_AUTOMATION_INTERVAL_MINUTES = 10
 
 
+def _resolve_username(user_scope_id: Optional[str]) -> str:
+    """Resolve username from config for notification lookups."""
+    try:
+        from vaf.core.config import Config
+        return Config.get("username", "admin") or "admin"
+    except Exception:
+        return "admin"
+
+
+def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) -> bool:
+    """Push automation result as a chat message to the user's latest web session.
+
+    Skipped when a main messenger (Telegram/WhatsApp/Discord) is configured —
+    the messenger handles delivery in that case.
+    Returns True if the message was pushed successfully.
+    """
+    try:
+        from vaf.core.messaging_connections import get_messaging_connections
+        username = _resolve_username(task.user_scope_id)
+        conn = get_messaging_connections(username=username, user_scope_id=task.user_scope_id)
+        main_messenger = (conn.get("main_messenger") or "").strip().lower()
+        if main_messenger in ("telegram", "whatsapp", "discord"):
+            return False  # messenger handles delivery — no duplicate push
+
+        from vaf.core.web_interface import get_web_interface
+        from vaf.core.session import SessionManager
+        wi = get_web_interface()
+        sm = SessionManager()
+        all_sessions = sm.list(limit=10, user_scope_id=task.user_scope_id)
+        web_sessions = [
+            s for s in all_sessions
+            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+        ]
+
+        status_icon = "\u2705" if status == "success" else "\u274c"
+        msg = f"{status_icon} **{task.name}** \u2014 {status.upper()}\n\n{(summary or '').strip()[:800]}"
+
+        if web_sessions:
+            sid = web_sessions[0]["id"]
+        else:
+            # No existing web session — create one to deliver the result
+            new_session = sm.create(user_scope_id=task.user_scope_id, metadata={"source": "automation_result"})
+            sid = new_session.id
+
+        loaded = sm.load(sid)
+        if loaded:
+            loaded.add_message(role="assistant", content=msg)
+            sm.save(loaded)
+
+        if wi:
+            wi.emit_agent_message("assistant", msg, session_id=sid)
+            wi.emit_session_unread(sid)
+
+        return True
+    except Exception as _e:
+        append_domain_log("backend", f"[AUTOMATION] _push_result_to_web_ui failed: {_e}")
+        return False
+
+
 def _minutes_since_midnight(time_str: str) -> int:
     """Parse HH:MM and return minutes since midnight (0-1439)."""
     if not time_str or ":" not in time_str:
@@ -1450,6 +1509,10 @@ vaf automation delete <id>   # Delete task
             pass
         try:
             status = "error" if (result or "").strip().startswith("Error:") else "success"
+            _push_result_to_web_ui(task, status, result or "Completed")
+        except Exception:
+            pass
+        try:
             self._sync_workspace_automation_state(
                 task,
                 run_status=status,

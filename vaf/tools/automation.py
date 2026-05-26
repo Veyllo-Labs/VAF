@@ -77,6 +77,14 @@ Use this when user wants to schedule recurring tasks or a one-time task:
 - UPDATE the existing automation instead of creating a new one
 - Inform user: "I'll update the existing automation [name] instead of creating a new one"
 
+3b. **FREQUENCY — CRITICAL: NEVER assume a recurring schedule!**
+   - Set `frequency='once'` for ANY one-time task (reminders, "do this tomorrow", "run this at 10:00", etc.)
+   - `frequency='once'` means: run **exactly once** and then the automation is automatically deleted. **No repeat.**
+   - Only set `frequency` to `daily` / `weekly` / `monthly` / `hourly` when the user has **EXPLICITLY** asked for a recurring schedule (e.g. "every day", "every Monday", "täglich", "wöchentlich").
+   - If the user says "remind me tomorrow at 10" → `frequency='once'`, `time='10:00'`. **No delay, no repeat.**
+   - **NEVER add a delay** unless the user explicitly asks to run something in the future. If `time` is in the future today, the system schedules it automatically.
+   - Summary: `once` = one run, no repeat | `daily`/`weekly`/etc. = only when user EXPLICITLY requested recurrence.
+
 4. **PROMPT CONTENT (when the automation sends something to the user):**
    - Never hardcode a messenger (e.g. send_telegram). The user may use WhatsApp, Discord, email, etc.
    - In the prompt, instruct: "Send the result/summary to the user via their **main_messenger** (see User Identity): use the matching tool—send_telegram, send_whatsapp, send_discord, send_slack, or send_mail—depending on main_messenger. If main_messenger is not set, summarize in your reply."
@@ -105,11 +113,23 @@ Use this when user wants to schedule recurring tasks or a one-time task:
             "frequency": {
                 "type": "string",
                 "enum": ["once", "hourly", "daily", "weekly", "monthly"],
-                "description": "How often to run: once (single run), hourly, daily, weekly, monthly"
+                "description": (
+                    "How often to run. REQUIRED — you MUST ask the user explicitly if not stated.\n"
+                    "- 'once': runs exactly one time, then deleted (DEFAULT — use unless user explicitly wants repetition)\n"
+                    "- 'daily': every day at the given time\n"
+                    "- 'weekly': every week on weekday (requires weekday param)\n"
+                    "- 'monthly': every month on day (requires day param)\n"
+                    "- 'hourly': every hour at :MM\n"
+                    "NEVER default to 'daily'. If unclear, ask the user."
+                )
             },
             "time": {
                 "type": "string",
-                "description": "Time to run in HH:MM format (e.g., '06:00', '18:30'). Must be at least 10 minutes apart from any existing automation."
+                "description": (
+                    "Time to run in HH:MM format (e.g., '07:00', '18:30'). "
+                    "REQUIRED — ask the user what time they want if not stated. "
+                    "Must be at least 10 minutes apart from existing automations."
+                )
             },
             "weekday": {
                 "type": "string",
@@ -126,6 +146,17 @@ Use this when user wants to schedule recurring tasks or a one-time task:
             "parameters": {
                 "type": "object",
                 "description": "Additional parameters like city for weather, category for news"
+            },
+            "max_retries": {
+                "type": "integer",
+                "description": "How many times to retry on failure (0 = no retry). Only set if user explicitly requests retry behavior.",
+                "minimum": 0,
+                "maximum": 5
+            },
+            "retry_delay_minutes": {
+                "type": "integer",
+                "description": "Minutes to wait between retries. Only relevant if max_retries > 0. Only set if user explicitly requests it.",
+                "minimum": 1
             }
         },
         "required": ["name", "prompt", "frequency", "time"]
@@ -134,7 +165,7 @@ Use this when user wants to schedule recurring tasks or a one-time task:
     def run(self, **kwargs) -> str:
         name = kwargs.get("name", "untitled")
         prompt = kwargs.get("prompt", "")
-        frequency = (kwargs.get("frequency") or "daily").lower()
+        frequency = (kwargs.get("frequency") or "").lower().strip()
         schedule_time = kwargs.get("time", "06:00")
         weekday_arg = kwargs.get("weekday")
         day_arg = kwargs.get("day")
@@ -159,6 +190,18 @@ Use this when user wants to schedule recurring tasks or a one-time task:
         output_path_arg = kwargs.get("output_path")
         output_path = output_path_arg or "Documents"  # Fallback only if not provided
         params = kwargs.get("parameters", {})
+        max_retries = kwargs.get("max_retries")
+        retry_delay_minutes = kwargs.get("retry_delay_minutes")
+        if max_retries is not None:
+            try:
+                params["max_retries"] = max(0, min(5, int(max_retries)))
+            except (TypeError, ValueError):
+                pass
+        if retry_delay_minutes is not None:
+            try:
+                params["retry_delay_minutes"] = max(1, int(retry_delay_minutes))
+            except (TypeError, ValueError):
+                pass
         
         if not prompt:
             return "Error: No prompt provided for automation."
@@ -263,11 +306,14 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                 name = self._generate_name_with_llm(prompt, extracted_params)
         
         # Validate frequency - must be one of the valid values
-        valid_frequencies = ["hourly", "daily", "weekly", "monthly"]
+        # IMPORTANT: "once" is a valid frequency for one-time tasks — do NOT override it!
+        valid_frequencies = ["once", "hourly", "daily", "weekly", "monthly"]
         if frequency not in valid_frequencies:
             # Try to infer from common patterns
             frequency_lower = str(frequency).lower()
-            if "täglich" in frequency_lower or "daily" in frequency_lower or "jeden tag" in frequency_lower or "every day" in frequency_lower:
+            if "once" in frequency_lower or "einmalig" in frequency_lower or "one-time" in frequency_lower or "one time" in frequency_lower:
+                frequency = "once"
+            elif "täglich" in frequency_lower or "daily" in frequency_lower or "jeden tag" in frequency_lower or "every day" in frequency_lower:
                 frequency = "daily"
             elif "wöchentlich" in frequency_lower or "weekly" in frequency_lower:
                 frequency = "weekly"
@@ -276,11 +322,11 @@ Use this when user wants to schedule recurring tasks or a one-time task:
             elif "monatlich" in frequency_lower or "monthly" in frequency_lower:
                 frequency = "monthly"
             else:
-                # Default to daily if frequency looks like a time (contains :)
-                if ":" in str(frequency):
-                    frequency = "daily"
-                else:
-                    frequency = "daily"  # Safe default
+                return (
+                    f"Error: frequency '{frequency}' is not valid. "
+                    "Must be one of: once, hourly, daily, weekly, monthly. "
+                    "Ask the user which frequency they want — NEVER assume daily."
+                )
         
         # Validate time format (HH:MM)
         if not isinstance(schedule_time, str) or ":" not in schedule_time:

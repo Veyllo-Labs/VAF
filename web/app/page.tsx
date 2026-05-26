@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import {
@@ -889,6 +890,8 @@ function VAFDashboardContent() {
     const [stopHovered, setStopHovered] = useState(false);
     const [stopPulsing, setStopPulsing] = useState(false);
     const stopPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const stopBtnRef = useRef<HTMLButtonElement>(null);
+    const [stopBtnPos, setStopBtnPos] = useState<{ x: number; y: number } | null>(null);
     const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string }[]>([]);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
@@ -3093,10 +3096,15 @@ function VAFDashboardContent() {
         if (!ws || !currentSessionId || isStoppingGenerationRef.current) return;
         isStoppingGenerationRef.current = true;
         setIsStoppingGeneration(true);
+        // Capture button position for portal ripples before state change
+        if (stopBtnRef.current) {
+            const r = stopBtnRef.current.getBoundingClientRect();
+            setStopBtnPos({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+        }
         // Ripple pulses for minimum 3 full cycles (3 × 1.1s ≈ 3.3s) regardless of how fast the backend stops
         setStopPulsing(true);
         if (stopPulseTimerRef.current) clearTimeout(stopPulseTimerRef.current);
-        stopPulseTimerRef.current = setTimeout(() => setStopPulsing(false), 3500);
+        stopPulseTimerRef.current = setTimeout(() => { setStopPulsing(false); setStopBtnPos(null); }, 3500);
         ws.send(JSON.stringify({
             type: 'stop_generation',
             sessionId: currentSessionId
@@ -4754,13 +4762,13 @@ function VAFDashboardContent() {
 
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
-                                    <div className="w-9 shrink-0 flex items-center justify-center">
+                                    <div className="w-9 shrink-0 flex items-center justify-center" style={{ overflow: 'visible' }}>
                                         {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration) && (
-                                            <div className="relative flex items-center justify-center">
+                                            <div className="relative flex items-center justify-center" style={{ overflow: 'visible' }}>
                                                 {/* Hover aura */}
-                                                {stopHovered && !isStoppingGeneration && (
+                                                {stopHovered && !stopPulsing && (
                                                     <span className="absolute inset-0 rounded-full pointer-events-none"
-                                                        style={{ boxShadow: '0 0 0 4px rgba(239,68,68,0.25), 0 0 12px 6px rgba(239,68,68,0.18)', borderRadius: '50%' }} />
+                                                        style={{ boxShadow: '0 0 0 6px rgba(239,68,68,0.28), 0 0 16px 8px rgba(239,68,68,0.15)', borderRadius: '50%', zIndex: 9989 }} />
                                                 )}
                                                 {/* Stop ripple waves — rendered for min 3 full pulse cycles */}
                                                 {stopPulsing && [0,1,2].map(i => (
@@ -4768,9 +4776,10 @@ function VAFDashboardContent() {
                                                         style={{
                                                             width: 36, height: 36,
                                                             left: '50%', top: '50%',
-                                                            backgroundColor: 'rgba(239,68,68,0.5)',
+                                                            backgroundColor: 'rgba(239,68,68,0.45)',
                                                             animation: `stopRipple 1.1s ease-out infinite`,
                                                             animationDelay: `${i * 0.37}s`,
+                                                            zIndex: 9990,
                                                         }} />
                                                 ))}
                                                 <button

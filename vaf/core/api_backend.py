@@ -488,6 +488,7 @@ class APIBackendManager:
         if self.provider_name == "deepseek" and str(model or "").lower() == "deepseek-auto":
             _pro_context = (
                 os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+                or os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_COMPACTION_IN_PROGRESS", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_TOOL_MODEL", "").strip().lower() == "deepseek-auto"
             )

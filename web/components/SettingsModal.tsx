@@ -258,6 +258,16 @@ const PROVIDERS = [
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
 ];
 
+// Vision-capable providers (no static model lists — models are fetched dynamically via refresh button)
+const VISION_PROVIDERS: { id: string; label: string }[] = [
+    { id: 'openai',     label: 'OpenAI' },
+    { id: 'anthropic',  label: 'Anthropic' },
+    { id: 'google',     label: 'Google' },
+    { id: 'openrouter', label: 'OpenRouter' },
+];
+
+const VISION_CAPABLE_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter']);
+
 // Common IANA timezones for Date & Time (Interface). Used in system prompt and user context.
 const DATE_TIME_TIMEZONES: { value: string; label: string }[] = [
     { value: '', label: 'Server default' },
@@ -1780,6 +1790,69 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
                                     );
                                 })}
+
+                                {/* Vision Model Fallback */}
+                                {(() => {
+                                    const primaryProvider = localConfig.provider || 'local';
+                                    const primaryHasVision = VISION_CAPABLE_PROVIDERS.has(primaryProvider);
+                                    const selectedVisionProvider = localConfig.vision_provider || '';
+                                    return (
+                                        <Section title={tAi('visionModel')}>
+                                            {primaryHasVision && !selectedVisionProvider && (
+                                                <p className="text-xs text-green-600 mb-3 flex items-center gap-1">
+                                                    <span>✓</span> {tAi('visionSameProvider')}
+                                                </p>
+                                            )}
+                                            <p className="text-xs text-gray-400 mb-3">{tAi('visionProviderDesc')}</p>
+                                            <Select
+                                                label={tAi('visionProvider')}
+                                                value={selectedVisionProvider}
+                                                onChange={(v: string) => {
+                                                    handleChange('vision_provider', v);
+                                                    handleChange('vision_model', '');
+                                                }}
+                                                options={[
+                                                    { value: '', label: tAi('visionNone') },
+                                                    ...VISION_PROVIDERS.map(p => ({ value: p.id, label: p.label }))
+                                                ]}
+                                            />
+                                            {selectedVisionProvider && (
+                                                <div className="mt-3">
+                                                    <div className="flex gap-2 items-end">
+                                                        <div className="flex-1">
+                                                            <Select
+                                                                label={tAi('visionModelLabel')}
+                                                                value={localConfig.vision_model || ''}
+                                                                onChange={(v: string) => handleChange('vision_model', v)}
+                                                                options={(() => {
+                                                                    const fetched = apiModels[selectedVisionProvider] || [];
+                                                                    const seen = new Set<string>();
+                                                                    return [
+                                                                        { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('visionModelDesc') },
+                                                                        ...fetched
+                                                                            .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
+                                                                            .map(m => ({ value: m, label: m }))
+                                                                    ];
+                                                                })()}
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleFetchModels(selectedVisionProvider)}
+                                                            className={cn(
+                                                                "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                                                                fetchingProvider === selectedVisionProvider && "animate-pulse"
+                                                            )}
+                                                            title={tAi('fetchModels')}
+                                                            disabled={!localConfig[`api_key_${selectedVisionProvider}`]}
+                                                        >
+                                                            <RefreshCw size={18} className={cn(fetchingProvider === selectedVisionProvider && "animate-spin")} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </Section>
+                                    );
+                                })()}
 
                                 <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
                                     <div className="flex items-center justify-between mb-3">

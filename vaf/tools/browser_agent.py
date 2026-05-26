@@ -23,6 +23,189 @@ from typing import Any, Optional
 from vaf.tools.base import BaseTool
 
 
+# ── 0. On-demand vision helpers ───────────────────────────────────────────────
+# Vision is only called when browser-use sends a screenshot (use_vision='auto'),
+# or when the agent explicitly calls describe_page_visually().
+# This avoids paying vision-token cost on every DOM-only step.
+
+def _model_supports_vision(provider: str, model: str) -> bool:
+    """Mirror of agent.py's _model_supports_vision — kept in sync manually."""
+    if provider == "anthropic":
+        return True
+    if provider == "google":
+        return True
+    if provider == "openai":
+        return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
+    if provider == "deepseek":
+        return False
+    if provider == "openrouter":
+        return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
+    return True  # local / unknown: pass through
+
+
+def _call_vision(image_url: str, prompt: str, max_tokens: int = 512) -> Optional[str]:
+    """
+    Send a screenshot to the configured vision backend with a custom prompt.
+    Returns the response text, or None if no vision backend is available.
+    """
+    try:
+        from vaf.core.config import Config
+        from vaf.core.api_backend import APIBackendManager
+
+        vision_provider = Config.get("vision_provider", "").strip()
+        vision_model = Config.get("vision_model", "").strip() or None
+
+        if not vision_provider:
+            return None
+
+        backend = APIBackendManager(vision_provider)
+        msgs = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }]
+        text = ""
+        for chunk in backend.chat_completion(
+            msgs, model=vision_model, temperature=0.1,
+            max_tokens=max_tokens, stream=True,
+        ):
+            if isinstance(chunk, str):
+                text += chunk
+        return text.strip() or None
+    except Exception as _e:
+        logging.getLogger(__name__).debug("vision call failed: %s", _e)
+        return None
+
+
+def _call_vision_for_screenshot(image_url: str) -> Optional[str]:
+    """Generic page description — used by describe_page_visually action."""
+    return _call_vision(
+        image_url,
+        prompt=(
+            "You are helping a browser automation agent. "
+            "Describe what is visible on this screenshot concisely: "
+            "page title/heading, main content, any forms, buttons, errors, "
+            "or CAPTCHA/challenge elements. Be specific and brief."
+        ),
+        max_tokens=512,
+    )
+
+
+def _call_vision_for_captcha(image_url: str, category: str) -> Optional[str]:
+    """
+    Analyze a reCAPTCHA grid screenshot and return which tile indices to click.
+    Grid size is detected from the image — not assumed.
+    """
+    prompt = (
+        f"This is a reCAPTCHA image challenge screenshot.\n"
+        f"It shows a grid of image tiles. First, count the rows and columns yourself "
+        f"from what you see — do NOT assume a fixed size.\n"
+        f"The task is to select all tiles that contain: \"{category}\"\n\n"
+        f"Number the tiles 0 to (rows×cols − 1), left-to-right, top-to-bottom.\n"
+        f"Examine EACH tile carefully.\n\n"
+        f"Respond with ONLY JSON — no prose, no markdown fences:\n"
+        f'{{"tiles": [<matching indices>], "rows": <rows you counted>, '
+        f'"cols": <cols you counted>, "confidence": "high"|"medium"|"low"}}'
+    )
+    raw = _call_vision(image_url, prompt=prompt, max_tokens=150)
+    if not raw:
+        return None
+
+    try:
+        cleaned = raw.strip()
+        if "```" in cleaned:
+            parts = cleaned.split("```")
+            cleaned = parts[1].lstrip("json").strip() if len(parts) > 1 else cleaned
+        start, end = cleaned.find("{"), cleaned.rfind("}") + 1
+        if start >= 0 and end > start:
+            obj = json.loads(cleaned[start:end])
+            tiles = obj.get("tiles", [])
+            rows = obj.get("rows", "?")
+            cols = obj.get("cols", "?")
+            conf = obj.get("confidence", "unknown")
+            grid_desc = f"{rows}×{cols}" if rows != "?" else "unknown size"
+            if tiles:
+                return (
+                    f"[reCAPTCHA analysis — category: '{category}']\n"
+                    f"Detected grid: {grid_desc}  |  Confidence: {conf}\n"
+                    f"Tiles to click (0-indexed, left→right, top→bottom): {tiles}\n"
+                    f"Click each listed tile, then click 'Verify'."
+                )
+            else:
+                return (
+                    f"[reCAPTCHA analysis — category: '{category}']\n"
+                    f"Detected grid: {grid_desc}  |  No matching tiles found (confidence: {conf}).\n"
+                    f"Click 'Skip' if available, otherwise click 'Verify' and wait for a new challenge."
+                )
+    except Exception:
+        pass
+    return f"[reCAPTCHA vision response]\n{raw}"
+
+
+def _build_browser_controller():
+    """
+    Build a browser-use Controller with vision-powered actions.
+
+    Actions:
+      describe_page_visually  — generic page description (stuck, unclear DOM)
+      solve_captcha_challenge — targeted reCAPTCHA tile analysis → returns click indices
+    """
+    from browser_use import Controller
+    import base64
+
+    controller = Controller()
+
+    @controller.action(
+        "Visually describe the current page using a screenshot. "
+        "Use for general page understanding when DOM text is insufficient. "
+        "For reCAPTCHA image grids, use solve_captcha_challenge instead."
+    )
+    async def describe_page_visually(browser_session) -> str:  # type: ignore[misc]
+        try:
+            shot = await browser_session.take_screenshot(
+                format="jpeg", quality=72, full_page=False
+            )
+            b64 = base64.b64encode(shot).decode()
+            desc = _call_vision_for_screenshot(f"data:image/jpeg;base64,{b64}")
+            if desc:
+                return f"[Visual description of current page]\n{desc}"
+            return (
+                "Vision API not configured. "
+                "Configure a Vision Model in VAF Settings → AI & Model to enable this."
+            )
+        except Exception as e:
+            return f"Screenshot failed: {e}"
+
+    @controller.action(
+        "Solve a reCAPTCHA image tile challenge using computer vision. "
+        "Call this IMMEDIATELY when you see a grid of images asking you to select specific tiles "
+        "(buses, traffic lights, crosswalks, bicycles, fire hydrants, etc.). "
+        "The grid can be any size — the vision model detects it automatically. "
+        "Provide the exact category text shown above the grid (e.g. 'traffic lights', 'buses'). "
+        "Returns the tile indices (0-indexed, left-to-right, top-to-bottom) to click."
+    )
+    async def solve_captcha_challenge(category: str, browser_session) -> str:  # type: ignore[misc]
+        try:
+            # Higher quality for tile content analysis
+            shot = await browser_session.take_screenshot(
+                format="jpeg", quality=88, full_page=False
+            )
+            b64 = base64.b64encode(shot).decode()
+            result = _call_vision_for_captcha(f"data:image/jpeg;base64,{b64}", category)
+            if result:
+                return result
+            return (
+                "Vision API not configured — cannot analyze CAPTCHA tiles. "
+                "Configure a Vision Model in VAF Settings → AI & Model."
+            )
+        except Exception as e:
+            return f"CAPTCHA analysis failed: {e}"
+
+    return controller
+
+
 # ── 1. Async-to-sync bridge ───────────────────────────────────────────────────
 # Copied verbatim from vaf/tools/context_tools.py so there is no cross-tool
 # import dependency. Creates a fresh OS thread + event loop to avoid
@@ -210,19 +393,57 @@ class VAFLLMBridge:
     # ── Message conversion ────────────────────────────────────────────────────
 
     def _to_dicts(self, messages: list) -> list[dict]:
-        """Convert browser-use BaseMessage objects → VAF/OpenAI dicts."""
+        """
+        Convert browser-use BaseMessage objects → VAF/OpenAI dicts.
+
+        Image handling (on-demand vision):
+        - If main provider supports native vision → pass image_url blocks directly.
+        - Else if vision_provider configured → call vision API → inject text description.
+        - Else → skip images (DOM-only fallback).
+        """
+        native_vision = _model_supports_vision(self._provider_name, self.model)
         result = []
         for m in messages:
             role = str(getattr(m, "role", "user"))
             content = getattr(m, "content", "") or ""
             if isinstance(content, list):
-                # Multimodal parts: extract text only (vision=False in v1)
-                parts = []
+                text_parts: list[str] = []
+                img_urls: list[str] = []
+
                 for p in content:
                     if getattr(p, "type", "") == "image_url":
-                        continue        # skip screenshots
-                    parts.append(getattr(p, "text", str(p)))
-                content = "\n".join(parts)
+                        # Extract URL from various browser-use object shapes
+                        img = getattr(p, "image_url", None)
+                        if isinstance(img, dict):
+                            img_url = img.get("url", "")
+                        elif isinstance(img, str):
+                            img_url = img
+                        else:
+                            img_url = str(img or "")
+                        if img_url:
+                            img_urls.append(img_url)
+                    else:
+                        text_parts.append(getattr(p, "text", str(p)))
+
+                if img_urls:
+                    if native_vision:
+                        # Pass images natively — provider handles them directly
+                        blocks: list = []
+                        if text_parts:
+                            blocks.append({"type": "text", "text": "\n".join(text_parts)})
+                        for url in img_urls:
+                            blocks.append({"type": "image_url", "image_url": {"url": url}})
+                        result.append({"role": role, "content": blocks})
+                        continue
+                    else:
+                        # Vision fallback: describe each image, inject as text
+                        for url in img_urls:
+                            desc = _call_vision_for_screenshot(url)
+                            if desc:
+                                text_parts.append(f"[Vision: {desc}]")
+                        # fall through to plain-text content below
+
+                content = "\n".join(text_parts)
             result.append({"role": role, "content": str(content)})
         return result
 
@@ -527,8 +748,9 @@ class BrowserAgentTool(BaseTool):
             task=task,
             llm=_build_vaf_bridge(session_id=_session_id),
             browser_session=browser,
+            controller=_build_browser_controller(),
             max_failures=3,
-            use_vision=False,
+            use_vision=False,       # screenshots go only through describe_page_visually action
             enable_planning=False,
             use_thinking=False,
         )

@@ -12,6 +12,8 @@ VAF supports **scheduled automations**: the agent runs a prompt on a schedule (o
 - **CLI and scheduler:** `vaf automation list`, `vaf automation run <id>`, and `vaf automation start` use an aggregated view: the global manager loads tasks from `automations/` and from every `automations/<uuid>/` subdir. All automations are listed and scheduled; save, delete, and restore write to the task's scope path (`_path_for_task`).
 - **Web UI:** **Settings → Automations** lists and manages automations. The **Automation** button in the main footer opens the automation calendar: pick month, day, and hour slot to create a new automation (repeat, time, prompt, optional name). Creation is sent via WebSocket (`create_automation`); the list refreshes on success.
 - **Agent tool:** The agent can create (and manage) automations via the `create_automation` tool in chat. The Tool Router adds `create_automation` when the user message contains words like "automate", "schedule", "daily", "weekly" (see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
+- **Result delivery:** After an automation completes, the result is pushed as a chat message (✅/❌ + summary) to the user's latest web session. If a main messenger (Telegram, WhatsApp, Discord) is configured, the messenger handles delivery instead of the Web UI. If no web session exists, a new one is created.
+- **Model for execution:** Automations run with `VAF_IN_AUTOMATION=1`, which causes `deepseek-auto` to resolve to the pro model (same as workflows). This ensures tool-heavy automations use the most capable model.
 - **Thinking Workspace bridge (MVP):** automation lifecycle is mirrored into per-user thinking workspace tasks (`source=automation:<id>`). Run status (`success/error`), last/next run, `last_completed_local_date` (when present), and enabled state are synced so Thinking Mode can reason over current automation health. Approved workspace handoffs can optionally trigger `create`/`update` automation actions (approval-gated).
 
 ## Today status, persisted completion, and catch-up runs
@@ -21,6 +23,23 @@ VAF supports **scheduled automations**: the agent runs a prompt on a schedule (o
 - **Agent tools:** `list_automations` and `read_automation` include a **Today (local)** line for the model: **Done (today)**, **Scheduled (later today)**, **Due (not yet run today)**, or **In progress** (automation lock held). `read_automation` also shows **Last completed (local date)** when set.
 - **Immediate run after `create_automation`:** If the chosen clock time has **already passed today**, a daily automation is normally started **once** right after creation. That **immediate catch-up is skipped** when another **enabled daily** automation in the same **family** already completed today: same name (case-insensitive), or both names match a small briefing-style heuristic (e.g. “briefing”, “Morgenbrief”, “morning brief”). The tool response includes **Same-day catch-up skipped** with a short reason so duplicate morning jobs do not run twice the same calendar day.
 - **Web UI:** The automations list in Settings still centers on schedule and `last_run`; the explicit **today** wording above is primarily surfaced through **agent tools** until the UI is extended to show the same labels.
+
+## create_automation tool — parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Short identifier (e.g. `daily_news`) |
+| `prompt` | yes | Full task prompt the agent executes |
+| `frequency` | yes | **Must be explicitly confirmed with the user.** One of: `once`, `hourly`, `daily`, `weekly`, `monthly`. Default is `once` (single run, deleted after execution). The agent must never assume `daily` or any other frequency. |
+| `time` | yes | HH:MM format. Must be confirmed with the user. Minimum 10 min gap from any existing automation. |
+| `weekday` | for `weekly` | e.g. `monday` |
+| `day` | for `monthly` | Day of month (1–31) |
+| `output_path` | no | Save location (default: `Documents`) |
+| `parameters` | no | Extra context: `city`, `category`, etc. |
+| `max_retries` | no | Times to retry on failure (0–5). Only set if user explicitly requests retry behaviour. |
+| `retry_delay_minutes` | no | Minutes between retries. Only relevant with `max_retries > 0`. |
+
+**Frequency rule (important):** The agent errors if an unknown frequency is passed. It never silently defaults to `daily`. The tool enforces: if not one of the five valid values, return an error and ask the user to specify.
 
 ## Automation planner (notes and to-dos)
 

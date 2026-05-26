@@ -56,6 +56,12 @@ class Config:
         "api_model_google": "gemini-1.5-flash",  # Free tier, fast & capable
         "api_model_openrouter": "anthropic/claude-3.5-sonnet",
         
+        # Vision Model Fallback — used when the primary provider does not support image input.
+        # Example: primary = deepseek (no vision) → vision_provider = google / openai / anthropic.
+        # Leave empty to keep current behavior (strip images + show error to user).
+        "vision_provider": "",   # e.g. "google", "openai", "anthropic", "openrouter"
+        "vision_model": "",      # e.g. "gemini-2.0-flash", "gpt-4o" — leave empty for provider default
+
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
         "subagent_use_separate_provider": False,

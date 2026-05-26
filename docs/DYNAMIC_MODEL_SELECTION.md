@@ -241,6 +241,44 @@ Only relevant models shown:
 - Google: Text generation models only (no vision-only)
 - No deprecated models
 
+## Vision Model Fallback
+
+Some providers (notably DeepSeek) do not support image input. VAF lets you configure a separate **Vision Model** that is used automatically whenever the primary model cannot process images.
+
+### Configuration
+
+**Settings → AI & Model → Vision-Modell**
+
+| Setting | Description |
+|---------|-------------|
+| `vision_provider` | Provider to use for vision tasks (`openai`, `anthropic`, `google`, `openrouter`). Leave empty to show an error when images are attached. |
+| `vision_model` | Specific model for vision. Leave empty to use the provider's default. |
+
+### How it works
+
+1. User sends a message with an image attached.
+2. If the primary provider supports vision (Anthropic, Google, OpenAI with `gpt-4o`, etc.) → image is processed normally.
+3. If the primary provider **does not** support vision (e.g. DeepSeek) and a `vision_provider` is configured:
+   - VAF makes a short auxiliary call to the vision provider to analyse the image.
+   - The description is injected into the message as `[Vision (provider/model): ...]`.
+   - The primary model (DeepSeek etc.) then answers based on the text description.
+4. If no `vision_provider` is set → the user sees an error and is told to configure one.
+
+### Vision-capable providers
+
+| Provider | Vision support | Recommended model |
+|----------|---------------|-------------------|
+| OpenAI | ✅ | `gpt-4o` |
+| Anthropic | ✅ all Claude 3+ | `claude-3-5-sonnet-20241022` |
+| Google | ✅ all Gemini | `gemini-2.0-flash` |
+| OpenRouter | ✅ varies | `openai/gpt-4o` |
+| DeepSeek | ❌ | — |
+| Local | depends on model | — |
+
+### Image persistence in chat
+
+Attached images are saved with the session message and are visible after page reload regardless of which model processed them. Image data is stored in the message `metadata` and reconstructed as data URIs when serving session history.
+
 ## Troubleshooting
 
 ### Models Not Loading?

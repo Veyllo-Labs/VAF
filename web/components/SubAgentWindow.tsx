@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +30,56 @@ export type SubAgentWindowProps = {
     browserUrl?: string;     // current page URL
     [key: string]: any;
 };
+
+/**
+ * Typewriter animation for console lines — strictly sequential.
+ *
+ * state:
+ *   'done'    — already animated, show full text immediately
+ *   'active'  — currently typing (only one at a time)
+ *   'pending' — waiting in queue, invisible until its turn
+ *
+ * When the active line finishes typing it calls onDone() → parent advances
+ * animatingIdx → next line becomes 'active'.
+ */
+function AnimatedConsoleLine({ text, state, onDone }: {
+    text: string;
+    state: 'done' | 'active' | 'pending';
+    onDone: () => void;
+}) {
+    const [typedLen, setTypedLen] = useState(() => state === 'done' ? text.length : 0);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const onDoneRef = useRef(onDone);
+    onDoneRef.current = onDone;
+
+    useEffect(() => {
+        if (state === 'done') { setTypedLen(text.length); return; }
+        if (state === 'pending') { setTypedLen(0); return; }
+        // state === 'active'
+        setTypedLen(0);
+        let i = 0;
+        const tick = () => {
+            i++;
+            setTypedLen(i);
+            if (i < text.length) {
+                timerRef.current = setTimeout(tick, 7 + Math.random() * 5);
+            } else {
+                onDoneRef.current();
+            }
+        };
+        timerRef.current = setTimeout(tick, 20);
+        return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    }, [state, text]);
+
+    return (
+        <div className="break-all whitespace-pre-wrap leading-5">
+            {text.slice(0, typedLen)}
+            {state === 'active' && typedLen < text.length && (
+                <span className="inline-block w-[1px] h-[0.85em] bg-gray-400 align-middle ml-[1px] animate-pulse" />
+            )}
+        </div>
+    );
+}
 
 const actionTone = (type: string) => {
     const normalized = type.toLowerCase();
@@ -82,6 +132,11 @@ export default function SubAgentWindow({
             : 'bg-gray-400';
     const hasWorkflow = false;
     const codeLines = useMemo(() => (displayCode ? displayCode.split('\n') : []), [displayCode]);
+
+    // Sequential console animation queue — only one line types at a time.
+    // Initialise to current line count so existing lines on mount show instantly.
+    const [animatingIdx, setAnimatingIdx] = useState(() => consoleLines.length);
+    const advanceAnim = () => setAnimatingIdx(i => i + 1);
 
     // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
     const consoleScrollRef = useRef<HTMLDivElement>(null);
@@ -232,12 +287,12 @@ export default function SubAgentWindow({
                         <span className="truncate font-mono text-[11px]">{displayFile || 'No active file'}</span>
                     </div>
 
-                    <div className="flex flex-1 flex-col overflow-hidden p-4 gap-3">
-                        {/* Browser live viewport — natural aspect ratio, no bars */}
+                    <div className="flex flex-1 flex-col overflow-hidden">
+                        {/* Browser live viewport — edge-to-edge, no wrapper border */}
                         {browserFrame && (
-                            <div className="flex-none overflow-hidden rounded-xl border border-gray-200 bg-white">
+                            <div className="flex-none border-b border-gray-100">
                                 {/* URL bar */}
-                                <div className="flex h-7 items-center gap-2 border-b border-gray-100 bg-gray-50 px-3">
+                                <div className="flex h-7 items-center gap-2 bg-gray-50 px-3">
                                     <Globe size={10} className="shrink-0 text-gray-400" />
                                     <span className="flex-1 truncate font-mono text-[10px] text-gray-500">
                                         {browserUrl || 'Loading…'}
@@ -258,9 +313,9 @@ export default function SubAgentWindow({
                             </div>
                         )}
 
-                        {/* Console — fills all remaining space */}
-                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
-                            <div className="flex h-8 items-center border-b border-gray-100 bg-gray-50 px-3 text-[10px] text-gray-400">
+                        {/* Console — fills all remaining space, flat (no extra border box) */}
+                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                            <div className="flex h-7 items-center border-b border-gray-100 bg-gray-50/50 px-3 text-[10px] text-gray-400">
                                 <div className="flex-1 truncate text-center font-mono">
                                     Console
                                 </div>
@@ -273,7 +328,12 @@ export default function SubAgentWindow({
                                 {consoleLines.length > 0 ? (
                                     <div className="space-y-0.5">
                                         {consoleLines.map((line, index) => (
-                                            <div key={`${line}-${index}`} className="break-all whitespace-pre-wrap leading-5">{line}</div>
+                                            <AnimatedConsoleLine
+                                                key={`${index}-${line.slice(0, 20)}`}
+                                                text={line}
+                                                state={index < animatingIdx ? 'done' : index === animatingIdx ? 'active' : 'pending'}
+                                                onDone={advanceAnim}
+                                            />
                                         ))}
                                     </div>
                                 ) : (
@@ -440,7 +500,12 @@ export default function SubAgentWindow({
                                 ) : consoleLines && consoleLines.length > 0 ? (
                                     <div className="space-y-0.5 px-4 py-4 font-mono text-xs text-gray-900">
                                         {consoleLines.map((line, index) => (
-                                            <div key={`${line}-${index}`} className="break-all whitespace-pre-wrap leading-5">{line}</div>
+                                            <AnimatedConsoleLine
+                                                key={`${index}-${line.slice(0, 20)}`}
+                                                text={line}
+                                                state={index < animatingIdx ? 'done' : index === animatingIdx ? 'active' : 'pending'}
+                                                onDone={advanceAnim}
+                                            />
                                         ))}
                                     </div>
                                 ) : (

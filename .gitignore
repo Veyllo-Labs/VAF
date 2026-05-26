@@ -83,6 +83,7 @@ node_modules/
 # Next.js
 .next/
 out/
+*.tsbuildinfo
 
 memory_report_20231015.txt
 .gitignore

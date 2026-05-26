@@ -523,6 +523,109 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
     );
 };
 
+// ── Agent Avatar: morphing yellow dot — idle / thinking / talking ──
+// Keyframes are defined in globals.css to guarantee they're available on first paint.
+type AvatarMode = 'idle' | 'waiting' | 'thinking' | 'talking';
+
+function AgentAvatar({ mode = 'idle', dim = false }: { mode?: AvatarMode; dim?: boolean }) {
+    // Keyframes live in globals.css — no runtime injection needed
+    const active = mode !== 'idle';
+    const animation = mode === 'talking'
+        ? 'agentAvatarTalk 0.75s ease-in-out infinite'
+        : mode === 'thinking'
+            ? 'agentAvatarMorph 1.0s ease-in-out infinite, agentAvatarBreathe 0.7s ease-in-out infinite'
+            : mode === 'waiting'
+                ? 'agentAvatarMorph 5.5s ease-in-out infinite, agentAvatarBreathe 4.0s ease-in-out infinite'
+                : 'none';
+    const size = mode === 'talking' ? 15 : 14;
+
+    const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+    const EASE_IN = 'cubic-bezier(0.4, 0, 1, 1)';
+
+    return (
+        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0", dim ? "bg-gray-200" : "bg-gray-900")}
+             data-agent-avatar
+             style={{ position: 'relative', overflow: 'hidden' }}>
+            {/* Background aura blob — morphs independently behind idle dot */}
+            {!active && !dim && (
+                <span style={{
+                    position: 'absolute',
+                    display: 'block',
+                    width: 20, height: 20,
+                    borderRadius: '50%',
+                    backgroundColor: '#ffffff',
+                    opacity: 0.13,
+                    filter: 'blur(2.5px)',
+                    animation: 'agentAvatarMorph 4.5s ease-in-out infinite 1.2s',
+                    pointerEvents: 'none',
+                }} />
+            )}
+            {/* idle dot — white on dark bg, gray on light bg — fades out when active */}
+            <span style={{
+                position: 'absolute',
+                display: 'block',
+                width: 14, height: 14,
+                borderRadius: '50%',
+                backgroundColor: dim ? '#b0b0b0' : '#ffffff',
+                opacity: active ? 0 : 1,
+                // When floating-idle, animation drives transform; transition only handles opacity
+                transform: (!active && !dim) ? undefined : (active ? 'scale(0.5)' : 'scale(1)'),
+                transition: active
+                    ? `opacity 0.25s ${EASE_IN}`
+                    : `opacity 0.35s ease`,
+                // Chill floating idle animation for the live avatar — starts after fade-in
+                animation: (!active && !dim) ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s' : 'none',
+                pointerEvents: 'none',
+            }} />
+            {/* active dot: outer handles spring/fade, inner runs morph animation.
+                Splitting layers avoids inline-transform vs keyframe-transform conflict. */}
+            <span style={{
+                position: 'absolute',
+                display: 'block',
+                width: size, height: size,
+                opacity: active ? 1 : 0,
+                transform: active ? 'scale(1)' : 'scale(0.3)',
+                transition: active
+                    ? `opacity 0.32s ease, transform 0.38s ${SPRING}`
+                    : `opacity 0.55s ease, transform 0.55s ease`,
+                pointerEvents: 'none',
+            }}>
+                <span style={{
+                    display: 'block',
+                    width: '100%', height: '100%',
+                    borderRadius: '50%',
+                    backgroundColor: '#ffffff',
+                    boxShadow: '0 0 10px 3px rgba(255,255,255,0.35)',
+                    animation,
+                }} />
+            </span>
+        </div>
+    );
+}
+
+// Animates a title string: types text character by character after a short delay.
+function TypingTitle({ text }: { text: string }) {
+    const [displayed, setDisplayed] = React.useState('');
+
+    React.useEffect(() => {
+        let alive = true;
+        setDisplayed('');
+
+        let i = 0;
+        const typeNext = () => {
+            if (!alive) return;
+            i++;
+            setDisplayed(text.slice(0, i));
+            if (i < text.length) setTimeout(typeNext, 38 + Math.random() * 22);
+        };
+        const t = setTimeout(typeNext, 50);
+
+        return () => { alive = false; clearTimeout(t); };
+    }, [text]);
+
+    return <>{displayed}</>;
+}
+
 // Component: System Step Log
 const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { message: string, isLoading?: boolean, onClick?: () => void, useBotIcon?: boolean }) => {
     const isRouter = message.includes('Router');
@@ -606,12 +709,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
         >
             <div className="w-9 shrink-0 flex justify-center">
                 {useBotIcon ? (
-                    <div className={cn(
-                        "w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0",
-                        isLoading && "animate-pulse"
-                    )}>
-                        <Bot size={18} />
-                    </div>
+                    <AgentAvatar mode={isLoading ? 'waiting' : 'idle'} />
                 ) : (
                     <div className="w-0.5 h-full bg-gray-100 relative">
                         <div className={cn(
@@ -734,6 +832,8 @@ function VAFDashboardContent() {
                 const tf = (data?.user_identity?.time_format || '').toString().toLowerCase();
                 // "Default (24h)" is stored as empty string; empty and '24h' both mean 24h
                 setUserTimeFormat(tf === '12h' ? '12h' : '24h');
+                const name = data?.user_identity?.name || data?.identity?.name || null;
+                setUserName(name || null);
             })
             .catch(() => setUserTimeFormat('24h'));
     }, []);
@@ -857,6 +957,22 @@ function VAFDashboardContent() {
     const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null);
     /** User's preferred time format from Settings → Interface (24h | 12h). Used for message timestamps. */
     const [userTimeFormat, setUserTimeFormat] = useState<'24h' | '12h' | undefined>(undefined);
+    /** User's display name from user_identity.json (e.g. "Mert"). Used for personalised welcome greeting. */
+    const [userName, setUserName] = useState<string | null>(null);
+    /** Randomly selected welcome greeting — refreshed each time the chat is empty (new chat). */
+    const [welcomeText, setWelcomeText] = useState('');
+    const isEmpty = messages.length === 0;
+    useEffect(() => {
+        if (!isEmpty) return;
+        const raw = tMain.raw('welcomeGreetings') as string[];
+        const pool = userName
+            ? raw
+            : raw.filter(g => !g.includes('{name}'));
+        const picked = pool[Math.floor(Math.random() * pool.length)] ?? tMain('howCanIHelp');
+        setWelcomeText(picked.replace('{name}', userName ?? ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isEmpty, userName]);
+
     const [isAutomationPopupOpen, setIsAutomationPopupOpen] = useState(false);
     // When automation calendar opens (footer), load notes and todos for the current user
     useEffect(() => {
@@ -1670,6 +1786,26 @@ function VAFDashboardContent() {
                     });
                     // Clear status message when tool runs
                     setStatusMessage('');
+
+                    // Drive agent-cursor animation
+                    if (toolName === 'learn_attached_knowledge') {
+                        if (subType === 'start') {
+                            window.dispatchEvent(new CustomEvent('agent-cursor', { detail: { phase: 'start' } }));
+                        } else if (subType === 'end' || subType === 'error') {
+                            window.dispatchEvent(new CustomEvent('agent-cursor', { detail: { phase: 'end' } }));
+                        }
+                    } else if (subType === 'start') {
+                        if (toolName === 'create_workflow') {
+                            let args: Record<string, unknown> = {};
+                            try { args = JSON.parse(eventData || '{}'); } catch { /* empty */ }
+                            window.dispatchEvent(new CustomEvent('agent-cursor', {
+                                detail: { phase: 'tool-sequence', tool: toolName, args }
+                            }));
+                        }
+                    }
+                }
+                else if (data.type === 'cursor_animation') {
+                    window.dispatchEvent(new CustomEvent('agent-cursor', { detail: data }));
                 }
                 else if (data.type === 'stats') {
                     // Update stats if session matches OR if it's a global update (no sessionId)
@@ -2972,7 +3108,6 @@ function VAFDashboardContent() {
         setIsStoppingGeneration(false);
         setLoading(true);
         setIsGenerating(true);
-
         if (currentSessionId) {
             sessionLoadingStates.current[currentSessionId] = {
                 loading: true,
@@ -3905,6 +4040,7 @@ function VAFDashboardContent() {
                             }}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
                             title={tNav('settings')}
+                            data-agent-hint="nav-settings"
                         >
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
@@ -4006,6 +4142,13 @@ function VAFDashboardContent() {
                                 )}
 
                                 {(() => {
+                                    // Index of the most recent assistant message — only that one gets the avatar
+                                    const lastBotTrueIndex = (() => {
+                                        for (let k = messages.length - 1; k >= 0; k--) {
+                                            if (messages[k].role === 'assistant') return k;
+                                        }
+                                        return -1;
+                                    })();
                                     return visibleMessages.map((msg, i) => {
                                         const trueIndex = messages.indexOf(msg);
                                         const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
@@ -4097,7 +4240,7 @@ function VAFDashboardContent() {
                                                         return (
                                                             <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
                                                                 <div className="flex gap-4 max-w-[85%] w-full items-start">
-                                                                    <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                                    <AgentAvatar />
                                                                     <WorkflowChatElement
                                                                         workflowId={msg.workflowId || ""}
                                                                         name={msg.workflowName || "Workflow"}
@@ -4110,7 +4253,8 @@ function VAFDashboardContent() {
 
                                                     const { thought, answer, isThinkingComplete } = parseContent(msg.content);
                                                     const isBot = msg.role === 'assistant';
-                                                    const isLastMessage = i === visibleMessages.length - 1;
+                                                    // Use trueIndex (position in full messages array) — visibleMessages may be a subset
+                                                    const isLastMessage = trueIndex === messages.length - 1;
                                                     // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                                     // For non-last messages, always treat as complete
                                                     const thinkingDone = !isLastMessage || isThinkingComplete;
@@ -4129,7 +4273,8 @@ function VAFDashboardContent() {
                                                         : !!((cleanAnswer && cleanAnswer.trim() !== '') || parseWorkflowAsync(answer));
                                                     // When there is nothing to show (no bubble, no thinking), don't render the row at all (no avatar, no timestamp, no empty space)
                                                     const hasVisibleContent = isBot
-                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== ''))
+                                                        // keep visible when there's a think tag at all (even after reload when thought may be empty)
+                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== '') || msg.content.includes('<think>'))
                                                         : hasBubbleContent;
                                                     if (!hasVisibleContent) return null;
 
@@ -4329,22 +4474,28 @@ function VAFDashboardContent() {
                                                         </>
                                                     );
 
+                                                    const isLatestBot = isBot && trueIndex === lastBotTrueIndex;
                                                     return (
                                                         <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 <div className="w-full max-w-[85%] flex gap-4">
-                                                                    <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0"><Bot size={18} /></div>
+                                                                    {isLatestBot && !loading ? (
+                                                                        <AgentAvatar mode={(() => {
+                                                                            if (!isGenerating) return 'idle';
+                                                                            if (msg.content.includes('<think>') && !isThinkingComplete) return 'thinking';
+                                                                            return 'talking';
+                                                                        })()} />
+                                                                    ) : (
+                                                                        <AgentAvatar mode="idle" dim />
+                                                                    )}
                                                                     <div className="flex flex-col flex-1 min-w-0 shrink-0 items-start w-full">
                                                                         {bubbleContent}
                                                                     </div>
                                                                 </div>
                                                             ) : (
-                                                                <>
-                                                                    <div className={cn("flex flex-col", "max-w-[72%] items-end shrink-0")}>
-                                                                        {bubbleContent}
-                                                                    </div>
-                                                                    <div className="w-9 h-9 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-gray-500 shadow-sm shrink-0"><User size={18} /></div>
-                                                                </>
+                                                                <div className={cn("flex flex-col", "max-w-[75%] items-end shrink-0")}>
+                                                                    {bubbleContent}
+                                                                </div>
                                                             )}
                                                         </div>
                                                     );
@@ -4363,7 +4514,7 @@ function VAFDashboardContent() {
                                 ) && (
                                     <div className="flex gap-4 justify-center pt-4">
                                         <div className="w-full max-w-[85%] flex gap-4">
-                                            <div className="w-9 h-9 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400 shrink-0"><Bot size={18} /></div>
+                                            <AgentAvatar mode="waiting" />
                                             <div className="flex flex-col gap-1">
                                                 {activeToolName ? (
                                                     // Tool just finished / between tools: show tool name with spinner
@@ -4402,8 +4553,12 @@ function VAFDashboardContent() {
                             <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
                                 {messages.length === 0 && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
-                                        <Bot size={40} className="text-gray-300 mx-auto mb-3" />
-                                        <h2 className="text-xl font-bold text-gray-800">{tMain('howCanIHelp')}</h2>
+                                        <div className="flex justify-center mb-8" style={{ transform: 'scale(1.8)', transformOrigin: 'center' }}>
+                                            <AgentAvatar mode="idle" />
+                                        </div>
+                                        <h2 className="text-xl font-bold text-gray-800">
+                                            <TypingTitle text={welcomeText} />
+                                        </h2>
                                         <p className="text-gray-400 mt-1 text-sm">{tMain('startConversationOrWorkflow')}</p>
                                     </div>
                                 )}

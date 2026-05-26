@@ -300,7 +300,7 @@ const PdfWithHighlightsInner = function PdfWithHighlights({
                 }
             >
                 {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => (
-                    <div key={pageNum} className="mb-10 flex flex-col items-center">
+                    <div key={pageNum} data-pdf-page-container={pageNum} className="mb-10 flex flex-col items-center">
                         <div className="mb-2 self-start text-xs font-medium text-gray-500">
                             Seite {pageNum} von {numPages}
                         </div>

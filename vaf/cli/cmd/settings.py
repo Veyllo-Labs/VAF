@@ -968,7 +968,8 @@ def voice_settings_menu():
             # Cycle: piper -> system -> docker -> piper
             next_engine = {"docker": "piper", "piper": "system", "system": "docker"}.get(tts_engine, "docker")
             Config.set("speech_tts_engine", next_engine)
-            engine_name = {"piper": "Piper (local)", "system": "System (pyttsx3)", "docker": "Docker (HTTP)"}.get(next_engine, next_engine)
+            # pyttsx3 removed — "system" engine now shows an error on non-macOS (macOS uses 'say')
+            engine_name = {"piper": "Piper (local)", "system": "System (macOS only)", "docker": "Docker (HTTP)"}.get(next_engine, next_engine)
             UI.event("Settings", f"TTS Engine set to: {engine_name}", style="success")
             if next_engine == "docker":
                 url = Config.get("speech_tts_docker_url", "")
@@ -1229,7 +1230,8 @@ def main_menu(agent=None):
                     from vaf.core.speech import get_speech_manager
                     get_speech_manager().speak("Speech output enabled.")
                 except ImportError:
-                    UI.warning("Speech libraries not installed. Run: pip install pyttsx3")
+                    # pyttsx3 removed — TTS is via Docker (Piper). See docs/SPEECH_FEATURES.md.
+                    UI.warning("TTS not available. Start Docker and set speech_tts_engine=docker")
             time.sleep(1.0)
             
         if action == 'provider':

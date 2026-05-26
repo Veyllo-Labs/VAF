@@ -207,12 +207,13 @@ class ExecuteWorkflowTool(BaseTool):
             _orig_stderr = sys.stderr
             _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
             _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
-            _subagent_model = Config.get("subagent_model", "")
+            from vaf.core.config import Config as _CfgWE
+            _subagent_model = _CfgWE.get("subagent_model", "")
             try:
                 sys.stdout = _WebStreamWriter(sys.stdout)
                 sys.stderr = _WebStreamWriter(sys.stderr)
                 os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
-                if _subagent_model:
+                if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                     os.environ["VAF_TOOL_MODEL"] = _subagent_model
                 result = engine.execute(steps, variables=variables)
             except Exception as exc:

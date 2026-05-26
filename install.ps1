@@ -695,7 +695,9 @@ Write-Step "Verifying Installation..."
 $checks = @(
     @{ Name = "VAF Module"; Test = { python -c "import vaf" 2>$null; $LASTEXITCODE -eq 0 } },
     @{ Name = "FastAPI"; Test = { python -c "import fastapi" 2>$null; $LASTEXITCODE -eq 0 } },
-    @{ Name = "TTS Engine"; Test = { python -c "import pyttsx3" 2>$null; $LASTEXITCODE -eq 0 } },
+    # pyttsx3 removed — caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
+    # TTS is now handled by Docker (Piper). See docs/SPEECH_FEATURES.md.
+    # @{ Name = "TTS Engine"; Test = { python -c "import pyttsx3" 2>$null; $LASTEXITCODE -eq 0 } },
     @{ Name = "Speech Recognition"; Test = { python -c "import speech_recognition" 2>$null; $LASTEXITCODE -eq 0 } }
 )
 

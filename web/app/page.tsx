@@ -886,6 +886,9 @@ function VAFDashboardContent() {
     const [loading, setLoading] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isStoppingGeneration, setIsStoppingGeneration] = useState(false);
+    const [stopHovered, setStopHovered] = useState(false);
+    const [stopPulsing, setStopPulsing] = useState(false);
+    const stopPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string }[]>([]);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
@@ -1133,6 +1136,8 @@ function VAFDashboardContent() {
         artifactStatus: string;
         consoleLines: string[];
         steps: any[];
+        browserFrame: string;
+        browserUrl: string;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1144,7 +1149,9 @@ function VAFDashboardContent() {
         artifactCode: "",
         artifactStatus: "Idle",
         consoleLines: [],
-        steps: []
+        steps: [],
+        browserFrame: "",
+        browserUrl: "",
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -1703,7 +1710,7 @@ function VAFDashboardContent() {
 
                     const { subType, toolId, name, data: eventData, timestamp } = data;
                     const toolName = String(name || '').toLowerCase();
-                    const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolName);
+                    const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolName);
 
                     // Track active tool for loading bubble
                     if (subType === 'start') {
@@ -1721,6 +1728,9 @@ function VAFDashboardContent() {
                             ...prev,
                             status: 'Running...',
                             presence: 'online',
+                            // Clear stale browser view on each new subagent task start
+                            browserFrame: '',
+                            browserUrl: '',
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -2915,6 +2925,18 @@ function VAFDashboardContent() {
                         });
                     }
                 }
+                else if (data.type === 'browser_frame_update') {
+                    // Live browser screenshot from browser_agent
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        browserFrame: data.frame || '',
+                        browserUrl: data.url || '',
+                    }));
+                }
+                else if (data.type === 'browser_step_update' && data.line) {
+                    // browser-use agent step log line → SubAgent console
+                    appendSubAgentLine(String(data.line));
+                }
                 else if (data.type === 'memory_learning') {
                     // Memory Learning status updates
                     if (data.status === 'started') {
@@ -3071,6 +3093,10 @@ function VAFDashboardContent() {
         if (!ws || !currentSessionId || isStoppingGenerationRef.current) return;
         isStoppingGenerationRef.current = true;
         setIsStoppingGeneration(true);
+        // Ripple pulses for minimum 3 full cycles (3 × 1.1s ≈ 3.3s) regardless of how fast the backend stops
+        setStopPulsing(true);
+        if (stopPulseTimerRef.current) clearTimeout(stopPulseTimerRef.current);
+        stopPulseTimerRef.current = setTimeout(() => setStopPulsing(false), 3500);
         ws.send(JSON.stringify({
             type: 'stop_generation',
             sessionId: currentSessionId
@@ -4209,7 +4235,7 @@ function VAFDashboardContent() {
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
-                                                                        <div className="max-w-[95%]">
+                                                                        <div className={cn("max-w-[95%] rounded-lg transition-all duration-300", stopHovered && msg.toolStatus === 'running' ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]" : "")}>
                                                                             <ToolMessage
                                                                                 key={`tool-${trueIndex}`}
                                                                                 id={msg.toolId || `tool-${trueIndex}`}
@@ -4239,7 +4265,12 @@ function VAFDashboardContent() {
                                                     if (msg.role === 'workflow') {
                                                         return (
                                                             <div key={`workflow-${trueIndex}`} className="flex justify-center gap-4 pt-4">
-                                                                <div className="flex gap-4 max-w-[85%] w-full items-start">
+                                                                <div className={cn(
+                                                                    "flex gap-4 max-w-[85%] w-full items-start rounded-xl transition-all duration-300",
+                                                                    stopHovered && isWorkflowRunning && trueIndex === messages.length - 1
+                                                                        ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]"
+                                                                        : ""
+                                                                )}>
                                                                     <AgentAvatar />
                                                                     <WorkflowChatElement
                                                                         workflowId={msg.workflowId || ""}
@@ -4488,7 +4519,12 @@ function VAFDashboardContent() {
                                                                     ) : (
                                                                         <AgentAvatar mode="idle" dim />
                                                                     )}
-                                                                    <div className="flex flex-col flex-1 min-w-0 shrink-0 items-start w-full">
+                                                                    <div className={cn(
+                                                                        "flex flex-col flex-1 min-w-0 shrink-0 items-start w-full rounded-2xl transition-all duration-300",
+                                                                        isLatestBot && stopHovered && isGenerating
+                                                                            ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]"
+                                                                            : ""
+                                                                    )}>
                                                                         {bubbleContent}
                                                                     </div>
                                                                 </div>
@@ -4720,24 +4756,44 @@ function VAFDashboardContent() {
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
                                         {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration) && (
-                                            <button
-                                                type="button"
-                                                onClick={stopGeneration}
-                                                disabled={isStoppingGeneration}
-                                                title={isStoppingGeneration ? tMain('stoppingGeneration') : tMain('stopGeneration')}
-                                                className={cn(
-                                                    "p-2 rounded-full text-white text-sm font-medium transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2",
-                                                    isStoppingGeneration
-                                                        ? "bg-amber-500 cursor-wait"
-                                                        : "bg-red-500 hover:bg-red-600"
+                                            <div className="relative flex items-center justify-center">
+                                                {/* Hover aura */}
+                                                {stopHovered && !isStoppingGeneration && (
+                                                    <span className="absolute inset-0 rounded-full pointer-events-none"
+                                                        style={{ boxShadow: '0 0 0 4px rgba(239,68,68,0.25), 0 0 12px 6px rgba(239,68,68,0.18)', borderRadius: '50%' }} />
                                                 )}
-                                            >
-                                                {isStoppingGeneration ? (
-                                                    <Loader2 size={12} className="animate-spin" />
-                                                ) : (
-                                                    <Square size={12} fill="currentColor" />
-                                                )}
-                                            </button>
+                                                {/* Stop ripple waves — rendered for min 3 full pulse cycles */}
+                                                {stopPulsing && [0,1,2].map(i => (
+                                                    <span key={i} className="absolute pointer-events-none rounded-full"
+                                                        style={{
+                                                            width: 36, height: 36,
+                                                            left: '50%', top: '50%',
+                                                            backgroundColor: 'rgba(239,68,68,0.5)',
+                                                            animation: `stopRipple 1.1s ease-out infinite`,
+                                                            animationDelay: `${i * 0.37}s`,
+                                                        }} />
+                                                ))}
+                                                <button
+                                                    type="button"
+                                                    onClick={stopGeneration}
+                                                    disabled={isStoppingGeneration}
+                                                    onMouseEnter={() => setStopHovered(true)}
+                                                    onMouseLeave={() => setStopHovered(false)}
+                                                    title={isStoppingGeneration ? tMain('stoppingGeneration') : tMain('stopGeneration')}
+                                                    className={cn(
+                                                        "relative z-10 p-2 rounded-full text-white text-sm font-medium transition-all shadow-md flex items-center justify-center animate-in fade-in slide-in-from-bottom-2",
+                                                        isStoppingGeneration
+                                                            ? "bg-red-500 cursor-wait"
+                                                            : "bg-red-500 hover:bg-red-600"
+                                                    )}
+                                                >
+                                                    {isStoppingGeneration ? (
+                                                        <Loader2 size={12} className="animate-spin" />
+                                                    ) : (
+                                                        <Square size={12} fill="currentColor" />
+                                                    )}
+                                                </button>
+                                            </div>
                                         )}
                                     </div>
                                     <form
@@ -4856,7 +4912,10 @@ function VAFDashboardContent() {
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
                                 (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen)
                                     ? "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"
-                                    : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none"
+                                    : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none",
+                                stopHovered && isSubAgentRunning
+                                    ? "outline outline-2 outline-red-400/60 shadow-[0_0_16px_6px_rgba(239,68,68,0.12)]"
+                                    : ""
                             )}
                             aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen && !htmlViewerState.isOpen}
                         >
@@ -4927,6 +4986,8 @@ function VAFDashboardContent() {
                                     onArtifactChange={handleArtifactChange}
                                     consoleLines={subAgentState.consoleLines}
                                     steps={subAgentState.steps}
+                                    browserFrame={subAgentState.browserFrame}
+                                    browserUrl={subAgentState.browserUrl}
                                 />
                             )}
                         </div>

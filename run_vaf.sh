@@ -8,6 +8,15 @@ PROJECT_ROOT="$SCRIPT_DIR"
 if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     source "$PROJECT_ROOT/venv/bin/activate"
     export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+
+    # Start Docker services (postgres, redis, browser, etc.)
+    if command -v docker &>/dev/null && [ -f "$PROJECT_ROOT/docker-compose.memory.yml" ]; then
+        echo "Starting Docker services..."
+        docker compose -f "$PROJECT_ROOT/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
+            && echo "   ✓ Docker services running" \
+            || echo "   ⚠ Docker not available — services skipped"
+    fi
+
     # Try to find a Framework Python for macOS GUI apps (Rumps tray icon)
     # This is critical when running from an App Bundle
     FRAMEWORK_PYTHON=""

@@ -39,15 +39,10 @@ def bootstrap():
         # AI/ML
         "huggingface_hub": "huggingface_hub",
         "tqdm": "tqdm",  # Progress bars for downloads
-        # Search
-        "ddgs": "ddgs",
-        # Language Detection
-        "langid": "langid",
         # Automation
         "schedule": "schedule",
         "inquirer": "inquirer",
         # Speech (TTS/STT/Wake Word)
-        "pyttsx3": "pyttsx3",
         "SpeechRecognition": "speech_recognition",
         "pyaudio": "pyaudio",
         # "openwakeword": "openwakeword", # Optional/Unstable on Mac

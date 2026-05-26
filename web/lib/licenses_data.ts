@@ -44,9 +44,12 @@ export const thirdPartyLicenses = [
   { name: 'Hugging Face Hub', license: 'Apache-2.0', url: 'https://github.com/huggingface/huggingface_hub' },
   { name: 'ONNX Runtime', license: 'MIT', url: 'https://github.com/microsoft/onnxruntime' },
   { name: 'NumPy', license: 'BSD-3-Clause', url: 'https://github.com/numpy/numpy' },
+  // Browser automation
+  { name: 'browser-use', license: 'MIT', url: 'https://github.com/browser-use/browser-use' },
+  { name: 'Playwright (Python)', license: 'Apache-2.0', url: 'https://github.com/microsoft/playwright-python' },
+  { name: 'playwright-stealth', license: 'MIT', url: 'https://github.com/Mattwmaster58/playwright_stealth' },
   // Integrations & tools
   { name: 'PyGithub', license: 'LGPL-3.0', url: 'https://github.com/PyGithub/PyGithub' },
-  { name: 'DuckDuckGo Search (ddgs)', license: 'MIT', url: 'https://github.com/deedy5/duckduckgo_search' },
   { name: 'pytesseract', license: 'Apache-2.0', url: 'https://github.com/madmaze/pytesseract' },
   { name: 'pdf2image', license: 'MIT', url: 'https://github.com/Belval/pdf2image' },
   { name: 'Pillow', license: 'HPND', url: 'https://github.com/python-pillow/Pillow' },

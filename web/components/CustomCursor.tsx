@@ -72,6 +72,10 @@ export function CustomCursor() {
   const cursorStateRef   = useRef<CursorState>("default");
   const rafRef           = useRef<number | null>(null);
 
+  // ── LINE visibility (fades in when moving, out when still) ──
+  const lineAlphaRef = useRef(0);
+  const prevPosRef   = useRef({ x: 0, y: 0 });
+
   // ── AGENT / PDF reading mode ──
   const agentModeRef     = useRef(false);
   const agentPageTimeRef = useRef(0);
@@ -239,23 +243,27 @@ export function CustomCursor() {
       if (ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // ── Connecting line ──
+        // ── Connecting line (gradient white→transparent, visible only when moving) ──
         const { x: x1, y: y1 } = positionRef.current;
         const x2 = trailPositionRef.current.x, y2 = trailPositionRef.current.y;
-        const showLine = agentModeRef.current || isVisibleRef.current;
+        const la = lineAlphaRef.current;
 
-        if (showLine) {
+        if (la > 0.01 && isVisibleRef.current) {
           const dx = x2 - x1, dy = y2 - y1;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist >= 12) {
-            const r  = agentModeRef.current ? 9 : 6;
+            const r  = 6;
             const ux = dx / dist, uy = dy / dist;
-            const a  = agentModeRef.current ? Math.max(0.1, 0.45 - dist / 2000) : 0.5;
+            const sx = x1 + ux * r, sy = y1 + uy * r;
+            const ex = x2 - ux * r, ey = y2 - uy * r;
+            const grad = ctx.createLinearGradient(sx, sy, ex, ey);
+            grad.addColorStop(0, `rgba(0,0,0,${(0.35 * la).toFixed(3)})`);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.beginPath();
-            ctx.moveTo(x1 + ux * r, y1 + uy * r);
-            ctx.lineTo(x2 - ux * r, y2 - uy * r);
-            ctx.strokeStyle = `rgba(245,166,35,${a})`;
-            ctx.lineWidth   = agentModeRef.current ? 1 : 1.5;
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.strokeStyle = grad;
+            ctx.lineWidth   = 1;
             ctx.stroke();
           }
         }
@@ -325,6 +333,12 @@ export function CustomCursor() {
       trailPositionRef.current.x += (positionRef.current.x - trailPositionRef.current.x) * 0.15;
       trailPositionRef.current.y += (positionRef.current.y - trailPositionRef.current.y) * 0.15;
     }
+
+    // Fade line in when cursor moves, out when still
+    const cp = positionRef.current, pp = prevPosRef.current;
+    const moved = Math.sqrt((cp.x - pp.x) ** 2 + (cp.y - pp.y) ** 2) > 1.5;
+    lineAlphaRef.current += ((moved ? 1 : 0) - lineAlphaRef.current) * (moved ? 0.2 : 0.05);
+    prevPosRef.current = { x: cp.x, y: cp.y };
 
     updateCursorDOM();
     rafRef.current = requestAnimationFrame(animateTrail);

@@ -1,17 +1,7 @@
 import re
 import requests
-import warnings
 import os
-from urllib.parse import quote_plus
-
-# Best Practice: Try new package first, fallback to legacy with suppression
-try:
-    from ddgs import DDGS
-except ImportError:
-    # Fallback for older installations (suppress the rename warning)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        from duckduckgo_search import DDGS
+from urllib.parse import quote_plus, unquote, parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -169,6 +159,52 @@ def _search_google_cse(query: str, max_results: int) -> list:
         return []
 
 
+def _search_duckduckgo(query: str, max_results: int) -> list:
+    """
+    Direct DuckDuckGo Lite search — no third-party package.
+    Uses lite.duckduckgo.com (plain HTML, no bot-challenge JS unlike the main endpoint).
+    Uses requests + BeautifulSoup (both already VAF dependencies).
+    Returns list of {title, href, body} identical to other search functions.
+    """
+    try:
+        import time
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        })
+        # DDG may return 202 (bot challenge) under rate limiting — retry up to 3x with backoff
+        r = None
+        for attempt in range(3):
+            r = s.post("https://lite.duckduckgo.com/lite/", data={"q": query}, timeout=10)
+            if r.status_code == 200:
+                break
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+        if r is None or r.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = soup.select("a.result-link")
+        snippets = soup.select("td.result-snippet")
+        out = []
+        seen: set[str] = set()
+
+        for a, snippet_el in zip(links, snippets):
+            if len(out) >= max_results:
+                break
+            href = unquote(a.get("href", ""))
+            if not href or not href.startswith("http") or href in seen:
+                continue
+            seen.add(href)
+            title = a.get_text(strip=True) or "No title"
+            body = snippet_el.get_text(strip=True)[:500] if snippet_el else ""
+            out.append({"title": title, "href": href, "body": body})
+
+        return out
+    except Exception:
+        return []
+
+
 def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str | None]:
     """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint)."""
     fallback_hint = None
@@ -184,10 +220,9 @@ def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str
     results, google_reason = _search_google(query, max_results)
     if results:
         return (results, "Google", None)
-    # 4) DuckDuckGo fallback
+    # 4) DuckDuckGo fallback (direct HTML — no third-party package)
     UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
-    raw = DDGS().text(query, max_results=max_results, safesearch="strict")
-    results = list(raw) if raw else []
+    results = _search_duckduckgo(query, max_results)
     fallback_hint = {"blocked": "Google blockiert.", "no_results": "Google: keine Treffer.", "error": "Google: Fehler."}.get(google_reason, "Google: keine Treffer.")
     return (results, "DuckDuckGo", fallback_hint)
 

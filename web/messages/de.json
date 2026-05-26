@@ -14,6 +14,17 @@
     "dropFilesHere": "Dateien hier ablegen",
     "veylloAgenticFramework": "Veyllo Agentic Framework",
     "howCanIHelp": "Womit kann ich helfen?",
+    "welcomeGreetings": [
+      "Womit kann ich helfen?",
+      "Was kann ich für dich tun?",
+      "Wie kann ich weiterhelfen?",
+      "Was beschäftigt dich gerade?",
+      "Womit soll ich heute anfangen?",
+      "Hey {name}, womit kann ich helfen?",
+      "Hey {name}, was steht heute an?",
+      "Hey {name}, wie kann ich dir helfen?",
+      "Hey {name}, womit soll ich loslegen?"
+    ],
     "startConversationOrWorkflow": "Starte eine Unterhaltung oder wähle einen Workflow",
     "tools": "Tools",
     "workflows": "Workflows",

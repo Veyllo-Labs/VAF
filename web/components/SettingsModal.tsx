@@ -939,7 +939,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     if (!isOpen) return null;
 
     const handleChange = (key: string, value: any) => {
-        setLocalConfig((prev: any) => ({ ...prev, [key]: value }));
+        setLocalConfig((prev: any) => {
+            const next = { ...prev, [key]: value };
+            // Auto-fetch model list when an API key looks complete (length > 20)
+            if (key.startsWith('api_key_') && typeof value === 'string' && value.length > 20) {
+                const provider = key.replace('api_key_', '');
+                const dynamicProviders = ['openai', 'anthropic', 'google', 'openrouter', 'deepseek'];
+                const prevKey = prev[key] || '';
+                // Only trigger when key changes from empty/short to long (not on every keystroke)
+                if (dynamicProviders.includes(provider) && prevKey.length <= 20) {
+                    setTimeout(() => {
+                        setFetchingProvider(provider);
+                        onFetchApiModels(provider, value);
+                    }, 0);
+                }
+            }
+            return next;
+        });
         setChanged(true);
     };
 

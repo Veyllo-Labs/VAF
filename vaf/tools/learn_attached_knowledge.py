@@ -125,6 +125,18 @@ class LearnAttachedKnowledgeTool(BaseTool):
         from vaf.memory.rag import RagPipeline
         import asyncio
 
+        def _emit_cursor(phase: str, **kw) -> None:
+            try:
+                import json as _json
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface()._push_session_update(session_id, {
+                    "type": "cursor_animation",
+                    "phase": phase,
+                    **kw,
+                })
+            except Exception:
+                pass
+
         async def _transfer() -> int:
             from sqlalchemy import select, and_
             from vaf.memory.models import Memory
@@ -148,6 +160,8 @@ class LearnAttachedKnowledgeTool(BaseTool):
                     all_tags = list(dict.fromkeys([doc_tag, "knowledge", "from-attachment"] + llm_tags + tags))
 
                     pages = _split_by_pages(content)
+                    total_pages = len(pages) if pages else 1
+                    _emit_cursor("start", total=total_pages, attachment=att_name)
                     if pages:
                         for page_num, page_text in pages:
                             if not page_text:
@@ -180,6 +194,7 @@ class LearnAttachedKnowledgeTool(BaseTool):
                             )
                             created += 1
                             pages_stored += 1
+                            _emit_cursor("page", page=pages_stored, total=total_pages, title=page_title)
                     else:
                         pa = page_analysis.get(1, {})
                         page_title = (pa.get("title") or "").strip() or doc_title
@@ -250,6 +265,7 @@ class LearnAttachedKnowledgeTool(BaseTool):
                                 auto_connect=False,
                             )
 
+                _emit_cursor("end")
                 return created
 
         try:

@@ -543,62 +543,99 @@ function AgentAvatar({ mode = 'idle', dim = false }: { mode?: AvatarMode; dim?: 
     const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
     const EASE_IN = 'cubic-bezier(0.4, 0, 1, 1)';
 
+    // Shy repulsion: dot drifts away from cursor when hovered (non-dim only)
+    const [repulse, setRepulse] = React.useState({ x: 0, y: 0 });
+    const [isHovering, setIsHovering] = React.useState(false);
+
+    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (dim) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const strength = 7;
+        setRepulse({
+            x: -(dx / dist) * Math.min(strength, dist * 0.85),
+            y: -(dy / dist) * Math.min(strength, dist * 0.85),
+        });
+    };
+    const handleMouseEnter = () => { if (!dim) setIsHovering(true); };
+    const handleMouseLeave = () => { setIsHovering(false); setRepulse({ x: 0, y: 0 }); };
+
     return (
         <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center shrink-0", dim ? "bg-gray-200" : "bg-gray-900")}
              data-agent-avatar
-             style={{ position: 'relative', overflow: 'hidden' }}>
-            {/* Background aura blob — morphs independently behind idle dot */}
-            {!active && !dim && (
+             style={{ position: 'relative', overflow: 'hidden' }}
+             onMouseMove={handleMouseMove}
+             onMouseEnter={handleMouseEnter}
+             onMouseLeave={handleMouseLeave}>
+            {/* Repulsion wrapper — all dots translate together away from cursor.
+                Using a zero-size anchor at center so children can use negative margins for centering.
+                This layer's transform is separate from any child animation transforms. */}
+            <span style={{
+                position: 'absolute',
+                width: 0, height: 0,
+                top: '50%', left: '50%',
+                transform: `translate(${repulse.x}px, ${repulse.y}px)`,
+                transition: isHovering
+                    ? 'transform 0.1s ease-out'
+                    : `transform 0.6s ${SPRING}`,
+                pointerEvents: 'none',
+            }}>
+                {/* Background aura blob — morphs independently behind idle dot */}
+                {!active && !dim && (
+                    <span style={{
+                        position: 'absolute',
+                        display: 'block',
+                        width: 20, height: 20,
+                        top: -10, left: -10,
+                        borderRadius: '50%',
+                        backgroundColor: '#ffffff',
+                        opacity: 0.13,
+                        filter: 'blur(2.5px)',
+                        animation: 'agentAvatarMorph 4.5s ease-in-out infinite 1.2s',
+                    }} />
+                )}
+                {/* idle dot — white on dark bg, gray on light bg — fades out when active.
+                    Animation drives transform; repulsion is on the parent wrapper. */}
                 <span style={{
                     position: 'absolute',
                     display: 'block',
-                    width: 20, height: 20,
+                    width: 14, height: 14,
+                    top: -7, left: -7,
                     borderRadius: '50%',
-                    backgroundColor: '#ffffff',
-                    opacity: 0.13,
-                    filter: 'blur(2.5px)',
-                    animation: 'agentAvatarMorph 4.5s ease-in-out infinite 1.2s',
-                    pointerEvents: 'none',
+                    backgroundColor: dim ? '#b0b0b0' : '#ffffff',
+                    opacity: active ? 0 : 1,
+                    transform: active ? 'scale(0.5)' : undefined,
+                    transition: active
+                        ? `opacity 0.25s ${EASE_IN}`
+                        : `opacity 0.35s ease`,
+                    animation: (!active && !dim) ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s' : 'none',
                 }} />
-            )}
-            {/* idle dot — white on dark bg, gray on light bg — fades out when active */}
-            <span style={{
-                position: 'absolute',
-                display: 'block',
-                width: 14, height: 14,
-                borderRadius: '50%',
-                backgroundColor: dim ? '#b0b0b0' : '#ffffff',
-                opacity: active ? 0 : 1,
-                // When floating-idle, animation drives transform; transition only handles opacity
-                transform: (!active && !dim) ? undefined : (active ? 'scale(0.5)' : 'scale(1)'),
-                transition: active
-                    ? `opacity 0.25s ${EASE_IN}`
-                    : `opacity 0.35s ease`,
-                // Chill floating idle animation for the live avatar — starts after fade-in
-                animation: (!active && !dim) ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s' : 'none',
-                pointerEvents: 'none',
-            }} />
-            {/* active dot: outer handles spring/fade, inner runs morph animation.
-                Splitting layers avoids inline-transform vs keyframe-transform conflict. */}
-            <span style={{
-                position: 'absolute',
-                display: 'block',
-                width: size, height: size,
-                opacity: active ? 1 : 0,
-                transform: active ? 'scale(1)' : 'scale(0.3)',
-                transition: active
-                    ? `opacity 0.32s ease, transform 0.38s ${SPRING}`
-                    : `opacity 0.55s ease, transform 0.55s ease`,
-                pointerEvents: 'none',
-            }}>
+                {/* active dot: outer handles spring/fade, inner runs morph animation.
+                    Splitting layers avoids inline-transform vs keyframe-transform conflict. */}
                 <span style={{
+                    position: 'absolute',
                     display: 'block',
-                    width: '100%', height: '100%',
-                    borderRadius: '50%',
-                    backgroundColor: '#ffffff',
-                    boxShadow: '0 0 10px 3px rgba(255,255,255,0.35)',
-                    animation,
-                }} />
+                    width: size, height: size,
+                    top: -(size / 2), left: -(size / 2),
+                    opacity: active ? 1 : 0,
+                    transform: active ? 'scale(1)' : 'scale(0.3)',
+                    transition: active
+                        ? `opacity 0.32s ease, transform 0.38s ${SPRING}`
+                        : `opacity 0.55s ease, transform 0.55s ease`,
+                }}>
+                    <span style={{
+                        display: 'block',
+                        width: '100%', height: '100%',
+                        borderRadius: '50%',
+                        backgroundColor: '#ffffff',
+                        boxShadow: '0 0 10px 3px rgba(255,255,255,0.35)',
+                        animation,
+                    }} />
+                </span>
             </span>
         </div>
     );
@@ -4762,27 +4799,16 @@ function VAFDashboardContent() {
 
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
-                                    <div className="w-9 shrink-0 flex items-center justify-center" style={{ overflow: 'visible' }}>
-                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration) && (
-                                            <div className="relative flex items-center justify-center" style={{ overflow: 'visible' }}>
-                                                {/* Hover aura */}
+                                    <div className="w-9 shrink-0 flex items-center justify-center">
+                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing) && (
+                                            <div className="relative flex items-center justify-center">
+                                                {/* Hover aura — inline, only needs to surround the button itself */}
                                                 {stopHovered && !stopPulsing && (
                                                     <span className="absolute inset-0 rounded-full pointer-events-none"
-                                                        style={{ boxShadow: '0 0 0 6px rgba(239,68,68,0.28), 0 0 16px 8px rgba(239,68,68,0.15)', borderRadius: '50%', zIndex: 9989 }} />
+                                                        style={{ boxShadow: '0 0 0 6px rgba(239,68,68,0.28), 0 0 16px 8px rgba(239,68,68,0.15)', borderRadius: '50%' }} />
                                                 )}
-                                                {/* Stop ripple waves — rendered for min 3 full pulse cycles */}
-                                                {stopPulsing && [0,1,2].map(i => (
-                                                    <span key={i} className="absolute pointer-events-none rounded-full"
-                                                        style={{
-                                                            width: 36, height: 36,
-                                                            left: '50%', top: '50%',
-                                                            backgroundColor: 'rgba(239,68,68,0.45)',
-                                                            animation: `stopRipple 1.1s ease-out infinite`,
-                                                            animationDelay: `${i * 0.37}s`,
-                                                            zIndex: 9990,
-                                                        }} />
-                                                ))}
                                                 <button
+                                                    ref={stopBtnRef}
                                                     type="button"
                                                     onClick={stopGeneration}
                                                     disabled={isStoppingGeneration}
@@ -5005,6 +5031,28 @@ function VAFDashboardContent() {
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
+
+            {/* Stop-button ripple portal — rendered at document.body level to bypass all overflow:hidden parents */}
+            {stopPulsing && stopBtnPos && typeof document !== 'undefined' && createPortal(
+                <>
+                    {[0, 1, 2].map(i => (
+                        <span key={i} style={{
+                            position: 'fixed',
+                            left: stopBtnPos.x,
+                            top: stopBtnPos.y,
+                            width: 36, height: 36,
+                            transform: 'translate(-50%, -50%)',
+                            borderRadius: '50%',
+                            backgroundColor: 'rgba(239,68,68,0.45)',
+                            pointerEvents: 'none',
+                            zIndex: 99999,
+                            animation: 'stopRipple 1.1s ease-out infinite',
+                            animationDelay: `${i * 0.37}s`,
+                        }} />
+                    ))}
+                </>,
+                document.body
+            )}
 
             {/* Context Window Modal - Clean & Professional */}
             {isContextModalOpen && contextStats && (

@@ -7720,36 +7720,102 @@ class Agent:
                         })
                     msg["content"] = blocks
                 else:
-                    # Non-vision model: degrade gracefully.
-                    # Inject a SYSTEM NOTE the agent will read and relay to the user,
-                    # so they know why the image isn't visible and which model to use.
-                    names = [img.get("name", "image") for img in imgs]
-                    img_list = ", ".join(f"`{n}`" for n in names)
-                    _vision_models = {
-                        "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-3-5-sonnet-20241022`) or OpenAI (`gpt-4o`)",
-                        "openai":   "`gpt-4o` or `gpt-4-turbo`",
-                        "anthropic": "`claude-3-5-sonnet-20241022` or newer",
-                        "google":   "`gemini-1.5-pro` or `gemini-2.0-flash`",
-                        "openrouter": "a vision model such as `openai/gpt-4o`",
+                    # Non-vision model: try configured vision fallback provider first.
+                    _vision_fb_provider = Config.get("vision_provider", "").strip()
+                    _vision_fb_model = Config.get("vision_model", "").strip() or None
+                    _vision_fb_used = False
+
+                    # Safe default vision models per provider (used when vision_model is not set)
+                    _VISION_DEFAULTS = {
+                        "openai":     "gpt-4o",
+                        "anthropic":  "claude-3-5-sonnet-20241022",
+                        "google":     "gemini-2.0-flash",
+                        "openrouter": "openai/gpt-4o",
                     }
-                    _vision_hint = _vision_models.get(_provider, "a vision-capable model")
-                    system_note = (
-                        f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
-                        f"but the current model ({_model or _provider}) does not support vision. "
-                        f"The image data has been stripped and cannot be recovered. "
-                        f"Please tell the user: this model cannot see images. "
-                        f"To use vision, go to Settings → Model and switch to {_vision_hint}. "
-                        f"Do NOT attempt to guess the image content or use list_files/find_files tools.]"
-                    )
-                    msg["content"] = (system_note + "\n\n" + text).strip() if text else system_note
-                    try:
-                        from vaf.cli.ui import UI as _UI
-                        _UI.warning(
-                            f"Vision not supported by {_model or _provider}. "
-                            f"Image stripped — switch to a vision model (deepseek-v4-pro, gpt-4o, claude-3, gemini)."
+                    if not _vision_fb_model and _vision_fb_provider:
+                        _vision_fb_model = _VISION_DEFAULTS.get(_vision_fb_provider)
+
+                    if _vision_fb_provider and _vision_fb_provider != _provider:
+                        try:
+                            from vaf.core.api_backend import APIBackendManager as _APIBM
+                            from vaf.core.log_helper import append_domain_log as _adl
+                            _vb = _APIBM(_vision_fb_provider)
+                            # Build a single-turn multimodal message for the vision backend
+                            _vb_blocks: List[Dict] = []
+                            if text:
+                                _vb_blocks.append({"type": "text", "text": text})
+                            for _vi in imgs:
+                                _raw = _vi.get("data", "")
+                                _mime = _vi.get("mime_type", "image/jpeg")
+                                if _raw.startswith("data:"):
+                                    _raw = _raw.split(",", 1)[1] if "," in _raw else _raw
+                                _vb_blocks.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{_mime};base64,{_raw}"},
+                                })
+                            _vb_msgs = [{"role": "user", "content": _vb_blocks}]
+                            _adl("backend", f"[VISION_FALLBACK] calling {_vision_fb_provider}/{_vision_fb_model or 'default'} for {len(imgs)} image(s)")
+                            _vb_resp_parts = []
+                            for _chunk in _vb.chat_completion(
+                                _vb_msgs,
+                                model=_vision_fb_model,
+                                temperature=0.2,
+                                max_tokens=1024,
+                                stream=True,
+                                tools=None,
+                            ):
+                                if isinstance(_chunk, str):
+                                    _vb_resp_parts.append(_chunk)
+                                elif isinstance(_chunk, dict):
+                                    _vb_resp_parts.append(_chunk.get("content") or "")
+                            _vb_resp = "".join(_vb_resp_parts).strip()
+                            _adl("backend", f"[VISION_FALLBACK] response len={len(_vb_resp)} ok={bool(_vb_resp)}")
+                            if _vb_resp:
+                                _names = [_vi.get("name", "image") for _vi in imgs]
+                                _img_list = ", ".join(_names)
+                                vision_injection = (
+                                    f"[Vision ({_vision_fb_provider}/{_vision_fb_model or 'default'}): "
+                                    f"Image(s) {_img_list} analysed]\n{_vb_resp}"
+                                )
+                                msg["content"] = (vision_injection + "\n\n" + text).strip() if text else vision_injection
+                                _vision_fb_used = True
+                        except Exception as _vfe:
+                            try:
+                                from vaf.core.log_helper import append_domain_log as _adl2
+                                _adl2("backend", f"[VISION_FALLBACK] FAILED provider={_vision_fb_provider} error={_vfe}")
+                            except Exception:
+                                pass
+
+                    if not _vision_fb_used:
+                        # No vision fallback configured or it failed: inform user.
+                        names = [img.get("name", "image") for img in imgs]
+                        img_list = ", ".join(f"`{n}`" for n in names)
+                        _vision_models = {
+                            "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-3-5-sonnet-20241022`) or OpenAI (`gpt-4o`), or configure a Vision Model in Settings → AI & Model.",
+                            "openai":   "`gpt-4o` or `gpt-4-turbo`",
+                            "anthropic": "`claude-3-5-sonnet-20241022` or newer",
+                            "google":   "`gemini-1.5-pro` or `gemini-2.0-flash`",
+                            "openrouter": "a vision model such as `openai/gpt-4o`",
+                        }
+                        _vision_hint = _vision_models.get(_provider, "a vision-capable model, or configure a Vision Model in Settings → AI & Model")
+                        system_note = (
+                            f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
+                            f"but the current model ({_model or _provider}) does not support vision. "
+                            f"The image data has been stripped and cannot be recovered. "
+                            f"Please tell the user: this model cannot see images. "
+                            f"To use vision, go to Settings → AI & Model and configure a Vision Model, "
+                            f"or switch the primary provider to {_vision_hint}. "
+                            f"Do NOT attempt to guess the image content or use list_files/find_files tools.]"
                         )
-                    except Exception:
-                        pass
+                        msg["content"] = (system_note + "\n\n" + text).strip() if text else system_note
+                        try:
+                            from vaf.cli.ui import UI as _UI
+                            _UI.warning(
+                                f"Vision not supported by {_model or _provider}. "
+                                f"Image stripped — configure a Vision Model in Settings or switch provider."
+                            )
+                        except Exception:
+                            pass
             multimodal_messages.append(msg)
         messages = multimodal_messages
         # -------------------------------------------------------------------

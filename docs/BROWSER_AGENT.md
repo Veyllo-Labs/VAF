@@ -106,15 +106,20 @@ Once the agent calls `browser_agent`, the following happens:
 4. Screenshot loop starts (parallel task):
    │   Every 1.5 s: take_screenshot() → emit browser_frame_update → WebUI live view
    │
-5. browser-use Agent loop starts:
+5. browser-use Agent loop starts (use_vision='auto'):
    │
    ├── Capture DOM snapshot of current page
-   ├── Send DOM + task to VAF's LLM (via VAFLLMBridge)
+   ├── If page is unclear / CAPTCHA detected: also attach screenshot
+   ├── Send DOM (+ optional screenshot) to VAFLLMBridge
+   │     ├── Provider supports native vision → image passed directly
+   │     └── Provider has no vision (e.g. DeepSeek) → vision_provider called
+   │           → screenshot described as text → injected into message
    ├── LLM decides next action: navigate / click / fill / extract / done
+   │     └── Can also call describe_page_visually() when explicitly stuck
    ├── Execute action on Chromium via CDP
    └── Repeat until task complete or max_steps reached
    │
-6. Screenshot loop stops
+6. Screenshot loop stops; persistent session cookies saved (if persistent=true)
    │
 7. Extract final result from agent history
    │
@@ -235,6 +240,20 @@ browser-use internal loop
 ```
 
 The bridge (`VAFLLMBridge`) implements browser-use's `BaseChatModel` protocol and delegates every LLM call to `APIBackendManager` — the same class used by all other VAF tools.
+
+### On-demand vision
+
+The browser agent uses **`use_vision='auto'`** — browser-use decides per-step whether to attach a screenshot. Screenshots are only sent to the LLM when the page cannot be understood from DOM text alone (e.g. image-heavy pages, CAPTCHAs, visual challenges).
+
+When a screenshot is sent, `VAFLLMBridge` handles it based on the configured provider:
+
+| Main provider | Vision handling |
+|---|---|
+| Anthropic, Google, GPT-4o | Screenshot passed natively — provider sees the image directly |
+| DeepSeek, non-vision models | Screenshot sent to `vision_provider` (configured in Settings → AI & Model) → text description injected into the message |
+| No vision provider configured | Screenshot skipped — DOM-only fallback |
+
+The agent also has a `describe_page_visually()` action it can call explicitly when stuck — for example, if it detects a CAPTCHA in the DOM and needs to understand what type it is before deciding how to proceed. Vision cost is only paid when actually needed — not on every step.
 
 ### LLM model recommendation
 
@@ -429,7 +448,9 @@ If you still see this error, the site may be doing TLS fingerprinting (JA3) — 
 
 ### CAPTCHA / bot detection
 
-Some sites detect headless browsers and show CAPTCHAs or block access entirely. There is no built-in CAPTCHA solver in v1. VAF injects a stealth script (`vaf/tools/_stealth_payload.js`) that masks common headless browser signals (navigator.webdriver, WebGL vendor, etc.), which reduces detection on most sites.
+VAF injects a stealth script (`vaf/tools/_stealth_payload.js`) that masks common headless browser signals (navigator.webdriver, WebGL vendor, etc.), which reduces detection on most sites.
+
+When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session trust — the stealth script and HTTP/1.1 bypass help here.
 
 ---
 
@@ -437,7 +458,7 @@ Some sites detect headless browsers and show CAPTCHAs or block access entirely. 
 
 | Limitation | Notes |
 |---|---|
-| **LLM vision disabled** | The agent reasons from DOM text only — the screenshots in the live view are for human monitoring only, not fed to the LLM. Per-provider image encoding needed for LLM vision. |
+| **On-demand vision** | Vision is used only when browser-use determines it's needed (`use_vision='auto'`). Configure a Vision Model in Settings → AI & Model for providers that don't support vision natively (e.g. DeepSeek). |
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |

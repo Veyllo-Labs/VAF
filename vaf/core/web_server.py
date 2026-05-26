@@ -1941,6 +1941,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if role == "assistant":
                     content = clean_history_text(content)
                 entry = {"role": role, "content": content, "timestamp": timestamp}
+                if role == "user" and meta and meta.get("images"):
+                    entry["images"] = [
+                        {
+                            "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img.get('data', '')}",
+                            "name": img.get("name", "image"),
+                        }
+                        for img in meta["images"]
+                        if img.get("data")
+                    ]
                 if role == "tool":
                     # Try metadata dict first, then fall back to top-level keys
                     # (backend stores tool info as top-level: name, tool_call_id)

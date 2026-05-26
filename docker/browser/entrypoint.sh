@@ -29,6 +29,9 @@ set -e
     --safebrowsing-disable-auto-update \
     --disable-http2 \
     --disable-quic \
+    --disable-gpu \
+    --disable-gpu-sandbox \
+    --disable-software-rasterizer \
     about:blank &
 
 # Wait until Chromium CDP is ready

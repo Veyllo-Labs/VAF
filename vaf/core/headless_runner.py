@@ -1638,7 +1638,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     break
 
                             if last_user_msg != _user_input.strip():
-                                session.add_message(role="user", content=_user_input.strip())
+                                _img_meta = None
+                                if _task_images:
+                                    _img_meta = {"images": [
+                                        {"name": _im.get("name", "image"), "mime_type": _im.get("mime_type", "image/jpeg"), "data": _im.get("data", "")}
+                                        for _im in _task_images
+                                    ]}
+                                session.add_message(role="user", content=_user_input.strip(), metadata=_img_meta)
                                 # Increment persistent user_turn_count in runtime_state
                                 if not hasattr(session, 'runtime_state') or session.runtime_state is None:
                                     session.runtime_state = {}

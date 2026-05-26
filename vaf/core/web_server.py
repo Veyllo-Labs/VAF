@@ -807,7 +807,7 @@ def _detect_language_simple(text: str) -> str:
         return "en"
     # Prefer langid for reliable detection (e.g. German text -> de)
     try:
-        import langid
+        from vaf.vendor import langid
         import re
         # Strip thinking/code so we classify on actual spoken content
         clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()

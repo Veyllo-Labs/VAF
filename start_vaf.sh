@@ -11,6 +11,14 @@ mkdir -p logs
 echo "Starting VAF Tray App in background..."
 echo "Logs will be written to ./logs/tray_debug.log"
 
+# Start Docker services (postgres, redis, browser, etc.)
+if command -v docker &>/dev/null && [ -f "$DIR/docker-compose.memory.yml" ]; then
+    echo "Starting Docker services..."
+    docker compose -f "$DIR/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
+        && echo "   ✓ Docker services running" \
+        || echo "   ⚠ Docker not available — services skipped"
+fi
+
 # Ensure PATH includes common locations for Node/npm (Homebrew, etc.)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ | head -n 1)/bin:$PATH"
 

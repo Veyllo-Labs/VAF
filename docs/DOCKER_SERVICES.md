@@ -12,6 +12,7 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
 | TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install) |
 | STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text |
+| **Browser** | `vaf-browser` | 9222 | Headless Chromium (CDP) for the `browser_agent` tool — see [BROWSER_AGENT.md](BROWSER_AGENT.md) |
 
 All services start by default when you run `docker compose up -d`.
 
@@ -47,6 +48,11 @@ CONTAINER ID   IMAGE                      PORTS                          NAMES
 ```
 
 > **Sicherheit:** Alle Ports sind an `127.0.0.1` gebunden — nur lokal erreichbar, nicht im LAN oder Internet. Falls `0.0.0.0` angezeigt wird, sind die Ports auf allen Netzwerk-Interfaces offen. In diesem Fall `docker-compose.memory.yml` prüfen und sicherstellen dass alle Port-Mappings das Format `127.0.0.1:PORT:PORT` verwenden.
+>
+> **Netzwerk-Isolation:** Jeder Container ist nur in dem Docker-Netzwerk das er braucht:
+> - `vaf-network`: postgres, redis, tts, stt, gotenberg
+> - `vaf-sandbox-network`: sandbox (kein Zugriff auf postgres/redis)
+> - `vaf-browser-network`: vaf-browser (kein Zugriff auf postgres/redis — SSRF-Schutz)
 
 ### Stop Services
 

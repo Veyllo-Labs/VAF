@@ -32,10 +32,10 @@ function extractMainInput(argsJson: string | undefined): string {
         const obj = JSON.parse(argsJson) as Record<string, unknown>;
         for (const key of INPUT_PRIORITY) {
             const v = obj[key];
-            if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
+            if (typeof v === 'string' && v.trim()) return v.trim();
         }
         for (const v of Object.values(obj)) {
-            if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
+            if (typeof v === 'string' && v.trim()) return v.trim();
         }
     } catch { /* empty */ }
     return '';
@@ -183,22 +183,19 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                         >
                             <div className="p-3 pt-0 text-xs font-mono text-muted-foreground break-all">
 
-                                {/* Typewriter animation while running */}
-                                {status === 'running' && animInput && (
+                                {/* Input: typewriter while running, same styled text when done */}
+                                {animInput && (
                                     <div className="mb-2">
-                                        <TypewriterText input={animInput} />
-                                    </div>
-                                )}
-
-                                {/* Static args once done */}
-                                {status !== 'running' && args && (
-                                    <div className="mb-2">
-                                        <div className="flex items-center gap-1 opacity-70 mb-1 font-semibold">
-                                            <span>Input</span>
-                                        </div>
-                                        <div className="bg-background/50 p-2 rounded border border-border/50 whitespace-pre-wrap">
-                                            {args}
-                                        </div>
+                                        {status === 'running'
+                                            ? <TypewriterText input={animInput} />
+                                            : (
+                                                <div className="px-2 py-1.5 rounded border border-border/40 bg-background/60">
+                                                    <span className="font-mono text-[11px] text-foreground break-all leading-relaxed">
+                                                        {animInput}
+                                                    </span>
+                                                </div>
+                                            )
+                                        }
                                     </div>
                                 )}
 

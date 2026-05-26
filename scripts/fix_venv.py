@@ -27,7 +27,8 @@ def fix_pywin32():
 
 def check_imports():
     print("\n🧪 Testing Critical Imports...")
-    imports = ["pythoncom", "win32api", "win32con", "pyttsx3", "uvicorn", "fastapi"]
+    # pyttsx3 removed — caused RAM explosion on Windows. TTS is via Docker (Piper).
+    imports = ["pythoncom", "win32api", "win32con", "uvicorn", "fastapi"]
     for mod in imports:
         try:
             __import__(mod)

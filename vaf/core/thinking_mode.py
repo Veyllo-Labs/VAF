@@ -990,6 +990,9 @@ def _try_emit_to_web_ui_and_wait(
     """
     if not run_history:
         return False
+    # If thinking_done was already called, any remaining text is the internal summary — never emit it
+    if _history_has_thinking_done(run_history):
+        return False
     # Find the last assistant message that has text content but NO send_* tool call
     for msg in reversed(run_history):
         if not isinstance(msg, dict) or msg.get("role") != "assistant":

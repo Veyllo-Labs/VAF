@@ -6907,27 +6907,15 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     _log_to_file(f"[DEBUG-X] web_deep_search EXEC START: query='{query[:50]}'")
 
                     try:
-                        # Try to import DuckDuckGo search
-                        try:
-                            from ddgs import DDGS
-                        except ImportError:
-                            try:
-                                from duckduckgo_search import DDGS
-                            except ImportError:
-                                result = "Error: DuckDuckGo search not available. Install with: pip install duckduckgo-search"
-                                tui.append_stream("❌ Search tool not available")
-
-                        # Perform search
-                        if 'DDGS' in locals():  # Only search if library was imported
-                            results = list(DDGS().text(query, max_results=max_results, safesearch='strict'))
-                            if not results:
-                                result = f"No results found for: {query}"
-                                tui.append_stream("No results")
-                        else:
-                            results = []  # No library available, skip search
+                        # Use VAF's direct DuckDuckGo search (no third-party package)
+                        from vaf.tools.search import _search_duckduckgo
+                        results = _search_duckduckgo(query, max_results)
+                        if not results:
+                            result = f"No results found for: {query}"
+                            tui.append_stream("No results")
 
                         # Only build summary if we have results
-                        if results and 'DDGS' in locals():
+                        if results:
                             # Helper to fetch and summarize page content (context-aware, limited)
                             def fetch_summary(url):
                                 try:

@@ -32,7 +32,18 @@ VAF stores your API keys and OAuth tokens in your **OS Keyring** (Windows Creden
 - **Risk:** Anyone with physical or remote access to your user account on the host machine can potentially retrieve these credentials.
 - **Risk:** If you share your VAF instance in "Local Network Mode", other users are isolated via `user_scope_id`, but the host administrator still has full visibility into all data.
 
-### 3. Sub-Agent Isolation
+### 3. Browser Agent (browser_agent tool)
+
+The `browser_agent` tool controls a real headless Chromium browser. This introduces specific risks:
+
+- **Credential exposure:** If a task includes login credentials in the `task` parameter, they are passed to the LLM and executed in the browser. Credentials are never stored by VAF, but they appear in the agent's run history for the duration of the session.
+- **Irreversible actions:** The browser can submit forms, complete purchases, and send messages. VAF classifies this tool as `permission_level = "dangerous"` and requires explicit user confirmation before each run.
+- **CDP port:** The Chrome DevTools Protocol port (`9222`) is bound to `127.0.0.1` only and is never exposed to the network. Do not change this binding.
+- **Browser network isolation:** The `vaf-browser` container runs on its own isolated Docker network (`vaf-browser-network`) and is **not** on `vaf-network`. It cannot reach `postgres` or `redis` by hostname. A compromised browser (e.g. via SSRF or malicious page) has no direct path to the database.
+- **Bot detection bypass:** VAF injects a stealth script (`vaf/tools/_stealth_payload.js`) to reduce bot detection. This script is vendored directly in the repository — it does not update automatically and carries no runtime PyPI dependency.
+- **Channel restriction:** `browser_agent` is blocked on Telegram, WhatsApp, and Discord channels by design. It can only be triggered from the Web UI or API.
+
+### 4. Sub-Agent Isolation
 Sub-agents (Coder, Librarian, Research) run in separate processes. While they are instructed to stay within certain directories, they are **not fully sandboxed** unless you are running in Docker mode. Even in Docker mode, excessive resource consumption (RAM/CPU) can lead to Denial of Service (DoS) on the host machine.
 
 ---
@@ -42,6 +53,50 @@ Sub-agents (Coder, Librarian, Research) run in separate processes. While they ar
 VAF uses a **UUID-based Scoping System** (`user_scope_id`) to isolate data between users.
 - **Isolation:** User A cannot see User B's memories, emails, or contacts.
 - **Fallback Logic:** In single-user setups, VAF uses robust fallbacks to ensure local tools keep working if session IDs change. This is a trade-off between "perfect isolation" and "local usability".
+
+---
+
+## Supply-Chain Security
+
+VAF takes the following measures to reduce dependency-based attack surface:
+
+### Vendored dependencies
+The following packages are copied directly into the VAF repository and are **not fetched from PyPI at runtime**:
+
+| Package | Location | Version pinned | SHA-256 |
+|---|---|---|---|
+| `langid` (language detection) | `vaf/vendor/langid/` | 1.1.6 | `5e4d4991...` |
+| `playwright-stealth` JS payload | `vaf/tools/_stealth_payload.js` | 2.0.3 | `5601b9cc...` |
+
+These packages were selected for vendoring because they are maintained by single individuals, change rarely, and are small enough to audit manually.
+
+### Tiered dependency strategy
+
+Dependencies are handled at one of three tiers based on risk:
+
+| Tier | When to use | Examples |
+|---|---|---|
+| **Vendor** | Single maintainer, small, changes rarely, no transitive deps | `langid`, `playwright-stealth` JS payload |
+| **Pin + freeze** | Multi-contributor, well-audited, hard to replace, stdlib replacement not worth the cost | `schedule`, `requests`, `fastapi` |
+| **Remove / replace with stdlib** | Scraper wrappers, thin single-maintainer shims with an obvious direct equivalent | `ddgs` → direct HTTP to `lite.duckduckgo.com`, `pyttsx3` → Docker TTS |
+
+**`schedule` decision:** `schedule` is pinned in `requirements.lock` with a SHA-256 hash and is never updated automatically. The stdlib replacement would provide identical security at the cost of ~200 lines of datetime arithmetic — not worth the maintenance burden. Current pinned version: `1.2.2`.
+
+### Pinned lockfile
+`requirements.lock` pins every dependency (direct and transitive) to an exact version with SHA-256 hashes. A compromised new version on PyPI cannot be installed silently:
+
+```bash
+pip install --require-hashes -r requirements.lock
+```
+
+The lockfile is regenerated intentionally with `pip-compile --generate-hashes` — never via an automated process.
+
+### Updating dependencies
+When a dependency needs to be updated:
+1. Update the version in `requirements.txt`
+2. Run `pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.txt`
+3. Review the diff in `requirements.lock` before installing
+4. For vendored packages: copy the new source, verify the SHA-256, update the hash comment in the consuming file
 
 ---
 

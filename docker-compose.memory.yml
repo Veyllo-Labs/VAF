@@ -215,6 +215,35 @@ services:
         reservations:
           memory: 512M
 
+  # ==========================================================================
+  # Browser (Headless Chromium via CDP)
+  # ==========================================================================
+  # VAF's browser_agent tool connects here via ws://localhost:9222.
+  # No Chromium installation needed on the host.
+  # CDP port is bound to 127.0.0.1 only — not accessible from outside the machine.
+  vaf-browser:
+    build:
+      context: ./docker/browser
+      dockerfile: Dockerfile
+    container_name: vaf-browser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BROWSER_CDP_PORT:-9222}:9222"
+    networks:
+      - vaf-browser-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9222/json/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
 volumes:
   # DB volume – holds Memory + Auth/User data; do not remove or replace
   vaf_pgdata:
@@ -244,4 +273,10 @@ networks:
   # The sandbox is NOT on vaf-network, so it cannot reach postgres/redis by hostname.
   vaf-sandbox-network:
     name: vaf-sandbox-network
+    driver: bridge
+  # Isolated network for the browser container.
+  # The browser is NOT on vaf-network, so it cannot reach postgres/redis by hostname.
+  # A compromised browser (SSRF/XSS) has no path to the database.
+  vaf-browser-network:
+    name: vaf-browser-network
     driver: bridge

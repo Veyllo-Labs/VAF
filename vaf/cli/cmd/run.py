@@ -941,7 +941,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         
         # Preload Language Identification (if installed) to prevent lag during chat
         try:
-            import langid
+            from vaf.vendor import langid
             tui.event("System", "Preloading language detection...", style="dim")
             langid.classify("test")
         except ImportError:

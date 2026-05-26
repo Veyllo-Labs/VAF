@@ -29,18 +29,16 @@ openai>=1.12.0
 anthropic>=0.18.0
 google-generativeai>=0.4.0
 
-# Search
-ddgs>=6.1.0
-
-# Language Detection
-langid>=1.1.6
+# Browser Automation (optional — run `playwright install --with-deps chromium` after pip install)
+browser-use>=0.12.9
+playwright>=1.49.0
 
 # Automation
 schedule>=1.2.0
 inquirer>=3.1.0
 
-# Speech Processing (Optional - Offline TTS/STT)
-pyttsx3>=2.90
+# Speech Processing (Optional - Offline STT)
+# pyttsx3 removed — RAM explosion on Windows (SAPI/comtypes); Docker TTS (Piper) is the primary engine
 SpeechRecognition>=3.10.0
 pyaudio>=0.2.14
 # openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)

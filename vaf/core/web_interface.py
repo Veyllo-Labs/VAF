@@ -325,6 +325,22 @@ class WebInterfaceManager:
             "timestamp": __import__("datetime").datetime.now().isoformat()
         })
 
+    def emit_browser_frame(self, frame_b64: str, url: str = "", session_id: str = None):
+        """Emit a live browser screenshot frame for browser_agent live view in WebUI."""
+        self._push_session_update(session_id, {
+            "type": "browser_frame_update",
+            "frame": frame_b64,
+            "url": url,
+            "timestamp": __import__("datetime").datetime.now().isoformat()
+        })
+
+    def emit_browser_step(self, line: str, session_id: str = None):
+        """Emit a single browser-use agent log line to the WebUI SubAgent console."""
+        self._push_session_update(session_id, {
+            "type": "browser_step_update",
+            "line": line,
+        })
+
     def emit_stats(self, stats: dict, session_id: str = None):
         """Emit context/token statistics."""
         self.last_stats = stats

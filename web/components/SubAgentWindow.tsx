@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useRef, useEffect } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export type SubAgentWindowProps = {
@@ -26,6 +26,8 @@ export type SubAgentWindowProps = {
         status: 'pending' | 'running' | 'completed';
         actions: Array<{ type: string; details: string }>;
     }>;
+    browserFrame?: string;   // base64 JPEG screenshot from browser_agent
+    browserUrl?: string;     // current page URL
     [key: string]: any;
 };
 
@@ -54,6 +56,8 @@ export default function SubAgentWindow({
     onArtifactChange,
     consoleLines = [],
     steps,
+    browserFrame,
+    browserUrl,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -83,11 +87,25 @@ export default function SubAgentWindow({
     const consoleScrollRef = useRef<HTMLDivElement>(null);
     const userScrolledUpRef = useRef(false);
 
-    useEffect(() => {
-        if (!userScrolledUpRef.current && consoleScrollRef.current) {
+    const scrollConsoleToBottom = () => {
+        if (consoleScrollRef.current) {
             consoleScrollRef.current.scrollTop = consoleScrollRef.current.scrollHeight;
         }
+    };
+
+    // Auto-scroll on new lines (unless user scrolled up)
+    useEffect(() => {
+        if (!userScrolledUpRef.current) {
+            scrollConsoleToBottom();
+        }
     }, [consoleLines]);
+
+    // When a new screenshot arrives the image height may change, causing a layout shift that
+    // fires a scroll event and falsely marks userScrolledUpRef=true. Reset on every new frame.
+    useEffect(() => {
+        userScrolledUpRef.current = false;
+        scrollConsoleToBottom();
+    }, [browserFrame]);
 
     const handleConsoleScroll = (e: React.UIEvent<HTMLDivElement>) => {
         const el = e.currentTarget;
@@ -214,8 +232,34 @@ export default function SubAgentWindow({
                         <span className="truncate font-mono text-[11px]">{displayFile || 'No active file'}</span>
                     </div>
 
-                    <div className="flex-1 overflow-hidden p-4">
-                        <div className="flex h-full flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
+                    <div className="flex flex-1 flex-col overflow-hidden p-4 gap-3">
+                        {/* Browser live viewport — natural aspect ratio, no bars */}
+                        {browserFrame && (
+                            <div className="flex-none overflow-hidden rounded-xl border border-gray-200 bg-white">
+                                {/* URL bar */}
+                                <div className="flex h-7 items-center gap-2 border-b border-gray-100 bg-gray-50 px-3">
+                                    <Globe size={10} className="shrink-0 text-gray-400" />
+                                    <span className="flex-1 truncate font-mono text-[10px] text-gray-500">
+                                        {browserUrl || 'Loading…'}
+                                    </span>
+                                    <div className="flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-red-500">
+                                        <span className="h-1 w-1 animate-pulse rounded-full bg-red-500" />
+                                        Live
+                                    </div>
+                                </div>
+                                {/* Screenshot — full width, proportional height, no crop */}
+                                <img
+                                    src={`data:image/jpeg;base64,${browserFrame}`}
+                                    alt="Browser live view"
+                                    className="block w-full"
+                                    draggable={false}
+                                    onLoad={() => { if (!userScrolledUpRef.current) scrollConsoleToBottom(); }}
+                                />
+                            </div>
+                        )}
+
+                        {/* Console — fills all remaining space */}
+                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
                             <div className="flex h-8 items-center border-b border-gray-100 bg-gray-50 px-3 text-[10px] text-gray-400">
                                 <div className="flex-1 truncate text-center font-mono">
                                     Console
@@ -224,18 +268,18 @@ export default function SubAgentWindow({
                             <div
                                 ref={consoleScrollRef}
                                 onScroll={handleConsoleScroll}
-                                className="flex-1 overflow-auto bg-white px-4 py-4 font-mono text-xs text-gray-900"
+                                className="flex-1 overflow-y-auto overflow-x-hidden bg-white px-4 py-4 font-mono text-xs text-gray-900"
                             >
                                 {consoleLines.length > 0 ? (
-                                    <div className="space-y-1 whitespace-pre-wrap">
+                                    <div className="space-y-0.5">
                                         {consoleLines.map((line, index) => (
-                                            <div key={`${line}-${index}`}>{line}</div>
+                                            <div key={`${line}-${index}`} className="break-all whitespace-pre-wrap leading-5">{line}</div>
                                         ))}
                                     </div>
                                 ) : (
                                     <div className="flex items-center gap-2 text-gray-300">
                                         <Loader2 size={14} className="animate-spin opacity-50" />
-                                        <span className="text-xs">Waiting for output...</span>
+                                        <span className="text-xs">Waiting for output…</span>
                                     </div>
                                 )}
                             </div>
@@ -346,12 +390,42 @@ export default function SubAgentWindow({
                         <span className="truncate font-mono">{currentFile || 'No active file'}</span>
                     </div>
 
-                    <div className="flex-1 overflow-hidden p-6">
-                        <div className="flex h-full flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <div className="flex flex-1 flex-col overflow-hidden p-6 gap-4">
+                        {/* Browser live viewport — natural aspect ratio, no bars */}
+                        {browserFrame && (
+                            <div className="flex-none overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                                {/* URL bar */}
+                                <div className="flex h-8 items-center gap-2 border-b border-gray-100 bg-gray-50 px-4">
+                                    <Globe size={12} className="shrink-0 text-gray-400" />
+                                    <span className="flex-1 truncate font-mono text-xs text-gray-500">
+                                        {browserUrl || 'Loading…'}
+                                    </span>
+                                    <div className="flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-500">
+                                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+                                        Live
+                                    </div>
+                                </div>
+                                {/* Screenshot — full width, proportional height, no crop */}
+                                <img
+                                    src={`data:image/jpeg;base64,${browserFrame}`}
+                                    alt="Browser live view"
+                                    className="block w-full"
+                                    draggable={false}
+                                    onLoad={() => { if (!userScrolledUpRef.current) scrollConsoleToBottom(); }}
+                                />
+                            </div>
+                        )}
+
+                        {/* Code / Console — fills remaining space */}
+                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                             <div className="flex h-9 items-center border-b border-gray-100 bg-gray-50 px-4 text-xs font-medium text-gray-600">
                                 {currentFile ? currentFile.split('/').pop() : 'Console'}
                             </div>
-                            <div className="flex-1 overflow-auto">
+                            <div
+                                ref={consoleScrollRef}
+                                onScroll={handleConsoleScroll}
+                                className="flex-1 overflow-y-auto overflow-x-hidden"
+                            >
                                 {codeContent ? (
                                     <div className="flex text-sm leading-6 text-gray-800">
                                         <div className="select-none border-r bg-gray-50/70 px-4 py-4 text-right font-mono text-xs text-gray-400">
@@ -363,10 +437,16 @@ export default function SubAgentWindow({
                                             {codeContent}
                                         </pre>
                                     </div>
+                                ) : consoleLines && consoleLines.length > 0 ? (
+                                    <div className="space-y-0.5 px-4 py-4 font-mono text-xs text-gray-900">
+                                        {consoleLines.map((line, index) => (
+                                            <div key={`${line}-${index}`} className="break-all whitespace-pre-wrap leading-5">{line}</div>
+                                        ))}
+                                    </div>
                                 ) : (
                                     <div className="flex h-full flex-col items-center justify-center gap-2 text-gray-300">
                                         <Loader2 size={28} className="animate-spin opacity-50" />
-                                        <span className="text-xs">Waiting for output...</span>
+                                        <span className="text-xs">Waiting for output…</span>
                                     </div>
                                 )}
                             </div>

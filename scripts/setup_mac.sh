@@ -34,7 +34,8 @@ else
 
     pip install --upgrade pip
     # Explicitly install core libs so they are guaranteed present
-    pip install pyttsx3 SpeechRecognition pyaudio requests beautifulsoup4 rich typer prompt_toolkit
+    # pyttsx3 removed — caused RAM explosion on Windows. TTS is via Docker (Piper).
+    pip install SpeechRecognition pyaudio requests beautifulsoup4 rich typer prompt_toolkit
 
     # Install the project itself in editable mode (Creates 'vaf' command)
     pip install -e .
@@ -52,12 +53,8 @@ fi
 # 5. Verification
 echo "🔍 Verifying Installation..."
 
-# TTS Check
-if python3 -c "import pyttsx3" &> /dev/null; then
-    echo "✅ TTS Engine (pyttsx3) installed."
-else
-    echo "❌ TTS Engine failed to install."
-fi
+# TTS: pyttsx3 removed — TTS is now via Docker (Piper). No local install check needed.
+# See docs/SPEECH_FEATURES.md and docker-compose.memory.yml (vaf-tts service).
 
 # Audio Check
 if python3 -c "import pyaudio" &> /dev/null; then

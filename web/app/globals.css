@@ -107,3 +107,7 @@
   84%  { transform: scale(1.11) translate(0.85px,  0.4px);  border-radius: 58% 42% 44% 56%/56% 44% 42% 58%; }
   100% { transform: scale(1)    translate(0px,     0px);    border-radius: 50%; }
 }
+@keyframes stopRipple {
+  0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.65; }
+  100% { transform: translate(-50%,-50%) scale(3.2); opacity: 0; }
+}

@@ -18,16 +18,6 @@ from pathlib import Path
 # Dependency imports will be handled in setup or assumed present if requirements are installed
 from huggingface_hub import hf_hub_download
 
-# DuckDuckGo Search: Try new package first, fallback to legacy with suppression
-try:
-    from ddgs import DDGS
-except ImportError:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        import importlib
-        duck_module = importlib.import_module("duckduckgo_search")
-        DDGS = getattr(duck_module, "DDGS")
-
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
@@ -96,7 +86,6 @@ class Agent:
     REQUIRED_PACKAGES = {
         "colorama": "colorama",
         "huggingface_hub": "huggingface_hub",
-        "duckduckgo_search": "duckduckgo-search",
         "llama_cpp": "llama-cpp-python"
     }
     
@@ -2306,7 +2295,7 @@ class Agent:
         # 2. Fallback to langid (Probabilistic / General Purpose) - Supports 97 languages
         try:
             # langid is pure-Python and supports many languages (offline).
-            import langid  # type: ignore
+            from vaf.vendor import langid  # type: ignore
 
             # Use langid for detection. It is generally robust even for short phrases.
             # We relax the length constraint to > 3 chars to catch "Was ist das" etc.
@@ -2423,7 +2412,7 @@ class Agent:
         # Determine language (simplified check for common cases)
         # Using langid for robust detection
         try:
-            import langid
+            from vaf.vendor import langid
             import re
             
             user_lang = self._detect_user_language(user_input)
@@ -4852,7 +4841,7 @@ class Agent:
                         if ws.is_default_user_identity(user_identity):
                             # Detect language from user's first message
                             try:
-                                import langid
+                                from vaf.vendor import langid
                                 detected_lang, confidence = langid.classify(user_input)
                                 # Map to common 2-letter codes
                                 lang_code = detected_lang if detected_lang in ("de", "en", "es", "fr", "it", "zh", "ja") else "en"

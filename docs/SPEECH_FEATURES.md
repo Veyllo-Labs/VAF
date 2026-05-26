@@ -56,7 +56,7 @@ VAF supports multiple TTS engines configured via `speech_tts_engine`:
 |--------|-------------|----------|
 | `docker` | HTTP TTS service (Piper in container) | **Recommended** - Best quality |
 | `piper` | Local Piper binary | Offline without Docker |
-| `system` | pyttsx3 (SAPI5/nsss/espeak) | Fallback |
+| `system` | macOS `say` command only (pyttsx3 removed — caused 1-4 GB RAM explosion on Windows via SAPI/comtypes) | macOS fallback only |
 
 ### Multi-Language Docker TTS
 

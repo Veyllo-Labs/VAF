@@ -2055,7 +2055,10 @@ class Agent:
             username=getattr(self, "_current_username", None),
             user_scope_id=getattr(self, "_current_user_scope_id", None),
             current_source=getattr(self, "_current_chat_source", None),
-            last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
+            last_interaction=(
+                None if getattr(self, "_is_new_session", False)
+                else get_last_interaction(getattr(self, "_current_user_scope_id", None))
+            ),
             front_office=getattr(self, "_front_office_mode", False),
         )
         
@@ -2104,9 +2107,16 @@ class Agent:
                 self._current_user_scope_id = meta.get("user_scope_id")
             if meta.get("username") is not None:
                 self._current_username = meta.get("username")
+            # Suppress last_interaction preview for empty sessions: the "Prior topic: ..."
+            # hint causes the agent to treat the previous session's message as the current
+            # one, leading to context bleed into brand new chats.
+            self._is_new_session = not any(
+                getattr(m, "role", None) in ("user", "assistant")
+                for m in (session.messages or [])
+            )
             # Reset Context (System Prompt)
-            self.init_chat() 
-            
+            self.init_chat()
+
             # Replay History (session.messages are Message dataclass instances: .role, .content)
             for msg in session.messages:
                 role = getattr(msg, "role", None)
@@ -2122,7 +2132,15 @@ class Agent:
                         ]
                         if any(p in content for p in ignore_patterns) and "## PROJECT CONTEXT" not in content:
                             continue
-                            
+
+                    # Strip think blocks from LLM context (saved for UI display only)
+                    if role == "assistant":
+                        import re as _re
+                        content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
+                        content = content.strip()
+                        if not content:
+                            continue
+
                     self.history.append({"role": role, "content": content})
             
             # Update Pointer
@@ -2130,7 +2148,8 @@ class Agent:
             set_current_session_id(session_id)
             
         except Exception:
-            # New/Empty session
+            # New/Empty session — definitely no prior history
+            self._is_new_session = True
             self.init_chat()
             self.current_session_id = session_id
             set_current_session_id(session_id)

@@ -77,6 +77,10 @@ class AgentWorkflowBuilderTool(BaseTool):
         "DO NOT use action='execute' — that does not exist. "
         "To run something NOW use action='run_temp'. "
         "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
+        "AUTOMATIC CLEANUP (run_temp only): All intermediate files created during the run "
+        "are automatically deleted after completion. Only the final write_file output is kept. "
+        "If the user wants to keep an additional file, pass keep_files=[\"/path/to/file\"]. "
+        "This means: use write_file only for the FINAL deliverable — not for intermediate scripts.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
         "and a 'tool'. AVAILABLE SUB-AGENTS AND TOOLS FOR STEPS:\n"
         "  coding_agent    — Write/edit code, create HTML/CSS/JS, generate structured files, "
@@ -237,6 +241,17 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "items": {"type": "string"},
                 "description": "Trigger phrases for create mode (optional).",
             },
+            "keep_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "For run_temp only: list of absolute file paths to preserve after the workflow "
+                    "finishes. All other intermediate files created during the run are automatically "
+                    "deleted. Use this when the final step produces a document/report the user wants "
+                    "to keep (e.g. keep_files=[\"/home/user/Documents/VAF_Projects/report.pdf\"]). "
+                    "The last write_file output is always kept automatically."
+                ),
+            },
         },
         "required": ["action"],
     }
@@ -256,6 +271,15 @@ class AgentWorkflowBuilderTool(BaseTool):
             self._agent = _injected
 
         action = (kwargs.get("action") or "").strip().lower()
+
+        # Infer action from other fields when agent omits it
+        if not action:
+            if kwargs.get("is_temporary") or (kwargs.get("steps") and not kwargs.get("workflow_id")):
+                action = "run_temp"
+            elif kwargs.get("workflow_id") and kwargs.get("steps"):
+                action = "create"
+            elif kwargs.get("workflow_id") and not kwargs.get("steps"):
+                action = "delete"
 
         if action == "run_temp":
             return self._run_temp(kwargs)
@@ -298,13 +322,31 @@ class AgentWorkflowBuilderTool(BaseTool):
         for i, s in enumerate(raw_steps):
             if not isinstance(s, dict):
                 return f"Error: step {i + 1} must be an object with at least an 'input' field."
-            if not s.get("input", "").strip():
+            # Accept 'agent_id' as alias for 'tool' (some LLMs emit this)
+            tool_val = s.get("tool") or s.get("agent_id") or "coding_agent"
+            # Accept 'input' as dict (convert to JSON string) or string
+            raw_input = s.get("input") or s.get("code") or ""
+            if isinstance(raw_input, dict):
+                raw_input = json.dumps(raw_input, ensure_ascii=False)
+            raw_input = str(raw_input).strip()
+            if not raw_input:
                 return f"Error: step {i + 1} is missing a non-empty 'input' field."
+            # Normalise tool aliases the LLM sometimes emits
+            _tool_aliases = {
+                "python_exec": "python_sandbox",
+                "python":      "python_sandbox",
+                "bash":        "python_sandbox",
+                "search":      "web_search",
+                "write":       "write_file",
+                "read":        "read_file",
+            }
+            tool_str = str(tool_val).strip() or "coding_agent"
+            tool_str = _tool_aliases.get(tool_str.lower(), tool_str)
             step_dict: dict = {
-                "input":       s["input"],
-                "tool":        s.get("tool", "coding_agent"),
+                "input":       raw_input,
+                "tool":        tool_str,
                 "output":      s.get("output") or f"step_{i + 1}_output",
-                "description": s.get("description") or f"Step {i + 1}",
+                "description": s.get("description") or s.get("name") or f"Step {i + 1}",
             }
             for _f in ("on_success", "on_failure", "optional", "condition",
                        "assertions", "max_assertion_retries", "args"):
@@ -462,7 +504,7 @@ class AgentWorkflowBuilderTool(BaseTool):
             sys.stdout = _WebStreamWriter(sys.stdout)
             sys.stderr = _WebStreamWriter(sys.stderr)
             os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
-            if _subagent_model:
+            if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                 os.environ["VAF_TOOL_MODEL"] = _subagent_model
             result = engine.execute(steps, variables=variables)
         except Exception as exc:
@@ -484,6 +526,47 @@ class AgentWorkflowBuilderTool(BaseTool):
                 f"Temporary workflow '{name}' paused (async sub-agent). "
                 "The result will arrive when the sub-agent completes."
             )
+
+        # ── Intermediate file cleanup for run_temp ────────────────────────────
+        # After a temp workflow completes, delete all intermediate files that were
+        # created in the shared project path. The final answer is in result.final_output
+        # (text). If the last step produced a file the user wants to keep, the agent
+        # should pass keep_files=[path] to preserve it; everything else is removed.
+        _proj_path = (result.outputs or {}).get("workflow_project_path", "")
+        if _proj_path and os.path.isdir(_proj_path):
+            _keep_files = set()
+            # Preserve explicitly requested files
+            for _kf in (kwargs.get("keep_files") or []):
+                _kf = str(_kf).strip()
+                if _kf:
+                    _keep_files.add(os.path.realpath(_kf))
+            # Infer final output file: if last step used write_file, keep that path
+            _last_step_output = str(result.final_output or "")
+            # write_file tool returns the path it wrote to
+            if _last_step_output and os.path.isfile(_last_step_output):
+                _keep_files.add(os.path.realpath(_last_step_output))
+            # Walk and delete intermediates
+            _deleted = 0
+            for _root, _dirs, _files in os.walk(_proj_path, topdown=False):
+                for _fn in _files:
+                    _fp = os.path.realpath(os.path.join(_root, _fn))
+                    if _fp not in _keep_files:
+                        try:
+                            os.unlink(_fp)
+                            _deleted += 1
+                        except Exception:
+                            pass
+                for _dn in _dirs:
+                    _dp = os.path.join(_root, _dn)
+                    try:
+                        os.rmdir(_dp)  # only removes if empty
+                    except Exception:
+                        pass
+            # Remove the project dir itself if now empty
+            try:
+                os.rmdir(_proj_path)
+            except Exception:
+                pass
 
         if result.success:
             return f"Temporary workflow '{name}' completed.\n\n{result.final_output}"

@@ -765,7 +765,7 @@ Then use the results to answer. Do NOT guess from your training data!
                     voice_note = " (Sprachnachricht)" if self.user_language == "de" else " (voice message)"
                 line_parts.append(f"Last user {display_name} interaction: {rel} via {chan}{voice_note}.")
                 if preview:
-                    line_parts.append(f" (About: {preview})")
+                    line_parts.append(f" Prior topic: \"{preview}\" (previous chat — current message may be unrelated).")
             if current_source:
                 chan = self._format_channel(current_source)
                 line_parts.append(f" Currently chatting in {chan}.")
@@ -824,7 +824,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "Der Kontakt würde diese Berichte sehen und verwirrt sein.\n"
                 "- Schreibe KEINE internen Statusmeldungen an den Inhaber. Du sprichst MIT dem Kontakt, nicht ÜBER den Kontakt.\n"
                 "- Verwechsle den Kontakt NICHT mit dem Account-Inhaber.\n"
-                "- Sage NICHT \"ich\" im Sinne des Inhabers (z.B. \"Ich mag deine Börek\" als wäre du Mert — stattdessen \"Er mag deine Börek\" oder \"Mert mag sie\").\n\n"
+                "- Sage NICHT \"ich\" im Sinne des Inhabers (z.B. \"Ich mag deine Börek\" als wäre du Mert — stattdessen \"Er mag deine B��rek\" oder \"Mert mag sie\").\n\n"
                 "### Sprache (verbindlich)\n"
                 "**Wenn im Kontakt-Block `preferred_language` steht (z.B. tr, de):** Antworte dem Kontakt **immer in genau dieser Sprache**, auch wenn die Nachricht des Kontakts in einer anderen Sprache war. "
                 "Beispiel: preferred_language = tr → deine Antwort auf Türkisch, auch bei einer Frage auf Deutsch.\n"

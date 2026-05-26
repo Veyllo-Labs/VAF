@@ -2098,6 +2098,16 @@ Thumbs.db
             _api_base, _llm_default_model = _API_PROVIDERS[_provider]
             _llm_api_key = Config.get_api_key(_provider) or ""
             _llm_model = Config.get(f"api_model_{_provider}", _llm_default_model) or _llm_default_model
+            # Resolve deepseek-auto → concrete model name (API rejects "deepseek-auto" directly)
+            if _provider == "deepseek" and str(_llm_model).lower() == "deepseek-auto":
+                _in_wf = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
+                _sa = Config.get("subagent_model", "").strip()
+                if _in_wf and _sa and _sa.lower() != "deepseek-auto":
+                    _llm_model = _sa
+                elif _in_wf:
+                    _llm_model = "deepseek-v4-pro"
+                else:
+                    _llm_model = "deepseek-v4-flash"
             # Full URLs — base already ends with /v1 so just append the path segment
             _llm_chat_url = f"{_api_base}/chat/completions"
             _llm_models_url = f"{_api_base}/models"

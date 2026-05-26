@@ -1613,11 +1613,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
 
                         def _clean_for_session(text: str) -> str:
-                            """Remove reasoning blocks to keep session context efficient."""
+                            """Keep full content for display; only strip redacted blocks."""
                             if not text:
                                 return ""
-                            cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
+                            # Keep <think> blocks so the UI can show thinking after reload.
+                            # <think> is stripped from LLM context in agent.py when replaying history.
+                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', text, flags=re.DOTALL)
                             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
                             return cleaned.strip()
 

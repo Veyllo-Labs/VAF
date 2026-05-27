@@ -242,22 +242,22 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
         apt)
             print_info "Updating package lists..."
             sudo apt-get update -qq
-            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg"
+            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg python3-gi gir1.2-webkit2-4.0 gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
         dnf|yum)
-            DEPS="portaudio-devel python3-devel gcc git ffmpeg"
+            DEPS="portaudio-devel python3-devel gcc git ffmpeg python3-gobject3 webkit2gtk4.0 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
         pacman)
-            DEPS="portaudio python git ffmpeg base-devel"
+            DEPS="portaudio python git ffmpeg base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
         zypper)
-            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg nodejs-default npm-default docker-compose"
+            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg nodejs-default npm-default docker-compose typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0 typelib-1_0-AyatanaAppIndicator3-0_1 gobject-introspection-devel cairo-devel"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
             ;;
@@ -265,6 +265,15 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
             print_warning "Please manually install: portaudio, git, ffmpeg, python dev headers"
             ;;
     esac
+
+    # PyGObject must be compiled inside the venv (system gi is not accessible from venv)
+    # This is needed for pywebview's GTK backend (desktop window feature)
+    if [[ -f "venv/bin/activate" ]]; then
+        print_info "Installing PyGObject into venv (needed for desktop window)..."
+        source venv/bin/activate
+        pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed — desktop window may not work"
+        deactivate
+    fi
 fi
 
 print_success "System dependencies installed"

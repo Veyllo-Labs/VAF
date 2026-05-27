@@ -1714,6 +1714,12 @@ _stop_event = threading.Event()
 def _background_loop() -> None:
     """Daemon loop: every N seconds run thinking_loop_iteration."""
     from vaf.core.config import Config
+    # Startup grace period: wait before the first check so that thinking mode
+    # does not fire immediately on a freshly started VAF (the last interaction
+    # timestamp from a previous session would otherwise look like a long idle).
+    startup_grace = max(60, int(Config.get("thinking_startup_grace_seconds", 300) or 300))
+    if _stop_event.wait(timeout=startup_grace):
+        return  # stopped before grace period elapsed
     interval = max(30, int(Config.get("thinking_check_interval_seconds", 60) or 60))
     while not _stop_event.is_set():
         try:

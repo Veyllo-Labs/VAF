@@ -11,22 +11,32 @@ Supported distributions: **OpenSUSE**, **Fedora**, **Ubuntu/Debian**, **Arch Lin
 **OpenSUSE (zypper):**
 ```bash
 sudo zypper install portaudio-devel alsa-devel python3-devel gcc git nodejs-default npm-default docker docker-compose
+# Desktop window (pywebview):
+sudo zypper install typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0
 ```
 
 **Fedora (dnf):**
 ```bash
 sudo dnf install portaudio-devel alsa-devel python3-devel gcc git nodejs npm docker docker-compose
+# Desktop window (pywebview):
+sudo dnf install python3-gobject3 webkit2gtk4.0
 ```
 
 **Ubuntu / Debian (apt):**
 ```bash
 sudo apt-get install portaudio19-dev python3-dev python3-venv build-essential git nodejs npm ffmpeg
+# Desktop window (pywebview):
+sudo apt-get install python3-gi gir1.2-webkit2-4.0
 ```
 
 **Arch:**
 ```bash
 sudo pacman -S portaudio python git nodejs npm docker docker-compose base-devel
+# Desktop window (pywebview):
+sudo pacman -S python-gobject webkit2gtk
 ```
+
+> **Note:** The WebKitGTK packages are only needed for the native desktop window. If they are missing, VAF falls back to opening the Web UI in your default browser instead.
 
 ### 2. Enable Docker
 
@@ -131,7 +141,11 @@ python -m vaf.main tray   # must NOT set VAF_NATIVE_WRAPPER=1
 
 ## GPU Acceleration
 
-VAF uses **Vulkan** for GPU acceleration on Linux. Vulkan works with NVIDIA, AMD, and Intel GPUs without requiring the CUDA toolkit — only the GPU driver is needed (`libcuda.so` / `libvulkan.so`).
+VAF uses GPU acceleration in two places:
+
+### 1. Local model inference (llama-server)
+
+Uses **Vulkan** — works with NVIDIA, AMD, and Intel GPUs without the CUDA toolkit (only the GPU driver is needed).
 
 On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected.
 
@@ -139,6 +153,22 @@ To verify GPU is active, check the server output for:
 ```
 load_backend: loaded Vulkan backend from .../libggml-vulkan.so
 ```
+
+### 2. Desktop window (Qt WebEngine / Chromium)
+
+VAF automatically enables Chromium GPU rasterization for smooth rendering. The following flags are set at startup (Linux only):
+
+```
+--disable-frame-rate-limit   → animations run at the monitor's actual refresh rate
+--disable-gpu-vsync          → avoids double-vsync latency between Qt and Chromium
+--enable-gpu-rasterization   → GPU-based tile rasterization (biggest speedup)
+--enable-accelerated-2d-canvas
+--num-raster-threads=4
+```
+
+> **Note:** `--enable-zero-copy` is intentionally omitted — it maps GPU texture memory into the process address space, which causes the process to appear to use several GB of additional RAM in system monitors (the memory is GPU-backed and not actually paged, but tools like `top` report it as RSS). Removing it has no visible impact on rendering performance.
+
+No manual configuration needed — these are applied automatically.
 
 ---
 

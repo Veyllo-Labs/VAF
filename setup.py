@@ -70,7 +70,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Veyllo Labs",
-    url="https://github.com/Veyllo-Labs/Veyllo-App",
+    url="https://github.com/Veyllo-Labs/VAF",
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=requirements,

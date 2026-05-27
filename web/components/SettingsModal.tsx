@@ -911,7 +911,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const base = apiBase || (typeof window !== 'undefined' ? '' : 'http://localhost:8001');
         fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' })
             .then(() => {
-                if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_token');
+                if (typeof window !== 'undefined') localStorage.removeItem('vaf_token');
                 setTimeout(() => {
                     setIsLoggingOut(false);
                     setLogoutBarProgress(0);
@@ -919,7 +919,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 }, 1500);
             })
             .catch(() => {
-                if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_token');
+                if (typeof window !== 'undefined') localStorage.removeItem('vaf_token');
                 setIsLoggingOut(false);
                 setLogoutBarProgress(0);
                 onLogout?.();

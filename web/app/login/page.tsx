@@ -65,7 +65,7 @@ export default function LoginPage() {
             'Cache-Control': 'no-cache',
         };
         if (typeof window !== 'undefined') {
-            const token = sessionStorage.getItem('vaf_token');
+            const token = localStorage.getItem('vaf_token');
             if (token) authHeaders.Authorization = `Bearer ${token}`;
         }
 
@@ -95,7 +95,7 @@ export default function LoginPage() {
 
                 // If not authenticated, check setup status
                 if (typeof window !== 'undefined') {
-                    sessionStorage.removeItem('vaf_token');
+                    localStorage.removeItem('vaf_token');
                 }
                 fetch(`${apiPrefix}/api/auth/needs-setup`, { credentials: 'include' })
                     .then((res) => {
@@ -217,7 +217,7 @@ export default function LoginPage() {
             if (typeof window !== 'undefined') {
                 sessionStorage.removeItem('vaf_onboarding');
                 sessionStorage.removeItem('vaf_onboarding_step');
-                if (data.access_token) sessionStorage.setItem('vaf_token', data.access_token);
+                if (data.access_token) localStorage.setItem('vaf_token', data.access_token);
             }
             window.location.replace(`${window.location.origin}/`);
             return;
@@ -271,7 +271,7 @@ export default function LoginPage() {
                 }
             } else {
                 if (typeof window !== 'undefined' && data.access_token) {
-                    sessionStorage.setItem('vaf_token', data.access_token);
+                    localStorage.setItem('vaf_token', data.access_token);
                 }
                 router.push('/');
                 return;
@@ -305,7 +305,7 @@ export default function LoginPage() {
                 return;
             }
             if (typeof window !== 'undefined' && data.access_token) {
-                sessionStorage.setItem('vaf_token', data.access_token);
+                localStorage.setItem('vaf_token', data.access_token);
             }
             router.push('/');
         } catch {

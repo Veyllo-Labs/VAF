@@ -1,15 +1,18 @@
-# System Tray & Persistent Server
+# System Tray & Desktop Window
 
-VAF includes a persistent background service managed by a system tray application. This allows for instant agent availability, dynamic resource management, and a native desktop experience.
+VAF includes a persistent background service managed by a system tray application and a native desktop window. This allows for instant agent availability, dynamic resource management, and a native desktop experience — without requiring the user to open a browser manually.
 
 ## Features
 
-- **Persistent Icon**: A system tray (Windows/Linux) or menu bar (macOS) icon indicates the server state.
+- **Native Desktop Window**: VAF opens in its own dedicated window (no browser tab needed), powered by the system's native WebView engine.
+    - Windows: Edge/WebView2 (Chromium-based)
+    - macOS: WKWebView (Safari engine)
+    - Linux: WebKitGTK
+- **Persistent Tray Icon**: A system tray icon on all platforms indicates the server state.
     - 🟢 **Green / Active**: Server is running, model is loaded into RAM.
     - 🟡 **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
     - 🔵 **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
-- **macOS Dock Integration**: On macOS, clicking the Dock icon (when VAF is already running) focuses the app and opens/re-activates the Web UI.
-- **Smart Tab Reuse**: If a VAF tab is already open in Safari or Google Chrome, clicking the Dock icon will re-focus that existing tab instead of opening a new one.
+- **Window Minimize to Tray**: Closing the window hides it — the app stays running in the system tray. Click "Open VAF" to bring the window back.
 - **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources.
 - **WebUI-Aware Idle**: The local model unloads after 15 seconds with no active WebUI WebSocket connections (unless persistence is enabled).
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
@@ -34,9 +37,9 @@ vaf tray
 
 ### Menu Options
 
-- **Open WebUI**: Opens the VAF dashboard in your default browser.
+- **Open VAF**: Shows the VAF desktop window (brings it to the front if already open).
 - **Persistent Server**: Toggle this to keep the model loaded in RAM even when idle (useful for frequent interaction).
-- **Quit**: Stops the server and exits the application.
+- **Quit**: Stops the server, closes the window, and exits the application.
 
 ### CLI Integration
 
@@ -78,9 +81,46 @@ This is implemented via the Config observer pattern: `Config.save()` detects cha
 ## Architecture
 
 The system uses a shared `TrayContext` to manage state between the Uvicorn web server and the UI loop.
-- **macOS**: Uses `rumps` for a native Cocoa menu bar experience.
-- **Windows/Linux**: Uses `pystray` for cross-platform system tray support.
+
+- **All platforms**: Uses `pystray` for the system tray icon (runs in a background thread via `icon.run_detached()`).
+- **Desktop window**: `pywebview` (`vaf/core/desktop_window.py`) creates a native WebView window that owns the main thread (`webview.start()` blocks). Closing the window hides it; Quit destroys it and exits. Login sessions and localStorage are **persisted** across restarts (`private_mode=False`, storage in `.vaf_webview/`).
+- **Thread model**:
+  - Main thread → `webview.start()` (pywebview GUI loop)
+  - Background threads → pystray tray icon, uvicorn backend, Next.js frontend, agent loop
 - **HTTP Backend**: The tray starts and unloads the local backend; health checks reuse an existing backend to avoid multiple processes.
+
+### Linux system dependencies
+
+The desktop window on Linux uses **Qt WebEngine (Chromium-based)** via `PyQt6-WebEngine` (installed automatically via `requirements.txt`). This gives smooth, Chrome-like rendering with full GPU acceleration.
+
+System packages required:
+
+```bash
+# OpenSUSE
+sudo zypper install typelib-1_0-AyatanaAppIndicator3-0_1 typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0
+
+# Debian / Ubuntu
+sudo apt install python3-gi gir1.2-webkit2-4.0 gir1.2-ayatanaappindicator3-0.1
+
+# Fedora
+sudo dnf install python3-gobject webkit2gtk4.0
+
+# Arch
+sudo pacman -S python-gobject webkit2gtk
+```
+
+VAF sets the following environment variables automatically on startup:
+- `GDK_BACKEND=x11` — forces GTK (pystray) to use X11/XWayland
+- `QT_QPA_PLATFORM=xcb` — forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
+- `WEBKIT_DISABLE_DMABUF_RENDERER=1` — avoids GBM buffer errors under XWayland
+
+**GPU acceleration** is enabled automatically via Chromium flags:
+```
+--disable-frame-rate-limit --disable-gpu-vsync --enable-gpu-rasterization
+--enable-accelerated-2d-canvas --num-raster-threads=4
+```
+
+If PyQt6-WebEngine is not installed, VAF falls back to browser-only mode (tray icon still works).
 
 ## Platform Implementation Notes
 
@@ -100,12 +140,13 @@ When modifying the tray or adding platform-specific logic, observe these differe
 
 | Aspect | Requirement |
 |--------|-------------|
-| **Tray library** | `rumps` (not pystray). Requires Cocoa RunLoop on main thread. |
-| **Initialization** | Start backend/frontend threads only after rumps RunLoop is active (e.g. via `threading.Timer` delayed init). |
+| **Tray library** | `pystray` (same as Windows/Linux). `rumps` was removed — it conflicts with pywebview for main-thread ownership. |
+| **Initialization** | pystray runs detached; pywebview owns the main thread. No delayed-init workaround needed. |
 | **Signals** | Handle `SIGTERM`, `SIGINT`, `SIGHUP` for clean shutdown (Dock Quit, Cmd+Q). |
 | **Icon** | 44×44 recommended for Retina; macOS downscales as needed. |
 
 ### Cross-platform
 
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
-- Callbacks (e.g. pystray `checked`): accept `(icon, item)`; Rumps passes `(sender)`—handle both.
+- Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
+- Desktop window API: `vaf.core.desktop_window` — `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.

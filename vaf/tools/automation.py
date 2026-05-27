@@ -40,9 +40,9 @@ class AutomationTool(BaseTool):
     name = "create_automation"
     permission_level = "write"
     side_effect_class = "reversible"
-    description = """Create a scheduled automation task that runs at specified times.
+    description = """Create a scheduled automation task. Use frequency='once' for one-time timers, reminders, or delayed actions (runs exactly once at the given time, then self-deletes). Use frequency='daily'/'weekly'/'monthly'/'hourly' only for recurring schedules.
 Use this when user wants to schedule recurring tasks or a one-time task:
-- Once (einmalig): single run, automatically deleted after execution. Best for one-time reminders or tasks (e.g. 'Remind me tomorrow at 10:00').
+- Once (einmalig): single run, automatically deleted after execution. Use for any one-time reminder or delayed task (e.g. 'Remind me tomorrow at 10:00', 'Run this script tonight at 23:00').
 - Daily (täglich), weekly (wöchentlich, use weekday e.g. monday), monthly (monatlich, use day 1-31), hourly (stündlich)
 - Daily news/weather reports, periodic backups, scheduled reminders, regular document generation
 
@@ -115,7 +115,9 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                 "enum": ["once", "hourly", "daily", "weekly", "monthly"],
                 "description": (
                     "How often to run. REQUIRED — you MUST ask the user explicitly if not stated.\n"
-                    "- 'once': runs exactly one time, then deleted (DEFAULT — use unless user explicitly wants repetition)\n"
+                    "- 'once': ONE-TIME timer — runs exactly once at the given time, then automatically deleted. "
+                    "Use for any single reminder, delayed action, or one-off task ('remind me tomorrow at 10', "
+                    "'run this at 22:00 tonight', 'send report next Friday at 09:00 once'). DEFAULT — use unless user explicitly wants repetition.\n"
                     "- 'daily': every day at the given time\n"
                     "- 'weekly': every week on weekday (requires weekday param)\n"
                     "- 'monthly': every month on day (requires day param)\n"

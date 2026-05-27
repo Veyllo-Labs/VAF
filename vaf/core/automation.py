@@ -174,22 +174,40 @@ def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) ->
     msg = f"{status_icon} **Automation: {task.name}**\n\n{(summary or '').strip()[:1200]}"
     web_ok = False
 
-    # 1. Web UI — always deliver as a chat message in the latest web session.
+    # 1. Web UI — deliver as a chat message to the user's active session.
     try:
         from vaf.core.web_interface import get_web_interface
         from vaf.core.session import SessionManager
         wi = get_web_interface()
         sm = SessionManager()
-        all_sessions = sm.list(limit=10, user_scope_id=task.user_scope_id)
-        web_sessions = [
-            s for s in all_sessions
-            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
-        ]
-        if web_sessions:
-            sid = web_sessions[0]["id"]
-        else:
-            new_session = sm.create(user_scope_id=task.user_scope_id, metadata={"source": "automation_result"})
-            sid = new_session.id
+        _target_scope = str(task.user_scope_id or "")
+
+        # Priority 1: session with an active WebSocket connection for this user.
+        # This ensures the message lands in the tab the user is currently looking at,
+        # not in some historically-sorted session file from hours ago.
+        sid = None
+        if wi and wi.connection_sessions:
+            live_sids = [
+                sess_id
+                for ws, sess_id in list(wi.connection_sessions.items())
+                if str(wi.connection_users.get(ws) or "") == _target_scope
+            ]
+            if live_sids:
+                sid = live_sids[-1]  # most recently subscribed connection
+
+        # Priority 2: most recently modified web session on disk (mtime-sorted).
+        if not sid:
+            all_sessions = sm.list(limit=10, user_scope_id=task.user_scope_id)
+            web_sessions = [
+                s for s in all_sessions
+                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+            ]
+            if web_sessions:
+                sid = web_sessions[0]["id"]
+            else:
+                new_session = sm.create(user_scope_id=task.user_scope_id, metadata={"source": "automation_result"})
+                sid = new_session.id
+
         loaded = sm.load(sid)
         if loaded:
             loaded.add_message(role="assistant", content=msg)

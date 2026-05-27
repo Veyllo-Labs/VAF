@@ -801,7 +801,7 @@ def callback(
         from vaf import __version__
         UI.print("[cyan bold]VAF[/cyan bold] - Veyllo Agentic Framework")
         UI.print(f"Version: [green]{__version__}[/green]")
-        UI.print("https://github.com/Veyllo-Labs/Veyllo-App")
+        UI.print("https://github.com/Veyllo-Labs/VAF")
         raise typer.Exit()
 
 def main():

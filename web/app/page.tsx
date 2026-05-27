@@ -817,7 +817,7 @@ function VAFDashboardContent() {
             'Cache-Control': 'no-cache',
         };
         if (typeof window !== 'undefined') {
-            const token = sessionStorage.getItem('vaf_token');
+            const token = localStorage.getItem('vaf_token');
             if (token) authHeaders.Authorization = `Bearer ${token}`;
         }
         fetch(`${getApiBase()}/api/auth/me`, {
@@ -834,7 +834,7 @@ function VAFDashboardContent() {
                 } else {
                     if (typeof window !== 'undefined') {
                         // Avoid split-brain auth state (stale token in storage, invalid on backend)
-                        sessionStorage.removeItem('vaf_token');
+                        localStorage.removeItem('vaf_token');
                         // Hard navigation: router.replace('/login') can fail to leave the dashboard
                         // shell when using the integrated HTTPS proxy (e.g. https://localhost:8443).
                         window.location.replace(`${window.location.origin}/login`);
@@ -1651,7 +1651,7 @@ function VAFDashboardContent() {
             }
             if (cancelled) return;
             let wsUrl = (base ? base + '/ws' : '/ws');
-            const token = sessionStorage.getItem('vaf_token');
+            const token = localStorage.getItem('vaf_token');
             if (token) {
                 wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
             }

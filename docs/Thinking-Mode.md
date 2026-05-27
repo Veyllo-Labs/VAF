@@ -38,6 +38,7 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_model` | `null` | Specific model for thinking mode (empty = use provider default) |
 | `thinking_quiet_hours_enabled` | `false` | Do not run during quiet hours (local time) |
 | `thinking_quiet_hours_start` / `_end` | `"23:00"` / `"07:00"` | Quiet period (HH:MM, 24h); overnight span supported |
+| `thinking_startup_grace_seconds` | `300` | Seconds to skip thinking-mode checks after VAF starts. Prevents idle triggers immediately on startup. |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { X, ChevronRight, Zap, Trash2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -127,6 +127,15 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
     const t = useTranslations('settings.automations');
     const [automationCalendarViewDate, setAutomationCalendarViewDate] = useState(() => new Date());
     const [selectedDayForView, setSelectedDayForView] = useState<Date | null>(null);
+
+    // Pre-compute all 24 hour slots once — avoids re-running automationsAtSlot 24× on every render
+    const dayViewSlots = useMemo(() => {
+        if (!selectedDayForView) return null;
+        return Array.from({ length: 24 }, (_, h) => ({
+            h,
+            slotAutomations: automationsAtSlot(automations, selectedDayForView, h),
+        }));
+    }, [selectedDayForView, automations]);
     const [selectedSlot, setSelectedSlot] = useState<{ date: Date; hour: number } | null>(null);
     const [showAddTodoPopup, setShowAddTodoPopup] = useState(false);
     const [addTodoText, setAddTodoText] = useState('');
@@ -285,9 +294,8 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                             </h3>
                                         </div>
                                         <div className="flex-1 overflow-auto min-h-0 border border-gray-200 rounded-lg bg-white">
-                                            {Array.from({ length: 24 }, (_, h) => {
+                                            {(dayViewSlots ?? []).map(({ h, slotAutomations }) => {
                                                 const isCurrentHourSlot = isToday && h === currentHour;
-                                                const slotAutomations = selectedDayForView ? automationsAtSlot(automations, selectedDayForView, h) : [];
                                                 return (
                                                     <div
                                                         key={h}
@@ -301,8 +309,8 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                                             }
                                                         }}
                                                         className={cn(
-                                                            'flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 last:border-b-0 min-h-[48px] rounded-lg transition-all duration-200 cursor-pointer',
-                                                            'hover:shadow-[0_0_16px_4px_rgba(0,0,0,0.12)] hover:z-10',
+                                                            'flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 last:border-b-0 min-h-[48px] rounded-lg transition-[background-color,box-shadow] duration-150 cursor-pointer',
+                                                            'hover:shadow-[0_0_16px_4px_rgba(0,0,0,0.12)]',
                                                             !isCurrentHourSlot && 'hover:bg-gray-50/80',
                                                             isCurrentHourSlot && 'ring-2 ring-red-500 ring-inset bg-red-50/30'
                                                         )}

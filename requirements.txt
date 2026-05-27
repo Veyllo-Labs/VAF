@@ -46,9 +46,14 @@ pyaudio>=0.2.14
 # onnxruntime>=1.16.0  # Required for openWakeWord inference
 
 # Tray App / GUI
-pystray>=0.19.5; sys_platform != "darwin"  # Cross-platform tray (Windows/Linux)
+pystray>=0.19.5                                          # Cross-platform tray (Windows, macOS, Linux)
+pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"   # Required by pystray on macOS
 pillow>=10.0.0      # Image handling for icons
-rumps>=0.4.0; sys_platform == "darwin"      # Native macOS menu bar app
+pywebview>=4.3.0    # Native desktop window (Edge on Win, WKWebView on Mac, WebKitGTK on Linux)
+PyQt6>=6.4.0; sys_platform == "linux"          # Chromium-based WebView for Linux (via Qt WebEngine)
+PyQt6-WebEngine>=6.4.0; sys_platform == "linux"
+qtpy>=2.0.0; sys_platform == "linux"
+# rumps>=0.4.0; sys_platform == "darwin"  # Removed: conflicts with pywebview main-thread ownership
 
 # Code Quality & Linting
 ruff>=0.1.0  # Fast Python linter and formatter

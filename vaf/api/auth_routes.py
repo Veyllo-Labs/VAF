@@ -96,13 +96,24 @@ async def needs_setup():
     """
     Returns whether the first admin account must be created.
     Callable without auth. When true, show Create Admin flow instead of login.
+    Retries the DB connection up to 5 times (2s apart) to handle the startup
+    race where the frontend loads before PostgreSQL is ready.
     """
-    async with get_auth_db() as db:
-        result = await db.execute(
-            select(LocalUser).where(LocalUser.role == "admin", LocalUser.is_active == True)
-        )
-        has_admin = result.scalar_one_or_none() is not None
-    return {"needs_setup": not has_admin}
+    import asyncio
+    last_exc: Exception | None = None
+    for attempt in range(5):
+        try:
+            async with get_auth_db() as db:
+                result = await db.execute(
+                    select(LocalUser).where(LocalUser.role == "admin", LocalUser.is_active == True)
+                )
+                has_admin = result.scalar_one_or_none() is not None
+            return {"needs_setup": not has_admin}
+        except OSError as exc:
+            last_exc = exc
+            if attempt < 4:
+                await asyncio.sleep(2)
+    raise last_exc  # type: ignore[misc]
 
 
 @router.post("/bootstrap")
@@ -372,11 +383,17 @@ async def login(body: LoginRequest, request: Request, response: Response):
         needs_2fa_setup = user.requires_2fa_setup
         is_2fa_verified = not (needs_2fa_setup or has_2fa_configured)
 
+        # Localhost (desktop tray) logins always get a long-lived token —
+        # the user is on their own machine, 24h expiry serves no security purpose.
+        client_ip = request.client.host if request.client else ""
+        _is_localhost = client_ip in ("127.0.0.1", "::1", "localhost")
+        _localhost_expiry_hours = 30 * 24  # 30 days
         access = create_access_token(
             str(user.id),
             user.username,
             user.role,
             str(user.user_scope_id),
+            expires_hours=_localhost_expiry_hours if _is_localhost else None,
             is_2fa_verified=is_2fa_verified,
         )
         refresh = create_refresh_token(str(user.id))
@@ -388,7 +405,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
             "temp_token": access,
         }
 
-    max_age = 30 * 24 * 3600 if body.remember_me else 24 * 3600
+    max_age = 30 * 24 * 3600 if (body.remember_me or _is_localhost) else 24 * 3600
     _set_auth_cookie(request, response, access, max_age)
     return {
         "access_token": access,

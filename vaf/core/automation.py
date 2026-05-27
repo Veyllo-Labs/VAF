@@ -101,16 +101,12 @@ class AutomationTask:
         hour, minute = map(int, self.time.split(":"))
         
         if self.frequency == Frequency.ONCE:
-            # For ONCE frequency, use created_at + 1 day as default
-            # (or return now if created_at is not available)
-            if self.created_at:
-                try:
-                    created_dt = datetime.fromisoformat(self.created_at)
-                    # Schedule for 1 day after creation
-                    return created_dt + timedelta(days=1)
-                except (ValueError, TypeError):
-                    pass
-            return now
+            # Run once: today at the specified time.
+            # If that time has already passed, schedule for tomorrow.
+            next_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if next_time <= now:
+                next_time += timedelta(days=1)
+            return next_time
         
         elif self.frequency == Frequency.HOURLY:
             next_time = now.replace(minute=minute, second=0, microsecond=0)
@@ -130,10 +126,10 @@ class AutomationTask:
                 "friday": 4, "saturday": 5, "sunday": 6
             }
             target_day = weekdays.get(self.weekday.lower(), 0) if self.weekday else 0
-            days_ahead = target_day - now.weekday()
-            if days_ahead <= 0:
-                days_ahead += 7
             next_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            days_ahead = target_day - now.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and next_time <= now):
+                days_ahead += 7
             next_time += timedelta(days=days_ahead)
             return next_time
         
@@ -168,20 +164,18 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
 
 
 def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) -> bool:
-    """Push automation result as a chat message to the user's latest web session.
+    """Push automation result to Web UI and, if configured, to the user's messenger.
 
-    Skipped when a main messenger (Telegram/WhatsApp/Discord) is configured —
-    the messenger handles delivery in that case.
-    Returns True if the message was pushed successfully.
+    Delivers to BOTH channels so the user always sees the result regardless of
+    whether they have Telegram/WhatsApp/Discord configured.
+    Returns True if at least the Web UI push succeeded.
     """
-    try:
-        from vaf.core.messaging_connections import get_messaging_connections
-        username = _resolve_username(task.user_scope_id)
-        conn = get_messaging_connections(username=username, user_scope_id=task.user_scope_id)
-        main_messenger = (conn.get("main_messenger") or "").strip().lower()
-        if main_messenger in ("telegram", "whatsapp", "discord"):
-            return False  # messenger handles delivery — no duplicate push
+    status_icon = "\u2705" if status == "success" else "\u274c"
+    msg = f"{status_icon} **Automation: {task.name}**\n\n{(summary or '').strip()[:1200]}"
+    web_ok = False
 
+    # 1. Web UI — always deliver as a chat message in the latest web session.
+    try:
         from vaf.core.web_interface import get_web_interface
         from vaf.core.session import SessionManager
         wi = get_web_interface()
@@ -191,30 +185,68 @@ def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) ->
             s for s in all_sessions
             if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
         ]
-
-        status_icon = "\u2705" if status == "success" else "\u274c"
-        msg = f"{status_icon} **{task.name}** \u2014 {status.upper()}\n\n{(summary or '').strip()[:800]}"
-
         if web_sessions:
             sid = web_sessions[0]["id"]
         else:
-            # No existing web session — create one to deliver the result
             new_session = sm.create(user_scope_id=task.user_scope_id, metadata={"source": "automation_result"})
             sid = new_session.id
-
         loaded = sm.load(sid)
         if loaded:
             loaded.add_message(role="assistant", content=msg)
             sm.save(loaded)
-
         if wi:
             wi.emit_agent_message("assistant", msg, session_id=sid)
             wi.emit_session_unread(sid)
-
-        return True
+        web_ok = True
     except Exception as _e:
-        append_domain_log("backend", f"[AUTOMATION] _push_result_to_web_ui failed: {_e}")
-        return False
+        append_domain_log("backend", f"[AUTOMATION] Web UI delivery failed: {_e}")
+
+    # 2. Messenger — send proactively if a main messenger is configured.
+    try:
+        from vaf.core.messaging_connections import get_messaging_connections, get_telegram_chat_id
+        username = _resolve_username(task.user_scope_id)
+        conn = get_messaging_connections(username=username, user_scope_id=task.user_scope_id)
+        main_messenger = (conn.get("main_messenger") or "").strip().lower()
+
+        if main_messenger == "telegram":
+            from vaf.core.config import Config
+            tg_cfg = Config.get("telegram_config") or {}
+            bot_token = (tg_cfg.get("bot_token") or "").strip()
+            chat_id = get_telegram_chat_id(task.user_scope_id, username)
+            if bot_token and chat_id:
+                from vaf.api.telegram_bridge import send_telegram_message_direct
+                send_telegram_message_direct(bot_token, chat_id, msg)
+
+        elif main_messenger == "discord":
+            from vaf.core.config import Config
+            from vaf.core.discord_send import send_discord_message
+            disc_cfg = Config.get("discord_config") or {}
+            bot_token = (disc_cfg.get("bot_token") or "").strip()
+            for entry in (disc_cfg.get("users") or []):
+                scope_match = str(entry.get("user_scope_id", "")) == str(task.user_scope_id or "")
+                channel_id = (entry.get("channel_id") or "").strip()
+                if scope_match and bot_token and channel_id:
+                    send_discord_message(bot_token, channel_id, msg)
+                    break
+
+        elif main_messenger == "whatsapp":
+            # WhatsApp proactive send requires an active session — best-effort only.
+            from vaf.core.config import Config
+            wa_cfg = Config.get("whatsapp_config") or {}
+            for entry in (wa_cfg.get("whitelist") or []):
+                if str(entry.get("user_scope_id", "")) == str(task.user_scope_id or ""):
+                    phone = (entry.get("phone") or "").strip()
+                    if phone:
+                        try:
+                            from vaf.api.whatsapp_bridge import send_whatsapp_text
+                            send_whatsapp_text(phone, msg)
+                        except Exception:
+                            pass
+                    break
+    except Exception as _e:
+        append_domain_log("backend", f"[AUTOMATION] Messenger delivery failed: {_e}")
+
+    return web_ok
 
 
 def _minutes_since_midnight(time_str: str) -> int:
@@ -434,22 +466,31 @@ class AutomationManager:
         append_domain_log("backend", f"[AUTOMATION_SCHEDULER] {message}")
 
     def _run_scheduled_task(self, task: AutomationTask) -> str:
-        """Wrapper for scheduled executions so we can trace trigger points."""
+        """Wrapper for scheduled executions: runs in a background thread (no terminal).
+
+        Running without a terminal (new_terminal=False) keeps the automation in the
+        same process, which means _push_result_to_web_ui can reach the live Web UI
+        WebSocket and deliver the result directly — no subprocess isolation needed.
+        """
         self._log_scheduler_event(
             f"TRIGGER task_id={task.id} name={task.name!r} frequency={task.frequency} time={task.time}"
         )
-        try:
-            result = self.run_task(task, new_terminal=True)
-            preview = (result or "").replace("\n", " ")[:200]
-            self._log_scheduler_event(
-                f"DISPATCHED task_id={task.id} result_preview={preview!r}"
-            )
-            return result
-        except Exception as e:
-            self._log_scheduler_event(
-                f"ERROR task_id={task.id} name={task.name!r} error={e!r}"
-            )
-            raise
+
+        def _execute():
+            try:
+                result = self.run_task(task, new_terminal=False)
+                preview = (result or "").replace("\n", " ")[:200]
+                self._log_scheduler_event(
+                    f"COMPLETED task_id={task.id} result_preview={preview!r}"
+                )
+            except Exception as e:
+                self._log_scheduler_event(
+                    f"ERROR task_id={task.id} name={task.name!r} error={e!r}"
+                )
+
+        import threading as _threading
+        _threading.Thread(target=_execute, daemon=True, name=f"automation-{task.id}").start()
+        return f"Automation '{task.name}' started in background"
     
     def _create_readme(self):
         """Create README in automations folder if it doesn't exist."""
@@ -1225,10 +1266,8 @@ vaf automation delete <id>   # Delete task
                 
                 # Skip legacy output saving if workflow already saved the file
                 if workflow_saved_file:
-                    # Workflow's write_file step already saved the output
-                    # Update task and return
+                    # Workflow's write_file step already saved the output.
                     _stamp_successful_run(task)
-                    # next_run is calculated dynamically - no need to store it
                     self._save_task(task)
                     self._sync_workspace_automation_state(
                         task,
@@ -1236,18 +1275,18 @@ vaf automation delete <id>   # Delete task
                         summary=(result or "")[:1000],
                         event="automation_run",
                     )
-                    try:
-                        from vaf.core.user_notifications import append_notification
-                        append_notification(
-                            task.user_scope_id,
-                            kind="automation",
-                            title=task.name,
-                            status="success",
-                            summary=result or "Completed",
-                            task_name=task.name,
-                        )
-                    except Exception:
-                        pass
+                    # Delete ONCE tasks here too (early-return path would skip the
+                    # ONCE-delete block further below).
+                    if task.frequency == Frequency.ONCE:
+                        self.delete(task.id, permanent=True)
+                    # Build a short, friendly bot summary instead of the raw technical report.
+                    saved_path = workflow_result.final_output or ""
+                    short_summary = (
+                        f"✅ **{task.name}** ist fertig!\n\n"
+                        f"{saved_path}\n\n"
+                        f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
+                    ).strip()
+                    _push_result_to_web_ui(task, "success", short_summary)
                     return result
             else:
                 # Legacy: Use prompt-based execution (backwards compatibility)
@@ -1493,22 +1532,11 @@ vaf automation delete <id>   # Delete task
             os.environ.pop("VAF_IN_AUTOMATION", None)
             # Keep VAF_NONINTERACTIVE if it was set before
         
-        # Notify Web UI of automation result (persisted + live push if server running)
-        try:
-            from vaf.core.user_notifications import append_notification
-            status = "error" if (result or "").strip().startswith("Error:") else "success"
-            append_notification(
-                task.user_scope_id,
-                kind="automation",
-                title=task.name,
-                status=status,
-                summary=result or "Completed",
-                task_name=task.name,
-            )
-        except Exception:
-            pass
+        # Deliver result to user via Web UI chat + messenger.
+        # Only one delivery path — no duplicate notification + chat message.
         try:
             status = "error" if (result or "").strip().startswith("Error:") else "success"
+            # For prompt-based tasks the result IS the summary (already clean text).
             _push_result_to_web_ui(task, status, result or "Completed")
         except Exception:
             pass
@@ -1604,6 +1632,19 @@ vaf automation delete <id>   # Delete task
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=monthly day={task.day or 1} time={task.time}"
             )
+
+        elif task.frequency == Frequency.ONCE:
+            # Run exactly once at the specified time (today if still in the future,
+            # tomorrow if the time has already passed).  Returning schedule.CancelJob
+            # from the callback removes the job automatically after it fires.
+            def once_job(t=task):
+                self._run_scheduled_task(t)
+                return schedule.CancelJob
+            schedule.every().day.at(task.time).do(once_job)
+            self._log_scheduler_event(
+                f"REGISTERED task_id={task.id} name={task.name!r} frequency=once time={task.time}"
+            )
+
         else:
             self._log_scheduler_event(
                 f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='unsupported frequency {task.frequency}'"

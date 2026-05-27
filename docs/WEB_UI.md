@@ -126,7 +126,21 @@ The same automation calendar includes a **per-user planner**:
 
 Planner data is loaded with `get_automation_notes` and `get_automation_todos` when the calendar is opened (from the footer or from Settings). Create/update/delete use WebSocket messages; the UI updates optimistically where applicable. The agent can manage the same data via tools: `add_automation_note`, `add_automation_todo`, `list_automation_notes`, `list_automation_todos`, `delete_automation_note`, `delete_automation_todo`.
 
-**Notifications popup:** Clicking **Notifications** in the sidebar opens a modal the same size as the Automation window. It shows a unified list of background activity: **thinking mode** run results, **automation** run results (success/error and summary), **thinking workspace handoff decisions** (approve/reject including optional automation-action outcome), and **channel replies** (when the agent sent a message via Telegram, Discord, or WhatsApp). Each entry shows status (Success/Skipped/Error), title, relative time, and a compact one-line summary directly in the list. For handoff items, compact badges show action (`approve`/`reject`), optional automation operation (`create`/`update`), and result (`ok`/`failed`). Click the row or the expand control to show the full summary/details. The list is loaded from `GET /api/notifications` when the popup opens; new items are pushed live via WebSocket (`notification`). Data is stored per user and trimmed to the last 100 items or 7 days.
+**Logs window (admin only):** Clicking **Logs** in the sidebar opens a split-pane log viewer (same window size as the Automation window). It is only visible to users with the `admin` role.
+
+The left sidebar has two sections:
+- **Activity** — the existing notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
+- **Log Files** — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Only visible when **Debug Logs** is enabled in Settings → Advanced.
+
+Selecting a log domain opens a **terminal-style viewer** (dark background, monospace font, blue timestamps, line numbers). Controls:
+- **Live toggle** — auto-refreshes every 5 s (green pulsing indicator when active).
+- **Refresh button** — manual reload.
+- **Filter input** — filters lines client-side and highlights matches.
+- **Auto-scroll checkbox** — keeps the view pinned to the bottom.
+
+The viewer shows the last 500 lines of the selected file (`GET /api/logs/{filename}?tail=500`). The header shows the filename and, when truncated, how many lines are shown vs. total. Both API endpoints require admin role.
+
+All debug log functions in `vaf/core/log_helper.py` (`append_domain_log`, `append_domain_log_always`, `log_attachment`, `log_thinking_run`, `log_telegram_reply`, `log_discord_reply`, `log_whatsapp_*`) respect the `debug_logs_enabled` setting — no files are written when it is off.
 
 ### 7. Code Viewer
 

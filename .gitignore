@@ -61,6 +61,7 @@ Thumbs.db
 
 # Runtime
 .vaf.pid
+.vaf_webview/
 # Windows reserved device names (nul, con, prn, aux, com1–9, lpt1–9)
 nul
 con

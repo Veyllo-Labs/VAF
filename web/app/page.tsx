@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, Bell
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -4083,16 +4083,18 @@ function VAFDashboardContent() {
                             <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Automation</span>
                         </div>
 
+                        {currentUser?.role === 'admin' && (
                         <div
                             onClick={() => setIsNotificationsOpen(true)}
                             className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/notifications transition-all justify-start"
                             title={tNav('notifications')}
                         >
                             <div className="w-6 flex justify-center shrink-0">
-                                <Bell size={20} />
+                                <ScrollText size={20} />
                             </div>
                             <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
                         </div>
+                        )}
 
                         <div
                             onClick={() => {

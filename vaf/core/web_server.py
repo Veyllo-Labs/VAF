@@ -300,6 +300,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Calendar routes: {e}")
 
+# Mount Logs routes (admin-only debug log reader)
+try:
+    from vaf.api.logs_routes import router as logs_router
+    app.include_router(logs_router)
+    log("WebServer", "Logs routes mounted at /api/logs")
+except Exception as e:
+    log("WebServer", f"Failed to mount Logs routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:

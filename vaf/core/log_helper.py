@@ -76,7 +76,9 @@ def log_tool_use(
 
 
 def log_telegram_reply(message: str) -> None:
-    """Always append to logs/telegram_reply_YYYY-MM-DD.log (for diagnosing Telegram delivery). No-op on error."""
+    """Append to logs/telegram_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("telegram_reply", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +89,9 @@ def log_telegram_reply(message: str) -> None:
 
 
 def log_discord_reply(message: str) -> None:
-    """Always append to logs/discord_reply_YYYY-MM-DD.log (for diagnosing Discord delivery). No-op on error."""
+    """Append to logs/discord_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("discord_reply", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +102,9 @@ def log_discord_reply(message: str) -> None:
 
 
 def log_whatsapp_qr(message: str) -> None:
-    """Always append to logs/whatsapp_qr_YYYY-MM-DD.log (for diagnosing QR/link failures). No-op on error."""
+    """Append to logs/whatsapp_qr_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("whatsapp_qr", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +115,9 @@ def log_whatsapp_qr(message: str) -> None:
 
 
 def log_whatsapp_inbound(message: str) -> None:
-    """Always append to logs/whatsapp_inbound_YYYY-MM-DD.log (for diagnosing inbound/self-chat). No-op on error."""
+    """Append to logs/whatsapp_inbound_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("whatsapp_inbound", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +128,9 @@ def log_whatsapp_inbound(message: str) -> None:
 
 
 def log_whatsapp_reply(message: str) -> None:
-    """Always append to logs/whatsapp_reply_YYYY-MM-DD.log (for diagnosing WhatsApp delivery). No-op on error."""
+    """Append to logs/whatsapp_reply_YYYY-MM-DD.log when debug_logs_enabled. No-op on error."""
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("whatsapp_reply", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,11 +160,10 @@ def append_domain_log(domain: str, message: str) -> None:
 
 def append_domain_log_always(domain: str, message: str) -> None:
     """
-    Append one timestamped line to {domain}_YYYY-MM-DD.log even when debug_logs_enabled is False.
-    Use only for important diagnostics (e.g. [CALENDAR] status, [EMAIL_OAUTH]) so users
-    can see what the backend did without enabling Debug Logs.
+    Append one timestamped line to {domain}_YYYY-MM-DD.log.
+    Respects debug_logs_enabled — no-op when debug logging is off.
     """
-    if domain not in ALLOWED_DOMAINS:
+    if not is_debug_logging_enabled() or domain not in ALLOWED_DOMAINS:
         return
     try:
         path = get_dated_log_path(domain, "log")
@@ -168,7 +177,7 @@ def append_domain_log_always(domain: str, message: str) -> None:
 
 def log_attachment(event: str, **kwargs) -> None:
     """
-    Always-on attachment diagnostic log → attach_YYYY-MM-DD.log.
+    Attachment diagnostic log → attach_YYYY-MM-DD.log when debug_logs_enabled.
     Helps diagnose why specific PDFs fail to be seen by the agent.
     GC deletes old log files automatically (gc_max_age_hours config).
 
@@ -178,6 +187,8 @@ def log_attachment(event: str, **kwargs) -> None:
         log_attachment("SAVE_OK", session="xxx", docs=1)
         log_attachment("AGENT_SEES", session="xxx", docs=1, names=["foo.pdf"])
     """
+    if not is_debug_logging_enabled():
+        return
     try:
         path = get_dated_log_path("attach", "log")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,10 +229,12 @@ def log_thinking_run(
     messages: List[Dict[str, Any]],
 ) -> None:
     """
-    Always append a thinking-mode run to logs/vaf_think.log for debugging.
+    Append a thinking-mode run to logs/vaf_think.log when debug_logs_enabled.
     One log file for all users; each run gets a separator block with run metadata
     and a human-readable summary of what the agent did.
     """
+    if not is_debug_logging_enabled():
+        return
     try:
         ts = datetime.now().isoformat()
 

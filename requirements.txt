@@ -30,8 +30,8 @@ anthropic>=0.18.0
 google-generativeai>=0.4.0
 
 # Browser Automation (optional — run `playwright install --with-deps chromium` after pip install)
-browser-use>=0.12.9
-playwright>=1.49.0
+browser-use>=0.12.9; python_version >= "3.11"
+playwright>=1.49.0; python_version >= "3.11"
 
 # Automation
 schedule>=1.2.0

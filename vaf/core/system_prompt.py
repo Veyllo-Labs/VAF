@@ -196,43 +196,13 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
             
             "filesystem": """
 ## File System Guidelines
-- You can read and analyze local files by using the `librarian_agent`.
+- **List / search:** `list_files`, `find_files`, `tree`
+- **Read a file:** `read_file` (TXT, PDF, Word, Excel, PowerPoint)
+- **Complex analysis, cloud storage, or multi-file tasks:** `librarian_agent`
+- Not sure which tool fits? → `search_tools(query="read file")` or `list_tools()`
+- Never invent file paths — only use paths confirmed via tool output or user instruction.
 - Always confirm before overwriting important files.
-- **Protected paths:** Do not search, read, list, or modify files inside the VAF application/project directory (the directory where VAF is installed, e.g. D:\\VAF). That directory is protected. Only use allowed tools within user workspaces and other permitted paths.
-
-### 📂 Handling Local Files and Summaries (CRITICAL)
-If the user provides a local file path (e.g., `file:///...` or `C:\\...`) and asks you to read or summarize it:
-1.  **DELEGATE to `librarian_agent`**: Call the `librarian_agent` tool.
-2.  **FORMULATE the task**: The task for the librarian should be 'read file <path>'.
-    - Example: `librarian_agent(task="read file /path/to/your/report.html")`
-3.  **DO NOT SAY** "I can't read files" or "I don't have access". Delegate to the `librarian_agent`.
-
-### 🔍 Extracting File Paths from Context
-**CRITICAL:** When sub-agent results mention file paths, EXTRACT and USE them directly!
-
-**Common patterns to look for:**
-- "📄 Saved to: [path]"
-- "Output: [path]"
-- "File: [path]"
-- "Ausgabe: [path]" (German)
-- "Output saved to: successfully to [path]"
-
-**Example:**
-```
-Sub-Agent Result: "📄 Saved to: /path/to/your/report.html"
-User: "Kannst du die Datei ansehen?"
-
-✅ CORRECT: librarian_agent(task="read file /path/to/your/report.html")
-❌ WRONG: Ask user for file path (it's already in context!)
-❌ WRONG: Say "I can't read files"
-```
-
-**Best Practice:** Look for the "🔗 EXTRACTED FILE PATHS" section in sub-agent results for ready-to-use paths!
-
-### 📁 Renaming Files
-- **If you have `move_file`:** `move_file(src="old_path", dst="new_path")`
-- **If you have `librarian_agent` (but possibly not move_file):** `librarian_agent(task="rename file X in Downloads to Y.pdf")` or use the user's request verbatim, e.g. `librarian_agent(task="können wir die Datei X aus dem Downloads Ordner umbenennen zu Y")`
-- **NEVER** claim the rename was done without calling one of these tools. No tool call = no success – say so and call the tool.
+- **Protected:** Do not access the VAF application directory (e.g. D:\\VAF).
 """,
             
             "git": """
@@ -576,7 +546,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
                 "For complex multi-step tasks, write your plan to working memory FIRST, "
                 "then execute step by step — your plan survives context compression."
             )
-            parts.append("\n".join(persona_parts))
+            parts.append("<identity>\n" + "\n".join(persona_parts) + "\n</identity>")
             persona_loaded = True
             soul_len = len(soul) if soul else 0
             _log_soul(f"Soul/identity loaded name={soul_name} soul_len={soul_len}")
@@ -587,11 +557,12 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             _log_soul("Using fallback identity (soul.md not found)")
             # Use generic fallback that does NOT reveal what model/system this is
             # The model should not know it's "AI", "VAF", "VQ-1" etc. - only soul.md defines identity
-            parts.append(self.fallback_identity)
+            parts.append("<identity>\n" + self.fallback_identity + "\n</identity>")
 
-        # Memory Recall instructions (Clawbot-inspired approach)
+        # Memory Recall instructions
         parts.append("""
-## 🧠 Memory Recall
+<memory_instructions>
+## Memory Recall
 **BEFORE answering anything about:**
 - Prior conversations, work, or decisions
 - Dates, deadlines, or scheduled events
@@ -604,70 +575,24 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 Then use the results to answer. Do NOT guess from your training data!
 
 ### Memory Tools:
-| Tool | When to Use | Examples |
-|------|-------------|----------|
-| `memory_search` | **Look up** any stored facts | "user name", "project X", "last meeting" |
-| `memory_save` | **Save** general facts, projects, notes | "Project VAF uses Docker", "Meeting scheduled for Friday" |
-| `update_user_identity` | **Save PERSONAL user info** (name, language, city, country, preferences, do's/don'ts, main_messenger, timezone, date_format, time_format) | "My name is Mert", "I'm in Berlin", "Send it via Telegram", "Use Europe/Berlin for time" |
-| `send_telegram` | **Send a message via Telegram** (message, optional voice_lang for Sprachnachricht, optional file_path for documents). Use when user asked to receive something | Send text, voice message, or document |
-| `send_discord` | **Send a message to the user via Discord** (when they asked to receive something there; use if main_messenger is Discord or user said "via Discord") | Send summary, result, or notification |
-| `send_whatsapp` | **Send content via WhatsApp** (message; optional to_phone for a contact, voice_lang for Sprachnachricht, file_path for PDF). Use to_phone with contact's whatsapp_phone from get_contact when user asks to send to someone (e.g. Alice) | Send to owner or to contact (to_phone) |
-| `whatsapp_inbox` | **List WhatsApp chats** (like mail_inbox). Returns chat_id, name, last_ts. Use find_whatsapp_messages to search; read_whatsapp_chat to read a chat | When user asks "list WhatsApp chats", "find messages from Alice" |
-| `find_whatsapp_messages` | **Search WhatsApp messages** by query (matches body, chat name, sender). Optional chat_id to limit. Use when user asks "find messages from Alice", "what did X say" | find_whatsapp_messages(query="Alice") |
-| `read_whatsapp_chat` | **Read messages from a WhatsApp chat** (chat_id, limit). Use chat_id from whatsapp_inbox or find_whatsapp_messages | read_whatsapp_chat(chat_id="+49...") |
-| `whatsapp_call` | **Placeholder** for WhatsApp voice/video calls. Not implemented yet | Use send_whatsapp instead |
-| `list_contacts` | **List contacts** from the central contact list. Returns name, contact_id, and channels per contact. Use contact_id for update_contact/delete_contact | When user asks who is in the contact list, or before get_contact; contact_id is required for update/delete |
-| `get_contact` | **Get a contact by name**. Returns contact_id, channel IDs, and personal file. If multiple contacts share the same name, returns all with contact_ids – then you MUST ask the user which one they mean before update_contact or delete_contact | When user asks "has [Name] written to me?" or for contact details; for update/delete use contact_id; when multiple same name, never guess – ask user to confirm which contact |
-| `create_contact` | **Create a contact**. Required: name. Optional: email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user. Returns contact_id | When user asks to add a new contact |
-| `update_contact` | **Update a contact by contact_id**. Required: contact_id (from list_contacts or get_contact). Optional: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user | When user asks to change a contact; if get_contact returned multiple with same name, ask user which one before updating |
-| `delete_contact` | **Delete a contact by contact_id**. Required: contact_id. If multiple contacts have the same name, you MUST tell the user and ask which one to delete – never delete without confirmation | When user asks to remove a contact; always confirm which contact when duplicates exist |
-| `mail_inbox` | **Show inbox** (list of emails). Use **max_messages** to control how many (e.g. max_messages=20 for 20 mails, 50 for 50). Omit account_id for ALL accounts; optional account_id, folder. Output: From, Date, Subject, account_id, message_id, provider_message_id per line | When user asks "list 20 mails", "die anderen 20", "alle Mails" → call with max_messages=20 (or 50); show the full list, do not summarize to 3 |
-| `find_mail` | **Search mailbox** by subject or sender (query, optional folder, limit). Returns matches with account_id, message_id, provider_message_id; if exactly one match, returns full body. Use when user asks "what does the X mail say?" or "details about the X email" | Prefer find_mail(query="X") for "Postman mail", "Twitch email", etc.; if result includes full body use it, else call read_mail with first match's IDs |
-| `read_mail` | **Read full body of one email** (account_id, message_id, folder, optional provider_message_id). Use IDs from find_mail or mail_inbox output | When you have account_id and message_id (e.g. from find_mail), call read_mail to get body. Do NOT ask the user for email ID |
-| `mark_mail_answered` | **Mark email as answered** (account_id, message_id, folder) | Call after processing/replying so it shows "Benatwortet am ..." and is not handled again |
-| `list_email_accounts` | **List connected email accounts**. Call when user asks to send an email but does not specify from which account | Use before send_mail if unsure which account to use |
-| `send_mail` | **Send an email** (to, subject, body; optional account_id; optional attachment_paths). Omit account_id to use the first connected account | Send email; for documents pass attachment_paths. Do NOT ask user for account_id—use list_email_accounts or omit account_id |
+- `memory_search` — look up stored facts ("user name", "project X", "last meeting")
+- `memory_save` — save facts, projects, notes ("VAF uses Docker", "Meeting Friday")
+- `update_user_identity` — save personal user info: name, language, city, country, preferences, dos/donts, main_messenger, timezone ("My name is Mert", "I'm in Berlin")
 
-### Voice messages (Sprachnachrichten) – send_telegram and send_whatsapp:
-- Both **send_telegram** and **send_whatsapp** support **voice_lang** (e.g. "de", "en", "tr") to send as voice message (Sprachnachricht).
-- Use send_telegram(voice_lang="de") when user asks for a voice message **via Telegram** (e.g. "schick als Sprachnachricht per Telegram").
-- Use send_whatsapp(voice_lang="de") when user asks for a voice message **via WhatsApp** (e.g. "schick als Sprachnachricht per WhatsApp").
-- **When sending a voice message to a contact** (to_phone), use the contact's **preferred_language** from **get_contact(name=\"...\")** for voice_lang (e.g. Alice speaks Turkish → get_contact(name=\"Alice\") shows Preferred language: tr → send_whatsapp(..., voice_lang=\"tr\")).
-
-### WhatsApp (whatsapp_inbox, find_whatsapp_messages, read_whatsapp_chat, send_whatsapp):
-- When the user asks **to find WhatsApp messages** (e.g. "find messages from Alice", "was hat XY in WhatsApp geschrieben") → call **find_whatsapp_messages(query=\"Alice\")** or similar. Use **read_whatsapp_chat(chat_id=...)** to read the full thread.
-- **whatsapp_inbox** lists chats (like mail_inbox). **find_whatsapp_messages** searches by name or text. **read_whatsapp_chat** returns messages for a chat_id.
-- **send_whatsapp** sends content via WhatsApp: to the **account owner** (default) or to a **contact** (use **to_phone** with the contact's whatsapp_phone from **get_contact(name=\"...\")**). When the user asks to send a message to someone (e.g. "schick Alice eine WhatsApp", "send a WhatsApp to Alice"), call get_contact(name=\"Alice\"), take the whatsapp_phone (E.164), then send_whatsapp(message=\"...\", to_phone=\"+49...\"). For **voice messages** to a contact, use the contact's **preferred_language** for voice_lang (get_contact returns it). Also supports **document** (file_path). Incoming voice messages are transcribed (STT) and passed as text.
-- **whatsapp_call** is a placeholder (not implemented).
-
-### Contacts (list_contacts, get_contact, create_contact, update_contact, delete_contact):
-- The user may have a **central contact list** (Settings → Connections → Contacts) with names, contact_id, channel IDs (WhatsApp, Telegram, email), and personal file (language, how to address, birthday, notes).
-- **Same-name rule (critical):** Multiple contacts can have the same name (e.g. two "Max"). When **get_contact(name)** returns "Multiple contacts have the name …", you must **never guess** which one the user means. Always tell the user: "There are multiple contacts named [X]" and list them (contact_id and a short label like phone or email). Ask the user to confirm which one they mean before calling **update_contact** or **delete_contact**. Only use the contact_id the user confirmed.
-- When the user asks **"has [Name] written to me?"**, **"check if Max messaged"**, or **"what did Anna say?"** → call **get_contact(name=\"Max\")**. If exactly one contact is returned, use its channel IDs with read_whatsapp_chat, find_whatsapp_messages, find_mail. If multiple are returned, ask which one they mean before any update/delete.
-- **list_contacts** returns name, contact_id, and channels; **get_contact(name)** returns contact_id and full details. **create_contact**, **update_contact(contact_id, ...)**, **delete_contact(contact_id)** require contact_id for update/delete; when in doubt (same name), always ask the user for confirmation.
-
-### Email (mail_inbox, find_mail, read_mail, send_mail):
-- When the user asks **how many or which mails** (e.g. "list 20 mails", "die anderen 20", "zeig mir alle Mails", "lies die anderen Mails") → call **mail_inbox** with **max_messages** set to the requested number (e.g. 20 or 50). Present the **full list** in your reply; do NOT summarize to only 3 mails. If the user said "read the other mails", list them with mail_inbox(max_messages=50) and then either read a few with read_mail or offer to read specific ones.
-- When the user asks **what an email says** (e.g. "what does the Postman mail say?", "was sagt die X-Mail?") → prefer **find_mail(query="X")**. If the result includes the full body, use it; else call **read_mail** with the first match's IDs. Do NOT ask the user for message ID or account.
-- **find_mail** searches the synced mailbox by subject and sender (like Ctrl+F).
-- If you already have a mail_inbox list and the user asks about a specific subject, use the matching row's IDs with read_mail, or find_mail(query="...").
-- **send_mail**: When the user asks to send an email (e.g. "send a test mail to x@example.com"), call send_mail with to, subject, body. Omit account_id—it uses the first connected account. Do NOT ask the user for the account ID. If the user specifies a purpose (e.g. "from support", "use outreach account"), call list_email_accounts first and pick the account whose label matches (support, outreach, etc.).
+### Tool Discovery:
+- **Not sure which tool to use?** → `search_tools(query="what you need")` (e.g. `"send whatsapp"`, `"calendar event"`, `"read email"`)
+- **Browse all tools** → `list_tools()`
+- **Complex multi-step task** → `create_agent_workflow` to build and execute a temporary workflow
 
 ### When to use which SAVE tool:
 - **Personal info about the USER** → `update_user_identity`
-  - Name, nickname, language, location (city, country), preferences, do's, don'ts
-  - Example: "Ich heiße Mert" → `update_user_identity(name="Mert")`
-  - Example: "Ich wohne in Berlin" / "I'm based in Munich, Germany" → `update_user_identity(city="Berlin", country="Germany")`
-  - Example: "Antworte immer auf Deutsch" → `update_user_identity(preferred_language="de")`
 - **Everything else** → `memory_save`
-  - Projects, facts, deadlines, notes, decisions
-  - Example: "Merke dir: VAF nutzt PostgreSQL" → `memory_save(content="VAF uses PostgreSQL")`
 
 ### Rules:
-- **Memory context** for this turn is injected below as `## Memory context (relevant to this query)`. Check it FIRST before calling memory_search.
+- Memory context for this turn is injected below as `## Memory context`. Check it FIRST before calling memory_search.
 - Pass SHORT queries to memory_search (e.g. "user preferences", NOT your full reasoning)
-- Do NOT use memory_save for lookups - it's for SAVING only
-- When user asks "who am I?" or "what do you remember?" → check Memory context below, then memory_search if needed
+- Do NOT use memory_save for lookups — it's for SAVING only
+</memory_instructions>
 """)
 
 
@@ -721,29 +646,25 @@ Then use the results to answer. Do NOT guess from your training data!
             time_str = f"Heute ist {day_name}, der {now.strftime(combined_fmt)}."
         else:
             time_str = f"Today is {day_name}, {now.strftime(combined_fmt)}."
-        parts.append(f"\n## Current Time\n{time_str}\n")
+        # Collect time, env, session into one <context> block
+        context_lines = [time_str]
 
-        # 2a-env. ENVIRONMENT (OS + filesystem)
+        # Environment
         try:
             import sys as _sys
             _home = str(Path.home())
             _docs = str(Platform.documents_dir())
-            _os_name = _sys.platform  # e.g. "linux", "darwin", "win32"
-            parts.append(
-                f"\n## Environment\n"
-                f"OS: {_os_name} | Home: {_home} | "
-                f"New projects are created in: {_docs}/VAF_Projects/\n"
-                f"IMPORTANT: Never invent or guess file paths. Only use paths you have confirmed exist "
-                f"(from tool output, [SESSION WORKSPACE], or explicit user instruction).\n"
+            _os_name = _sys.platform
+            context_lines.append(
+                f"os: {_os_name} | home: {_home} | new projects: {_docs}/VAF_Projects/"
             )
+            context_lines.append("Never invent file paths — only use paths confirmed via tool output or user instruction.")
         except Exception:
             pass
 
-        #
-        # 2b. LAST INTERACTION & CURRENT CHANNEL (optional)
-        # 
+        # Session (last interaction + current channel)
         if current_source or last_interaction:
-            line_parts = []
+            session_parts = []
             if last_interaction:
                 ts = last_interaction.get("ts")
                 src = last_interaction.get("source", "web")
@@ -762,17 +683,16 @@ Then use the results to answer. Do NOT guess from your training data!
                 chan = self._format_channel(src)
                 voice_note = ""
                 if last_interaction.get("voice") and src == "telegram":
-                    voice_note = " (Sprachnachricht)" if self.user_language == "de" else " (voice message)"
-                line_parts.append(f"Last user {display_name} interaction: {rel} via {chan}{voice_note}.")
+                    voice_note = " (voice message)"
+                session_parts.append(f"last_interaction: {display_name} {rel} via {chan}{voice_note}")
                 if preview:
-                    line_parts.append(f" Prior topic: \"{preview}\" (previous chat — current message may be unrelated).")
+                    session_parts.append(f"prior_topic: \"{preview}\" (previous chat — current message may be unrelated)")
             if current_source:
                 chan = self._format_channel(current_source)
-                line_parts.append(f" Currently chatting in {chan}.")
-            if line_parts:
-                block = "".join(line_parts).strip()
-                if block:
-                    parts.append(f"\n## Session context\n{block}\n")
+                session_parts.append(f"current_channel: {chan}")
+            context_lines.extend(session_parts)
+
+        parts.append("<context>\n" + "\n".join(context_lines) + "\n</context>")
 
         
         # 2c. CHANNEL CAPABILITIES (when user has NO Web UI)
@@ -936,24 +856,25 @@ Then use the results to answer. Do NOT guess from your training data!
             else:
                 cwd_display = ws_info['cwd']
                 project_root_display = ws_info['project_root']
-            parts.append(f"""
-## 📂 WORKSPACE CONTEXT
-**Current Working Directory:** `{cwd_display}`
-**Project Root:** `{project_root_display}`
-**Inside Project:** {'Yes' if ws_info['is_in_project'] else 'No'}
-""")
+            parts.append(
+                f"<workspace>\n"
+                f"cwd: {cwd_display}\n"
+                f"project_root: {project_root_display}\n"
+                f"inside_project: {'yes' if ws_info['is_in_project'] else 'no'}\n"
+                f"</workspace>"
+            )
 
         #
         # 4. ACTIVE MODULES
         # 
-        active_module_parts = []
-        # Sort for stable prompt order
+        # Sort for stable prompt order, wrap each module in <guidelines module="...">
         for module_name in sorted(self.active_modules.keys()):
             if module_name in self.modules:
-                active_module_parts.append(self.modules[module_name])
-        
-        if active_module_parts:
-            parts.extend(active_module_parts)
+                parts.append(
+                    f'<guidelines module="{module_name}">\n'
+                    + self.modules[module_name].strip()
+                    + "\n</guidelines>"
+                )
         
         #
         # 4. PERSISTENT CONTEXT INJECTION (Brain)
@@ -1024,31 +945,26 @@ Then use the results to answer. Do NOT guess from your training data!
                 except Exception:
                     pass
 
-            # Construct JSON-like block
-            import json
-            user_json = json.dumps(user_data, indent=2, ensure_ascii=False)
-            
-            identity_block = f"""
-## 👤 CURRENT USER CONTEXT (High Priority)
-You are talking to the following user. 
-**CRITICAL:** You MUST adapt your personality, language, and behavior to this profile.
-
-```json
-{user_json}
-```
-"""
+            # Build key-value lines for user_context
+            kv_lines = []
+            for k, v in user_data.items():
+                if isinstance(v, list):
+                    kv_lines.append(f"{k}: {', '.join(v)}")
+                else:
+                    kv_lines.append(f"{k}: {v}")
             if known_facts:
-                identity_block += f"\n**Known facts from memory:**\n{known_facts}\n"
+                kv_lines.append(f"known_facts: {known_facts}")
+            user_kv = "\n".join(kv_lines)
 
-            identity_block += """
-**INSTRUCTIONS:**
-1. **CHECK** the `dos` and `donts` list above before generating every response.
-2. **ADAPT** your tone to the `preferences` (e.g. if 'concise', be concise).
-3. **LANGUAGE:** If `preferred_language` is set, **ALWAYS** answer in that language (unless explicitly asked otherwise).
-4. **GREETING:** If this is the start of a conversation, greet the user by their `name` naturally (don't say "Hello [Name]", say "Hey [Name]" or similar based on your Soul).
-5. **LOCATION:** If `city` and/or `country` are set, use them for context-aware answers (e.g. weather, local time, "how's the weather today?" → use the user's location).
-6. **DATES & TIMES:** If `timezone`, `date_format`, or `time_format` are set, use them when showing dates or times (e.g. user's local time, preferred date format like dd.mm.yyyy, 24h vs 12h).
-"""
+            identity_block = f"<user_context>\n{user_kv}\n\n"
+            identity_block += (
+                "**Rules:** Adapt language/tone/behavior to this profile. "
+                "Use preferred_language for all replies. "
+                "Use city/country for location-aware answers. "
+                "Use timezone/date_format/time_format when showing dates or times. "
+                "Respect dos/donts in every response.\n"
+            )
+
             # Messaging connections: only when at least one channel is available
             try:
                 from vaf.core.messaging_connections import get_messaging_connections
@@ -1057,36 +973,22 @@ You are talking to the following user.
                 main = conn.get("main_messenger")
                 if avail:
                     channel_names = [c.capitalize() for c in avail]
-                    identity_block += "\n## Messaging connections (proactive messages)\n"
-                    identity_block += f"This user has the following messaging channels available for proactive messages: {', '.join(channel_names)}.\n"
-                    if main:
-                        identity_block += f"Preferred channel for proactive messages: {main.capitalize()}.\n"
-                    else:
-                        identity_block += "Preferred channel is not set yet.\n"
-                    if current_source and str(current_source).strip().lower() == "web" and main:
-                        chan_name = main.capitalize()
+                    identity_block += f"\nmessaging_channels: {', '.join(channel_names)}\n"
+                    identity_block += f"preferred_messenger: {main.capitalize() if main else 'not set'}\n"
+                    if current_source and str(current_source).strip().lower() == "web":
                         identity_block += (
-                            f"\n**When the user is chatting in the Web UI:** They see your reply there. "
-                            f"Do NOT send messages to {chan_name} unless they explicitly asked to receive something via {chan_name}.\n"
-                            f"\n**CRITICAL – Web UI active:** The user is chatting in the Web UI and sees every reply there. "
-                            f"**NEVER** call `send_telegram`, `send_discord`, `send_slack`, `send_whatsapp`, or `send_mail` to 'confirm', 'notify', or 'inform' – that duplicates your message and annoys the user. "
-                            f"Only use these tools when the user **explicitly** asked to receive something on that channel (e.g. 'schick mir die Datei per {chan_name}' / 'send me the file via {chan_name}'). "
-                            f"Routine confirmations belong in the Web UI reply only.\n"
+                            "**Web UI active:** User sees your reply in the UI. "
+                            "Do NOT call send_* tools to confirm or notify — only when the user explicitly asks to receive something via a channel.\n"
                         )
-                    identity_block += (
-                        "When the user asks you to send them something (e.g. a summary, a file, or a notification), "
-                        "if preferred channel is not set, ask once: e.g. \"Soll ich es dir per Discord, Telegram, WhatsApp, Slack oder Mail schicken?\" / \"Should I send it via Discord, Telegram, WhatsApp, Slack or Email?\". "
-                        "Store their answer with `update_user_identity(main_messenger=\"telegram\")` (or discord/slack/whatsapp/email). "
-                        "Then use the matching tool: `send_telegram`, `send_discord`, `send_slack`, `send_whatsapp`, or `send_mail` depending on the preferred channel or user request (e.g. use send_telegram when main_messenger is Telegram or they said \"via Telegram\"; use send_mail when main_messenger is Email or they said \"via Mail\"). "
-                        "**For sending a file** (invoice, contract, PDF): First call `find_files(path=\"Downloads\" or folder user named, pattern=\"*filename*\")`, then `send_telegram(message=\"Caption\", file_path=<path from find_files>)`. Do NOT delegate to librarian_agent – use find_files + send_telegram directly.\n"
-                    )
-                    identity_block += (
-                        "**Telegram / Sprachnachricht:** When the user asks you to write something (e.g. email, contact names, list of people) or when their last message was a voice message (Sprachnachricht): "
-                        "send or present that content as **text** (not only by voice), so that names and important details are not misunderstood. "
-                        "Include the exact names, email text, or contacts in your written reply so they can be read; avoid relying only on spoken output for names and exact wording.\n"
-                    )
+                    if not main:
+                        identity_block += (
+                            "Preferred channel not set. If user asks to receive something, ask once which channel they prefer, "
+                            "then save with `update_user_identity(main_messenger=\"...\")` and use `search_tools(query=\"send [channel]\")` to find the right tool.\n"
+                        )
             except Exception:
                 pass
+
+            identity_block += "\n</user_context>"
             parts.append(identity_block)
 
         full_prompt = "\n".join(parts)

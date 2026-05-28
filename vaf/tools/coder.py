@@ -2580,37 +2580,44 @@ The following template files exist as a starting point:
 - The template is a starting point, not a constraint
 """
         
-        system_prompt = f"""You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
+        system_prompt = f"""<identity>
+You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
+</identity>
 
-## PROJECT DIRECTORY
-`{base_dir}`
+<context>
+project_directory: {base_dir}
 All file paths must be OS-independent (use forward slashes or Path objects).
+</context>
 
-## TOOLS
+<goal>
+Complete this task: "{task}"
+</goal>
+
+<tools>
 - `set_todos(tasks=[...])`: REQUIRED FIRST step - break down the task into specific subtasks.
 - `web_search(query)`: Search web for docs, examples, or research BEFORE planning (optional).
 - `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
 - `read_file(path)`: Read existing files.
 - `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files.
+</tools>
 
-## YOUR GOAL
-Complete this task: "{task}"
-
-## 🎯 ACTION-FIRST PHILOSOPHY
+<philosophy>
 **YOU ARE A DOER, NOT A TALKER!**
 - EVERY response MUST include at least ONE tool call (read_file, write_file, task_done, etc.)
 - Explaining what you'll do WITHOUT doing it = FAILURE
 - Short thinking → Immediate action → Results
 - If you find yourself writing long explanations, STOP and use tools instead!
+</philosophy>
 
-## CRITICAL WORKFLOW (MUST FOLLOW):
+<workflow>
 1. **RESEARCH** (optional): Use `web_search` if you need docs/examples BEFORE planning.
 2. **PLAN**: Call `set_todos` with a list of specific steps.
 3. **ACT**: Use `write_file` to CREATE the actual code files - this is MANDATORY!
 4. **VERIFY**: Use `read_file` if needed to check existing code.
 5. **FINISH**: Call `task_done` ONLY after you've actually written files with `write_file`.
+</workflow>
 
-**CRITICAL RULES:**
+<rules>
 - **ACTION REQUIRED**: Every response MUST contain at least one tool call - no exceptions!
 - **IMPORTANT**: If you use `web_search` for research, you MUST then call `set_todos` immediately - do not loop searches!
 - You MUST call `write_file` before calling `task_done` - no exceptions!
@@ -2618,13 +2625,15 @@ Complete this task: "{task}"
 - DO NOT call `task_done` without first calling `write_file` for the current task.
 - Work on ONE task at a time, complete it fully, then move to the next.
 - **REMEMBER YOUR TASK**: You are working on: "{task}" - keep this in mind with every action!
+</rules>
 
-## 🚨 TASK PLANNING RULES (set_todos):
+<planning_rules>
 - **Website / HTML tasks → ALWAYS use separate files**: For any website or HTML project, write CSS in a separate `styles.css` file and reference it from `index.html` via `<link>`. NEVER put large blocks of CSS inline in HTML — this causes output truncation. Each file = one task.
 - **Single-file output → 1 task only**: Only for non-website single-file deliverables (e.g. a Python script, a config file). Do NOT split into sub-tasks like "Add CSS", "Add JavaScript", "Verify".
 - **Multi-file output → one task per output file**: Create exactly one task per file you need to write (e.g. styles.css, index.html, app.js). Execute them in whatever order makes sense. Write ONLY the file named in the current task — do not rewrite files from previous tasks.
 - **NO planning tasks**: NEVER create tasks like "Plan the structure", "Design the layout", or "Review". Every task MUST result in at least one `write_file` call. Planning is mental — do it before calling `set_todos`.
 - **NO meta-files**: NEVER write planning documents (PLAN.md, STRUCTURE.md, NOTES.md, TODO.md, etc.) to the project directory. These pollute the deliverable. Plan mentally, then write code files only.
+</planning_rules>
 """
         # ═══════════════════════════════════════════════════════════════════
         # GUIDED TEMPLATE MODE - Auto-Generate TODOs
@@ -2984,17 +2993,20 @@ The following files were already created from a template:
                 # IMPORTANT: Keep task-context prompts SMALL to avoid n_ctx overflow.
                 # The agent may have more tools available locally, but task execution should
                 # only advertise the minimal tool set required to complete the task.
-                fresh_system_prompt = f"""You are a Senior software developer Sub-agent.
+                fresh_system_prompt = f"""<identity>
+You are a Senior software developer Sub-agent.
+</identity>
 
-## PROJECT DIRECTORY
-`{base_dir}`
+<context>
+project_directory: {base_dir}
 All files must be saved inside this directory.
 {completed_section}
 {_existing_note}
 {fresh_existing_files_info}
 {persistent_context}
+</context>
 
-## AVAILABLE TOOLS (task execution)
+<tools>
 - `read_file(path)` - Read file contents
 - `list_files(path)` - List directory contents
 - `write_file(path, content)` - Create/modify files with actual code
@@ -3002,17 +3014,20 @@ All files must be saved inside this directory.
 - `task_done(summary)` - Mark task complete and move to next
 - `update_codex(title, content)` - Save important patterns/conventions
 - `add_memory(note)` - Save short-term notes
+</tools>
 
-## YOUR CURRENT TASK (Task {task_idx + 1})
-**{current_task}**
+<current_task>
+Task {task_idx + 1}: {current_task}
+</current_task>
 
-## RULES
+<rules>
 - Focus ONLY on the current task — write ONLY the file(s) named in it, nothing else
 - Do NOT rewrite files from previous tasks (they are already done)
 - Use `write_file` to actually create/modify files (do not just describe code)
 - **CRITICAL**: After `web_search`, immediately use the results to call `write_file` - DO NOT just think or plan
 - When finished, call `task_done(summary="...")`
 - If you discover a reusable pattern, use `update_codex` to save it.
+</rules>
 """
 
                 # Build user message for this specific task (ONLY current task, not entire list)

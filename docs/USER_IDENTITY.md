@@ -28,11 +28,11 @@ In `vaf/core/system_prompt.py`, `build_prompt()` adds a user-identity block when
 - Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
 - Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, or slack).
-- Optional `timezone`, `date_format`, and `time_format` (used for the **"## Current Time"** block and so the model can show dates/times in the user's preferred format).
+- Optional `timezone`, `date_format`, and `time_format` (used for the **`<context>`** block datetime line and so the model can show dates/times in the user's preferred format).
 
-The **"## Current Time"** sentence in the system prompt uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
+The datetime line inside the **`<context>`** block uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
 
-When the user has at least one messaging connection (Telegram, Discord, WhatsApp), a **"## Messaging connections (proactive messages)"** subsection is added: it lists available channels and the preferred channel (if set), and instructs the agent to ask once if the user wants to receive something but has not set `main_messenger`, then to use `update_user_identity(main_messenger=...)` and the matching channel tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`). Only tools for configured connections are exposed to the agent. See [CONNECTIONS.md](CONNECTIONS.md) for proactive messaging.
+When the user has at least one messaging connection (Telegram, Discord, WhatsApp), `messaging_channels` and `preferred_messenger` lines are added inside the **`<user_context>`** block: they list available channels and the preferred channel (if set), and instruct the agent to ask once if the user wants to receive something but has not set `main_messenger`, then to use `update_user_identity(main_messenger=...)` and `search_tools(query="send [channel]")` to find the right tool. Only tools for configured connections are exposed to the agent. See [CONNECTIONS.md](CONNECTIONS.md) for proactive messaging.
 
 That block is rebuilt every turn (dynamic system prompt), so the model always sees the latest user identity.
 

@@ -39,7 +39,7 @@ When the system prompt is built (`SystemPromptManager.build_prompt` in `vaf/core
 - Reads `current_source` from the agent (`_current_chat_source`).
 - Reads the last interaction from the store via `get_last_interaction(user_scope_id)`.
 
-If either is set, it appends a **"## Session context"** block after **"## Current Time"**. The block uses:
+If either is set, it adds `last_interaction` and `current_channel` lines inside the **`<context>`** block (which also contains the current datetime and environment info). The block uses:
 
 - The user’s display name from user identity (or "the user" if none).
 - Relative time from the last interaction timestamp. Steps: under 1 h → minutes; 1–24 h → hours; 1 day → "yesterday"; 2–29 days → days; 30+ days → months (≈30 days each); 365+ days → years. Language follows the prompt language (e.g. "5 min ago" / "vor 5 Min.", "2 months ago" / "vor 2 Monaten").
@@ -49,7 +49,7 @@ No session-context block is added if both `current_source` and `last_interaction
 
 ### 3a. Channel capabilities (text-only channels)
 
-When the current channel is **Telegram**, **WhatsApp**, **Discord**, or **CLI**, the system prompt adds a **"## Channel capabilities"** block that instructs the model:
+When the current channel is **Telegram**, **WhatsApp**, **Discord**, or **CLI**, the system prompt adds a **channel capabilities** block that instructs the model:
 
 - The user does **not** have access to the Web UI on this channel.
 - They cannot view documents, attachment lists, or pages in a browser.
@@ -62,7 +62,7 @@ The block is shown only when `current_source` is one of `telegram`, `whatsapp`, 
 
 ### 3b. Messaging connections block
 
-When the current user has at least one **messaging connection** (Telegram, Discord, or WhatsApp) and a username or user_scope_id is available, `build_prompt()` also adds a **"## Messaging connections (proactive messages)"** subsection inside the **"## 👤 CURRENT USER CONTEXT"** block. It states:
+When the current user has at least one **messaging connection** (Telegram, Discord, or WhatsApp) and a username or user_scope_id is available, `build_prompt()` also adds `messaging_channels` and `preferred_messenger` lines inside the **`<user_context>`** block. It states:
 
 - Which channels are available for proactive messages (e.g. Telegram, Discord, WhatsApp).
 - The user’s preferred channel (`main_messenger` from user_identity, if set).
@@ -100,7 +100,7 @@ The store is **per user**: each user has their own last-interaction entry. User 
 - **Write:** The headless runner passes `user_scope_id` from the task metadata (from WebUI connection or Telegram whitelist). The store key is that scope (or `"default"` when there is no scope). So each user’s message updates only their own key.
 - **Read:** When building the system prompt, the agent passes its current `_current_user_scope_id` (set from the same session/task). So we only load the last interaction for the user who is chatting right now.
 
-So the "Session context" block in the system prompt always refers to the **same** user: their previous turn and their current channel. No cross-user data is shown.
+So the `last_interaction` / `current_channel` lines inside `<context>` always refer to the **same** user: their previous turn and their current channel. No cross-user data is shown.
 
 ## Storage
 
@@ -129,7 +129,7 @@ Example with two users (Max and Susanne each have their own key):
 
 ## System Prompt Examples (Session context only)
 
-The following are examples of the **"## Session context"** section only. The rest of the system prompt (identity, time, tools, user block, etc.) is unchanged and not shown.
+The following are examples of the session-related lines inside the **`<context>`** block only. The rest of the system prompt (identity, memory instructions, workspace, user block, etc.) is not shown.
 
 ---
 
@@ -137,8 +137,11 @@ The following are examples of the **"## Session context"** section only. The res
 No previous interaction is stored yet. Only the current channel is known (e.g. WebUI).
 
 ```
-## Session context
-Currently chatting in WebUI.
+<context>
+Today is Thursday, 2026-05-28 10:03:09.
+os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+current_channel: WebUI
+</context>
 ```
 
 ---
@@ -147,8 +150,12 @@ Currently chatting in WebUI.
 The user had sent one message a few minutes ago in the WebUI; the current message is also from the WebUI.
 
 ```
-## Session context
-Last user Alex interaction: 3 min ago via WebUI. Currently chatting in WebUI.
+<context>
+Today is Thursday, 2026-05-28 10:03:09.
+os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+last_interaction: Alex 3 min ago via WebUI
+current_channel: WebUI
+</context>
 ```
 
 ---
@@ -157,8 +164,13 @@ Last user Alex interaction: 3 min ago via WebUI. Currently chatting in WebUI.
 The last interaction was on Telegram (with a short preview); the current one is in the WebUI.
 
 ```
-## Session context
-Last user Alex interaction: 10 min ago via Telegram. (About: Can you check the deployment status?) Currently chatting in WebUI.
+<context>
+Today is Thursday, 2026-05-28 10:03:09.
+os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+last_interaction: Alex 10 min ago via Telegram
+prior_topic: "Can you check the deployment status?" (previous chat — current message may be unrelated)
+current_channel: WebUI
+</context>
 ```
 
 ---
@@ -167,8 +179,13 @@ Last user Alex interaction: 10 min ago via Telegram. (About: Can you check the d
 Same idea as Example 3, but the prompt language is German, so relative time is in German.
 
 ```
-## Session context
-Last user Mert interaction: vor 10 Min. via Telegram. (About: Kannst du den Deployment-Status prüfen?) Currently chatting in WebUI.
+<context>
+Heute ist Donnerstag, 28.05.2026 10:03:09.
+os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+last_interaction: Mert vor 10 Min. via Telegram
+prior_topic: "Kannst du den Deployment-Status prüfen?" (previous chat — current message may be unrelated)
+current_channel: WebUI
+</context>
 ```
 
 (Channel names "WebUI" and "Telegram" stay in English in the prompt; only the relative time string is localized.)

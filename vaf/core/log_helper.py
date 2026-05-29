@@ -3,6 +3,8 @@ Shared log directory and domain log writers for VAF.
 Consolidates logs into one file per domain (rag, memory, webui, prompt, headless, backend) with timestamps.
 Respects Config.debug_logs_enabled: when False, no domain logs and no queue.log are written.
 """
+import hashlib
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -220,6 +222,71 @@ def append_domain_log_block(domain: str, first_line: str, rest_lines: Optional[L
         pass
 
 
+def _timeline_prev_hash(path: Path) -> str:
+    """Return the hash of the last event in the timeline JSONL file, or 'GENESIS' if empty/missing."""
+    try:
+        if not path.exists():
+            return "GENESIS"
+        with open(path, "rb") as f:
+            # Seek to last non-empty line efficiently
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return "GENESIS"
+            # Walk backwards to find the last newline
+            pos = size - 1
+            while pos > 0:
+                f.seek(pos)
+                ch = f.read(1)
+                if ch == b"\n" and pos < size - 1:
+                    break
+                pos -= 1
+            f.seek(pos + 1 if pos > 0 else 0)
+            last_line = f.read().decode("utf-8", errors="replace").strip()
+        if not last_line:
+            return "GENESIS"
+        obj = json.loads(last_line)
+        return obj.get("hash", "GENESIS")
+    except Exception:
+        return "GENESIS"
+
+
+def _timeline_hash(event_dict: Dict[str, Any]) -> str:
+    """SHA-256 of the canonical JSON representation of the event (excluding the 'hash' field)."""
+    payload = {k: v for k, v in event_dict.items() if k != "hash"}
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def log_timeline_event(event_type: str, **kwargs) -> None:
+    """
+    Append one JSONL event to timeline_YYYY-MM-DD.jsonl when debug_logs_enabled.
+    Each event carries a SHA-256 hash chain: prev_hash → hash — enables tamper detection.
+
+    event_type: 'tool_start' | 'tool_end' | 'subagent_start' | 'subagent_end' | 'thinking_run'
+    kwargs: tool, call_id, session, scope, args, status, duration_s, result, task_id, agent_type, ...
+            Pass _ts='2026-...' to override the event timestamp (e.g. for historical thinking runs).
+    """
+    if not is_debug_logging_enabled():
+        return
+    try:
+        ts_override: Optional[str] = kwargs.pop("_ts", None)
+        path = get_dated_log_path("timeline", "jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        prev_hash = _timeline_prev_hash(path)
+        event: Dict[str, Any] = {
+            "ts": ts_override or datetime.now().isoformat(),
+            "type": event_type,
+            "prev_hash": prev_hash,
+        }
+        event.update(kwargs)
+        event["hash"] = _timeline_hash(event)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 def log_thinking_run(
     run_id: str,
     scope_key: str,
@@ -284,5 +351,14 @@ def log_thinking_run(
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
+
+        log_timeline_event(
+            "thinking_run",
+            _ts=started_at,
+            run_id=run_id,
+            scope=scope_key,
+            ended_at=ended_at,
+            duration_s=round(duration_seconds, 2),
+        )
     except Exception:
         pass

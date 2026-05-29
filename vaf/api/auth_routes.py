@@ -405,6 +405,28 @@ async def login(body: LoginRequest, request: Request, response: Response):
             "temp_token": access,
         }
 
+    # Create UserSession so /me can validate the token via DB (required by get_current_user_from_token)
+    payload_login = decode_token(access)
+    exp_ts_login = payload_login.get("exp") if payload_login else None
+    expires_at_login = (
+        datetime.fromtimestamp(exp_ts_login, tz=timezone.utc)
+        if exp_ts_login
+        else datetime.now(timezone.utc) + timedelta(hours=24)
+    )
+    if expires_at_login.tzinfo is not None:
+        expires_at_login = expires_at_login.replace(tzinfo=None)
+    client_host_login = request.client.host if request.client else None
+    user_agent_login = request.headers.get("user-agent", "")
+    async with get_auth_db() as db:
+        login_session = UserSession(
+            user_id=user.id,
+            token_hash=token_hash_for_db(access),
+            device_info={"ip": client_host_login, "user_agent": user_agent_login, "device_type": "web"},
+            expires_at=expires_at_login,
+        )
+        db.add(login_session)
+        await db.commit()
+
     max_age = 30 * 24 * 3600 if (body.remember_me or _is_localhost) else 24 * 3600
     _set_auth_cookie(request, response, access, max_age)
     return {
@@ -464,48 +486,82 @@ async def _me_user_from_token(request: Request, response: Response, token: str) 
         logger.warning("Invalid UUID in token sub: %s", e)
         return None
 
-    async with get_auth_db() as db:
-        result = await db.execute(
-            select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
-        )
-        user = result.scalar_one_or_none()
-        if not user:
-            return None
+    import asyncio as _asyncio
 
-        token_hash = token_hash_for_db(token)
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-        session_result = await db.execute(
-            select(UserSession).where(
-                UserSession.token_hash == token_hash,
-                UserSession.is_active == True,
-                UserSession.expires_at > now_utc,
-            )
-        )
-        session = session_result.scalar_one_or_none()
-        if not session:
-            return None
+    _DB_RETRIES = 5
+    _DB_RETRY_DELAY = 1.0  # seconds between attempts
 
-        require_2fa = Config.get("local_network_require_2fa", True)
-        if require_2fa and not payload.get("is_2fa_verified", False):
-            client_ip = request.client.host if request.client else "unknown"
-            try:
-                from vaf.network.binding import is_localhost
-            except ImportError:
-                is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
-
-            if not is_localhost(client_ip) or user.role != "admin":
-                _clear_auth_cookie(response)
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="2FA verification required",
+    for _attempt in range(_DB_RETRIES):
+        try:
+            async with get_auth_db() as db:
+                result = await db.execute(
+                    select(LocalUser).where(LocalUser.id == user_id, LocalUser.is_active == True)
                 )
+                user = result.scalar_one_or_none()
+                if not user:
+                    return None
 
-        return {
-            "id": str(user.id),
-            "username": user.username,
-            "role": user.role,
-            "user_scope_id": str(user.user_scope_id),
-        }
+                token_hash = token_hash_for_db(token)
+                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                session_result = await db.execute(
+                    select(UserSession).where(
+                        UserSession.token_hash == token_hash,
+                        UserSession.is_active == True,
+                        UserSession.expires_at > now_utc,
+                    )
+                )
+                session = session_result.scalar_one_or_none()
+                if not session:
+                    return None
+
+                require_2fa = Config.get("local_network_require_2fa", True)
+                if require_2fa and not payload.get("is_2fa_verified", False):
+                    client_ip = request.client.host if request.client else "unknown"
+                    try:
+                        from vaf.network.binding import is_localhost
+                    except ImportError:
+                        is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
+
+                    if not is_localhost(client_ip) or user.role != "admin":
+                        _clear_auth_cookie(response)
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="2FA verification required",
+                        )
+
+                return {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "role": user.role,
+                    "user_scope_id": str(user.user_scope_id),
+                }
+        except HTTPException:
+            raise
+        except OSError:
+            pass  # connection refused — retry
+        except Exception as _db_err:
+            _err_str = str(_db_err).lower()
+            if not any(kw in _err_str for kw in ("connect", "connection", "refused", "could not connect", "is the server running")):
+                raise
+            # connection error — retry
+
+        if _attempt < _DB_RETRIES - 1:
+            logger.warning("DB not ready for /me (attempt %d/%d) — retrying in %.0fs", _attempt + 1, _DB_RETRIES, _DB_RETRY_DELAY)
+            await _asyncio.sleep(_DB_RETRY_DELAY)
+
+    # All retries exhausted — fall back to JWT-only (DB temporarily unavailable)
+    username_jwt = payload.get("username", "")
+    role_jwt = payload.get("role", "user")
+    scope_jwt = payload.get("user_scope_id", "")
+    if not username_jwt:
+        return None
+    logger.warning("DB unavailable after %d retries for /me — falling back to JWT-only auth for user %s", _DB_RETRIES, username_jwt)
+    return {
+        "id": str(user_id),
+        "username": username_jwt,
+        "role": role_jwt,
+        "user_scope_id": scope_jwt,
+    }
 
 
 @router.get("/me")

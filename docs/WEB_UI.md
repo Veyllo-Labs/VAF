@@ -128,19 +128,119 @@ Planner data is loaded with `get_automation_notes` and `get_automation_todos` wh
 
 **Logs window (admin only):** Clicking **Logs** in the sidebar opens a split-pane log viewer (same window size as the Automation window). It is only visible to users with the `admin` role.
 
-The left sidebar has two sections:
-- **Activity** — the existing notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
-- **Log Files** — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Only visible when **Debug Logs** is enabled in Settings → Advanced.
+The left sidebar has three sections:
 
-Selecting a log domain opens a **terminal-style viewer** (dark background, monospace font, blue timestamps, line numbers). Controls:
-- **Live toggle** — auto-refreshes every 5 s (green pulsing indicator when active).
+- **Timeline** (top) — the agent tool-use timeline (see below). The default view when opening the window.
+- **Activity** — the notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
+- **Log Files** (collapsible) — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Collapsed by default; only meaningful when **Debug Logs** is enabled in Settings → Advanced.
+
+#### Timeline view
+
+The Timeline is a **horizontal scrubber** modelled after video-editing software. It is split into two vertical sections:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  [2/5  Activity panel]  │  [3/5  ReactFlow canvas]                    │
+├─────────────────────────┴────────────────────────────────────────────── │
+│  [Lane labels]  ████████  ███  ██████████  ████   (timeline bars)      │
+│                 ←── older                      newer ──→               │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Bottom row — timeline bars** (left-to-right = time, lanes = tool category):
+- Each bar represents one completed tool call; width = duration.
+- Colour = category: blue (web/search), green (files), purple (memory), orange (code/bash), pink (messaging), indigo (sub-agents).
+- **Ruler** at the top of the bar area shows time ticks; a **red "now" line** marks the live position (today only).
+- **Mouse wheel** scrolls horizontally. **Ctrl + scroll** zooms in/out. `+`/`−` buttons in the top-right corner also zoom.
+- Timeline is anchored to the bottom; lanes grow upward as more categories appear.
+
+**Cursor (playhead):**
+- Click anywhere on the bar area to place a **thick black cursor line** with a time badge in the ruler. This marks the inspection point.
+- The dashed line follows the mouse as a hover indicator. The red line = live "now".
+- Clicking the same position again removes the cursor.
+- **`▶ live`** button (appears when scrolled away from the right edge) jumps the cursor to the current time and re-enables auto-scroll.
+
+**Top-left — Activity panel (2/5 width):**
+- Empty when no cursor is set ("Click on the timeline to inspect that moment").
+- When a cursor is placed, shows all events whose bars are **touched by the cursor line** (start ≤ cursor ≤ start+duration). Point events use ±15 s tolerance.
+- Each row: coloured left stripe, tool name, duration, status, args preview (`→`), result preview (`←`).
+- **Live mode** (Live toggle active): panel refreshes every 3 s to show what the agent is doing right now.
+
+**Top-right — ReactFlow canvas (3/5 width):**
+- Populated when cursor is placed; empty otherwise.
+- Shows the same events as the Activity panel as **ProcessNodes**: animated cards with tool name, duration bar, status icon, args snippet. Running nodes pulse.
+- Layout: events sorted chronologically left→right, one row per lane, minimum 16 px gap — no overlaps.
+- Click a node to **select** it (coloured glow ring); click empty canvas space to deselect.
+- **Node detail window** (window-in-window in the Activity panel): clicking a node opens a floating panel over the Activity panel showing full event details and **real log lines** fetched from the server (see Log Context API below). Close with the red ✕ button.
+
+A **date selector** in the header lets you switch between days. A **hash-chain integrity badge** (green shield = intact, red shield = tampered/deleted event) is shown whenever the chain can be verified.
+
+**Live toggle** auto-refreshes the timeline events every 5 s and enables the live cursor mode. The manual Refresh button also applies.
+
+#### Hash-chain tamper detection
+
+Every timeline event is written to `timeline_YYYY-MM-DD.jsonl` by `log_timeline_event()` in `vaf/core/log_helper.py`. Each event object includes:
+
+```
+{
+  "ts":        "2026-05-28T14:23:01.123",
+  "type":      "tool_start" | "tool_end" | "subagent_start",
+  "tool":      "<name>",
+  "call_id":   "<uuid>",
+  "args":      "<preview>",          // tool_start only
+  "status":    "ok" | "error",       // tool_end only
+  "duration_s": 1.23,                // tool_end only
+  "result":    "<preview>",          // tool_end only
+  "prev_hash": "<sha256 of previous event>",
+  "hash":      "<sha256 of this event>"
+}
+```
+
+The hash is SHA-256 of the canonical JSON of the event (all fields except `hash` itself, keys sorted). `prev_hash` is `"GENESIS"` for the first event of the day. This forms a forward-linked chain: deleting or modifying any event breaks all subsequent hashes, which the API detects and surfaces as `chain_ok: false`.
+
+#### API endpoints
+
+All timeline and log endpoints require the `admin` role:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/logs` | List all `.log` files with metadata |
+| `GET` | `/api/logs/{filename}?tail=500` | Last N lines of a log file |
+| `GET` | `/api/logs/timeline/dates` | Dates for which JSONL files exist |
+| `GET` | `/api/logs/timeline/events?date=YYYY-MM-DD&merge=true` | Merged timeline events + `chain_ok` |
+| `GET` | `/api/logs/timeline/context` | Event-specific log lines (see below) |
+
+The `merge=true` parameter (default) pairs `tool_start` + `tool_end` events by `call_id` into a single merged record. Still-running tools (no matching `tool_end`) appear with `status: "running"`.
+
+**Log Context API** (`GET /api/logs/timeline/context`) returns log entries specific to the clicked event rather than all lines in a time window:
+
+| Query param | Description |
+|-------------|-------------|
+| `ts` | ISO timestamp of the event (required) |
+| `type` | Event type: `thinking_run`, `tool_end`, `tool_start`, … |
+| `run_id` | For `thinking_run`: extracts the full multi-line block from `vaf_think_*.log` |
+| `call_id` | For tool events: matched against the JSONL timeline entry |
+| `tool` | Tool name: filters `tool_use_*.log` lines to this tool |
+| `session` | Session ID for additional filtering |
+| `window_s` | Time window in seconds (default 30, max 120) |
+
+Response always includes the matching JSONL entry (full call_id/session/scope/duration/result context). For `thinking_run` + `run_id`, the full conversation block (user, assistant, tool turns) is returned. Files larger than 2 MB are skipped.
+
+Path-traversal is prevented on all file endpoints: the resolved path is checked to be a direct child of the log directory (no symlink escape).
+
+#### Log gating
+
+All debug log functions in `vaf/core/log_helper.py` (`append_domain_log`, `append_domain_log_always`, `log_attachment`, `log_thinking_run`, `log_telegram_reply`, `log_discord_reply`, `log_whatsapp_*`, `log_timeline_event`) respect the `debug_logs_enabled` setting — no files are written when it is off.
+
+#### Terminal log viewer
+
+Selecting a domain under **Log Files** opens a **terminal-style viewer** (dark `#0d1117` background, monospace font, blue timestamps, line numbers). Controls:
+- **Live toggle** — auto-refreshes every 5 s.
 - **Refresh button** — manual reload.
-- **Filter input** — filters lines client-side and highlights matches.
+- **Filter input** — client-side line filter with match highlighting.
 - **Auto-scroll checkbox** — keeps the view pinned to the bottom.
 
-The viewer shows the last 500 lines of the selected file (`GET /api/logs/{filename}?tail=500`). The header shows the filename and, when truncated, how many lines are shown vs. total. Both API endpoints require admin role.
-
-All debug log functions in `vaf/core/log_helper.py` (`append_domain_log`, `append_domain_log_always`, `log_attachment`, `log_thinking_run`, `log_telegram_reply`, `log_discord_reply`, `log_whatsapp_*`) respect the `debug_logs_enabled` setting — no files are written when it is off.
+The viewer shows the last 500 lines of the selected file. The header shows the filename and, when truncated, how many lines are shown vs. total.
 
 ### 7. Code Viewer
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from typing import List, Dict, Any, Optional
 
@@ -89,6 +90,26 @@ class WebInterfaceManager:
         self.agent_instance = None  # Reference to the active Agent
         self._server_loop = None
         self._last_log_push_time = 0.0
+        # Pending trust-gate confirmations: session_id → {"event": Event, "decision": list[str|None]}
+        self._pending_gates: Dict[str, Dict] = {}
+
+    def register_gate(self, session_id: str) -> tuple:
+        """Register a pending trust-gate for session_id. Returns (event, decision_box).
+        The agent thread blocks on event.wait(); the WebSocket handler calls resolve_gate()."""
+        event = threading.Event()
+        decision_box: list = [None]
+        self._pending_gates[session_id] = {"event": event, "decision": decision_box}
+        return event, decision_box
+
+    def resolve_gate(self, session_id: str, decision: str) -> bool:
+        """Signal a waiting gate with the user's decision ("allow_once"|"allow_always"|"cancel").
+        Returns True if a pending gate was found and signalled."""
+        pending = self._pending_gates.pop(session_id, None)
+        if pending:
+            pending["decision"][0] = decision
+            pending["event"].set()
+            return True
+        return False
 
     def register_agent(self, agent):
         """Register the active agent instance to allow control from Web UI."""
@@ -224,7 +245,8 @@ class WebInterfaceManager:
 
         # Diagnostic: log every broadcast attempt for key event types (always written, not gated by debug flag)
         msg_type = message.get('type', '')
-        if msg_type in ('agent_message_update', 'tool_update', 'history_update', 'status_update'):
+        if msg_type in ('agent_message_update', 'tool_update', 'history_update', 'status_update',
+                        'workflow_start', 'workflow_update', 'workflow_output_stream', 'workflow_done'):
             try:
                 cur_loop = asyncio.get_running_loop()
                 loop_id = id(cur_loop)
@@ -434,7 +456,8 @@ class WebInterfaceManager:
                     loop
                 )
                 msg_type = data.get('type', '')
-                if msg_type in ('agent_message_update', 'history_update', 'status_update'):
+                if msg_type in ('agent_message_update', 'history_update', 'status_update',
+                                'workflow_start', 'workflow_update', 'workflow_output_stream', 'workflow_done'):
                     _diag_log(
                         f"[PUSH_SCHEDULED] type={msg_type} session={session_id} "
                         f"loop={id(loop)} active_ws={len(self.active_connections)}"

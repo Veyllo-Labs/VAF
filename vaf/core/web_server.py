@@ -950,6 +950,13 @@ class SubAgentStreamUpdate(BaseModel):
     file: Optional[str] = None
     code: Optional[str] = None
     steps: Optional[List] = None
+    # Workflow-specific fields
+    workflowId: Optional[str] = None
+    stepId: Optional[str] = None
+    progress: Optional[int] = None
+    name: Optional[str] = None
+
+    model_config = {"extra": "allow"}
 
 
 @app.post("/api/subagent/stream")
@@ -1581,7 +1588,8 @@ async def get_workflow_details(wf_id: str):
                 "id": wf_id,
                 "name": wf.get("name"),
                 "description": wf.get("description"),
-                "steps": steps
+                "triggers": wf.get("triggers", []),
+                "steps": steps,
             }
         return {"error": "Workflow not found"}
     except Exception as e:
@@ -2780,6 +2788,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log("WebServer", f"contact_reply_decision failed: {e}")
                             await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": str(e)[:200], "replyId": reply_id})
 
+                elif type == "gate_response":
+                    # User clicked Allow Once / Allow Always / Cancel in the trust gate dialog.
+                    decision = cmd.get("decision")  # "allow_once" | "allow_always" | "cancel"
+                    if decision in ("allow_once", "allow_always", "cancel"):
+                        _gate_session = manager.get_session_for_connection(websocket)
+                        from vaf.core.web_interface import get_web_interface as _gwi
+                        _gwi().resolve_gate(_gate_session or "", decision)
+
                 elif type == "chat":
                     content = cmd.get("content")
                     files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
@@ -3533,11 +3549,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             import re as _re_wf
                             from vaf.workflows.templates import reload_workflows, list_templates
 
-                            _wf_id       = str(data.get("workflow_id") or "").strip()
-                            _wf_name     = str(data.get("name") or "").strip()
-                            _wf_desc     = str(data.get("description") or "").strip()
-                            _wf_triggers = [str(t) for t in (data.get("triggers") or []) if str(t).strip()]
-                            _wf_steps    = data.get("steps") or []
+                            _wf_id       = str(cmd.get("workflow_id") or "").strip()
+                            _wf_name     = str(cmd.get("name") or "").strip()
+                            _wf_desc     = str(cmd.get("description") or "").strip()
+                            _wf_triggers = [str(t) for t in (cmd.get("triggers") or []) if str(t).strip()]
+                            _wf_steps    = cmd.get("steps") or []
 
                             if not _re_wf.match(r'^[a-z][a-z0-9_]*$', _wf_id):
                                 raise ValueError(f"workflow_id must be lowercase snake_case, got '{_wf_id}'")
@@ -3597,11 +3613,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             import os as _os_wf
                             from vaf.workflows.templates import reload_workflows, list_templates
 
-                            _wf_id       = str(data.get("workflow_id") or "").strip()
-                            _wf_name     = str(data.get("name") or "").strip()
-                            _wf_desc     = str(data.get("description") or "").strip()
-                            _wf_triggers = [str(t) for t in (data.get("triggers") or []) if str(t).strip()]
-                            _wf_steps    = data.get("steps") or []
+                            _wf_id       = str(cmd.get("workflow_id") or "").strip()
+                            _wf_name     = str(cmd.get("name") or "").strip()
+                            _wf_desc     = str(cmd.get("description") or "").strip()
+                            _wf_triggers = [str(t) for t in (cmd.get("triggers") or []) if str(t).strip()]
+                            _wf_steps    = cmd.get("steps") or []
 
                             if not _wf_name:
                                 raise ValueError("name is required")
@@ -3656,7 +3672,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             import os as _os_wf
                             from vaf.workflows.templates import reload_workflows, list_templates
 
-                            _wf_id = str(data.get("workflow_id") or "").strip()
+                            _wf_id = str(cmd.get("workflow_id") or "").strip()
                             _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
                             _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")
 

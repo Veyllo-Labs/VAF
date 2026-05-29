@@ -380,7 +380,7 @@ const RULER_H     = 28;
 const LABEL_W     = 90;
 const MIN_EV_W    = 6;
 const MIN_SPAN_MS = 5 * 60 * 1000;
-const MIN_ZOOM    = 0.25;
+const MIN_ZOOM    = 1.0;
 const MAX_ZOOM    = 20;
 
 function HorizontalTimeline({ events, date, hour12, i18n }: {

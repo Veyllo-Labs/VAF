@@ -136,6 +136,30 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
             slotAutomations: automationsAtSlot(automations, selectedDayForView, h),
         }));
     }, [selectedDayForView, automations]);
+
+    // Pre-compute all month calendar cells once — avoids running automationsOnDay 35× on every render
+    const monthCells = useMemo(() => {
+        const y = automationCalendarViewDate.getFullYear();
+        const m = automationCalendarViewDate.getMonth();
+        const firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
+        const daysInMonth = new Date(y, m + 1, 0).getDate();
+        const today = new Date();
+        const isCurrentMonth = today.getFullYear() === y && today.getMonth() === m;
+        const cells: (number | null)[] = [
+            ...Array(firstWeekday).fill(null),
+            ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+        ];
+        while (cells.length % 7 !== 0) cells.push(null);
+        return { y, m, isCurrentMonth, today, cells, numRows: Math.ceil(cells.length / 7) };
+    }, [automationCalendarViewDate]);
+
+    // Per-cell automation dots — separate memo so cell list and automation data decouple
+    const cellAutomations = useMemo(() => {
+        const { y, m, cells } = monthCells;
+        return cells.map(day =>
+            day !== null ? automationsOnDay(automations, y, m, day) : []
+        );
+    }, [monthCells, automations]);
     const [selectedSlot, setSelectedSlot] = useState<{ date: Date; hour: number } | null>(null);
     const [showAddTodoPopup, setShowAddTodoPopup] = useState(false);
     const [addTodoText, setAddTodoText] = useState('');
@@ -186,7 +210,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <div className="absolute inset-0 bg-black/50" />
             <div
                 className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white"
                 onClick={(e) => e.stopPropagation()}
@@ -309,9 +333,8 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                                             }
                                                         }}
                                                         className={cn(
-                                                            'flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 last:border-b-0 min-h-[48px] rounded-lg transition-[background-color,box-shadow] duration-150 cursor-pointer',
-                                                            'hover:shadow-[0_0_16px_4px_rgba(0,0,0,0.12)]',
-                                                            !isCurrentHourSlot && 'hover:bg-gray-50/80',
+                                                            'flex items-center gap-3 px-3 py-2.5 border-b border-gray-100 last:border-b-0 min-h-[48px] rounded-lg transition-colors duration-150 cursor-pointer',
+                                                            !isCurrentHourSlot && 'hover:bg-gray-100',
                                                             isCurrentHourSlot && 'ring-2 ring-red-500 ring-inset bg-red-50/30'
                                                         )}
                                                     >
@@ -348,65 +371,48 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                 );
                             })()
                         ) : (
-                            (() => {
-                                const y = automationCalendarViewDate.getFullYear();
-                                const m = automationCalendarViewDate.getMonth();
-                                const firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
-                                const daysInMonth = new Date(y, m + 1, 0).getDate();
-                                const numRows = Math.ceil((firstWeekday + daysInMonth) / 7);
-                                return (
-                                    <div
-                                        className="grid grid-cols-7 gap-px bg-gray-400 rounded-xl flex-1 min-h-0 w-full"
-                                        style={{ gridTemplateRows: `auto repeat(${numRows}, minmax(0, 1fr))` }}
-                                    >
-                                        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
-                                            <div key={day} className="bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-500 uppercase tracking-wide py-1.5">
-                                                {day}
-                                            </div>
-                                        ))}
-                                        {(() => {
-                                            const today = new Date();
-                                            const isCurrentMonth = today.getFullYear() === y && today.getMonth() === m;
-                                            const cells: (number | null)[] = [
-                                                ...Array(firstWeekday).fill(null),
-                                                ...Array.from({ length: daysInMonth }, (_, i) => i + 1)
-                                            ];
-                                            while (cells.length % 7 !== 0) cells.push(null);
-                                            return cells.map((day, i) => {
-                                                const isSunday = (i % 7) === 6;
-                                                const onThisDay = day !== null ? automationsOnDay(automations, y, m, day) : [];
-                                                const count = onThisDay.length;
-                                                return (
-                                                    <div
-                                                        key={i}
-                                                        role="button"
-                                                        tabIndex={0}
-                                                        onClick={day !== null ? () => setSelectedDayForView(new Date(y, m, day)) : undefined}
-                                                        onKeyDown={day !== null ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDayForView(new Date(y, m, day!)); } } : undefined}
-                                                        className={cn(
-                                                            'min-h-0 flex flex-col items-center justify-center text-sm rounded-lg transition-all duration-200 relative',
-                                                            day === null
-                                                                ? 'bg-gray-200 text-gray-400 cursor-default'
-                                                                : 'bg-white text-gray-700 cursor-pointer hover:bg-gray-50 hover:scale-105 hover:shadow-[0_0_16px_4px_rgba(0,0,0,0.12)] hover:z-10',
-                                                            day !== null && isSunday && 'text-red-600',
-                                                            day !== null && isCurrentMonth && day === today.getDate() && 'font-semibold text-gray-900 ring-2 ring-red-500 ring-inset'
-                                                        )}
-                                                    >
-                                                        <span>{day ?? ''}</span>
-                                                        {count > 0 && (
-                                                            <span className="mt-0.5 flex gap-0.5 flex-wrap justify-center max-w-full" title={count === 1 ? onThisDay[0].name : `${count} automations`}>
-                                                                {onThisDay.slice(0, 5).map((a) => (
-                                                                    <span key={a.id} className="w-1.5 h-1.5 rounded-full bg-gray-700 shrink-0" />
-                                                                ))}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                );
-                                            });
-                                        })()}
+                            <div
+                                className="grid grid-cols-7 gap-px bg-gray-400 rounded-xl flex-1 min-h-0 w-full"
+                                style={{ gridTemplateRows: `auto repeat(${monthCells.numRows}, minmax(0, 1fr))` }}
+                            >
+                                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
+                                    <div key={day} className="bg-gray-50 flex items-center justify-center text-xs font-medium text-gray-500 uppercase tracking-wide py-1.5">
+                                        {day}
                                     </div>
-                                );
-                            })()
+                                ))}
+                                {monthCells.cells.map((day, i) => {
+                                    const { y, m, isCurrentMonth, today } = monthCells;
+                                    const isSunday = (i % 7) === 6;
+                                    const onThisDay = cellAutomations[i];
+                                    const count = onThisDay.length;
+                                    return (
+                                        <div
+                                            key={i}
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={day !== null ? () => setSelectedDayForView(new Date(y, m, day)) : undefined}
+                                            onKeyDown={day !== null ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDayForView(new Date(y, m, day!)); } } : undefined}
+                                            className={cn(
+                                                'min-h-0 flex flex-col items-center justify-center text-sm rounded-lg transition-colors duration-150 relative',
+                                                day === null
+                                                    ? 'bg-gray-200 text-gray-400 cursor-default'
+                                                    : 'bg-white text-gray-700 cursor-pointer hover:bg-gray-100',
+                                                day !== null && isSunday && 'text-red-600',
+                                                day !== null && isCurrentMonth && day === today.getDate() && 'font-semibold text-gray-900 ring-2 ring-red-500 ring-inset'
+                                            )}
+                                        >
+                                            <span>{day ?? ''}</span>
+                                            {count > 0 && (
+                                                <span className="mt-0.5 flex gap-0.5 flex-wrap justify-center max-w-full" title={count === 1 ? onThisDay[0].name : `${count} automations`}>
+                                                    {onThisDay.slice(0, 5).map((a) => (
+                                                        <span key={a.id} className="w-1.5 h-1.5 rounded-full bg-gray-700 shrink-0" />
+                                                    ))}
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -450,7 +456,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
 
             {showAddNotePopup && (
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => { setShowAddNotePopup(false); setAddNoteTitle(''); setAddNoteContent(''); }}>
-                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div className="absolute inset-0 bg-black/50" />
                     <div
                         className="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-gray-200 p-4"
                         onClick={(e) => e.stopPropagation()}
@@ -500,7 +506,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
 
             {showAddTodoPopup && (
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => { setShowAddTodoPopup(false); setAddTodoText(''); setAddTodoDueAt(''); }}>
-                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div className="absolute inset-0 bg-black/50" />
                     <div
                         className="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-gray-200 p-4"
                         onClick={(e) => e.stopPropagation()}

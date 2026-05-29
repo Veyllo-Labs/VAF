@@ -432,14 +432,43 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "status":   _STATUS.get(event, "running"),
                 "progress": int((current / total) * 100),
             })
-            # Emit a step-header line to the terminal so the user sees which tool
-            # is running even for tools that produce no stdout (web_search, etc.).
             if event == "start":
                 label = step.description or step.tool
                 _push({
                     "type":       "workflow_output_stream",
                     "workflowId": workflow_id,
                     "line":       f"\u2500\u2500\u2500 Step {current}/{total}: {label} [{step.tool}] \u2500\u2500\u2500",
+                })
+            elif event == "success":
+                # Stream the step result so tools that don't write to stdout
+                # (browser_agent, research_agent, etc.) still show output.
+                _raw = str(getattr(step, "result", "") or "")
+                _preview = _raw[:2000] + ("\n\u2026[gek\u00fcrzt]" if len(_raw) > 2000 else "")
+                if _preview.strip():
+                    for _line in _preview.splitlines():
+                        _push({
+                            "type":       "workflow_output_stream",
+                            "workflowId": workflow_id,
+                            "line":       _line,
+                        })
+                dur = getattr(step, "duration", 0)
+                _push({
+                    "type":       "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line":       f"\u2713 Schritt {current}/{total} abgeschlossen ({dur:.1f}s)",
+                })
+            elif event == "error":
+                err = getattr(step, "error", "") or ""
+                _push({
+                    "type":       "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line":       f"\u2717 Schritt {current}/{total} fehlgeschlagen: {err[:300]}",
+                })
+            elif event == "skip":
+                _push({
+                    "type":       "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line":       f"\u2014 Schritt {current}/{total} \u00fcbersprungen",
                 })
 
         # ── Stdout / stderr wrapper ───────────────────────────────────────────
@@ -669,13 +698,73 @@ class AgentWorkflowBuilderTool(BaseTool):
         os.replace(tmp, wf_path)
 
         try:
-            from vaf.workflows.templates import reload_workflows
+            from vaf.workflows.templates import reload_workflows, list_templates
             reload_workflows()
         except Exception as exc:
             return (
                 f"Workflow '{workflow_id}' saved to disk but registry reload failed: {exc}. "
                 "It will be available after the next server restart."
             )
+
+        # Notify the WebUI: refresh list + play a save-preview animation
+        try:
+            import time as _time
+            from vaf.core.web_interface import get_web_interface
+            agent = self._agent
+            session_id = None
+            if agent is not None:
+                session_id = (
+                    getattr(agent, "current_session_id", None)
+                    or getattr(agent, "_session_id", None)
+                )
+            if session_id:
+                wi = get_web_interface()
+
+                # 1. Open the Workflow Runtime panel showing all steps as idle
+                ui_steps = [
+                    {
+                        "id":     f"step-{idx + 1}",
+                        "name":   s.get("description") or s.get("tool") or f"Step {idx + 1}",
+                        "type":   "tool",
+                        "status": "idle",
+                    }
+                    for idx, s in enumerate(normalised)
+                ]
+                wi._push_session_update(session_id, {
+                    "type":       "workflow_start",
+                    "workflowId": workflow_id,
+                    "name":       name,
+                    "steps":      ui_steps,
+                })
+
+                # 2. Console line
+                wi._push_session_update(session_id, {
+                    "type":       "workflow_output_stream",
+                    "workflowId": workflow_id,
+                    "line":       f"✓ Saved: ~/.vaf/workflows/{workflow_id}.py",
+                })
+
+                # 3. Animate each step to success in sequence
+                for idx in range(len(normalised)):
+                    _time.sleep(0.28)
+                    wi._push_session_update(session_id, {
+                        "type":     "workflow_update",
+                        "stepId":   f"step-{idx + 1}",
+                        "status":   "success",
+                        "progress": 100,
+                    })
+
+                # 4. Refresh workflow list (panel auto-closes after 2.5 s via store)
+                wi._push_session_update(session_id, {
+                    "type": "workflow_created",
+                    "workflow_id": workflow_id,
+                })
+                wi._push_session_update(session_id, {
+                    "type": "workflows_list",
+                    "workflows": list_templates(),
+                })
+        except Exception:
+            pass
 
         return (
             f"Workflow '{workflow_id}' saved successfully. "

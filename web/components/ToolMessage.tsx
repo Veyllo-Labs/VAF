@@ -73,6 +73,21 @@ function TypewriterText({ input }: { input: string }) {
     );
 }
 
+function workflowBadge(args: string | undefined): { label: string; color: string } | null {
+    if (!args) return null;
+    try {
+        const obj = JSON.parse(args) as Record<string, unknown>;
+        if (!('action' in obj)) return null;
+        switch (obj.action) {
+            case 'run_temp':  return { label: 'Temporär',            color: 'bg-blue-100 text-blue-700 border-blue-200' };
+            case 'create':    return { label: 'Persistenter Workflow', color: 'bg-green-100 text-green-700 border-green-200' };
+            case 'delete':    return { label: 'Löschen',              color: 'bg-red-100 text-red-700 border-red-200' };
+            case 'list':      return { label: 'Liste',                color: 'bg-gray-100 text-gray-600 border-gray-200' };
+            default:          return null;
+        }
+    } catch { return null; }
+}
+
 export const ToolMessage: React.FC<ToolMessageProps> = ({
     name,
     result,
@@ -85,6 +100,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const animInput = extractMainInput(args);
+    const wfBadge = name === 'create_agent_workflow' ? workflowBadge(args) : null;
 
     // visualStatus lags behind the real status by 450ms on completion so the
     // cursor return-to-avatar animation finishes before the green checkmark appears
@@ -120,7 +136,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className={cn(
-                    "tool-message-card overflow-hidden rounded-lg border bg-background/95 backdrop-blur shadow-sm transition-colors border-border",
+                    "tool-message-card overflow-hidden rounded-lg border bg-white shadow-sm transition-colors border-border",
                     status === 'error' ? "border-destructive/50" : ""
                 )}
             >
@@ -156,7 +172,14 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                         </div>
 
                         <div className="flex flex-col min-w-0">
-                            <span className="text-sm font-medium leading-none truncate pr-2">{name}</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-sm font-medium leading-none truncate pr-2">{name}</span>
+                                {wfBadge && (
+                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border leading-none ${wfBadge.color}`}>
+                                        {wfBadge.label}
+                                    </span>
+                                )}
+                            </div>
                             <span className="text-xs text-muted-foreground truncate">
                                 {visualStatus === 'running'   ? 'Running…' :
                                  visualStatus === 'completed' ? 'Completed' : 'Failed'}

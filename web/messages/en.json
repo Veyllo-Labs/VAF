@@ -90,7 +90,21 @@
     "refresh": "Refresh",
     "autoScroll": "Auto-scroll",
     "searchPlaceholder": "Filter lines…",
-    "linesOf": "last {tail} of {total} lines"
+    "linesOf": "last {tail} of {total} lines",
+    "sectionTimeline": "Timeline",
+    "timelineLabel": "Timeline",
+    "timelineEmpty": "No timeline events yet.\nEnable Debug Logs and run the agent.",
+    "chainOk": "Chain intact",
+    "chainFailed": "Chain broken",
+    "today": "Today",
+    "timelineRunning": "running",
+    "subagentLabel": "Sub-agent",
+    "sectionToolUse": "Tool Use",
+    "toolUseLabel": "Tool Calls",
+    "toolUseEmpty": "No tool calls yet.\nEnable Debug Logs and run the agent.",
+    "activityPanelTitle": "Activity",
+    "activityClickHint": "Click on the timeline\nto inspect that moment",
+    "canvasHint": "Flow"
   },
   "common": {
     "save": "Save",

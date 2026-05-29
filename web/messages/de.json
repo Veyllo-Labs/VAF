@@ -90,7 +90,21 @@
     "refresh": "Aktualisieren",
     "autoScroll": "Auto-scrollen",
     "searchPlaceholder": "Zeilen filtern…",
-    "linesOf": "letzte {tail} von {total} Zeilen"
+    "linesOf": "letzte {tail} von {total} Zeilen",
+    "sectionTimeline": "Timeline",
+    "timelineLabel": "Timeline",
+    "timelineEmpty": "Noch keine Timeline-Ereignisse.\nDebug-Logs aktivieren und Agent starten.",
+    "chainOk": "Kette intakt",
+    "chainFailed": "Kette gebrochen",
+    "today": "Heute",
+    "timelineRunning": "läuft",
+    "subagentLabel": "Sub-Agent",
+    "sectionToolUse": "Tool-Nutzung",
+    "toolUseLabel": "Tool-Aufrufe",
+    "toolUseEmpty": "Noch keine Tool-Aufrufe.\nDebug-Logs aktivieren und Agent starten.",
+    "activityPanelTitle": "Aktivität",
+    "activityClickHint": "Auf die Timeline klicken\num diesen Moment zu analysieren",
+    "canvasHint": "Flow"
   },
   "common": {
     "save": "Speichern",

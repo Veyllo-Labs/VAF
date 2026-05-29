@@ -5551,6 +5551,7 @@ function VAFDashboardContent() {
                 onClose={() => setIsNotificationsOpen(false)}
                 notifications={notifications}
                 onFetchComplete={setNotifications}
+                userTimeFormat={userTimeFormat}
             />
             {editingAutomationFromCalendar && (
                 <CreateAutomationPopup

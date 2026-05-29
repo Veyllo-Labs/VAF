@@ -14,6 +14,8 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 
+from vaf.cli.ui import UI
+
 
 def _strip_rich_links(text: str) -> str:
     """Replace Rich link markup with just the display text.
@@ -136,11 +138,9 @@ class WorkflowEngine:
         Returns:
             WorkflowResult with all outputs and status
         """
-        from vaf.cli.ui import UI
-        
         # Store defaults for use in template resolution (defaults not passed for automations)
         self._workflow_defaults = {}
-        
+
         start_time = time.time()
         outputs: Dict[str, Any] = dict(variables or {})
         # Merge defaults into outputs if not already present
@@ -190,12 +190,11 @@ class WorkflowEngine:
                 _workflow_project_path = os.path.join(_proj_root, _wf_dir)
                 os.makedirs(_workflow_project_path, exist_ok=True)
                 outputs["workflow_project_path"] = _workflow_project_path
-                UI.event("Workflow", f"  [INFO] Shared project path: {_workflow_project_path}", style="dim")
-            except Exception as _e:
-                UI.event("Workflow", f"  [WARN] Could not create shared project path: {_e}", style="warning")
+            except Exception:
+                pass
         else:
             _workflow_project_path = outputs["workflow_project_path"]
-        
+
         # Don't show "Starting workflow" message - will show Step 1/N instead
         
         # Get workflow-level debug logger
@@ -250,6 +249,11 @@ class WorkflowEngine:
                 continue
 
             # Progress callback
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log("webui", f"[engine.execute] BEFORE_CALLBACK step={i}/{len(steps)} tool={step.tool}")
+            except Exception:
+                pass
             self.callback("start", step, i, len(steps))
 
             # Show workflow progress (like "Step 1/2" display)
@@ -454,7 +458,7 @@ class WorkflowEngine:
                 max_retries = 3
                 retry_count = 0
                 result = None
-                
+
                 while retry_count < max_retries:
                     _inject_user_scope(step.tool, args)
                     try:
@@ -758,6 +762,9 @@ class WorkflowEngine:
                 # Use ASCII markers for maximum terminal compatibility (avoid UnicodeEncodeError on some Windows consoles)
                 UI.event("Workflow", f"  [OK] {step.output_name}: {display_result}", style="success")
 
+                step.result = result
+                step.status = StepStatus.SUCCESS
+                step.duration = time.time() - step_start
                 self.callback("success", step, i, len(steps))
 
                 # Branching: on_success jump (optional)
@@ -820,7 +827,6 @@ class WorkflowEngine:
         Returns:
             WorkflowResult with completion status
         """
-        from vaf.cli.ui import UI
         from vaf.core.subagent_ipc import get_ipc, PausedWorkflow
         
         UI.event("Workflow", f"▶️  Resuming workflow [{paused_wf.workflow_id}]...", style="bold cyan")
@@ -952,7 +958,7 @@ class WorkflowEngine:
         """
         # Common tool argument mappings
         ARG_MAPPINGS = {
-            "web_search": "query",
+            "web_search": "query",  # deep=False injected separately below
             "webfetch": "url",
             "coding_agent": "task",
             "librarian_agent": "task",
@@ -967,7 +973,12 @@ class WorkflowEngine:
         }
         
         arg_name = ARG_MAPPINGS.get(tool_name, "input")
-        return {arg_name: value}
+        args = {arg_name: value}
+        # In workflow context, disable per-result LLM synthesis for web_search.
+        # deep=True triggers a query_llm() call per result which blocks on DeepSeek latency.
+        if tool_name == "web_search":
+            args["deep"] = False
+        return args
     
     # ─── Branching helpers ──────────────────────────────────────────────────────
 
@@ -1003,8 +1014,6 @@ class WorkflowEngine:
           and reset step.status to SKIPPED so the workflow isn't marked failed.
         - Otherwise advance by 1 (normal sequential flow).
         """
-        from vaf.cli.ui import UI
-
         if error is None and step.on_success:
             target_idx = self._find_step_index(steps, step.on_success)
             if target_idx >= 0:

@@ -117,6 +117,8 @@ def _search_brave_api(query: str, max_results: int) -> list:
         headers = {"X-Subscription-Token": key, "Accept": "application/json"}
         r = requests.get(url, timeout=10, headers=headers)
         if r.status_code != 200:
+            label = "Rate limit" if r.status_code == 429 else f"HTTP {r.status_code}"
+            UI.event("Web Search", f"Brave API: {label}", style="dim")
             return []
         data = r.json()
         results = (data.get("web") or {}).get("results") or []
@@ -144,6 +146,8 @@ def _search_google_cse(query: str, max_results: int) -> list:
         params = {"key": key, "cx": cx, "q": query, "num": num}
         r = requests.get(url, params=params, timeout=10)
         if r.status_code != 200:
+            label = "Rate limit" if r.status_code == 429 else f"HTTP {r.status_code}"
+            UI.event("Web Search", f"Google CSE: {label}", style="dim")
             return []
         data = r.json()
         items = data.get("items") or []
@@ -172,15 +176,17 @@ def _search_duckduckgo(query: str, max_results: int) -> list:
         s.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         })
-        # DDG may return 202 (bot challenge) under rate limiting — retry up to 3x with backoff
+        # DDG may return 202 (bot challenge) under rate limiting — retry up to 3x with 4s wait
         r = None
         for attempt in range(3):
             r = s.post("https://lite.duckduckgo.com/lite/", data={"q": query}, timeout=10)
             if r.status_code == 200:
                 break
+            UI.event("Web Search", f"DuckDuckGo: HTTP {r.status_code} (attempt {attempt+1}/3) — retrying in 4s", style="dim")
             if attempt < 2:
-                time.sleep(1.5 * (attempt + 1))
+                time.sleep(4)
         if r is None or r.status_code != 200:
+            UI.event("Web Search", f"DuckDuckGo: failed after 3 attempts (HTTP {r.status_code if r else 'timeout'})", style="warning")
             return []
 
         soup = BeautifulSoup(r.text, "html.parser")
@@ -200,26 +206,42 @@ def _search_duckduckgo(query: str, max_results: int) -> list:
             body = snippet_el.get_text(strip=True)[:500] if snippet_el else ""
             out.append({"title": title, "href": href, "body": body})
 
+        if not out:
+            UI.event("Web Search", "DuckDuckGo: 200 OK but 0 results parsed from HTML", style="dim")
         return out
-    except Exception:
+    except Exception as _e:
+        UI.event("Web Search", f"DuckDuckGo: exception — {str(_e)[:80]}", style="warning")
         return []
 
 
 def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str | None]:
     """Try Brave API -> Google CSE API -> scrape Google -> DuckDuckGo. Returns (results, source_name, fallback_hint)."""
     fallback_hint = None
+
     # 1) Brave API
-    results = _search_brave_api(query, max_results)
-    if results:
-        return (results, "Brave", None)
+    brave_key = (Config.get("api_key_brave_search") or "").strip()
+    if brave_key:
+        results = _search_brave_api(query, max_results)
+        if results:
+            return (results, "Brave", None)
+    else:
+        UI.event("Web Search", "Brave API: no key configured — skipping", style="dim")
+
     # 2) Google Custom Search API
-    results = _search_google_cse(query, max_results)
-    if results:
-        return (results, "Google", None)
+    google_key = (Config.get("api_key_google_search") or "").strip()
+    google_cx  = (Config.get("google_search_engine_id") or "").strip()
+    if google_key and google_cx:
+        results = _search_google_cse(query, max_results)
+        if results:
+            return (results, "Google CSE", None)
+    else:
+        UI.event("Web Search", "Google CSE: no key configured — skipping", style="dim")
+
     # 3) Scrape Google
     results, google_reason = _search_google(query, max_results)
     if results:
         return (results, "Google", None)
+
     # 4) DuckDuckGo fallback (direct HTML — no third-party package)
     UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
     results = _search_duckduckgo(query, max_results)
@@ -330,7 +352,7 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                 results, search_source, fallback_hint = get_web_search_results(query, max_results)
             
             if not results:
-                return [] if return_raw else "No results found."
+                return [] if return_raw else "No results found. (All search APIs returned empty — possible rate limit or network issue)"
             
             # If return_raw is True, return the raw results list
             if return_raw:
@@ -396,7 +418,8 @@ Answer:"""
                             {"role": "user", "content": prompt}
                         ],
                         max_tokens=250,
-                        temperature=0.2
+                        temperature=0.2,
+                        timeout=15,
                     )
                     
                     if answer:
@@ -441,7 +464,8 @@ Final Answer:"""
                             {"role": "user", "content": prompt}
                         ],
                         max_tokens=300,
-                        temperature=0.3
+                        temperature=0.3,
+                        timeout=15,
                     )
                     
                     if answer:
@@ -487,6 +511,18 @@ Final Answer:"""
             MAX_SUMMARY_CHARS = 8000
 
             for i, res in enumerate(results, 1):
+                # Respect stop button between result pages
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id as _gcsi
+                    _sid = _gcsi()
+                    if _sid:
+                        from vaf.core.task_queue import TaskQueue as _TQ
+                        if _TQ().should_stop(_sid):
+                            summary += "\n\n[Web search aborted by user.]"
+                            break
+                except Exception:
+                    pass
+
                 # Check total size before adding more
                 if len(summary) > MAX_SUMMARY_CHARS:
                     summary += f"\n\n[Stopped reading further results to prevent context overflow. {len(results) - i + 1} results omitted.]"

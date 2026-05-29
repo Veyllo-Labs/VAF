@@ -21,13 +21,23 @@ Located at `web/components/workflows/WorkflowChatElement.tsx`
 A compact card displayed inline in the chat showing:
 - Workflow name
 - Progress bar with percentage
-- Current step name
-- Status icon (running/completed/failed)
+- Current step name / orphan countdown
+- Status icon (running / completed / failed / warning)
 
 **Key behavior:**
 - Connects to `useWorkflowStore` to get real-time status updates
 - Uses `workflowId` to match with the active workflow in store
 - Clicking opens the VAFWorkflowRuntime panel
+
+**Orphan timeout (60 s):**  
+If the right-side panel (`isOpen = false`) is already closed but this element still shows `status = 'running'`, a 60-second countdown starts automatically.  
+- Progress bar fills amber from left to right over 60 s  
+- Label shows `Waiting for output — timeout in Xs`  
+- At 0 s the store is force-set to `status: 'failed'`  
+This prevents the element from being stuck in "running" forever when `workflow_done` was lost or delayed.
+
+**Force-close via tool_update:**  
+When the `execute_workflow` ToolMessage transitions to `end` or `error`, the page handler checks whether the workflow store still has `status: 'running'` and force-sets it to `completed` or `failed`. This is a secondary safety net independent of the orphan timeout.
 
 ```typescript
 <WorkflowChatElement
@@ -240,10 +250,28 @@ All three write operations are **admin-only** — the server checks the session'
 
 User workflows are stored as `.py` files in `~/.vaf/workflows/`. Agent-created workflows carry a `# created_by: agent` marker on the first line (so the agent can only edit/delete its own). The `list_templates()` function sets `is_custom: True` for any workflow whose file exists in the user directory. After every write, `reload_workflows()` is called so the router and `execute_workflow` tool see the change immediately.
 
+## Workflow Execution Logging
+
+Every `execute_workflow` call writes a timestamped audit log to `~/.vaf/logs/workflow_YYYY-MM-DD.log` (always-on, independent of `debug_logs_enabled`). Each line is prefixed with a unique run ID (`wf-xxxxxxxx`):
+
+```
+2026-05-29T12:00:18.090 [wf-c20197c1] CALL | workflow_id='...' | num_steps='2' | variables='{...}'
+2026-05-29T12:00:18.091 [wf-c20197c1] ENGINE_START
+2026-05-29T12:00:18.091 [wf-c20197c1] STEP_CB | cb='start' | step='1/2' | tool='web_search'
+2026-05-29T12:00:53.216 [wf-c20197c1] STEP_CB | cb='success' | step='1/2' | duration='35.12'
+2026-05-29T12:00:56.256 [wf-c20197c1] ENGINE_RETURNED | success='True'
+2026-05-29T12:00:56.312 [wf-c20197c1] PUSH | type='workflow_done'
+2026-05-29T12:00:56.454 [wf-c20197c1] RETURN_SUCCESS | output_len='3040'
+```
+
+Log files are one per day and can be deleted freely (GC-safe).
+
 ## Known Issues
 
-1. **Workflow ID Matching**: The `workflowId` in chat messages must match the store's `workflow.id` for real-time updates to work. The workflow system uses the format `[WORKFLOW_ASYNC:{taskId}:{workflowId}]` where `workflowId` is the correct identifier.
+1. **Workflow ID Matching**: The `workflowId` in chat messages must match the store's `workflow.id` for real-time updates to work.
 
 2. **Terminal Scroll**: Auto-scroll only works when new lines are added. Manual scrolling up is preserved until new content arrives.
 
 3. **Document Loading**: DocumentEditor requires the `/api/file` endpoint to be accessible. Files must be in allowed directories (Documents, Downloads, or VAF data dir).
+
+4. **workflow_done delivery**: `_push_session_update` is fire-and-forget over WebSocket. If the message is dropped, the orphan timeout (60 s) and the tool_update force-close act as fallbacks.

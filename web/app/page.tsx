@@ -23,6 +23,7 @@ import CodeViewer, { isCodeFile } from '@/components/CodeViewer';
 import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
+import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
 import ReactMarkdown from 'react-markdown';
@@ -860,6 +861,21 @@ function VAFDashboardContent() {
         };
     }, [router, authRetryKey]);
 
+    // Chain-alert: silently poll today's timeline hash chain for admins; show red dot if broken
+    useEffect(() => {
+        if (currentUser?.role !== 'admin') return;
+        const check = () => {
+            const today = new Date().toISOString().slice(0, 10);
+            fetch(`${getApiBase()}/api/logs/timeline/events?date=${today}&merge=false`, { credentials: 'include' })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && d.total_raw > 0) setChainAlert(d.chain_ok === false); })
+                .catch(() => {});
+        };
+        check();
+        const id = setInterval(check, 5 * 60 * 1000); // every 5 min
+        return () => clearInterval(id);
+    }, [currentUser]);
+
     // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
     const openedFromOAuthRef = useRef(false);
 
@@ -1054,6 +1070,8 @@ function VAFDashboardContent() {
     const [automationTodos, setAutomationTodos] = useState<AutomationTodo[]>([]);
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+    const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string } | null>(null);
+    const [chainAlert, setChainAlert] = useState(false);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1821,19 +1839,48 @@ function VAFDashboardContent() {
                             }];
                         }
                         else if (subType === 'end' || subType === 'error') {
-                            if (existingIdx === -1) return prev; // Tool not found (maybe page reload?)
+                            let resolvedIdx = existingIdx;
+                            if (resolvedIdx === -1) {
+                                // toolId was lost on history_update rebuild — fall back to last
+                                // running tool message with the same name
+                                const fallback = prev
+                                    .map((m, i) => ({ m, i }))
+                                    .filter(({ m }) => m.role === 'tool' && m.toolName === name && m.toolStatus === 'running')
+                                    .pop();
+                                resolvedIdx = fallback?.i ?? -1;
+                            }
+                            if (resolvedIdx === -1) return prev; // truly not found
                             expectNewAssistantAfterToolRef.current = true;
                             const newMessages = [...prev];
-                            newMessages[existingIdx] = {
-                                ...newMessages[existingIdx],
+                            newMessages[resolvedIdx] = {
+                                ...newMessages[resolvedIdx],
+                                toolId: toolId, // restore toolId in case it was lost
                                 toolStatus: subType === 'error' ? 'error' : 'completed',
-                                content: eventData, // Result passed in data
+                                content: eventData,
                                 toolEndTime: Date.now()
                             };
                             return newMessages;
                         }
                         return prev;
                     });
+
+                    // When execute_workflow finishes, force-close any workflow panel still in
+                    // 'running' state — workflow_done may have been lost in the WebSocket queue
+                    if ((subType === 'end' || subType === 'error') && name === 'execute_workflow') {
+                        const wfStore = useWorkflowStore.getState();
+                        if (wfStore.workflow && wfStore.workflow.status === 'running') {
+                            const finalStatus = subType === 'error' ? 'failed' : 'completed';
+                            wfStore.workflow.steps.forEach((step: { id: string; status: string }) => {
+                                if (step.status === 'idle' || step.status === 'running') {
+                                    updateStepStatus(step.id, finalStatus as 'failed' | 'success', 100, undefined);
+                                }
+                            });
+                            useWorkflowStore.setState(s => ({
+                                workflow: s.workflow ? { ...s.workflow, status: finalStatus as VAFWorkflow['status'] } : null
+                            }));
+                        }
+                    }
+
                     // Clear status message when tool runs
                     setStatusMessage('');
 
@@ -1888,6 +1935,12 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'contact_reply_result' && data.replyId) {
                     setPendingContactReplies(prev => prev.filter(p => p.replyId !== data.replyId));
+                }
+                else if (data.type === 'gate_required') {
+                    setGateRequest({ tool: data.tool, cwd: data.cwd || '', reason: data.reason || '', args_preview: data.args_preview || '' });
+                }
+                else if (data.type === 'gate_decision') {
+                    setGateRequest(null);
                 }
                 else if (data.type === 'context_status') {
                     // Merge into existing contextStats so partial updates (e.g. load_session
@@ -2191,6 +2244,23 @@ function VAFDashboardContent() {
                 else if (data.type === 'workflow_update') {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     updateStepStatus(data.stepId, data.status, data.progress, data.result);
+                }
+                else if (data.type === 'workflow_done') {
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    // Mark all pending steps as failed/done so the store triggers auto-close
+                    const wfStore = useWorkflowStore.getState();
+                    if (wfStore.workflow) {
+                        const finalStatus = data.success ? 'success' : 'failed';
+                        wfStore.workflow.steps.forEach(step => {
+                            if (step.status === 'idle' || step.status === 'running') {
+                                updateStepStatus(step.id, finalStatus, 100, undefined);
+                            }
+                        });
+                        // Force workflow status update so auto-close fires
+                        useWorkflowStore.setState(s => ({
+                            workflow: s.workflow ? { ...s.workflow, status: data.success ? 'completed' : 'failed' } : null
+                        }));
+                    }
                 }
                 else if (data.type === 'workflow_output_stream') {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
@@ -2526,12 +2596,32 @@ function VAFDashboardContent() {
 
                     const hydratedServerMsgs = serverMsgs.map((srvMsg: Message & { _order?: number }) => {
                         if (srvMsg.role === 'tool') {
-                            const match = cachedMsgs.find(cm =>
+                            // 1) Exact content match (tool already completed on client too)
+                            const exactMatch = cachedMsgs.find(cm =>
                                 cm.role === 'tool' &&
                                 cm.content === srvMsg.content
                             );
-                            if (match) {
-                                return { ...srvMsg, ...match, _order: srvMsg._order };
+                            if (exactMatch) {
+                                return { ...srvMsg, ...exactMatch, _order: srvMsg._order };
+                            }
+                            // 2) Running→completed match: client has content='' (still running),
+                            //    server already has the result. Preserve toolId/toolArgs from
+                            //    client but take the completed content from server.
+                            const runningMatch = cachedMsgs.find(cm =>
+                                cm.role === 'tool' &&
+                                cm.toolStatus === 'running' &&
+                                (cm.content === '' || cm.content == null) &&
+                                cm.toolName === srvMsg.toolName
+                            );
+                            if (runningMatch) {
+                                return {
+                                    ...srvMsg,
+                                    toolId: runningMatch.toolId,
+                                    toolArgs: runningMatch.toolArgs,
+                                    toolStartTime: runningMatch.toolStartTime,
+                                    toolStatus: 'completed' as const,
+                                    _order: srvMsg._order
+                                };
                             }
                         }
                         // Assistant: prefer cache version if it contains <think> so Thinking appears above answer after reload
@@ -3952,7 +4042,7 @@ function VAFDashboardContent() {
                 </div>
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
-                <aside className="group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-all duration-300 z-20 shadow-lg overflow-hidden">
+                <aside className="group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-[width] duration-300 z-20 shadow-lg overflow-hidden">
 
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
@@ -4074,25 +4164,28 @@ function VAFDashboardContent() {
                                     .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws?.send(JSON.stringify({ type: 'get_automations' })); })
                                     .catch(() => { });
                             }}
-                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-all justify-start"
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/automation transition-colors justify-start"
                             title="Automation"
                         >
                             <div className="w-6 flex justify-center shrink-0">
                                 <Calendar size={20} />
                             </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Automation</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
                         </div>
 
                         {currentUser?.role === 'admin' && (
                         <div
                             onClick={() => setIsNotificationsOpen(true)}
-                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/notifications transition-all justify-start"
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/notifications transition-colors justify-start"
                             title={tNav('notifications')}
                         >
-                            <div className="w-6 flex justify-center shrink-0">
+                            <div className="w-6 flex justify-center shrink-0 relative">
                                 <ScrollText size={20} />
+                                {chainAlert && (
+                                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse" />
+                                )}
                             </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
                         </div>
                         )}
 
@@ -4111,14 +4204,14 @@ function VAFDashboardContent() {
                                     .then((data) => { if (data?.ok && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'get_automations' })); })
                                     .catch(() => { });
                             }}
-                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-all justify-start"
+                            className="flex items-center gap-3 p-2 rounded-xl cursor-pointer hover:bg-gray-100 text-gray-500 hover:text-gray-900 group/settings transition-colors justify-start"
                             title={tNav('settings')}
                             data-agent-hint="nav-settings"
                         >
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
                             </div>
-                            <span className="max-w-0 group-hover:max-w-xs overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-300 font-medium whitespace-nowrap text-sm">Settings</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Settings</span>
                         </div>
                     </div>
                 </aside>
@@ -4282,7 +4375,7 @@ function VAFDashboardContent() {
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
-                                                                        <div className={cn("max-w-[95%] rounded-lg transition-all duration-300", stopHovered && msg.toolStatus === 'running' ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]" : "")}>
+                                                                        <div className={cn("max-w-[95%] rounded-lg transition-[outline] duration-150", stopHovered && msg.toolStatus === 'running' ? "outline outline-2 outline-red-400/60" : "")}>
                                                                             <ToolMessage
                                                                                 key={`tool-${trueIndex}`}
                                                                                 id={msg.toolId || `tool-${trueIndex}`}
@@ -5471,6 +5564,63 @@ function VAFDashboardContent() {
                     onSubmit={createAutomationSubmit}
                     onDelete={(taskId) => { deleteAutomation(taskId); setEditingAutomationFromCalendar(null); refreshAutomations(); }}
                 />
+            )}
+            {/* Trust Gate Dialog — shown when agent needs confirmation for a risky tool */}
+            {gateRequest && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60" />
+                    <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 animate-in fade-in zoom-in-95 duration-200">
+                        {/* Header */}
+                        <div className="flex items-center gap-3 p-5 border-b border-gray-200 bg-amber-50 rounded-t-2xl">
+                            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center shrink-0">
+                                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                </svg>
+                            </div>
+                            <div>
+                                <p className="font-semibold text-gray-900 text-sm">Security Confirmation</p>
+                                <p className="text-xs text-amber-700">Agent wants to run a risky tool</p>
+                            </div>
+                        </div>
+                        {/* Body */}
+                        <div className="p-5 space-y-3">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Tool</span>
+                                <code className="text-sm font-mono bg-gray-100 px-2 py-0.5 rounded text-gray-900">{gateRequest.tool}</code>
+                            </div>
+                            {gateRequest.args_preview && (
+                                <div>
+                                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Arguments</p>
+                                    <pre className="text-xs font-mono bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-gray-800">{gateRequest.args_preview}</pre>
+                                </div>
+                            )}
+                            {gateRequest.reason && (
+                                <p className="text-xs text-gray-500">{gateRequest.reason}</p>
+                            )}
+                        </div>
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 p-5 pt-0">
+                            <button
+                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'cancel' })); setGateRequest(null); }}
+                                className="flex-1 px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-100 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_once' })); setGateRequest(null); }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors"
+                            >
+                                Allow Once
+                            </button>
+                            <button
+                                onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
+                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors"
+                            >
+                                Always Allow
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </main>
     );

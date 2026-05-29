@@ -21,7 +21,7 @@ from huggingface_hub import hf_hub_download
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core.platform import Platform
-from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use
+from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_tool_use, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.tools.search import WebSearchTool, get_web_search_results
@@ -1719,6 +1719,22 @@ class Agent:
                 )
             except Exception:
                 pass
+
+        # Log subagent_end to timeline before removing tracking entry
+        try:
+            meta = self._async_subagent_tasks.get(task.task_id, {})
+            started_at_dt = meta.get("started_at")
+            duration_s = round((datetime.now() - started_at_dt).total_seconds(), 1) if started_at_dt else None
+            log_timeline_event(
+                "subagent_end",
+                task_id=task.task_id,
+                agent_type=getattr(task, "agent_type", meta.get("agent_type", "")),
+                status=task.status,
+                duration_s=duration_s,
+                session=str(getattr(self, "current_session_id", "") or ""),
+            )
+        except Exception:
+            pass
 
         # Remove from tracking and consume from queue
         if task.task_id in self._async_subagent_tasks:
@@ -4499,13 +4515,37 @@ class Agent:
                      )
                      selected_tools_str = output['choices'][0]['message']['content']
                 elif self.api_backend:
-                    # API Backend returns a generator of strings
-                    response_chunks = list(self.api_backend.chat_completion(
-                        messages=messages,
-                        max_tokens=1224,
-                        temperature=0.0,
-                        stream=False
-                    ))
+                    # API Backend returns a generator of strings.
+                    # Use a thread + timeout so slow/reasoning models don't block forever.
+                    # NOTE: shutdown(wait=False) — we do NOT join the thread on timeout;
+                    # the HTTP connection will eventually close on its own.
+                    import concurrent.futures as _cf
+                    _ROUTER_TIMEOUT = 15  # seconds
+
+                    def _collect_router_chunks():
+                        return list(self.api_backend.chat_completion(
+                            messages=messages,
+                            max_tokens=1224,
+                            temperature=0.0,
+                            stream=False
+                        ))
+
+                    _ex = _cf.ThreadPoolExecutor(max_workers=1)
+                    _fut = _ex.submit(_collect_router_chunks)
+                    try:
+                        response_chunks = _fut.result(timeout=_ROUTER_TIMEOUT)
+                    except _cf.TimeoutError:
+                        _timeout_msg = f"Tool Router: Timeout nach {_ROUTER_TIMEOUT}s — falle zurück auf list_tools / search_tools"
+                        UI.event("Router", _timeout_msg, style="yellow")
+                        try:
+                            from vaf.core.web_interface import get_web_interface as _gwi
+                            _gwi().log(_timeout_msg, level="warning", source="Router", session_id=getattr(self, "current_session_id", None))
+                        except Exception:
+                            pass
+                        _fallback = [t for t in ("list_tools", "search_tools") if t in self.tools]
+                        return list(forced_tools) + [t for t in _fallback if t not in forced_tools]
+                    finally:
+                        _ex.shutdown(wait=False)
                     selected_tools_str = "".join(str(c) for c in response_chunks)
                 else:
                     UI.event("Router Debug", "No backend available for routing", style="yellow")
@@ -5093,6 +5133,21 @@ class Agent:
         MAX_TOOL_TURNS_PER_STEP = 15
         
         while empty_retry_count < MAX_EMPTY_RETRIES:
+            # Stop check at the top of every loop iteration — catches stop clicks
+            # that happen between tool execution and the next LLM call
+            _loop_session = getattr(self, 'current_session_id', None) or getattr(self, '_session_id', None)
+            if _loop_session:
+                try:
+                    from vaf.core.task_queue import TaskQueue as _LTQ
+                    _ltq = _LTQ()
+                    if _ltq.should_stop(_loop_session):
+                        _ltq.clear_stop(_loop_session)
+                        _stop_msg = "[Generation stopped by user]"
+                        self.history.append({"role": "assistant", "content": _stop_msg})
+                        return _stop_msg
+                except Exception:
+                    pass
+
             # 1. Prepare Request
             # Recalculate token usage at the start of each retry attempt
             current_tokens, max_tokens = self.get_token_usage()
@@ -6165,12 +6220,17 @@ class Agent:
                     except: arguments = {}
 
                     # Debug: log tool use with session/scope for user-isolation debugging (only when debug logs on)
+                    _tl_call_id = tc.get('id', '')
+                    _tl_start = time.time()
                     try:
                         from vaf.core.subagent_ipc import get_current_session_id
                         _sid = get_current_session_id() or getattr(self, "current_session_id", None)
                         _scope = getattr(self, "_current_user_scope_id", None)
                         _args_preview = json.dumps(arguments, ensure_ascii=False) if arguments else ""
                         log_tool_use(function_name, session_id=_sid, user_scope_id=_scope, arguments_preview=_args_preview)
+                        log_timeline_event('tool_start', tool=function_name, call_id=_tl_call_id,
+                                           session=str(_sid or ''), scope=str(_scope or ''),
+                                           args=_args_preview[:500])
                     except Exception:
                         pass
 
@@ -6250,19 +6310,35 @@ class Agent:
                     try:
                         from vaf.core.web_interface import get_web_interface
                         r_str = str(result) if result else ""
-                        is_err = "error" in r_str.lower() or "failed" in r_str.lower()
+                        # Same 50-char status convention: only the prefix is the status
+                        _r_status = r_str[:50].lower().strip()
+                        is_err = (
+                            _r_status.startswith("❌") or
+                            _r_status.startswith("error") or
+                            _r_status.startswith("failed")
+                        )
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
                             from vaf.core.subagent_ipc import get_current_session_id
                             _tool_session = get_current_session_id()
-                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=r_str, session_id=_tool_session)
+                        # Truncate + sanitize: remove surrogate chars that break json.dumps
+                        _r_raw = r_str[:800] + (f"\n[…+{len(r_str)-800} chars]" if len(r_str) > 800 else "")
+                        _r_ui = _r_raw.encode('utf-8', errors='replace').decode('utf-8')
+                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session)
                         _tool_end_emitted = True
+                        log_timeline_event('tool_end', tool=function_name, call_id=_tl_call_id,
+                                           session=str(_tool_session or ''),
+                                           status='error' if is_err else 'ok',
+                                           duration_s=round(time.time() - _tl_start, 2),
+                                           result=r_str[:300])
                         if is_err and "Error executing tool" not in r_str:
                             time.sleep(2)
-                    except Exception:
-                        pass
-                    if not _tool_end_emitted and result and ("error" in str(result).lower() or "failed" in str(result).lower()) and "Error executing tool" not in str(result):
-                        time.sleep(2)
+                    except Exception as _emit_err:
+                        UI.event("Debug", f"emit_tool_update failed: {_emit_err}", style="dim")
+                    if not _tool_end_emitted and result:
+                        _fb = str(result)[:50].lower().strip()
+                        if _fb.startswith("❌") or _fb.startswith("error") or _fb.startswith("failed"):
+                            time.sleep(2)
 
                     # Check if this is an async sub-agent task BEFORE adding to history
                     result_str = str(result) if result else ""
@@ -6273,6 +6349,10 @@ class Agent:
                         task_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result_str)
                         task_id = task_match.group(1) if task_match else "unknown"
                         agent_type = task_match.group(2) if task_match else "sub-agent"
+                        log_timeline_event('subagent_start', tool=function_name,
+                                           call_id=_tl_call_id,
+                                           session=str(getattr(self, 'current_session_id', '') or ''),
+                                           task_id=task_id, agent_type=agent_type)
                         
                         # Clear tool response that indicates waiting - NO actual data
                         self.history.append({
@@ -6413,14 +6493,16 @@ class Agent:
                         # Add a special marker that the CLI can use to force-print this message
                         return f"[ASYNC_ACK]{response_text}"
                     
-                    # If tool returned an error, force the model to acknowledge it
-                    result_str = str(result).lower() if result else ""
+                    # If tool returned an error, force the model to acknowledge it.
+                    # Convention: only the first ~50 chars are the status prefix —
+                    # everything after is payload (web content, file text, etc.) and must never
+                    # be inspected. ✅ = success, ❌ = user-facing error, bare "Error/Failed" = crash.
+                    _result_raw = str(result) if result else ""
+                    _status = _result_raw[:50].lower().strip()
                     is_tool_error = (
-                        "error executing tool" in result_str or
-                        ("error:" in result_str and not result_str.startswith("❌")) or  # Allow ❌ errors (user-friendly messages)
-                        "server returned" in result_str and ("400" in result_str or "500" in result_str or "404" in result_str) or
-                        "failed" in result_str and ("tool" in result_str or "execution" in result_str) or
-                        (result_str.startswith("error") and not result_str.startswith("❌"))
+                        _status.startswith("❌") or
+                        _status.startswith("error") or
+                        _status.startswith("failed")
                     )
                     
                     if result and is_tool_error:
@@ -6457,6 +6539,21 @@ class Agent:
                     append_domain_log("backend", msg)
                     self.history.append({"role": "assistant", "content": msg})
                     return msg
+
+                # Check stop flag after tool finishes — catches "Stop" clicked during tool execution
+                _post_tool_session = getattr(self, 'current_session_id', None) or getattr(self, '_session_id', None)
+                if _post_tool_session:
+                    try:
+                        from vaf.core.task_queue import TaskQueue as _PTQ
+                        _ptq = _PTQ()
+                        if _ptq.should_stop(_post_tool_session):
+                            _ptq.clear_stop(_post_tool_session)
+                            UI.event("System", "Generation stopped after tool execution", style="info")
+                            _stop_msg = "[Generation stopped by user]"
+                            self.history.append({"role": "assistant", "content": _stop_msg})
+                            return _stop_msg
+                    except Exception:
+                        pass
 
                 UI.event("Debug", f"Summarizing intel (turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP})...", style="dim")
                 continue
@@ -7098,19 +7195,49 @@ class Agent:
             cwd = Path.cwd()
             trusted = is_trusted_dir(cwd)
             allowed_once = name in self._allow_once_tools
-            
+
             if policy != "allow" and not trusted and not allowed_once:
-                emit({"type": "gate_required", "tool": name, "cwd": str(cwd)})
+                # Build args preview for the Web UI dialog (truncated, no secrets)
+                try:
+                    _gate_args_preview = json.dumps(make_json_serializable(args or {}), ensure_ascii=False)[:300]
+                except Exception:
+                    _gate_args_preview = ""
+                _gate_evt = {"type": "gate_required", "tool": name, "cwd": str(cwd),
+                             "reason": policy_decision.reason, "args_preview": _gate_args_preview}
+                emit(_gate_evt)
+                # Also push directly via web_interface so it reaches the WebSocket
+                # (emit/_event_sink is None in web context — tool events use this path instead)
+                try:
+                    from vaf.core.web_interface import get_web_interface as _gwi2
+                    _gwi2()._push_session_update(getattr(self, "current_session_id", None), _gate_evt)
+                except Exception:
+                    pass
+
                 if self._noninteractive:
                     return f"[ERROR] Tool '{name}' requires confirmation ({policy_decision.reason}). Re-run interactively or mark folder trusted."
-                
-                UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
-                choice = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
-                if choice in ("o", "once"):
+
+                # Prefer WebSocket gate when a web session is active (pywebview / browser)
+                _session = getattr(self, "current_session_id", None)
+                _choice = None
+                if _session:
+                    try:
+                        from vaf.core.web_interface import get_web_interface as _gwi
+                        _gate_event, _decision_box = _gwi().register_gate(_session)
+                        _granted = _gate_event.wait(timeout=300)  # 5-minute user timeout
+                        _choice = _decision_box[0] if _granted else "cancel"
+                    except Exception:
+                        _choice = "cancel"
+                else:
+                    # Fallback: terminal prompt (CLI / headless mode)
+                    UI.event("Security", f"Tool '{name}' requires confirmation. {policy_decision.reason}", style="warning")
+                    _raw = UI.prompt("Allow? [o]nce / [a]lways / [c]ancel: ").strip().lower()
+                    _choice = {"o": "allow_once", "once": "allow_once",
+                               "a": "allow_always", "always": "allow_always"}.get(_raw, "cancel")
+
+                if _choice == "allow_once":
                     self._allow_once_tools.add(name)
                     emit({"type": "gate_decision", "tool": name, "decision": "allow_once"})
-                elif choice in ("a", "always"):
-                    # Always = trust current folder + allow tool
+                elif _choice == "allow_always":
                     mark_trusted_dir(cwd)
                     set_tool_policy(name, "allow")
                     emit({"type": "gate_decision", "tool": name, "decision": "allow_always"})
@@ -7166,6 +7293,10 @@ class Agent:
                     #   - use the live tool registry for run_temp execution
                     #   - check admin status for create/delete actions
                     #   - pass user_scope_id / username to WorkflowEngine
+                    tool_args["_agent"] = self
+                if name == "execute_workflow":
+                    # Inject agent so the tool can reliably get current_session_id
+                    # for WebSocket pushes (module-global fallback is unreliable in threads)
                     tool_args["_agent"] = self
                 if name == "checkpoint_context":
                     # Inject agent reference so checkpoint_context can call agent.checkpoint_and_reset()

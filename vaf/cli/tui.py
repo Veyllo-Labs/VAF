@@ -1196,11 +1196,24 @@ class UI:
     @staticmethod
     def event(type_name: str, title: str, style: str = "info", end: str = "\n"):
         """Print event in OpenCode style."""
-        
+        import os as _os
+
+        # In workflow/subagent context the Rich Console lock can block (background threads
+        # hold it); skip the console entirely and just push to Web UI via non-blocking path.
+        if _os.environ.get("VAF_IN_WORKFLOW_TERMINAL") == "1" or \
+                _os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1":
+            try:
+                from vaf.core.web_interface import get_web_interface
+                from vaf.core.subagent_ipc import get_current_session_id
+                clean_cat = type_name.replace("|", "").strip()
+                get_web_interface().log(title, level="info", source=clean_cat, session_id=get_current_session_id())
+            except Exception:
+                pass
+            return
+
         # CRITICAL: Suppress Main Agent events if Coder TUI is active!
         # This prevents debug messages from breaking the active TUI layout
         try:
-            # Delayed import to avoid circular dependencies
             import sys
             if 'vaf.tools.coder' in sys.modules:
                 from vaf.tools.coder import CodingAgentTool
@@ -1208,7 +1221,7 @@ class UI:
                     return
         except Exception:
             pass
-            
+
         color_map = {
             "info": "cyan",
             "warning": "yellow",
@@ -1222,15 +1235,14 @@ class UI:
         type_str = f"[dim] {type_name:<7}[/dim]"
         title_str = f"[{color}]{title}[/{color}]"
         UI.console.print(f"{bar}{type_str} {title_str}", end=end)
-        
+
         # BRIDGE TO WEB UI
         try:
             from vaf.core.web_interface import get_web_interface
             from vaf.core.subagent_ipc import get_current_session_id
-            # Clean category name for display
             clean_cat = type_name.replace("|", "").strip()
-            get_web_interface().log(f"{title}", level="info", source=clean_cat, session_id=get_current_session_id())
-        except:
+            get_web_interface().log(title, level="info", source=clean_cat, session_id=get_current_session_id())
+        except Exception:
             pass
 
     @staticmethod

@@ -215,6 +215,12 @@ def run_workflow(
         except ImportError as e:
             UI.warning(f"Could not load utility tools: {e}")
 
+        try:
+            from vaf.tools.list_tools import ListToolsTool
+            tools["list_tools"] = ListToolsTool()
+        except ImportError:
+            pass
+
         # Web UI Reporting Setup
         import requests
         session_id = os.environ.get("VAF_SESSION_ID")
@@ -399,6 +405,15 @@ def run_workflow(
                 stdout_writer._buffer = ""
         except Exception:
             pass
+
+    # Always close the workflow panel — workflow_start was sent, workflow_done must follow
+    if session_id:
+        send_web_update({
+            "type": "workflow_done",
+            "workflowId": workflow_id,
+            "success": success,
+            "error": "" if success else (final_summary or "Workflow failed")
+        })
 
     # Stop heartbeat thread
     if heartbeat_stop_event:

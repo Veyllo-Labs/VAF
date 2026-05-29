@@ -112,7 +112,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff
+    Eye, EyeOff, ExternalLink
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -1344,36 +1344,42 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('api_key_veyllo', v)}
                                         type="password"
                                         placeholder="Veyllo API key (server coming soon)"
+                                        link="https://veyllo.io"
                                     />
                                     <Input
                                         label={tGeneral('openaiKey')}
                                         value={localConfig.api_key_openai || ''}
                                         onChange={(v: string) => handleChange('api_key_openai', v)}
                                         type="password" placeholder="sk-..."
+                                        link="https://platform.openai.com/api-keys"
                                     />
                                     <Input
                                         label={tGeneral('anthropicKey')}
                                         value={localConfig.api_key_anthropic || ''}
                                         onChange={(v: string) => handleChange('api_key_anthropic', v)}
                                         type="password" placeholder="sk-ant-..."
+                                        link="https://console.anthropic.com/settings/keys"
                                     />
                                     <Input
                                         label={tGeneral('deepseekKey')}
                                         value={localConfig.api_key_deepseek || ''}
                                         onChange={(v: string) => handleChange('api_key_deepseek', v)}
                                         type="password"
+                                        link="https://platform.deepseek.com/api_keys"
                                     />
                                     <Input
                                         label={tGeneral('googleKey')}
                                         value={localConfig.api_key_google || ''}
                                         onChange={(v: string) => handleChange('api_key_google', v)}
                                         type="password"
+                                        link="https://aistudio.google.com/app/apikey"
                                     />
                                     <Input
                                         label={tGeneral('openrouterKey')}
                                         value={localConfig.api_key_openrouter || ''}
                                         onChange={(v: string) => handleChange('api_key_openrouter', v)}
                                         type="password"
+                                        link="https://openrouter.ai/settings/keys"
                                     />
                                 </Section>
                                 <Section title={tGeneral('webSearch')}>
@@ -1384,6 +1390,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('api_key_brave_search', v)}
                                         type="password"
                                         placeholder="From api-dashboard.search.brave.com"
+                                        link="https://api-dashboard.search.brave.com/"
                                     />
                                     <Input
                                         label={tGeneral('googleSearchKey')}
@@ -1391,6 +1398,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('api_key_google_search', v)}
                                         type="password"
                                         placeholder="Cloud Console – Custom Search API"
+                                        link="https://console.cloud.google.com/apis/credentials"
                                     />
                                     <Input
                                         label={tGeneral('googleSearchEngineId')}
@@ -1398,6 +1406,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('google_search_engine_id', v)}
                                         type="text"
                                         placeholder="From Programmable Search Engine control panel"
+                                        link="https://programmablesearchengine.google.com/controlpanel/all"
                                     />
                                 </Section>
 
@@ -3289,10 +3298,32 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     .map((wf, idx) => (
                                         <div
                                             key={idx}
-                                            onClick={() => {
+                                            onClick={async () => {
                                                 if (wf.is_custom && currentUser?.role === 'admin' && onUpdateWorkflow) {
-                                                    // Admin can edit user-created workflows
-                                                    setWorkflowCreator({ workflowId: wf.id });
+                                                    // Load full workflow data before opening editor
+                                                    try {
+                                                        const res = await fetch(`/api/workflows/${encodeURIComponent(wf.id)}`);
+                                                        const data = res.ok ? await res.json() : {};
+                                                        setWorkflowCreator({
+                                                            workflowId: wf.id,
+                                                            initialData: {
+                                                                name:        data.name        ?? wf.name,
+                                                                description: data.description ?? wf.description,
+                                                                triggers:    data.triggers    ?? [],
+                                                                steps: (data.steps ?? []).map((s: { name: string; type: string; code: string }) => {
+                                                                    let input = '';
+                                                                    try { input = JSON.parse(s.code).input ?? ''; } catch { /* raw */ }
+                                                                    return { input, tool: s.type, description: s.name };
+                                                                }),
+                                                            },
+                                                        });
+                                                    } catch {
+                                                        // Fallback: open with minimal data from list
+                                                        setWorkflowCreator({
+                                                            workflowId: wf.id,
+                                                            initialData: { name: wf.name, description: wf.description, triggers: [], steps: [] },
+                                                        });
+                                                    }
                                                 } else {
                                                     handleViewWorkflow(wf.id);
                                                 }
@@ -4959,11 +4990,26 @@ interface InputProps {
     type?: string;
     placeholder?: string;
     disabled?: boolean;
+    link?: string;
 }
 
-const Input = ({ label, value, onChange, type = "text", placeholder, disabled }: InputProps) => (
+const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link }: InputProps) => (
     <div className="flex flex-col gap-1.5 w-full">
-        <label className="text-sm font-medium text-gray-700 ml-1">{label}</label>
+        <div className="flex items-center gap-1.5 ml-1">
+            <label className="text-sm font-medium text-gray-700">{label}</label>
+            {link && (
+                <a
+                    href={link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 hover:bg-indigo-100 text-gray-400 hover:text-indigo-600 transition-colors"
+                    title={`Get API key → ${link}`}
+                >
+                    <ExternalLink size={9} />
+                </a>
+            )}
+        </div>
         <input
             type={type}
             value={value}

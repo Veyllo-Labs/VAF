@@ -163,6 +163,71 @@ class UpdateWorkingMemoryTool(BaseTool):
         except Exception as e:
             return f"❌ Error updating working memory: {e}"
 
+class AddTaskAliasTool(BaseTool):
+    """
+    Compatibility alias — add_task is NOT a standalone tool.
+
+    The correct call is:
+        update_working_memory(add_task="Your task text here")
+
+    This alias accepts the task text and delegates to update_working_memory
+    so the agent's intent is not lost, but it also returns a warning so the
+    LLM learns the correct pattern for future calls.
+    """
+    name = "add_task"
+    permission_level = "system"
+    side_effect_class = "reversible"
+    description = (
+        "[ALIAS — prefer update_working_memory] Add a single pending task to working memory. "
+        "Correct usage: update_working_memory(add_task='<text>'). "
+        "This alias exists only as a fallback."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "The task text to add as pending."
+            },
+            "text": {
+                "type": "string",
+                "description": "Alternative argument name for the task text."
+            }
+        },
+        "required": []
+    }
+
+    def run(self, **kwargs) -> str:
+        task_text = (
+            kwargs.get("task") or
+            kwargs.get("text") or
+            kwargs.get("add_task") or
+            next((v for v in kwargs.values() if isinstance(v, str) and v.strip()), None)
+        )
+        if not task_text:
+            return (
+                "⚠️  add_task is not a standalone tool.\n"
+                "Correct usage: update_working_memory(add_task='<task text>')\n"
+                "No task text was provided, so nothing was saved."
+            )
+        try:
+            base_dir = kwargs.get("base_dir", ".")
+            mpm = MainPersistenceManager(base_dir)
+            mpm.update_working_memory(add_task=task_text.strip())
+            return (
+                f"✅ Task added: \"{task_text.strip()}\"\n\n"
+                f"⚠️  Note: add_task is not a real tool — it is a parameter of update_working_memory.\n"
+                f"Use the correct call next time:\n"
+                f"  update_working_memory(add_task=\"{task_text.strip()}\")"
+            )
+        except Exception as e:
+            return (
+                f"❌ Failed to add task: {e}\n\n"
+                f"⚠️  Remember: add_task is a parameter of update_working_memory, not a standalone tool.\n"
+                f"Correct usage: update_working_memory(add_task=\"<task text>\")"
+            )
+
+
 class RequestClarificationTool(BaseTool):
     """
     [SUB-AGENT ONLY] Signal that you are blocked and need user input.

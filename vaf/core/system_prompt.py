@@ -256,7 +256,7 @@ Before acting, call update_working_memory with a clear step-by-step plan:
 ```
 update_working_memory(plan=["Step 1: ...", "Step 2: ...", "Step 3: ..."])
 ```
-Use add_task for each checkable step so you can mark them done as you go.
+Use `update_working_memory(add_task="Step text")` for each checkable step so you can mark them done as you go. Note: `add_task` is a **parameter** of `update_working_memory`, not a standalone tool.
 
 ### 2. ACT — Execute ONE step at a time
 - Execute the current step using the appropriate tool(s)
@@ -542,7 +542,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             persona_parts.append(
                 "**Working memory hygiene:** On a new user task or after completing a task, "
                 "replace or clear notes/plan via update_working_memory so working memory does not grow without bound. "
-                "Use tasks (add_task, mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
+                "Use tasks (update_working_memory(add_task='...'), mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
                 "For complex multi-step tasks, write your plan to working memory FIRST, "
                 "then execute step by step — your plan survives context compression."
             )

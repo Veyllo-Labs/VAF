@@ -335,6 +335,13 @@ function isThinkingModePrompt(content: string): boolean {
 }
 
 // Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
+// Hard cap on the in-memory `messages` array. During Live-Mode the agent streams
+// System/Step/Router/Tool log entries continuously; without a cap `messages` grows
+// unbounded over a multi-hour session and leaks the JS heap (RAM climbs to several GB).
+// The chat only ever renders the last MSG_TURNS user-turns, and the full history lives
+// in backend session storage, so trimming the tail is invisible to the user.
+const MAX_LIVE_MESSAGES = 1500;
+
 const WORKFLOW_ASYNC_REGEX = /\[WORKFLOW_ASYNC:([^:]+):([^\]]+)\]\s*Workflow\s+'([^']+)'[^\n]*(?:\n\n)?([\s\S]*)/;
 function parseWorkflowAsync(answer: string): { taskId: string; workflowId: string; name: string; rest: string } | null {
     const m = (answer || '').trim().match(WORKFLOW_ASYNC_REGEX);
@@ -585,7 +592,11 @@ function AgentAvatar({ mode = 'idle', dim = false }: { mode?: AvatarMode; dim?: 
                     : `transform 0.6s ${SPRING}`,
                 pointerEvents: 'none',
             }}>
-                {/* Background aura blob — morphs independently behind idle dot */}
+                {/* Background aura blob — soft static halo behind idle dot.
+                    NOTE: the `animation` was removed. A continuously-morphing element with
+                    filter:blur() forces a fresh GPU blur texture EVERY frame; under
+                    QtWebEngine's in-process GPU those textures piled up and leaked the
+                    renderer (~40 MB/s). Static blur is rasterized once and cached. */}
                 {!active && !dim && (
                     <span style={{
                         position: 'absolute',
@@ -596,7 +607,6 @@ function AgentAvatar({ mode = 'idle', dim = false }: { mode?: AvatarMode; dim?: 
                         backgroundColor: '#ffffff',
                         opacity: 0.13,
                         filter: 'blur(2.5px)',
-                        animation: 'agentAvatarMorph 4.5s ease-in-out infinite 1.2s',
                     }} />
                 )}
                 {/* idle dot — white on dark bg, gray on light bg — fades out when active.
@@ -1280,6 +1290,11 @@ function VAFDashboardContent() {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const suggestionListRef = useRef<HTMLDivElement>(null);
 
+    // Re-focus input whenever the agent finishes generating
+    useEffect(() => {
+        if (!isGenerating) inputRef.current?.focus();
+    }, [isGenerating]);
+
     // Scroll Sync for Suggestions
     useEffect(() => {
         if (suggestionListRef.current && suggestionList.length > 0) {
@@ -1434,6 +1449,9 @@ function VAFDashboardContent() {
     const hasSpokenRef = useRef(false);
     const animationFrameRef = useRef<number | null>(null);
     const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+    // Holds completion-chime Audio elements until they finish, so the GC can't collect
+    // a locally-scoped Audio mid-playback (which cut the sound off).
+    const completionSoundsRef = useRef<Set<HTMLAudioElement>>(new Set());
     const pendingSttSendRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -1759,7 +1777,7 @@ function VAFDashboardContent() {
                             const idx = insertAt === -1 ? prev.length : insertAt;
                             const next = [...prev];
                             next.splice(idx, 0, { role: 'system', content: newContent, timestamp: Date.now() });
-                            return next;
+                            return next.length > MAX_LIVE_MESSAGES ? next.slice(-MAX_LIVE_MESSAGES) : next;
                         });
                     }
                 }
@@ -1786,9 +1804,11 @@ function VAFDashboardContent() {
                             ...prev,
                             status: 'Running...',
                             presence: 'online',
-                            // Clear stale browser view on each new subagent task start
+                            // Clear stale browser view AND console on each new subagent task
+                            // start — otherwise a re-run shows the previous run's frame/output.
                             browserFrame: '',
                             browserUrl: '',
+                            consoleLines: [],
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -1827,7 +1847,7 @@ function VAFDashboardContent() {
 
                         if (subType === 'start') {
                             if (existingIdx !== -1) return prev; // Duplicate start
-                            return [...prev, {
+                            const appended: Message[] = [...prev, {
                                 role: 'tool',
                                 content: '', // Result empty at start
                                 timestamp: Date.now(),
@@ -1837,6 +1857,7 @@ function VAFDashboardContent() {
                                 toolStatus: 'running',
                                 toolStartTime: Date.now()
                             }];
+                            return appended.length > MAX_LIVE_MESSAGES ? appended.slice(-MAX_LIVE_MESSAGES) : appended;
                         }
                         else if (subType === 'end' || subType === 'error') {
                             let resolvedIdx = existingIdx;
@@ -2184,7 +2205,13 @@ function VAFDashboardContent() {
                         const soundUrl = '/sounds/tts01.mp3';
                         const audio = new Audio(soundUrl);
                         audio.volume = 0.6;
-                        audio.play().catch(() => { /* ignore autoplay policy / user mute */ });
+                        // Retain a reference until playback ends, otherwise the GC can
+                        // collect this locally-scoped Audio mid-play and cut the sound off.
+                        completionSoundsRef.current.add(audio);
+                        const release = () => completionSoundsRef.current.delete(audio);
+                        audio.addEventListener('ended', release);
+                        audio.addEventListener('error', release);
+                        audio.play().catch(() => { release(); /* autoplay policy / user mute */ });
                     } catch {
                         // ignore if Audio or play fails
                     }
@@ -2928,7 +2955,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'notification' && data.notification) {
-                    setNotifications(prev => [data.notification, ...prev]);
+                    setNotifications(prev => [data.notification, ...prev].slice(0, 200));
                 }
                 else if (data.type === 'notifications_list' && Array.isArray(data.notifications)) {
                     setNotifications(data.notifications);

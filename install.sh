@@ -690,11 +690,16 @@ if [[ "$OS_TYPE" == "macos" ]]; then
     python3 scripts/create_app_shortcut.py 2>/dev/null || print_warning "Could not create app bundle"
 fi
 
-# Create desktop entry (Linux)
+# Create desktop entry (Linux) — works the same on Arch/Debian/Fedora (freedesktop std)
 if [[ "$OS_TYPE" == "linux" ]]; then
     DESKTOP_FILE="$HOME/.local/share/applications/vaf.desktop"
     mkdir -p "$(dirname "$DESKTOP_FILE")"
-    
+
+    # Prefer the PNG icon (renders reliably across GNOME/KDE/XFCE); fall back to the .ico
+    # if the PNG is missing (e.g. an older checkout). Many Linux DEs don't render .ico well.
+    ICON_PATH="$PROJECT_ROOT/vaf/media/vaf_icon.png"
+    [[ -f "$ICON_PATH" ]] || ICON_PATH="$PROJECT_ROOT/vaf/media/vaf_icon_v6.ico"
+
     cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Version=1.0
@@ -703,14 +708,22 @@ Name=VAF
 GenericName=Veyllo Agentic Framework
 Comment=AI-powered local assistant
 Exec=$PROJECT_ROOT/run_vaf.sh
-Icon=$PROJECT_ROOT/vaf/media/vaf_icon_v6.ico
-Terminal=true
-Categories=Development;Utility;
+Icon=$ICON_PATH
+Terminal=false
+Categories=Development;
 Keywords=ai;assistant;llm;
+StartupNotify=true
 EOF
-    
+
     chmod +x "$DESKTOP_FILE"
-    print_success "Linux desktop entry created"
+
+    # Refresh the application menu so the entry shows up immediately (no re-login).
+    # update-desktop-database ships in desktop-file-utils on all of Arch/Debian/Fedora;
+    # it's optional, so guard it and never fail the install if it's absent.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1 || true
+    fi
+    print_success "Linux desktop entry created (icon: $(basename "$ICON_PATH"), no terminal window)"
 fi
 
 # ============================================================================

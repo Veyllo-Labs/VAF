@@ -79,7 +79,17 @@
 }
 
 
-/* AgentAvatar morphing keyframes — defined here so they are always available on first paint */
+/* ⚠️ PERF / ANTI-LEAK RULE for continuously-running (infinite) animations ⚠️
+   This app runs in QtWebEngine with the GPU IN-PROCESS. There, a continuously
+   *repainting* animation leaks GPU tile/texture memory into the renderer process
+   (RSS climbed to 7 GB once — see vaf/core/desktop_window.py leak notes).
+   So for ANYTHING that animates forever (idle avatars, pulses, spinners, the cursor):
+     ✅ animate ONLY `transform` and `opacity`  → compositor-only, NO repaint, no leak
+     ❌ never continuously animate `border-radius`, `filter`/`blur`, `box-shadow`,
+        `width`/`height`, `background`, `clip-path` → each forces a per-frame repaint
+   The blob-morph (border-radius) below is therefore allowed ONLY in the active/transient
+   modes (thinking/talking/waiting); the always-on idle float is transform-only.
+   AgentAvatar morphing keyframes — defined here so they are always available on first paint */
 @keyframes agentAvatarMorph {
   0%,100% { border-radius:50% 50% 50% 50%/50% 50% 50% 50% }
   20%     { border-radius:62% 38% 55% 45%/45% 55% 38% 62% }
@@ -98,14 +108,19 @@
   62%     { transform:scale(1.30); border-radius:55% 45% 60% 40%/40% 60% 45% 55% }
   80%     { transform:scale(0.80); border-radius:44% 56% 38% 62%/62% 38% 56% 44% }
 }
+/* Idle float: transform-ONLY (compositor animation, no per-frame repaint).
+   The border-radius morph was removed here — animating border-radius forces a real
+   repaint every frame, and QtWebEngine's in-process GPU leaked ~2.4 MB/s rasterizing
+   the several idle avatars. The dot still gently floats/breathes; the blob-morph now
+   runs only in the active modes (thinking/talking/waiting), which are transient. */
 @keyframes agentAvatarIdleFloat {
-  0%   { transform: scale(1)    translate(0px,     0px);    border-radius: 50%; }
-  15%  { transform: scale(1.14) translate(0.85px, -0.7px);  border-radius: 62% 38% 55% 45%/45% 55% 38% 62%; }
-  32%  { transform: scale(0.91) translate(-0.6px,  0.85px); border-radius: 48% 52% 42% 58%/58% 42% 52% 48%; }
-  50%  { transform: scale(1.12) translate(-0.85px,-0.5px);  border-radius: 55% 45% 60% 40%/40% 60% 45% 55%; }
-  68%  { transform: scale(0.93) translate(0.7px,   0.85px); border-radius: 44% 56% 38% 62%/62% 38% 56% 44%; }
-  84%  { transform: scale(1.11) translate(0.85px,  0.4px);  border-radius: 58% 42% 44% 56%/56% 44% 42% 58%; }
-  100% { transform: scale(1)    translate(0px,     0px);    border-radius: 50%; }
+  0%   { transform: scale(1)    translate(0px,     0px);    }
+  15%  { transform: scale(1.14) translate(0.85px, -0.7px);  }
+  32%  { transform: scale(0.91) translate(-0.6px,  0.85px); }
+  50%  { transform: scale(1.12) translate(-0.85px,-0.5px);  }
+  68%  { transform: scale(0.93) translate(0.7px,   0.85px); }
+  84%  { transform: scale(1.11) translate(0.85px,  0.4px);  }
+  100% { transform: scale(1)    translate(0px,     0px);    }
 }
 @keyframes stopRipple {
   0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.65; }

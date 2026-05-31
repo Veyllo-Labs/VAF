@@ -77,25 +77,62 @@ def init(url: str, title: str = "VAF", width: int = 1280, height: int = 800) -> 
         # GPU + framerate flags for Qt WebEngine (Chromium backend).
         # Must be set before QApplication is created.
         #
+        # ⚠️ ANTI-LEAK RULES OF THUMB (learned the hard way — RSS hit 7 GB):
+        #   • Do NOT add --disable-frame-rate-limit or --disable-gpu-vsync. Uncapping the
+        #     framerate makes the in-process GPU pile up tiles/textures — on a big high-Hz
+        #     display (5120x1440 @ 240Hz here) RSS climbs ~40 MB/s with a flat JS heap.
+        #     Capped (vsync on, Chromium default ~60fps) it stays bounded and self-reclaims.
+        #   • Do NOT add --enable-accelerated-2d-canvas (GPU-backs <canvas> buffers).
+        #   • The frontend must never run continuous *repainting* animations (animated
+        #     border-radius/filter/box-shadow, or a <canvas>). See web/app/globals.css and
+        #     web/components/CustomCursor.tsx. Compositor-only (transform/opacity) is safe.
+        #   • To re-diagnose: uncomment _start_mem_logger() below and read logs/leak_diag.
+        #
         # NOTE: --use-gl=desktop is intentionally omitted — it forces GLX which conflicts
         #   with EGL/Wayland and causes QWebEngineProfile to qFatal() on some drivers.
         #
-        # --disable-frame-rate-limit : removes Chromium's internal 60fps cap so rAF
-        #   runs at the display's actual refresh rate (e.g. 144Hz).
-        # --disable-gpu-vsync        : decouples the GPU process vsync from Chromium's
-        #   compositor — Qt handles display sync; double-vsync = dropped frames.
+        # --disable-frame-rate-limit : lifts Chromium's internal 60fps cap so rAF runs at
+        #   the display's refresh rate (e.g. 144Hz). SAFE to keep ONLY because vsync stays
+        #   ON (--disable-gpu-vsync is NOT set): vsync paces presentation to the display, so
+        #   frames are bounded at ~display Hz, not the thousands/sec that this flag produced
+        #   when vsync was ALSO disabled. The earlier runaway leak needed both flags off
+        #   AND a leaking per-frame repaint source (the GPU canvas / animated blur / avatar
+        #   border-radius morph) — all of which are now gone, so the remaining animations
+        #   are compositor-only (transform/opacity) and don't allocate per frame.
+        # NOTE: --disable-gpu-vsync stays REMOVED — it disabled frame pacing entirely.
         # --enable-gpu-rasterization : GPU-based rasterization instead of CPU tiles.
         # --enable-zero-copy         : zero-copy texture upload (GPU tile → display).
         # --enable-accelerated-2d-canvas : Canvas API on GPU (CSS animations, WebGL).
         # --num-raster-threads=4     : parallel CPU fallback raster threads.
         _cf = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-        if "--disable-frame-rate-limit" not in _cf:
+        if "--aggressive-cache-discard" not in _cf:
             _gpu_flags = (
-                "--disable-frame-rate-limit "
-                "--disable-gpu-vsync "
+                # --disable-frame-rate-limit stays OUT. Empirically it leaks on this machine
+                # even with vsync ON and all per-frame repaint sources removed: on a
+                # 5120x1440 @ 240Hz display, uncapping rAF lets the compositor churn ~7.3 MP
+                # tiles at 240 fps and the in-process GPU piles them up — renderer RSS hit
+                # 3.7 GB. Capped (Chromium default ~60fps) it stays bounded at ~1.5 GB and
+                # self-reclaims. High refresh vs. no-leak is a hard trade-off on this engine.
                 "--enable-gpu-rasterization "
-                "--enable-accelerated-2d-canvas "
-                "--num-raster-threads=4"
+                # NOTE: --enable-accelerated-2d-canvas was REMOVED. With the GPU running
+                #   in-process (no separate gpu-process), the full-screen cursor canvas's
+                #   GPU-backed buffers piled up in the RENDERER process — RSS climbed
+                #   ~30 MB/s to 6+ GB while the JS heap stayed flat at 10 MB (confirmed via
+                #   logs/leak_diag). The canvas itself was removed too (CustomCursor.tsx).
+                "--num-raster-threads=4 "
+                # RAM containment (see desktop_window memory notes):
+                # --max-old-space-size : hard-cap V8 heap per renderer (1 GB — 512 risks
+                #   OOM crashes given the Timeline/ReactFlow/Calendar SPA views).
+                # --aggressive-cache-discard : release unused RAM caches eagerly.
+                # --renderer-process-limit=1 : bundle renderers without losing the GPU
+                #   process separation (safer than --single-process, which breaks GPU
+                #   rasterization and crashes the whole app on a renderer fault).
+                # --disk-cache-size : cap on-disk HTTP cache at 50 MB (keeps it off RAM;
+                #   set via flag to avoid touching QWebEngineProfile off the Qt main thread).
+                "--js-flags=--max-old-space-size=1024 "
+                "--aggressive-cache-discard "
+                "--renderer-process-limit=1 "
+                "--disk-cache-size=52428800"
             )
             os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{_gpu_flags} {_cf}".strip()
             _log.info("[DesktopWindow] Chromium flags: %s", os.environ["QTWEBENGINE_CHROMIUM_FLAGS"])
@@ -182,6 +219,111 @@ def _on_closing() -> bool:
     return False  # returning False prevents the default destroy
 
 
+# ── Memory-leak diagnostic logger (opt-in, DISABLED by default) ───────────────
+# Kept on purpose: re-enable by uncommenting the _start_mem_logger() call in start().
+# Logs a correlated timeline to logs/leak_diag_<date>.log so we can tell WHERE the
+# RAM goes: QtWebEngine GPU process vs renderer process (OS RSS, via psutil) against
+# the in-page JS heap and DOM-node count (via performance.memory / evaluate_js).
+#   - gpu_MB climbs, jsUsedMB flat   → compositor / canvas / image GPU leak (not JS)
+#   - renderer_MB climbs, jsHeap flat→ in-process-GPU tile/texture leak from continuous
+#                                       repaints (animated border-radius/filter/box-shadow,
+#                                       <canvas>, or an uncapped framerate) — the May-2026 case
+#   - renderer_MB + domNodes climb   → detached-DOM leak in the page
+#   - jsUsedMB climbs                → JS heap leak (arrays / closures / listeners)
+_MEMLOG_JS = """(function(){
+  try {
+    var m = (window.performance && performance.memory) ? performance.memory : {};
+    return JSON.stringify({
+      jsUsedMB: Math.round((m.usedJSHeapSize||0)/1048576),
+      jsTotalMB: Math.round((m.totalJSHeapSize||0)/1048576),
+      dom: document.getElementsByTagName('*').length,
+      imgs: document.images.length,
+      canvas: document.getElementsByTagName('canvas').length,
+      listeners: 0
+    });
+  } catch(e){ return JSON.stringify({error:String(e)}); }
+})()"""
+
+
+def _start_mem_logger(interval: float = 2.0) -> None:
+    """Spawn a daemon thread that appends a memory timeline to a log file."""
+    import datetime
+    try:
+        import psutil
+    except Exception:
+        _log.warning("[MemLog] psutil unavailable — diagnostic logging disabled")
+        return
+
+    log_path = pathlib.Path(__file__).resolve().parents[2] / "logs" / \
+        f"leak_diag_{datetime.date.today().isoformat()}.log"
+    proc = psutil.Process()
+
+    def _loop():
+        # Wait until the page has actually loaded before probing JS.
+        while _window is None:
+            __import__("time").sleep(0.5)
+        try:
+            f = log_path.open("a", encoding="utf-8")
+        except Exception as exc:
+            _log.warning("[MemLog] cannot open %s: %s", log_path, exc)
+            return
+        with f:
+            f.write(f"\n=== leak_diag start {datetime.datetime.now().isoformat()} "
+                    f"(interval={interval}s) ===\n")
+            f.write("time\ttotalRSS_MB\tgpu_MB\trenderer_MB\tother_MB\t"
+                    "jsUsedMB\tjsTotalMB\tdomNodes\timgs\tcanvas\n")
+            f.flush()
+            while _window is not None:
+                total = gpu = rend = other = 0
+                try:
+                    for c in proc.children(recursive=True):
+                        try:
+                            rss = c.memory_info().rss
+                            name = c.name()
+                            try:
+                                cmd = " ".join(c.cmdline())
+                            except Exception:
+                                cmd = ""
+                        except Exception:
+                            continue
+                        total += rss
+                        if "QtWebEngine" in name or "QtWebEngine" in cmd:
+                            if "--type=gpu-process" in cmd:
+                                gpu += rss
+                            elif "--type=renderer" in cmd:
+                                rend += rss
+                            else:
+                                other += rss
+                        else:
+                            other += rss
+                except Exception:
+                    pass
+
+                js: dict = {}
+                try:
+                    raw = _window.evaluate_js(_MEMLOG_JS) if _window else None
+                    if raw:
+                        import json as _json
+                        js = _json.loads(raw)
+                except Exception as exc:
+                    js = {"error": str(exc)}
+
+                mb = lambda b: round(b / 1048576)
+                row = [
+                    datetime.datetime.now().strftime("%H:%M:%S"),
+                    mb(total), mb(gpu), mb(rend), mb(other),
+                    js.get("jsUsedMB", "-"), js.get("jsTotalMB", "-"),
+                    js.get("dom", "-"), js.get("imgs", "-"), js.get("canvas", "-"),
+                ]
+                f.write("\t".join(str(x) for x in row) + "\n")
+                f.flush()
+                __import__("time").sleep(interval)
+
+    import threading as _th
+    _th.Thread(target=_loop, daemon=True, name="vaf-memlog").start()
+    _log.info("[MemLog] Diagnostic memory logging → %s", log_path)
+
+
 def start(icon_path: str = None) -> None:
     """Start the pywebview GUI loop. Blocks until all windows are destroyed."""
     if not _webview:
@@ -215,6 +357,11 @@ def start(icon_path: str = None) -> None:
     _base.mkdir(parents=True, exist_ok=True)
     _state_path = _base / "window_state.json"
     _storage = str(_base)
+
+    # Memory-leak diagnostic logger — DISABLED. The function below is kept intact;
+    # to investigate renderer/GPU RAM again, just uncomment this line, restart, and read
+    # logs/leak_diag_<date>.log (columns: totalRSS / gpu / renderer / jsHeap / domNodes).
+    # _start_mem_logger()
 
     _log.info("[DesktopWindow] Starting GUI loop (main thread), storage=%s", _storage)
     _webview.start(

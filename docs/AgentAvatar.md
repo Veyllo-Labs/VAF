@@ -12,11 +12,20 @@ Like a facial expression, but abstract.
 
 ### 1. `idle` — Resting (latest message)
 - **Appearance:** Two-layer white dot:
-  - **Back layer** — larger (20 px), blurred (`blur(2.5px)`), semi-transparent (`opacity: 0.13`), morphing aura via `agentAvatarMorph 4.5s` (phase-offset by 1.2 s so it feels independent)
-  - **Front layer** — sharp white circle (14 px), floats + deforms via `agentAvatarIdleFloat 15s` (scale + translate + border-radius morphing combined)
+  - **Back layer** — larger (20 px), blurred (`blur(2.5px)`), semi-transparent (`opacity: 0.13`). **Static** (a soft halo, rasterized once).
+  - **Front layer** — sharp white circle (14 px), gently floats + breathes via `agentAvatarIdleFloat 15s` (**scale + translate only** — stays circular)
 - **Background:** Dark container (`bg-gray-900`), rounded corners (`rounded-xl`)
-- **Feel:** The agent is present but passive. Quietly alive — the aura softly shifts shape around the dot.
+- **Feel:** The agent is present but passive. Quietly alive — the dot softly drifts and breathes.
 - **When:** Most recent completed bot message, no active streaming
+
+> ⚠️ **Performance note (do not regress):** The idle state must NOT animate `border-radius`,
+> `filter`/`blur` or `box-shadow`, and the aura stays static. The app runs in QtWebEngine
+> with the GPU in-process, where a continuously *repainting* idle animation leaks GPU memory
+> (renderer RSS once climbed to several GB across the visible avatars). Idle animation is
+> therefore **compositor-only** (`transform`/`opacity`). The organic **blob-morph** (animated
+> `border-radius` via `agentAvatarMorph`) is intentionally limited to the transient active
+> states below (thinking / talking / waiting). See `web/app/globals.css` and
+> `vaf/core/desktop_window.py` for the full rationale.
 
 ### 1b. `idle + dim` — Resting (older messages)
 - **Appearance:** Gray circle (`#b0b0b0`), completely still — no animation

@@ -1,5 +1,19 @@
 "use client";
 
+/*
+ * Custom cursor. ⚠️ This component was TWICE the source of a multi-GB renderer leak in
+ * QtWebEngine (in-process GPU). Keep these rules if you touch it:
+ *   1. NO <canvas>. A full-screen, GPU-accelerated canvas repainted every frame piled up
+ *      GPU buffers (~30 MB/s). The connecting line is a single <div> stretched via
+ *      transform: scaleX() — compositor-only, no per-frame raster.
+ *   2. The rAF loop must IDLE-PAUSE: it stops when nothing is animating (mouse still,
+ *      trail settled) and wake() restarts it on move/click/agent events. Never let it
+ *      free-run while idle.
+ *   3. Animate ONLY transform/opacity on the cursor elements — never width/height/filter.
+ *   4. Don't rely on Chromium framerate flags for smoothness — see desktop_window.py;
+ *      --disable-frame-rate-limit re-introduced the leak on a 240Hz display.
+ */
+
 import { useRef, useEffect, useCallback } from "react";
 
 type CursorState = "default" | "pointer" | "text";
@@ -60,7 +74,7 @@ function buildSequence(tool: string, args: Record<string, unknown>): SeqStep[] {
 export function CustomCursor() {
   const mainCursorRef  = useRef<HTMLDivElement>(null);
   const trailCursorRef = useRef<HTMLDivElement>(null);
-  const canvasRef      = useRef<HTMLCanvasElement>(null);
+  const lineRef        = useRef<HTMLDivElement>(null);  // connecting gradient line (div, not canvas)
   const mainInnerRef   = useRef<HTMLDivElement>(null);
   const trailInnerRef  = useRef<HTMLDivElement>(null);
   const typingLabelRef = useRef<HTMLDivElement>(null);
@@ -71,6 +85,8 @@ export function CustomCursor() {
   const isClickingRef    = useRef(false);
   const cursorStateRef   = useRef<CursorState>("default");
   const rafRef           = useRef<number | null>(null);
+  const runningRef       = useRef(false);                  // is the rAF loop currently scheduled?
+  const wakeRef          = useRef<() => void>(() => {});    // resume hook for callbacks defined before wake()
 
   // ── LINE visibility (fades in when moving, out when still) ──
   const lineAlphaRef = useRef(0);
@@ -128,6 +144,7 @@ export function CustomCursor() {
 
     // Enter "sequence mode" (reuse agentMode for positioning)
     agentModeRef.current = true;
+    wakeRef.current();  // resume the loop if it was idle-paused
     const ti = trailInnerRef.current;
     if (ti) {
       ti.style.transition   = "background-color 0.3s ease, box-shadow 0.3s ease";
@@ -236,49 +253,26 @@ export function CustomCursor() {
       lbl.style.top  = `${y - 28}px`;
     }
 
-    // Canvas: line + click ripples
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // ── Connecting line (gradient white→transparent, visible only when moving) ──
-        const { x: x1, y: y1 } = positionRef.current;
-        const x2 = trailPositionRef.current.x, y2 = trailPositionRef.current.y;
-        const la = lineAlphaRef.current;
-
-        if (la > 0.01 && isVisibleRef.current) {
-          const dx = x2 - x1, dy = y2 - y1;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist >= 12) {
-            const r  = 6;
-            const ux = dx / dist, uy = dy / dist;
-            const sx = x1 + ux * r, sy = y1 + uy * r;
-            const ex = x2 - ux * r, ey = y2 - uy * r;
-            const grad = ctx.createLinearGradient(sx, sy, ex, ey);
-            grad.addColorStop(0, `rgba(0,0,0,${(0.35 * la).toFixed(3)})`);
-            grad.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.beginPath();
-            ctx.moveTo(sx, sy);
-            ctx.lineTo(ex, ey);
-            ctx.strokeStyle = grad;
-            ctx.lineWidth   = 1;
-            ctx.stroke();
-          }
-        }
-
-        // Click ripples
-        const now = Date.now();
-        clickRipples.current = clickRipples.current.filter(r => now - r.t < 450);
-        for (const r of clickRipples.current) {
-          const p = (now - r.t) / 450;
-          ctx.beginPath();
-          ctx.arc(r.x, r.y, 14 + p * 28, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(245,166,35,${0.7 * (1 - p)})`;
-          ctx.lineWidth   = 2.5 * (1 - p * 0.7);
-          ctx.stroke();
-        }
+    // Connecting line: a single thin div with a static gradient, stretched/rotated
+    // between the two dots via transform ONLY (scaleX = length). Compositor-only — no
+    // per-frame repaint, no canvas. (Replaces the old GPU-leaking full-screen canvas.)
+    const line = lineRef.current;
+    if (line) {
+      const { x: x1, y: y1 } = positionRef.current;
+      const x2 = trailPositionRef.current.x, y2 = trailPositionRef.current.y;
+      const la = lineAlphaRef.current;
+      const dx = x2 - x1, dy = y2 - y1;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (la > 0.01 && isVisibleRef.current && dist >= 12) {
+        const r = 6;                            // gap at each end (around the dots)
+        const ux = dx / dist, uy = dy / dist;
+        const sx = x1 + ux * r, sy = y1 + uy * r;
+        const len = dist - 2 * r;
+        const angle = Math.atan2(dy, dx);
+        line.style.transform = `translate(${sx}px, ${sy}px) rotate(${angle}rad) scaleX(${len})`;
+        line.style.opacity = String(la);        // gradient carries the 0→0.35 alpha falloff
+      } else {
+        line.style.opacity = "0";
       }
     }
   }, []);
@@ -341,22 +335,37 @@ export function CustomCursor() {
     prevPosRef.current = { x: cp.x, y: cp.y };
 
     updateCursorDOM();
-    rafRef.current = requestAnimationFrame(animateTrail);
+
+    // Idle-pause: stop the loop when nothing is animating, so an idle window does not
+    // repaint a full-screen canvas every frame. That continuous repaint (with no vsync
+    // backpressure) was the runaway-RAM source. wake() resumes on move/click/agent events.
+    const keepRunning =
+      agentModeRef.current ||
+      clickRipples.current.length > 0 ||
+      lineAlphaRef.current > 0.01 ||
+      Math.abs(positionRef.current.x - trailPositionRef.current.x) > 0.5 ||
+      Math.abs(positionRef.current.y - trailPositionRef.current.y) > 0.5;
+    if (keepRunning) {
+      rafRef.current = requestAnimationFrame(animateTrail);
+    } else {
+      runningRef.current = false;
+      rafRef.current = null;
+    }
   }, [updateCursorDOM]);
+
+  // Resume the animation loop after an idle pause (no-op if already running).
+  const wake = useCallback(() => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    rafRef.current = requestAnimationFrame(animateTrail);
+  }, [animateTrail]);
+  useEffect(() => { wakeRef.current = wake; }, [wake]);
 
   // ── INIT & EVENTS ──
   useEffect(() => {
     if (!window.matchMedia("(pointer: fine)").matches) return;
 
-    const canvas = canvasRef.current;
-    if (canvas) { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-
-    const onResize = () => {
-      if (canvasRef.current) { canvasRef.current.width = window.innerWidth; canvasRef.current.height = window.innerHeight; }
-    };
-    window.addEventListener("resize", onResize);
-
-    const onMove = (e: MouseEvent) => { positionRef.current = { x: e.clientX, y: e.clientY }; };
+    const onMove = (e: MouseEvent) => { positionRef.current = { x: e.clientX, y: e.clientY }; wake(); };
 
     const onOver = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -379,6 +388,7 @@ export function CustomCursor() {
 
     const onDown = () => {
       isClickingRef.current = true;
+      wake();
       if (cursorStateRef.current === "pointer") {
         const ti = trailInnerRef.current, mi = mainInnerRef.current;
         if (ti) { ti.style.backgroundColor = "#FF8000"; ti.style.boxShadow = "2px 2px 0 #FF8000"; }
@@ -388,6 +398,7 @@ export function CustomCursor() {
 
     const onUp = () => {
       isClickingRef.current = false;
+      wake();
       if (cursorStateRef.current === "pointer") {
         const ti = trailInnerRef.current, mi = mainInnerRef.current;
         if (ti) { ti.style.backgroundColor = "#F5A623"; ti.style.boxShadow = "2px 2px 0 #F5A623"; }
@@ -395,14 +406,15 @@ export function CustomCursor() {
       }
     };
 
-    const onLeave = () => { isVisibleRef.current = false; };
-    const onEnter = () => { isVisibleRef.current = true; };
+    const onLeave = () => { isVisibleRef.current = false; wake(); };
+    const onEnter = () => { isVisibleRef.current = true; wake(); };
 
     // ── AGENT CURSOR EVENTS ──
     const onAgentCursor = (e: Event) => {
       const d = (e as CustomEvent).detail as {
         phase: string; page?: number; tool?: string; args?: Record<string,unknown>;
       };
+      wake();  // agent animations need the loop running
       const ti = trailInnerRef.current;
 
       if (d.phase === "start") {
@@ -454,12 +466,13 @@ export function CustomCursor() {
     document.documentElement.addEventListener("mouseenter", onEnter);
     window.addEventListener("agent-cursor", onAgentCursor);
 
+    runningRef.current = true;
     rafRef.current = requestAnimationFrame(animateTrail);
 
     return () => {
+      runningRef.current = false;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       cancelSequence();
-      window.removeEventListener("resize",       onResize);
       window.removeEventListener("agent-cursor", onAgentCursor);
       document.removeEventListener("mousemove",  onMove);
       document.removeEventListener("mouseover",  onOver);
@@ -468,13 +481,25 @@ export function CustomCursor() {
       document.documentElement.removeEventListener("mouseleave", onLeave);
       document.documentElement.removeEventListener("mouseenter", onEnter);
     };
-  }, [animateTrail, applyCursorState, cancelSequence, playSequence]);
+  }, [animateTrail, applyCursorState, cancelSequence, playSequence, wake]);
 
   if (typeof window !== "undefined" && !window.matchMedia("(pointer: fine)").matches) return null;
 
   return (
     <>
-      <canvas ref={canvasRef} className="fixed top-0 left-0 pointer-events-none z-[9997]" />
+      {/* Connecting gradient line — 1px base div stretched via transform: scaleX(length).
+          transform-origin at left-center so scaleX grows it rightward along its rotation. */}
+      <div
+        ref={lineRef}
+        className="fixed top-0 left-0 pointer-events-none z-[9997] will-change-transform"
+        style={{
+          width: "1px",
+          height: "1.5px",
+          transformOrigin: "0 50%",
+          opacity: 0,
+          background: "linear-gradient(to right, rgba(0,0,0,0.35), rgba(0,0,0,0))",
+        }}
+      />
 
       {/* Floating typing label — appears next to the dot during sequence type steps */}
       <div

@@ -842,12 +842,16 @@ class BrowserAgentTool(BaseTool):
           2. Take a JPEG screenshot → emit browser_frame_update to WebUI live view
         """
         import base64
+        _slog = logging.getLogger(__name__)
         try:
             from vaf.core.web_interface import get_web_interface
             wi = get_web_interface()
         except Exception:
+            _slog.warning("[BrowserFrames] no web_interface — live view disabled (session=%s)", session_id)
             return
 
+        _frame_count = 0
+        _slog.info("[BrowserFrames] screenshot loop START session=%s", session_id)
         while not stop_event.is_set():
             # ── Drain step log queue ──────────────────────────────────────────
             if log_queue is not None:
@@ -869,8 +873,12 @@ class BrowserAgentTool(BaseTool):
                 except Exception:
                     pass
                 wi.emit_browser_frame(base64.b64encode(shot).decode(), url, session_id)
-            except Exception:
-                pass
+                _frame_count += 1
+                if _frame_count <= 2 or _frame_count % 5 == 0:
+                    _slog.info("[BrowserFrames] emitted frame #%d session=%s (%d bytes) url=%s",
+                               _frame_count, session_id, len(shot), url[:80])
+            except Exception as _e:
+                _slog.warning("[BrowserFrames] screenshot/emit failed session=%s: %s", session_id, _e)
 
             # Wait 1.5 s or until stop_event — whichever comes first
             try:
@@ -878,6 +886,9 @@ class BrowserAgentTool(BaseTool):
                 break
             except asyncio.TimeoutError:
                 pass
+
+        _slog.info("[BrowserFrames] screenshot loop EXIT session=%s (emitted %d frames)",
+                   session_id, _frame_count)
 
     # ── CDP URL resolution ────────────────────────────────────────────────────
 

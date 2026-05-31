@@ -4,10 +4,10 @@ VAF includes a persistent background service managed by a system tray applicatio
 
 ## Features
 
-- **Native Desktop Window**: VAF opens in its own dedicated window (no browser tab needed), powered by the system's native WebView engine.
+- **Native Desktop Window**: VAF opens in its own dedicated window (no browser tab needed), powered by a `pywebview` WebView.
     - Windows: Edge/WebView2 (Chromium-based)
     - macOS: WKWebView (Safari engine)
-    - Linux: WebKitGTK
+    - Linux: **PyQt6 / Qt WebEngine (Chromium)** — VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
 - **Persistent Tray Icon**: A system tray icon on all platforms indicates the server state.
     - 🟢 **Green / Active**: Server is running, model is loaded into RAM.
     - 🟡 **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
@@ -150,3 +150,29 @@ When modifying the tray or adding platform-specific logic, observe these differe
 - Prefer `vaf.core.platform.Platform` helpers for OS checks and paths (instead of direct `platform.system()` checks in new code).
 - Tray callbacks accept `(icon, item)` (pystray convention) on all platforms.
 - Desktop window API: `vaf.core.desktop_window` — `init()`, `start()`, `show()`, `hide()`, `navigate()`, `destroy()`.
+
+## Rendering & Memory (Linux / Qt WebEngine) — Anti-Leak Notes
+
+On Linux the desktop window is **Qt WebEngine (Chromium)** running with the **GPU in-process**.
+In that configuration a continuously *repainting* UI animation leaks GPU tile/texture memory
+into the **renderer** process — the JS heap stays tiny (~10 MB) while the OS RSS of
+`QtWebEngineProcess` climbs unbounded. A May-2026 investigation traced RSS from ~0.9 GB to
+**7 GB** to exactly these causes; the rules below keep it bounded (~1.5 GB, self-reclaiming):
+
+- **Chromium flags** (`QTWEBENGINE_CHROMIUM_FLAGS` in `desktop_window.py`):
+  - ❌ Do **not** add `--disable-frame-rate-limit` or `--disable-gpu-vsync`. Uncapping the
+    framerate (especially on a large high-Hz display, e.g. 5120×1440 @ 240 Hz) makes the
+    in-process GPU pile up tiles at ~40 MB/s. Keep vsync on + the default ~60 fps cap.
+  - ❌ Do **not** add `--enable-accelerated-2d-canvas` (GPU-backs `<canvas>` buffers).
+  - ✅ `--aggressive-cache-discard`, `--renderer-process-limit=1`, `--disk-cache-size`,
+    `--js-flags=--max-old-space-size=1024` are kept for RAM containment.
+- **Frontend animation rule:** continuously-running (infinite) animations may animate
+  **only `transform` / `opacity`** (compositor-only). Never continuously animate
+  `border-radius`, `filter`/`blur`, `box-shadow`, `width`/`height`, or paint with a
+  full-screen `<canvas>`. See `web/components/CustomCursor.tsx`, `web/app/globals.css`
+  (avatar keyframes), and `docs/AgentAvatar.md`.
+- **Trade-off:** true high-refresh (120/240 Hz) is only reachable via the leaking
+  framerate flag on this engine, so the app intentionally runs vsync-capped.
+- **Re-diagnosing:** a disabled, opt-in memory logger lives in `desktop_window.py`.
+  Uncomment the `_start_mem_logger()` call, restart, and read `logs/leak_diag_<date>.log`
+  (columns: total / gpu / renderer / jsHeap / domNodes RSS over time).

@@ -30,7 +30,12 @@ function fmtDuration(s?: number | null): string {
   return `${m}m ${sec}s`;
 }
 
-export default function WatchdogPanel() {
+/**
+ * @param excludeAgentTypes agent types already shown inline in a running tool bubble — hidden
+ *   here to avoid duplication. The panel then only surfaces units without an inline bubble
+ *   (e.g. workflow steps / orphans).
+ */
+export default function WatchdogPanel({ excludeAgentTypes = [] }: { excludeAgentTypes?: string[] }) {
   const [units, setUnits] = useState<Unit[]>([]);
   const [killing, setKilling] = useState<Record<string, boolean>>({});
   const [collapsed, setCollapsed] = useState(false);
@@ -76,7 +81,9 @@ export default function WatchdogPanel() {
     });
   };
 
-  if (units.length === 0) return null;
+  const excluded = new Set(excludeAgentTypes.map((t) => t.toLowerCase()));
+  const shown = units.filter((u) => !excluded.has((u.agent_type || '').toLowerCase()));
+  if (shown.length === 0) return null;
 
   return (
     <div className="fixed bottom-4 left-4 z-[9990] w-80 max-w-[90vw] pointer-events-auto">
@@ -87,13 +94,13 @@ export default function WatchdogPanel() {
         >
           <Activity size={14} className="animate-pulse text-emerald-400" />
           <span>Active agents</span>
-          <span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[11px]">{units.length}</span>
+          <span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[11px]">{shown.length}</span>
           <span className="text-white/50">{collapsed ? '▸' : '▾'}</span>
         </button>
 
         {!collapsed && (
           <div className="max-h-72 overflow-y-auto divide-y divide-gray-100">
-            {units.map((u) => {
+            {shown.map((u) => {
               const fresh = u.heartbeat_age_s != null && u.heartbeat_age_s < 10;
               const dot = u.stale ? 'bg-red-500' : fresh ? 'bg-emerald-500' : 'bg-amber-400';
               return (

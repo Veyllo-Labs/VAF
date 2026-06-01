@@ -138,55 +138,64 @@ class GitHubListReposTool(BaseTool):
 
 
 class GitHubGetFileTool(BaseTool):
-    """Get the content of a file from a GitHub repository."""
+    """Get the content of a file from a GitHub repository, with optional line-range support for large files."""
     name = "github_get_file"
     permission_level = "read"
     side_effect_class = "none"
     category = "github"
     description = (
-        "Get the content of a file from a GitHub repository. Use when the user wants to read code or a file from their GitHub repo. "
-        "Requires GitHub connected. Parameters: owner (repo owner), repo (repo name), path (file path in repo), ref (branch/tag/commit, default: default branch)."
+        "Get the content of a file from a GitHub repository. "
+        "For large files use start_line/end_line to read specific sections (e.g. start_line=500, end_line=1000). "
+        "Without a range, files >300 lines are capped at 200 lines with a size warning and navigation hint. "
+        "Requires GitHub connected."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "owner": {"type": "string", "description": "Repository owner (username or org)."},
-            "repo": {"type": "string", "description": "Repository name."},
-            "path": {"type": "string", "description": "Path to the file in the repo (e.g. README.md, src/main.py)."},
-            "ref": {"type": "string", "description": "Branch, tag, or commit SHA. Omit for default branch."},
+            "owner":      {"type": "string",  "description": "Repository owner (username or org)."},
+            "repo":       {"type": "string",  "description": "Repository name."},
+            "path":       {"type": "string",  "description": "Path to the file in the repo (e.g. README.md, src/main.py)."},
+            "ref":        {"type": "string",  "description": "Branch, tag, or commit SHA. Omit for default branch."},
+            "start_line": {"type": "integer", "description": "First line to return (1-based, inclusive). Use with end_line to read a section of a large file."},
+            "end_line":   {"type": "integer", "description": "Last line to return (1-based, inclusive). Use with start_line to read a section of a large file."},
         },
         "required": ["owner", "repo", "path"],
     }
 
+    # Files larger than this (lines) trigger the cap + warning when no range given
+    _LARGE_FILE_LINES = 300
+    # How many lines to return as preview when no range is given for a large file
+    _PREVIEW_LINES = 200
+
     def run(self, **kwargs) -> str:
-        username = cred_username_from_kwargs(kwargs)
+        username   = cred_username_from_kwargs(kwargs)
         g, account = _get_github_client(kwargs)
         if not g:
             return _no_github_message()
-        
+
         account_id = account.get("account_id") if account else None
-        owner = (kwargs.get("owner") or "").strip()
-        repo_name = (kwargs.get("repo") or "").strip()
-        path = (kwargs.get("path") or "").strip()
-        ref = (kwargs.get("ref") or "").strip() or None
-        
+        owner      = (kwargs.get("owner") or "").strip()
+        repo_name  = (kwargs.get("repo") or "").strip()
+        path       = (kwargs.get("path") or "").strip()
+        ref        = (kwargs.get("ref") or "").strip() or None
+        start_line = kwargs.get("start_line")  # 1-based, inclusive
+        end_line   = kwargs.get("end_line")    # 1-based, inclusive
+
         if not owner or not repo_name or not path:
             return "Missing required parameters: owner, repo, path."
-        
+
         try:
-            repo = g.get_repo(f"{owner}/{repo_name}")
-            # PyGithub's get_contents() asserts ref is str — do NOT pass None
+            repo         = g.get_repo(f"{owner}/{repo_name}")
             content_file = repo.get_contents(path) if not ref else repo.get_contents(path, ref=ref)
 
             if isinstance(content_file, list):
-                # Path is a directory — list contents to help the model pick the right file
                 items = [f"{'📁' if item.type == 'dir' else '📄'} {item.path}" for item in content_file]
                 log_github_activity(username, "get_file", f"Attempted to read directory: {owner}/{repo_name}/{path}", account_id=account_id)
                 return f"'{path}' is a directory. Contents:\n" + "\n".join(items)
 
             raw = content_file.decoded_content
             if raw is None:
-                # Large files (>1 MB) have decoded_content=None — fall back to download_url
+                # Files >1 MB: decoded_content is None — fetch via download_url
                 download_url = getattr(content_file, "download_url", None)
                 if download_url:
                     import urllib.request
@@ -195,20 +204,64 @@ class GitHubGetFileTool(BaseTool):
                 else:
                     return f"File '{path}' is too large to read via API (>1 MB) and no download URL available."
 
-            content = raw.decode("utf-8", errors="replace")
+            content    = raw.decode("utf-8", errors="replace")
+            all_lines  = content.splitlines()
+            total      = len(all_lines)
+            size_kb    = len(raw) / 1024
+
             log_github_activity(
-                username,
-                "get_file",
-                f"Read file: {owner}/{repo_name}/{path} (ref={ref or 'default'})",
+                username, "get_file",
+                f"Read file: {owner}/{repo_name}/{path} (ref={ref or 'default'}, lines={total})",
                 account_id=account_id,
             )
-            return content
+
+            # ── Range requested ──────────────────────────────────────────────
+            if start_line is not None or end_line is not None:
+                s = max(1, int(start_line or 1))
+                e = min(total, int(end_line or total))
+                if s > total:
+                    return (
+                        f"⚠️  start_line={s} is beyond the end of the file "
+                        f"({total} lines total). Use a value ≤ {total}."
+                    )
+                selected = all_lines[s - 1:e]
+                header = (
+                    f"📄 {path}  |  {total} lines total  |  {size_kb:.1f} KB\n"
+                    f"   Showing lines {s}–{e} ({len(selected)} lines)\n"
+                )
+                if e < total:
+                    header += f"   Next section: start_line={e + 1}, end_line={min(total, e + (e - s + 1))}\n"
+                header += "─" * 60 + "\n"
+                numbered = "\n".join(f"{s + i:>6}  {line}" for i, line in enumerate(selected))
+                return header + numbered
+
+            # ── No range: small file → return as-is ─────────────────────────
+            if total <= self._LARGE_FILE_LINES:
+                return content
+
+            # ── No range: large file → cap + warn ───────────────────────────
+            preview   = all_lines[:self._PREVIEW_LINES]
+            numbered  = "\n".join(f"{i + 1:>6}  {line}" for i, line in enumerate(preview))
+            remaining = total - self._PREVIEW_LINES
+            warning = (
+                f"⚠️  Large file: {path}\n"
+                f"   {total} lines  |  {size_kb:.1f} KB\n"
+                f"   Showing lines 1–{self._PREVIEW_LINES} (first {self._PREVIEW_LINES} of {total}).\n"
+                f"   {remaining} more lines not shown.\n"
+                f"\n"
+                f"   To read a specific section use:\n"
+                f"   github_get_file(owner=\"{owner}\", repo=\"{repo_name}\", path=\"{path}\",\n"
+                f"                   start_line={self._PREVIEW_LINES + 1}, end_line={min(total, self._PREVIEW_LINES * 2)})\n"
+                f"─" * 60 + "\n"
+            )
+            return warning + numbered
+
         except GithubException as e:
             if e.status == 404:
                 err_msg = f"File or repository not found: {owner}/{repo_name}/{path}"
                 log_github_activity(username, "get_file", f"File not found: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=err_msg)
                 return err_msg
-            data = getattr(e, "data", {}) or {}
+            data    = getattr(e, "data", {}) or {}
             api_msg = data.get("message") or str(e)
             err_msg = f"GitHub API error {e.status}: {api_msg}"
             log_github_activity(username, "get_file", f"Failed to read file: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=err_msg)
@@ -697,6 +750,174 @@ class GitHubUpdateFileTool(BaseTool):
             logger.exception("github_update_file failed")
             log_github_activity(username, "update_file", f"Failed to update {path} in {owner}/{repo_name}", account_id=account_id, success=False, error=str(e))
             return f"Error updating file: {e}"
+
+
+class GitHubGetFileStructureTool(BaseTool):
+    """Analyze the top-level structure of a code file (classes, functions, methods with line numbers)."""
+    name = "github_get_file_structure"
+    permission_level = "read"
+    side_effect_class = "none"
+    category = "github"
+    description = (
+        "Analyze the structure of a code file and return its classes, functions, and methods with line numbers. "
+        "Use BEFORE reading a large file to know which section to request with start_line/end_line. "
+        "Supports Python (AST-based, precise) and JS/TS/other (regex). "
+        "Parameters: owner, repo, path, ref (optional)."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "owner": {"type": "string", "description": "Repository owner."},
+            "repo":  {"type": "string", "description": "Repository name."},
+            "path":  {"type": "string", "description": "Path to the file (e.g. src/main.py)."},
+            "ref":   {"type": "string", "description": "Branch, tag, or commit SHA. Omit for default branch."},
+        },
+        "required": ["owner", "repo", "path"],
+    }
+
+    def _parse_python(self, content: str) -> list:
+        import ast as _ast
+        try:
+            tree = _ast.parse(content)
+        except SyntaxError as exc:
+            return [{"type": "error", "message": f"Python parse error: {exc}"}]
+        items = []
+        for node in tree.body:
+            if isinstance(node, _ast.ClassDef):
+                methods = []
+                for child in node.body:
+                    if isinstance(child, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                        methods.append({
+                            "name": child.name,
+                            "start": child.lineno,
+                            "end": getattr(child, "end_lineno", "?"),
+                            "async": isinstance(child, _ast.AsyncFunctionDef),
+                        })
+                items.append({
+                    "type": "class",
+                    "name": node.name,
+                    "start": node.lineno,
+                    "end": getattr(node, "end_lineno", "?"),
+                    "methods": methods,
+                })
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                items.append({
+                    "type": "function",
+                    "name": node.name,
+                    "start": node.lineno,
+                    "end": getattr(node, "end_lineno", "?"),
+                    "async": isinstance(node, _ast.AsyncFunctionDef),
+                })
+        return items
+
+    def _parse_generic(self, content: str) -> list:
+        import re
+        lines = content.splitlines()
+        items: list = []
+        CLASS_RE = re.compile(r"^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)")
+        FUNC_RE  = re.compile(r"^(?:export\s+)?(?:async\s+)?function\s+(\w+)")
+        ARROW_RE = re.compile(r"^(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(")
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            m = CLASS_RE.match(stripped)
+            if m:
+                items.append({"type": "class", "name": m.group(1), "start": i, "methods": []})
+                continue
+            m = FUNC_RE.match(stripped) or ARROW_RE.match(stripped)
+            if m:
+                items.append({"type": "function", "name": m.group(1), "start": i})
+        return items
+
+    def run(self, **kwargs) -> str:
+        username   = cred_username_from_kwargs(kwargs)
+        g, account = _get_github_client(kwargs)
+        if not g:
+            return _no_github_message()
+
+        account_id = account.get("account_id") if account else None
+        owner      = (kwargs.get("owner") or "").strip()
+        repo_name  = (kwargs.get("repo") or "").strip()
+        path       = (kwargs.get("path") or "").strip()
+        ref        = (kwargs.get("ref") or "").strip() or None
+
+        if not owner or not repo_name or not path:
+            return "Missing required parameters: owner, repo, path."
+
+        try:
+            repo         = g.get_repo(f"{owner}/{repo_name}")
+            content_file = repo.get_contents(path) if not ref else repo.get_contents(path, ref=ref)
+
+            if isinstance(content_file, list):
+                return f"'{path}' is a directory. Use github_list_directory instead."
+
+            raw = content_file.decoded_content
+            if raw is None:
+                download_url = getattr(content_file, "download_url", None)
+                if download_url:
+                    import urllib.request
+                    with urllib.request.urlopen(download_url, timeout=15) as resp:  # noqa: S310
+                        raw = resp.read()
+                else:
+                    return f"File '{path}' is too large to analyze (>1 MB) and no download URL available."
+
+            content     = raw.decode("utf-8", errors="replace")
+            total_lines = len(content.splitlines())
+            size_kb     = len(raw) / 1024
+
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if ext == "py":
+                items       = self._parse_python(content)
+                parser_used = "Python AST"
+            else:
+                items       = self._parse_generic(content)
+                parser_used = "regex"
+
+            log_github_activity(
+                username, "get_file_structure",
+                f"Analyzed structure: {owner}/{repo_name}/{path} ({total_lines} lines, {len(items)} items)",
+                account_id=account_id,
+            )
+
+            out = [
+                f"📄 {path}  |  {total_lines} lines  |  {size_kb:.1f} KB  |  parser: {parser_used}",
+                "─" * 60,
+            ]
+
+            if not items:
+                out.append("No top-level classes or functions found.")
+            elif items and items[0].get("type") == "error":
+                out.append(f"⚠️  {items[0]['message']}")
+            else:
+                for item in items:
+                    kind  = item["type"]
+                    name  = item["name"]
+                    start = item.get("start", "?")
+                    end   = item.get("end", "?")
+                    if kind == "class":
+                        out.append(f"🔷 class {name}  (lines {start}–{end})")
+                        for m in item.get("methods", []):
+                            prefix = "async def" if m.get("async") else "def"
+                            out.append(f"   ├─ {prefix} {m['name']}  (lines {m['start']}–{m['end']})")
+                    else:
+                        prefix = "async def" if item.get("async") else "def"
+                        out.append(f"🔹 {prefix} {name}  (lines {start}–{end})")
+
+            out.extend([
+                "─" * 60,
+                f'💡 To read a section: github_get_file(owner="{owner}", repo="{repo_name}", path="{path}", start_line=X, end_line=Y)',
+            ])
+            return "\n".join(out)
+
+        except GithubException as e:
+            if e.status == 404:
+                return f"File or repository not found: {owner}/{repo_name}/{path}"
+            data    = getattr(e, "data", {}) or {}
+            api_msg = data.get("message") or str(e)
+            return f"GitHub API error {e.status}: {api_msg}"
+        except Exception as e:
+            logger.exception("github_get_file_structure failed")
+            log_github_activity(username, "get_file_structure", f"Failed: {owner}/{repo_name}/{path}", account_id=account_id, success=False, error=str(e))
+            return f"Error analyzing file structure: {e}"
 
 
 # Module load confirmation (visible in server logs on startup)

@@ -4343,6 +4343,8 @@ class Agent:
                 forced_tools.add("github_list_repos")
             if "github_get_file" in self.tools:
                 forced_tools.add("github_get_file")
+            if "github_get_file_structure" in self.tools:
+                forced_tools.add("github_get_file_structure")
             if "github_list_issues" in self.tools:
                 forced_tools.add("github_list_issues")
             if "github_list_pulls" in self.tools:
@@ -7328,7 +7330,7 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("document_viewer", "document_editor", "replace_editor_selection"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls", "github_create_issue", "github_update_file"):
+                if name in ("github_list_repos", "github_get_file", "github_get_file_structure", "github_list_directory", "github_get_tree", "github_search_files", "github_list_issues", "github_list_pulls", "github_create_issue", "github_update_file"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry

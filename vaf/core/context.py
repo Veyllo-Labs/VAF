@@ -375,7 +375,7 @@ class ContextManager:
         if preserve_tools is None:
             preserve_tools = [
                 "set_todos", "write_file", "read_file",
-                "github_list_repos", "github_get_file", "github_list_issues", "github_list_pulls",
+                "github_list_repos", "github_get_file", "github_get_file_structure", "github_list_issues", "github_list_pulls",
                 "web_search",
             ]
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Inter-Process Communication (IPC)** system enables communication between the Main Agent and Sub-Agents running in separate terminal windows.
+The **Inter-Process Communication (IPC)** system enables communication between the Main Agent and Sub-Agents (e.g. `librarian_agent`, `research_agent`, `document_agent`) that run as **separate processes**. Results flow back through a file-based task queue. A sub-agent only opens its own *terminal window* in CLI mode — see **Execution modes** below for how it actually runs in the WebUI/desktop app and inside workflows.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -28,6 +28,25 @@ The **Inter-Process Communication (IPC)** system enables communication between t
 ```
 
 **Cross-Platform Support:** Works on Windows, Linux, and macOS.
+
+### Execution modes (important)
+
+How a sub-agent actually runs depends on the context. The IPC queue described in this
+document is used in the first two (separate-process) modes:
+
+| Mode | How the sub-agent runs | Blocks the main turn? |
+|------|------------------------|-----------------------|
+| **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No — result picked up via IPC on the next turn |
+| **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No — result picked up via IPC on the next turn |
+| **Inside a workflow** | **in-process** — the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns, so the step runs the sub-agent directly and **waits** for its result | Yes — the step waits (so step N can feed step N+1) |
+
+The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
+Terminal" box is a headless child process; inside a workflow there is no child at all.
+
+In every mode the call is **time-bounded** (`vaf/core/bounded_run.py`, config keys
+`subagent_timeout_seconds` / `tool_timeout_seconds`) and **stop-aware**: a stuck sub-agent
+can no longer freeze the backend, and the Stop button cancels in-flight work. The legacy
+`subagent_timeout_minutes` only governs IPC zombie cleanup, not the in-line wait.
 
 ---
 
@@ -521,14 +540,14 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 │   │  Workflow Step 2    │   ──────►     │  Research Agent     │             │
 │   │  → Sub-Agent        │   opens       │  [Task: abc123]     │             │
 │   │                     │               │                     │             │
-│   │⏸️  Workflow paused │               │  | Searching...     │             │
+│   │⏸️  Workflow paused  │               │  | Searching...     │             │
 │   │  You can continue   │               │  | Analyzing...     │             │
 │   │  using VAF!         │               │  | Writing...       │             │
 │   │                     │               │                     │             │
-│   │  ╭── 🚀 Background ─╮│              │                     │             │
-│   │  │ ⏸️  deep_research ││             │                     │             │
-│   │  │ waiting abc123   ││              │                     │             │
-│   │  ╰──────────────────╯│              │                     │             │
+│   │ ╭── 🚀 Background ─╮│               │                     │             │
+│   │ │ ⏸️  deep_research││               │                     │             │
+│   │ │ waiting abc123   ││               │                     │             │
+│   │ ╰──────────────────╯│               │                     │             │
 │   │                     │               │                     │             │
 │   │  User: "What's 2+2?"│               │                     │             │
 │   │  Agent: "4"         │               │  ✓ Result ready     │             │
@@ -720,8 +739,8 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
      │                     │   task_id: "a1b2"    │                     │
      │                     │◄─────────────────────│                     │
      │                     │                      │                     │
-     │                     │           Open new terminal               │
-     │                     │──────────────────────────────────────────►│
+     │                     │           Open new terminal                │
+     │                     │───────────────────────────────────────────►│
      │                     │                      │                     │
      │  "Sub-Agent running │                      │                     │
      │   in background.    │◄──────────┐          │                     │
@@ -772,7 +791,7 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
      │                   │                    │                   │
      │  "Workflow paused"│◄──────────┐        │    Working...     │
      │◄──────────────────│           │        │◄──────────────────│
-     │                   │  IMMEDIATE │        │                   │
+     │                   │ IMMEDIATE │        │                   │
      │  (other question) │           │        │                   │
      │──────────────────►│◄──────────┘        │                   │
      │                   │                    │                   │

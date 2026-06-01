@@ -114,6 +114,12 @@ class Config:
                 "result_grounding_enabled": True,              # global kill-switch
                 "result_grounding_max_retries": 2,             # corrections before proceeding anyway
 
+                # Current-step reminder: each turn, surface the agent's current plan step (the first
+                # pending task in working memory) with the index to mark it done, so any model
+                # follows its plan step by step instead of skipping or abandoning it. Silent when no
+                # pending task exists (no nagging on plain chat).
+                "plan_step_reminder_enabled": True,            # global kill-switch
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

@@ -295,6 +295,23 @@ When `browser_agent` is running, the **SubAgent Window** in the WebUI opens auto
 
 The viewport is visible in both **dock mode** (right side panel) and **overlay mode** (full-screen modal, triggered by clicking the SubAgent bubble in the chat).
 
+### How frames reach the UI (subprocess bridge)
+
+The browser agent runs as its own **child process** (in workflows, and via `subagent run`). That
+process has no local WebSocket clients, so `web_interface.emit_browser_frame()` / `emit_browser_step()`
+**bridge each frame over HTTP** (off-thread, non-blocking) to the main process's
+`POST /api/subagent/stream` whenever `VAF_IN_SUBAGENT_TERMINAL=1`. The generic endpoint then
+broadcasts a `browser_frame_update` to the session's WebSocket, which the WebUI already handles. So
+the path is: child screenshot loop → HTTP → main process → WebSocket → `subAgentState.browserFrame`.
+
+### Inside a workflow: tiled live view
+
+When the browser runs as a **workflow step**, the SubAgent dock is normally suppressed (its output
+goes to the Workflow Runtime terminal). Frames are visual, though, so they are shown in a dedicated
+`BrowserLiveTile` **docked to the left of the Workflow Runtime window** (side by side, not
+overlapping). Standalone (outside a workflow) the browser view still renders in the SubAgent dock.
+See [Window Tiling](WINDOW_TILING_DESIGN.md) and [Workflow UI Components](WORKFLOW_UI_COMPONENTS.md).
+
 ---
 
 ## Security
@@ -472,8 +489,9 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | File | Purpose |
 |---|---|
 | [vaf/tools/browser_agent.py](../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
-| [vaf/core/web_interface.py](../vaf/core/web_interface.py) | `emit_browser_frame()` — WebSocket broadcast for live view frames |
-| [web/components/SubAgentWindow.tsx](../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) |
-| [web/app/page.tsx](../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl` |
+| [vaf/core/web_interface.py](../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` — WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
+| [web/components/SubAgentWindow.tsx](../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) — standalone runs |
+| [web/components/BrowserLiveTile.tsx](../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
+| [web/app/page.tsx](../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
 | [docker/browser/Dockerfile](../docker/browser/Dockerfile) | Browser container image definition |
 | [docker-compose.memory.yml](../docker-compose.memory.yml) | `vaf-browser` service definition (search for `vaf-browser`) |

@@ -168,6 +168,7 @@ create_agent_workflow(
 | `optional` | bool | Skip on failure instead of aborting. |
 | `assertions` | list | Output checks — failed assertions retry only this step (not the whole workflow). |
 | `max_assertion_retries` | int | How many times to retry on assertion failure. Default: `1`. |
+| `validate` | bool | Opt-in: LLM-check this content/agent step's output against its goal, retry with a correction up to 3× then accept. See **Per-step output validation** below. Default: `false`. |
 
 ##### Available tools per step
 
@@ -183,6 +184,8 @@ create_agent_workflow(
 | `python_sandbox` | Data processing, calculations, Python scripts. |
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
+
+The table above lists the common ones, but a step can call **any tool the user has in chat** — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`write_file`, `bash`, `move_file`) that the Main Agent normally delegates to sub-agents. (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 
@@ -209,6 +212,22 @@ The path is also available as `{workflow_project_path}` in step input templates:
 ```
 
 On assertion failure the engine retries **only that step** with a correction hint prepended — previous steps are not re-run.
+
+##### Per-step output validation (opt-in, `validate: true`)
+
+Assertions are deterministic substring checks. For content/agent steps you often want a *semantic* check: did the output actually fulfil the step's goal? Set `"validate": true` on the step and an LLM judges the output against the step's goal (its `description`/`input`). On a mismatch the step is re-run with a correction hint, up to **3** times (`workflow_step_validation_max_retries`); after that the last version is **accepted** and the workflow continues — validation never hard-fails the step, and a validator error is treated as a pass.
+
+```python
+{"input": "Write a one-page summary of {research} focused on pricing.",
+ "tool": "document_agent",
+ "output": "summary",
+ "validate": True}
+```
+
+- **Eligible tools only:** `document_agent`, `document_writer`, `research_agent`, `coding_agent`, `browser_agent`, `librarian_agent` (a correction-retry can't change a deterministic tool's output, so `validate` is ignored elsewhere).
+- **No lenient fast-path:** unlike the Main Agent's direct sub-agent validation, this judges the *content* — a step that merely reports "saved successfully" but produced the wrong/empty document is caught.
+- **Confirmation gate:** if a workflow has eligible steps but **none** sets `validate`, `run_temp` does not execute — it returns a `[VALIDATION CHECK]` asking you to either flag the critical steps or pass the top-level `skip_validation: true` to run without validation on purpose.
+- Globally toggled via `workflow_step_validation_enabled` (default on). See [Sub-Agent IPC](SUBAGENT_IPC.md#per-step-output-validation-opt-in).
 
 ##### Variable Anchoring (automatic)
 

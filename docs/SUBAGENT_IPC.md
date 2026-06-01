@@ -48,6 +48,14 @@ In every mode the call is **time-bounded** (`vaf/core/bounded_run.py`, config ke
 can no longer freeze the backend, and the Stop button cancels in-flight work. The legacy
 `subagent_timeout_minutes` only governs IPC zombie cleanup, not the in-line wait.
 
+**Live supervision (watchdog).** The active IPC units are exposed read-only at
+`GET /api/supervisor/status` (agent type, runtime, heartbeat age, and staleness vs
+`subagent_liveness_timeout_seconds`) and can be force-killed individually via
+`POST /api/supervisor/cancel` `{task_id}` → `Platform.stop_webui_subagent_process_by_task`
+kills the child process tree and the IPC task is failed so any engine wait unblocks. The WebUI
+shows this inline in the running tool bubble (heartbeat · runtime · kill, between input and
+output) and in a fallback panel for units without a bubble (e.g. workflow steps).
+
 ---
 
 ## Workflow Diagram
@@ -194,7 +202,7 @@ In addition to the IPC queue, Sub-Agents synchronize their status with the **Mai
 **Synchronization Bridge:**
 1. IPC receives result.
 2. Main Agent's `_process_subagent_result` reads result.
-3. **Result validation** (see [Context Management](CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status.
+3. **Result validation** — direct sub-agent calls only (see [Context Management](CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status. (Sub-agents *inside a workflow* use the separate opt-in per-step validation described under [Workflow Integration](#per-step-output-validation-opt-in).)
 4. Automatically updates `team_state.json`:
    - `status`: `completed`
    - `result_summary`: First 500 chars of result
@@ -474,6 +482,21 @@ vaf subagent run librarian_agent --task "..." --no-auto-close
 Workflows now support **async sub-agents with pause/resume**. When a workflow step calls
 a sub-agent running in a separate terminal, the workflow **pauses** and returns control
 to the user. When the sub-agent finishes, the workflow **automatically resumes**.
+
+### Per-step output validation (opt-in)
+
+A workflow step can opt into an LLM check that its **output actually fulfils the step's goal** —
+distinct from the Main Agent's direct-call validation above (which workflow steps bypass). Set
+`"validate": true` on a content/agent step (`document_agent`, `research_agent`, `coding_agent`,
+`browser_agent`, `document_writer`, `librarian_agent`). After the step runs,
+`Agent._validate_step_output` judges the output against the step's goal (its `description`/`input`);
+on a mismatch the step re-runs with a correction hint up to `workflow_step_validation_max_retries`
+(default 3) times, then the last version is **accepted** and the workflow continues. It never
+hard-fails on validation, and a validator error is treated as a pass. Unlike the direct-call
+validator there is **no** lenient "saved successfully → accept" fast-path — the content is judged.
+If a workflow has content steps but none set `validate`, `run_temp` returns a `[VALIDATION CHECK]`
+prompt so the agent either flags the critical steps or confirms `skip_validation: true`. See
+[Workflow Selection](WORKFLOW_SELECTION.md).
 
 ### Step execution and conditions
 

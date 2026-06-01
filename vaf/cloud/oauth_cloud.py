@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 import requests
 
 from vaf.core.config import Config
-from vaf.core.oauth_pkce import _pkce_verifier_and_challenge  # noqa: reuse existing helper
+from vaf.core.oauth_pkce import _pkce_verifier_and_challenge
 from vaf.core.platform import Platform
 
 from vaf.cloud.credential_cloud import set_cloud_oauth_tokens

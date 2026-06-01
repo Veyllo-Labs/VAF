@@ -642,6 +642,40 @@ class BrowserAgentTool(BaseTool):
         if not task:
             return "Error: task parameter is required."
 
+        # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
+        # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
+        # instead of abandoning an un-killable in-process thread. The child sets
+        # VAF_IN_SUBAGENT_TERMINAL=1 and runs browser-use in-process there (no re-spawn);
+        # it streams live frames + writes its result back through the IPC queue. Standalone
+        # callers (no flag) keep the existing in-process behaviour unchanged.
+        import os as _os, sys as _sys
+        if (_os.environ.get("VAF_SPAWN_BROWSER_SUBAGENT", "").strip().lower() in ("1", "true", "yes")
+                and _os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes")):
+            try:
+                import shlex as _shlex
+                from vaf.core.platform import Platform
+                from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                ipc = get_ipc()
+                task_id = ipc.create_task("browser_agent", task_description=task)
+                _sid = get_current_session_id()
+                if _sid:
+                    _os.environ["VAF_SESSION_ID"] = _sid
+                _os.environ["VAF_TASK_ID"] = task_id
+                _os.environ["VAF_AGENT_TYPE"] = "browser_agent"
+                _parts = [_sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'browser_agent',
+                          '--task', task, '--task-id', task_id]
+                if Platform.is_windows():
+                    _cmd = ' '.join((f'"{p}"' if (' ' in p or '"' in p) else p) for p in _parts)
+                else:
+                    _cmd = ' '.join(_shlex.quote(str(p)) for p in _parts)
+                if Platform.open_new_terminal(_cmd, title=f"VAF Browser Agent [{task_id}]"):
+                    ipc.mark_task_running(task_id)
+                    return (f"[SUBAGENT_ASYNC:{task_id}:browser_agent] "
+                            f"Browser agent running as a child process. Task: {task[:80]}...")
+                ipc.cancel_task(task_id)   # spawn failed → fall through to in-process
+            except Exception:
+                pass   # any spawn error → fall through to in-process below
+
         max_steps = max(1, min(int(kwargs.get("max_steps") or 25), 100))
         allowed_domains: Optional[list] = kwargs.get("allowed_domains") or None
         persistent: bool = bool(kwargs.get("persistent") or False)

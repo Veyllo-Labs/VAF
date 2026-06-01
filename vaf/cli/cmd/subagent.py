@@ -34,7 +34,21 @@ def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
     """
     Show a countdown and then exit (closing the terminal).
     Cross-platform: works on Windows, Linux, macOS.
+
+    Only meaningful when the sub-agent runs in a REAL terminal window (CLI mode), where the
+    countdown gives the user a moment to read the result before the window closes. In WebUI /
+    piped mode (no tty) the countdown is pointless and harmful: its output is forwarded to the
+    WebUI console (spam) and the late exit overlaps the next workflow step, closing its
+    sub-agent window. So skip the countdown and exit immediately when not attached to a tty.
     """
+    _webui = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+    _is_tty = False
+    try:
+        _is_tty = bool(sys.stdout.isatty())
+    except Exception:
+        _is_tty = False
+    if _webui or not _is_tty:
+        sys.exit(0)
     try:
         print()
         for remaining in range(delay, 0, -1):
@@ -51,7 +65,7 @@ def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
 
 @app.command(name="run")
 def run_subagent(
-    agent_type: str = typer.Argument(..., help="Sub-agent type: coding_agent, librarian_agent, research_agent, or document_agent"),
+    agent_type: str = typer.Argument(..., help="Sub-agent type: coding_agent, librarian_agent, research_agent, document_agent, or browser_agent"),
     task: str = typer.Option("", "--task", "-t", help="Task for the sub-agent"),
     task_id: Optional[str] = typer.Option(None, "--task-id", help="Task ID for IPC tracking"),
     project_path: Optional[str] = typer.Option(None, "--project-path", "-p", help="Project path (for coding_agent)"),
@@ -174,12 +188,26 @@ def run_subagent(
                 if payload:
                     effective_task = payload
             result = tool.run(task=effective_task)
-            
+
             _safe_print()
             _safe_print("="*70)
             _safe_print(result)
             _safe_print("="*70)
-            
+
+        elif agent_type == "browser_agent":
+            from vaf.tools.browser_agent import BrowserAgentTool
+            tool = BrowserAgentTool()
+            effective_task = task
+            if (not effective_task or len(effective_task) < 50) and task_id and ipc:
+                payload = ipc.get_task_payload(task_id)
+                if payload:
+                    effective_task = payload
+            # In this child process VAF_IN_SUBAGENT_TERMINAL=1 is set, so BrowserAgentTool.run
+            # executes browser-use in-process here (no re-spawn) and streams its live frames
+            # via the web interface; the final result is written to IPC by complete_task below.
+            result = tool.run(task=effective_task)
+            _safe_print(result)
+
         else:
             try:
                 UI.error(f"Unknown sub-agent type: {agent_type}")

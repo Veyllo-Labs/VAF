@@ -1079,16 +1079,31 @@ Remove duplicates and ensure smooth flow.
             return f"[ERROR] Path does not exist: {path}"
         
         try:
-            # Use glob for pattern matching
-            if '*' in pattern:
-                matches = list(path.rglob(pattern))
-            else:
-                # Search for pattern in filename
-                matches = [f for f in path.rglob('*') if pattern.lower() in f.name.lower()]
-            
-            # Limit results
-            matches = matches[:50]
-            
+            import os as _os, time as _time, fnmatch as _fnmatch
+            # Bounded, pruned search: walk lazily, skip huge/system dirs, stop early.
+            # The previous code did list(path.rglob('*')) which materialised the ENTIRE
+            # tree (node_modules, venv, /mnt mounts, …) and could hang for minutes.
+            _SKIP_DIRS = {
+                "node_modules", "venv", ".venv", "env", "__pycache__", ".git",
+                "site-packages", "dist", "build", ".next", ".cache", ".npm",
+                "Library", "AppData", ".cargo", ".rustup", "proc", "sys", "dev",
+            }
+            _MAX = 50
+            _deadline = _time.monotonic() + 20.0   # soft cap → always responsive
+            _glob = ('*' in pattern or '?' in pattern)
+            _needle = pattern.lower()
+            matches = []
+            for _root, _dirs, _files in _os.walk(str(path)):
+                # prune heavy/system/hidden dirs in-place so we never descend into them
+                _dirs[:] = [d for d in _dirs if d not in _SKIP_DIRS and not d.startswith('.')]
+                for _fn in _files:
+                    if (_fnmatch.fnmatch(_fn, pattern) if _glob else _needle in _fn.lower()):
+                        matches.append(Path(_root) / _fn)
+                        if len(matches) >= _MAX:
+                            break
+                if len(matches) >= _MAX or _time.monotonic() > _deadline:
+                    break
+
             if not matches:
                 return f"No files found matching '{pattern}' in {path}"
 

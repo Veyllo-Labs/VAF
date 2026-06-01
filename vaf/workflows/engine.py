@@ -125,6 +125,7 @@ class WorkflowEngine:
         variables: Dict[str, Any] = None,
         stop_on_error: bool = True,
         check_stop: Optional[Callable[[], bool]] = None,
+        wait_for_subagents: bool = False,
     ) -> WorkflowResult:
         """
         Execute a workflow with the given steps.
@@ -134,6 +135,11 @@ class WorkflowEngine:
             variables: Initial variables (user inputs)
             stop_on_error: Stop workflow on first error (default: True)
             check_stop: Optional callback; if it returns True, workflow aborts (e.g. user clicked Stop).
+            wait_for_subagents: when True (synchronous run_temp workflows), heavy sub-agent
+                steps run as **killable child processes** and the engine waits for their IPC
+                result bounded + stop-aware, instead of running them in-process. This avoids
+                the in-process hang and the abandoned-thread-holds-the-LLM-lock problem.
+                browser_agent stays in-process (it self-manages its own stop/limits).
 
         Returns:
             WorkflowResult with all outputs and status
@@ -407,15 +413,34 @@ class WorkflowEngine:
                 prev_agent_type = os.environ.get("VAF_AGENT_TYPE")
                 prev_task_id = os.environ.get("VAF_TASK_ID")
                 prev_in_subagent_term = os.environ.get("VAF_IN_SUBAGENT_TERMINAL")
+                prev_spawn_browser = os.environ.get("VAF_SPAWN_BROWSER_SUBAGENT")
                 subagent_step_task_id = None
                 is_subagent_tool = step.tool in ("coding_agent", "librarian_agent", "research_agent")
+                # In wait-mode these heavy sub-agents run as KILLABLE CHILD PROCESSES
+                # (spawn → IPC wait), not in-process. document_agent is spawnable too (it
+                # isn't in is_subagent_tool, so it already spawns). browser_agent only spawns
+                # when opted-in via VAF_SPAWN_BROWSER_SUBAGENT (set below) so standalone
+                # browser usage stays in-process.
+                _spawnable = step.tool in (
+                    "coding_agent", "librarian_agent", "research_agent", "document_agent",
+                    "browser_agent",
+                )
+                _spawn_and_wait = bool(wait_for_subagents) and _spawnable
+                if _spawn_and_wait and step.tool == "browser_agent":
+                    # Tell BrowserAgentTool.run to spawn a killable child process for this step.
+                    os.environ["VAF_SPAWN_BROWSER_SUBAGENT"] = "1"
+                    os.environ.pop("VAF_IN_SUBAGENT_TERMINAL", None)
                 if is_subagent_tool:
                     subagent_step_task_id = f"{step.tool}-{i}-{str(uuid.uuid4())[:6]}"
                     os.environ["VAF_AGENT_TYPE"] = step.tool
                     os.environ["VAF_TASK_ID"] = subagent_step_task_id
-                    # Prevent nested terminal spawning during workflows.
-                    if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes"):
-                        os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"
+                    if _spawn_and_wait:
+                        # WAIT-MODE: force a child-process spawn (do NOT run in-process).
+                        os.environ.pop("VAF_IN_SUBAGENT_TERMINAL", None)
+                    else:
+                        # Legacy in-process path: prevent nested terminal spawning.
+                        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() not in ("1", "true", "yes"):
+                            os.environ["VAF_IN_SUBAGENT_TERMINAL"] = "1"
                     try:
                         from vaf.core.subagent_debug import get_subagent_logger_from_env
                         lg = get_subagent_logger_from_env()
@@ -459,10 +484,46 @@ class WorkflowEngine:
                 retry_count = 0
                 result = None
 
+                # Bounded execution: a single tool/sub-agent call may never block the
+                # worker forever. Pick a wall-clock timeout (sub-agents get more) and poll
+                # the user's Stop flag during the call so a hung step can't freeze the
+                # backend and the Stop button works mid-step. See vaf/core/bounded_run.py.
+                from vaf.core.bounded_run import (
+                    run_bounded, is_abort_sentinel, SELF_SUPERVISED_TOOLS, agent_timeout_seconds,
+                )
+                from vaf.core.config import Config as _CfgTO
+                # As a WORKFLOW STEP, browser_agent must be BOUNDED: it runs in-process and
+                # blocks the workflow, so leaving it unbounded lets a hung browser freeze the
+                # whole workflow (and the main agent waiting on it). It gets a generous budget
+                # (browser_timeout_seconds) + its own _stop_monitor/max_steps. Only the
+                # workflow orchestrators stay self-supervised here (they are never steps in
+                # practice). Standalone browser_agent (via execute_tool) stays self-supervised.
+                _self_supervised = (step.tool in SELF_SUPERVISED_TOOLS) and step.tool != "browser_agent"
+                _step_timeout = agent_timeout_seconds(step.tool)   # per-agent budget
+                _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
+
                 while retry_count < max_retries:
                     _inject_user_scope(step.tool, args)
                     try:
-                        result = tool.run(**args)
+                        if _spawn_and_wait:
+                            # Spawn the sub-agent as a killable child process (returns
+                            # [SUBAGENT_ASYNC:id] fast), then wait for its IPC result bounded
+                            # + stop-aware. Isolated → no in-process hang, and no abandoned
+                            # thread can hold the main agent's LLM lock.
+                            _spawn_out = tool.run(**args)
+                            result = self._await_subagent(
+                                _spawn_out, step.tool, check_stop, _step_timeout, _stop_poll,
+                            )
+                        elif _self_supervised:
+                            result = tool.run(**args)   # self-managed stop + internal limits
+                        else:
+                            result = run_bounded(
+                                lambda: tool.run(**args),
+                                timeout=_step_timeout,
+                                stop_check=check_stop,
+                                poll=_stop_poll,
+                                label=step.tool,
+                            )
                         
                         # Check if result contains context overflow error (like main agent)
                         result_str = str(result)
@@ -589,7 +650,13 @@ class WorkflowEngine:
                         os.environ.pop("VAF_IN_SUBAGENT_TERMINAL", None)
                     else:
                         os.environ["VAF_IN_SUBAGENT_TERMINAL"] = prev_in_subagent_term
-                
+
+                # Restore the browser-spawn opt-in flag (set for a browser_agent step above).
+                if prev_spawn_browser is None:
+                    os.environ.pop("VAF_SPAWN_BROWSER_SUBAGENT", None)
+                else:
+                    os.environ["VAF_SPAWN_BROWSER_SUBAGENT"] = prev_spawn_browser
+
                 # ═══════════════════════════════════════════════════════════════
                 # ASYNC SUB-AGENT HANDLING: Pause workflow and yield control
                 # ═══════════════════════════════════════════════════════════════
@@ -658,6 +725,18 @@ class WorkflowEngine:
                         waiting_for_task=task_id
                     )
                 
+                # A bounded-run timeout/stop returns a sentinel string. Treat it as a hard
+                # abort of the whole workflow — never branch or feed it onward.
+                if is_abort_sentinel(result):
+                    step.status = StepStatus.FAILED
+                    step.error = str(result)
+                    step.result = result
+                    step.duration = time.time() - step_start
+                    error = step.error
+                    UI.error(f"  [ABORTED] {step.error}")
+                    self.callback("error", step, i, len(steps))
+                    break
+
                 # Check if result indicates failure (even if no exception was raised)
                 if result is None:
                     # Should not happen, but handle gracefully
@@ -815,7 +894,112 @@ class WorkflowEngine:
             total_duration=total_duration,
             error=error
         )
-    
+
+    def _await_subagent(self, spawn_output, tool_name: str, check_stop, timeout: float, poll: float):
+        """
+        Wait for a spawned sub-agent's IPC result, bounded + stop-aware.
+
+        `spawn_output` is what the sub-agent tool returned after spawning a child process —
+        normally a ``[SUBAGENT_ASYNC:<task_id>:<type>]`` marker. We poll the IPC results queue
+        for that task. Because the sub-agent runs in its OWN process, the worker is never
+        blocked in-process and nothing can hold the main agent's LLM lock.
+
+        If the spawn fell back to in-process (no marker), `spawn_output` already IS the result.
+
+        Guards (in order): the child's IPC result; the user's Stop; **liveness** — if the
+        child stops sending heartbeats (~every 3 s) for `subagent_liveness_timeout_seconds`
+        it is dead/stuck and gets killed + failed fast; and a worst-case hard `timeout`.
+        On stop / liveness-fail / hard-cap the child process is actually KILLED (it runs in
+        its own process, so this is a clean kill — no abandoned thread).
+
+        If the spawn fell back to in-process (no marker), `spawn_output` already IS the result.
+        Returns the sub-agent's result string, or a bounded_run sentinel on stop/timeout
+        (the caller treats it as a hard workflow abort via ``is_abort_sentinel``).
+        """
+        import re as _re, time as _time
+        from vaf.core.bounded_run import TIMEOUT_PREFIX, STOPPED_PREFIX
+        m = _re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', str(spawn_output or ""))
+        if not m:
+            return spawn_output  # ran in-process / spawn fell back → already the result
+        task_id = m.group(1)
+        try:
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            ipc = get_ipc()
+        except Exception:
+            return spawn_output  # IPC unavailable — degrade to the marker text
+
+        try:
+            from vaf.core.config import Config as _Cfg
+            _liveness = float(_Cfg.get("subagent_liveness_timeout_seconds", 60))
+        except Exception:
+            _liveness = 60.0
+        _sid = None
+        try:
+            _sid = get_current_session_id()
+        except Exception:
+            _sid = None
+
+        def _kill_child():
+            """Actually terminate the spawned child process (it's a separate process)."""
+            try:
+                from vaf.core.platform import Platform
+                if _sid:
+                    Platform.stop_webui_subagent_processes(str(_sid))
+            except Exception:
+                pass
+
+        deadline = _time.monotonic() + max(1.0, float(timeout))
+        poll = max(0.1, float(poll))
+        _last_zombie_check = 0.0
+        while True:
+            try:
+                task = ipc.consume_result(task_id)
+            except Exception:
+                task = None
+            if task is not None:
+                # If the result is a failure (incl. a zombie failed by check_zombies below),
+                # reap any lingering process; on success there is nothing to kill.
+                if str(getattr(task, "status", "") or "") == "failed" or getattr(task, "error", None):
+                    _kill_child()
+                return getattr(task, "result", None) or getattr(task, "error", None) or ""
+
+            # User pressed Stop → kill the child and abort.
+            if check_stop is not None:
+                try:
+                    stop = bool(check_stop())
+                except Exception:
+                    stop = False
+                if stop:
+                    _kill_child()
+                    try:
+                        ipc.fail_task(task_id, "[USER_CANCELLED] Stopped by user via stop button.")
+                    except Exception:
+                        pass
+                    return (f"{STOPPED_PREFIX} '{tool_name}' was cancelled by the user "
+                            f"before it finished.")
+
+            _now = _time.monotonic()
+            # Liveness: no heartbeat for too long → check_zombies fails the stale task, which
+            # we then consume above and reap. This is the primary guard ("no sign of life").
+            if _now - _last_zombie_check >= 5.0:
+                _last_zombie_check = _now
+                try:
+                    ipc.check_zombies(timeout_seconds=int(_liveness))
+                except Exception:
+                    pass
+
+            # Worst-case hard cap.
+            if _now >= deadline:
+                _kill_child()
+                try:
+                    ipc.fail_task(task_id, f"[TIMEOUT] sub-agent exceeded {int(timeout)}s.")
+                except Exception:
+                    pass
+                return (f"{TIMEOUT_PREFIX} '{tool_name}' did not finish within "
+                        f"{int(timeout)}s (worst-case cap) and was killed.")
+
+            _time.sleep(poll)
+
     def resume_workflow(self, paused_wf, subagent_result: str) -> WorkflowResult:
         """
         Resume a paused workflow with the sub-agent's result.
@@ -964,6 +1148,7 @@ class WorkflowEngine:
             "librarian_agent": "task",
             "document_agent": "task",
             "document_writer": "task",
+            "browser_agent": "task",
             "research_agent": "topic",
             "read_file": "path",
             "write_file": "content",  # Usually needs path too

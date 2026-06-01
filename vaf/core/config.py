@@ -86,8 +86,21 @@ class Config:
         "sub_agents_in_separate_terminals": True,
                 # Sub-Agent timeout settings
                 "subagent_timeout_enabled": True,      # Enable/disable timeout for sub-agents
-                "subagent_timeout_minutes": 120,       # Timeout in minutes (default: 2 hours)
-                
+                "subagent_timeout_minutes": 120,       # Legacy IPC zombie-cleanup window (NOT the in-line wait)
+                # Bounded tool execution: hard wall-clock limits for a single in-line
+                # tool/sub-agent call so one blocking call can never freeze the worker.
+                # Enforced by vaf.core.bounded_run.run_bounded.
+                "tool_timeout_seconds": 120,           # generic in-process tool call
+                "subagent_timeout_seconds": 300,       # research/coding/document sub-agent step
+                "librarian_timeout_seconds": 60,       # filesystem agent — should be fast
+                "browser_timeout_seconds": 1800,       # worst-case hard cap (30 min); liveness is the real guard
+                "tool_stop_poll_seconds": 0.5,         # how often the bounded wait checks stop/deadline
+                # Liveness, not hard caps: a spawned sub-agent pulses a heartbeat every ~3 s.
+                # If none arrives for this long, it's dead/stuck → kill the child + fail fast
+                # (don't wait out the hard cap). This is the primary guard; the timeouts above
+                # are only the worst-case ceiling.
+                "subagent_liveness_timeout_seconds": 60,
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

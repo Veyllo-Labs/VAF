@@ -112,9 +112,24 @@ def bootstrap():
         return  # All good!
     
     print()
-    
-    response = input("  Auto-install via pip? [Y/n]: ").strip().lower()
-    
+
+    # Non-interactive environments (CI, piped stdin, cron, systemd) cannot answer the prompt.
+    # Do not block or crash on input(); skip the auto-install and continue so meta-commands like
+    # `vaf --version` / `vaf --help` still work. Users in a real terminal get the prompt as before.
+    try:
+        _interactive = sys.stdin.isatty()
+    except Exception:
+        _interactive = False
+    if not _interactive:
+        print("  Non-interactive environment — skipping auto-install.")
+        print("  To install manually: pip install -r requirements.txt")
+        return
+    try:
+        response = input("  Auto-install via pip? [Y/n]: ").strip().lower()
+    except EOFError:
+        print("\n  No input available — skipping auto-install.")
+        return
+
     if response in ('', 'y', 'yes', 'j', 'ja'):
         print("\n  Installing dependencies...")
         try:

@@ -119,7 +119,9 @@ class ExecuteWorkflowTool(BaseTool):
                     num_steps=len(steps),
                     variables=str({k: str(v)[:80] for k, v in variables.items()}))
 
-            # ── Tool registry (same set as CLI runner) ────────────────────────
+            # ── Tool registry ─────────────────────────────────────────────────
+            # Start with the workflow PRIMITIVES the main agent delegates to sub-agents (so they
+            # are NOT in agent.tools) but that workflows legitimately use as direct steps.
             tools = {}
             _optional = [
                 ("vaf.tools.search",         "WebSearchTool",       "web_search"),
@@ -142,6 +144,13 @@ class ExecuteWorkflowTool(BaseTool):
                     tools[tool_name] = getattr(mod, class_name)()
                 except Exception:
                     pass
+
+            # Overlay the agent's FULL live registry so a saved workflow has every tool the user
+            # has in chat (search_tools, custom tools, calendar, memory, github, …) — matching
+            # run_temp's _collect_tools(). The primitives above stay (they aren't in agent.tools);
+            # everything else the user has is added. Falls back to the primitives when headless.
+            if _agent is not None and getattr(_agent, "tools", None):
+                tools.update(dict(_agent.tools))
 
             if not tools:
                 return "❌ No tools available for workflow execution."

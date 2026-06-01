@@ -71,7 +71,7 @@ The **Context Glue** is a high-density summary block that is dynamically generat
 
 **Note on Hybrid Architecture (Agatic vNext):**
 VAF now uses a dual-glue system:
-1.  **Main Agent:** Uses `MainPersistenceManager` to inject **Persistent Glue** from disk (`.vaf/main/user_intent.md`, `.vaf/main/team_state.json`). This survives restarts.
+1.  **Main Agent:** Uses `MainPersistenceManager` to inject **Persistent Glue** from disk, scoped per session under `.vaf/main/sessions/<session_id>/` (`user_intent.md`, `team_state.json`, `working_memory.json`), so one chat's intent, plan, tasks, and team never leak into another. The legacy global `.vaf/main/` is kept as a fallback when no session is known. This survives restarts. See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) for how the store is bound on each session switch.
 2.  **Coder Agent:** Uses the **Dynamic RAM Glue** (described below) for high-speed, task-specific state tracking during a coding session.
 
 Even if we delete the last 50 messages, the Agent still "knows" what happened because of this block.
@@ -125,7 +125,7 @@ When `task_done` is called:
 
 ### Main Agent: Plan-Act-Summarize with `checkpoint_context`
 
-The Coder Agent has used task checkpointing from the start (`create_fresh_context_for_task`). The **Main Agent** now has the same capability via the `checkpoint_context` tool and the **Orchestrator Prompt Module**. When a complex task requires multiple steps, the agent writes a plan to `working_memory.json`, executes one step at a time, persists each result as a working memory note, and calls `checkpoint_context(summary="...")` to archive the history and start fresh. The plan and notes survive because they live on disk, not in chat history. This enables unbounded multi-step execution even on small-context models. For small contexts (`n_ctx` ≤ 12k) with the orchestrator active, the main agent uses **conditional enforcement**: a plan is required before heavy tools (e.g. `read_file`, `web_search`, sub-agents) can be used, and at most 2 heavy tool calls per turn are allowed to avoid overflow. See `CONTEXT_MANAGEMENT.md` → "Plan-Act-Summarize Pattern" for the full architecture and enforcement details.
+The Coder Agent has used task checkpointing from the start (`create_fresh_context_for_task`). The **Main Agent** now has the same capability via the `checkpoint_context` tool and the **Orchestrator Prompt Module**. When a complex task requires multiple steps, the agent writes a plan to `working_memory.json`, executes one step at a time, persists each result as a working memory note, and calls `checkpoint_context(summary="...")` to archive the history and start fresh. The plan and notes survive because they live on disk, not in chat history. This enables unbounded multi-step execution even on small-context models. For small contexts (`n_ctx` ≤ 12k) with the orchestrator active, the main agent uses **conditional enforcement**: a plan is required before heavy tools (e.g. `read_file`, `web_search`, sub-agents) can be used, and at most 2 heavy tool calls per turn are allowed to avoid overflow. Independently of context size, whenever the plan has pending tasks a compact **current-step reminder** is injected each turn — the first pending task with the index to mark it done — so the model works through the plan one step at a time and closes each task before the next. See `CONTEXT_MANAGEMENT.md` → "Plan-Act-Summarize Pattern" for the full architecture and enforcement details.
 
 ---
 

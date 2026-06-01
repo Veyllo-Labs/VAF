@@ -442,7 +442,7 @@ class ServerManager:
             UI.error(f"Backend download failed: {e}")
             return False
 
-    def start_server(self, model_path, n_gpu_layers=99, n_ctx=16384, port=8080):
+    def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080):
         """
         Start llama-server only if provider is 'local' and auto-start is enabled.
         

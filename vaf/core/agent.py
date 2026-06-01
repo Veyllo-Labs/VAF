@@ -291,6 +291,56 @@ class Agent:
         # Result Grounding State (anti-confabulation of tool results)
         self._result_grounding_retries = 0
 
+        # Plan gate State (main agent: plan before a state-changing tool runs)
+        self._plan_gate_blocks = 0
+
+    def _plan_gate_decision(self, name, tool_instance):
+        """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
+        ("explore freely, plan before you act"). Returns a block message (str) to show the model, or
+        None to allow. Never gates sub-agents (their own loops are untouched) and never blocks on a
+        read error (fail-open). Satisfied in the same turn by update_working_memory(plan=[...]); after
+        plan_gate_max_blocks it proceeds anyway so nothing hard-locks."""
+        try:
+            from vaf.core.config import Config
+            if not Config.get("plan_gate_enabled", True):
+                return None
+            # Main agent only: sub-agents / non-interactive runs (automations, CLI one-shot) skip.
+            is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
+            if self._noninteractive or is_subagent:
+                return None
+            # Gated set: write/dangerous tools, except python_sandbox.
+            level = getattr(tool_instance, "permission_level", "read") if tool_instance else "read"
+            if level not in ("write", "dangerous") or name == "python_sandbox":
+                return None
+            # Plan present? (working memory is already session-scoped). Fail-open on any error.
+            plan_exists = True
+            try:
+                if self.main_persistence is not None:
+                    plan_exists = bool(self.main_persistence.get_working_memory().get("plan"))
+            except Exception:
+                return None
+            if plan_exists:
+                self._plan_gate_blocks = 0
+                return None
+            # No plan -> gate. Loop-cap escape so it never hard-locks.
+            self._plan_gate_blocks += 1
+            if self._plan_gate_blocks > int(Config.get("plan_gate_max_blocks", 3)):
+                self._plan_gate_blocks = 0
+                try:
+                    from vaf.cli.ui import UI
+                    UI.event("System", f"Plan gate: proceeding without a plan after repeated blocks ('{name}').", style="warning")
+                except Exception:
+                    pass
+                return None
+            return (
+                f"[PLAN REQUIRED] '{name}' changes state, so write a short plan first: "
+                "update_working_memory(plan=[\"<what you will do>\", \"verify it succeeded\"]). "
+                "A one-line plan with a verify step is enough; then call the tool again. "
+                "Read/search tools need no plan — use them freely to figure out the plan."
+            )
+        except Exception:
+            return None
+
     def _get_tokenizer(self):
         """
         Initializes and returns a lightweight Llama instance for tokenization.
@@ -2178,6 +2228,18 @@ class Agent:
             {"role": "system", "content": system_prompt}
         ]
 
+    def _bind_session_persistence(self, session_id: str) -> None:
+        """Re-point the persistence store to this session's isolated dir so plan/tasks/notes/team/
+        intent never leak across chats or users. init_chat rebuilds prompt_manager (with a global
+        store), so re-point prompt_manager.mpm too. Best-effort: never break a turn on failure."""
+        try:
+            from vaf.core.main_persistence import MainPersistenceManager
+            self.main_persistence = MainPersistenceManager(os.getcwd(), session_id=session_id)
+            if getattr(self, "prompt_manager", None) is not None:
+                self.prompt_manager.mpm = self.main_persistence
+        except Exception:
+            pass
+
     def load_session_context(self, session_id: str):
         """
         Swap the agent's context to a specific session.
@@ -2240,14 +2302,16 @@ class Agent:
             # Update Pointer
             self.current_session_id = session_id
             set_current_session_id(session_id)
-            
+            self._bind_session_persistence(session_id)
+
         except Exception:
             # New/Empty session — definitely no prior history
             self._is_new_session = True
             self.init_chat()
             self.current_session_id = session_id
             set_current_session_id(session_id)
-            
+            self._bind_session_persistence(session_id)
+
         # CRITICAL: Compress history immediately upon load IF needed
         # Otherwise UI shows massive "Raw Truth" (e.g. 17k tokens) which looks broken,
         # even though chat_step would compress it before sending.
@@ -4953,7 +5017,8 @@ class Agent:
                 _user_msg["images"] = images  # [{data: str, mime_type: str}] — converted to multimodal in _prepare_messages
             self.history.append(_user_msg)
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
-            
+            self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
+
             # ═══════════════════════════════════════════════════════════════════════
             # FIRST-TIME USER: Automatic Greeting & Language Detection
             # ═══════════════════════════════════════════════════════════════════════
@@ -7321,6 +7386,11 @@ class Agent:
         )
         if policy_decision.blocked:
             return f"Security Error: {policy_decision.reason}"
+
+        # Plan gate (main agent only): require a plan before a state-changing tool runs.
+        gate_msg = self._plan_gate_decision(name, tool_instance)
+        if gate_msg is not None:
+            return gate_msg
 
         def emit(evt: dict):
             if callable(self._event_sink):

@@ -138,8 +138,8 @@ Current valid model IDs (as of 2026-05): `deepseek-v4-flash`, `deepseek-v4-pro`.
 
 When using the Local Server (llama-server), the context window size (`n_ctx`) is critical for tool calling to work correctly.
 
-- **Minimum: 32768** — hardcoded in VAF regardless of config. With 100+ tools, the overhead alone is ~11K tokens (system prompt ~5.5K + tool schemas ~6K), leaving ~20K for conversation. Values below 32K cause the router safety net to trigger on every turn.
-- **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced). Values below 32768 are silently raised to 32768.
+- **Minimum: 32768** — enforced regardless of the configured value. With 100+ tools, the overhead alone is ~11K tokens (system prompt ~5.5K + tool schemas ~6K), leaving ~20K for conversation. Values below 32K cause the router safety net to trigger on every turn.
+- **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced). A value below 32768 is clamped up to 32768 when the configuration is loaded (`Config.load`), so every reader and the local server see one consistent floor. The default is `32768`.
 - **KV Cache:** VAF uses `q8_0` for keys and `q4_0` for values — ~62.5% less VRAM than f16 with negligible quality loss.
 - **VRAM estimate (RTX 3080, 10GB):** VQ-1 q4_k_m (~4GB) + 32K KV cache (~0.8GB) = ~4.8GB total, leaving ~5GB free.
 

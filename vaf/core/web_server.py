@@ -308,6 +308,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Logs routes: {e}")
 
+# Mount Supervisor/Watchdog routes (live sub-agent units + kill)
+try:
+    from vaf.api.supervisor_routes import router as supervisor_router
+    app.include_router(supervisor_router)
+    log("WebServer", "Supervisor routes mounted at /api/supervisor")
+except Exception as e:
+    log("WebServer", f"Failed to mount Supervisor routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:

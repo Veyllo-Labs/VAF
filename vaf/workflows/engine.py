@@ -17,6 +17,15 @@ from enum import Enum
 from vaf.cli.ui import UI
 
 
+# Steps whose output is a content deliverable that can meaningfully be re-generated with a
+# correction hint. Only these are eligible for the opt-in per-step output validation — a
+# correction-retry on a deterministic tool (write_file, web_search, …) would just repeat itself.
+VALIDATABLE_TOOLS = frozenset({
+    "document_agent", "document_writer", "research_agent",
+    "coding_agent", "browser_agent", "librarian_agent",
+})
+
+
 def _strip_rich_links(text: str) -> str:
     """Replace Rich link markup with just the display text.
 
@@ -59,6 +68,7 @@ class WorkflowStep:
     on_failure: Optional[str] = None    # Jump to step with this output_name (or index) on failure (suppresses abort)
     assertions: Optional[List[Dict[str, str]]] = None  # Output checks: [{"contains": "{var}", "error": "msg"}]
     max_assertion_retries: int = 1      # How many times to retry this step on assertion failure
+    validate: bool = False              # Opt-in: LLM-check this step's output against its goal, retry on mismatch
 
     # Runtime state
     status: StepStatus = StepStatus.PENDING
@@ -114,6 +124,12 @@ class WorkflowEngine:
         self.callback = callback or (lambda *args: None)
         self.user_scope_id = user_scope_id
         self.username = username or "admin"
+
+        # Per-step output validation (opt-in). Set by the caller (run_temp) when an agent is
+        # available: _validate_step(goal, result, tool, user_intent) -> (fulfilled, retry_hint).
+        # Left None elsewhere (persistent/scheduled workflows) → validation simply does not run.
+        self._validate_step: Optional[Callable[[str, str, str, str], tuple]] = None
+        self._workflow_user_intent: str = ""
 
         # Initialize context manager for workflow execution (like main agent)
         from vaf.core.context import ContextManager
@@ -388,6 +404,20 @@ class WorkflowEngine:
                         + args["task"]
                         + _correction_block
                     )
+
+                # Correction hint for non-anchor validatable tools (document_agent, browser_agent):
+                # the anchor block above only injects for anchor tools. Append the previous-attempt
+                # correction to whichever primary instruction arg the tool uses, so a validation
+                # retry actually carries the fix forward.
+                _corr_hint = getattr(step, '_assert_correction', None)
+                if _corr_hint and step.tool in VALIDATABLE_TOOLS and step.tool not in _ANCHOR_TOOLS:
+                    for _ck in ("task", "input", "prompt", "instruction"):
+                        if isinstance(args.get(_ck), str):
+                            args[_ck] = (
+                                args[_ck]
+                                + f"\n\n[CORRECTION REQUIRED — Previous attempt did not fulfil the goal]\n{_corr_hint}"
+                            )
+                            break
 
                 # ── Auto-inject shared project_path for coding_agent / document_writer ──
                 # Prevents each step from creating its own scattered project directory.
@@ -691,6 +721,7 @@ class WorkflowEngine:
                             'args_template': s.args_template,
                             'on_success': s.on_success,
                             'on_failure': s.on_failure,
+                            'validate': s.validate,
                             'status': s.status.value,
                             'result': s.result,
                             'error': s.error,
@@ -819,6 +850,51 @@ class WorkflowEngine:
                             _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
                             _jump_count += 1
                             continue
+
+                # ── Validation Gate: does the output fulfil the step's goal? ───────
+                # Opt-in (step.validate) and only for content/agent tools where a correction
+                # retry can change the result. Unlike the assertion gate, exhausting the
+                # retries does NOT fail the step — the last version is accepted and we move on.
+                from vaf.core.config import Config as _CfgVal
+                if (
+                    step.validate
+                    and step.tool in VALIDATABLE_TOOLS
+                    and self._validate_step is not None
+                    and _CfgVal.get("workflow_step_validation_enabled", True)
+                ):
+                    _val_retry = getattr(step, '_validation_retry_count', 0)
+                    _val_max = int(_CfgVal.get("workflow_step_validation_max_retries", 3))
+                    _goal = (step.description or step.input_template or "").strip()
+                    try:
+                        _ok, _hint = self._validate_step(
+                            _goal, str(result), step.tool, self._workflow_user_intent
+                        )
+                    except Exception as _ve:
+                        # Never let a validator error break the workflow — accept the result.
+                        UI.event("Workflow", f"  [VALIDATE] validator error, accepting result: {_ve}", style="dim")
+                        _ok, _hint = True, None
+
+                    if not _ok and _val_retry < _val_max:
+                        step._validation_retry_count = _val_retry + 1
+                        step._assert_correction = (
+                            _hint or "The output did not fulfil the step's goal. Redo it correctly."
+                        )
+                        step.status = StepStatus.PENDING
+                        outputs = {k: v for k, v in outputs_snapshot.items()}
+                        UI.event(
+                            "Workflow",
+                            f"  [VALIDATE RETRY {step._validation_retry_count}/{_val_max}] {step._assert_correction}",
+                            style="warning",
+                        )
+                        # Stay on the current step (_step_idx not advanced) — re-run with correction.
+                        self.callback("start", step, i, len(steps))
+                        continue
+                    elif not _ok:
+                        UI.event(
+                            "Workflow",
+                            f"  [VALIDATE] {_val_max} retries reached — accepting current result and continuing",
+                            style="warning",
+                        )
 
                 step.status = StepStatus.SUCCESS
                 step.result = result
@@ -1028,6 +1104,7 @@ class WorkflowEngine:
                 args_template=step_data.get('args_template'),
                 on_success=step_data.get('on_success'),
                 on_failure=step_data.get('on_failure'),
+                validate=step_data.get('validate', False),
             )
             # Restore status
             step.status = StepStatus(step_data['status'])
@@ -1332,6 +1409,7 @@ def create_workflow(template: Dict[str, Any]) -> List[WorkflowStep]:
             on_failure=step_def.get("on_failure"),
             assertions=step_def.get("assertions"),
             max_assertion_retries=step_def.get("max_assertion_retries", 1),
+            validate=step_def.get("validate", False),
         ))
     return steps
 

@@ -1326,6 +1326,121 @@ class Agent:
             return task or proj
         return ""
 
+    def _run_validation_llm(self, messages: list, max_tokens: int = 150) -> str:
+        """One validation completion against whichever backend is active (server/api/local).
+        Shared by the sub-agent validator and the per-step workflow validator. Returns the
+        response content ("" if the backend produced nothing). Raises on backend errors so the
+        caller can fall back to its heuristic."""
+        if self.use_server:
+            res = requests.post(
+                "http://127.0.0.1:8080/v1/chat/completions",
+                json={"messages": messages, "max_tokens": max_tokens, "temperature": 0, "stream": False},
+                timeout=30,
+            ).json()
+            return (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        if self.api_backend:
+            chunks = list(
+                self.api_backend.chat_completion(
+                    messages=messages, max_tokens=max_tokens, temperature=0, stream=False
+                )
+            )
+            return "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+        if self.llm:
+            output = self.llm.create_chat_completion(
+                messages=messages, max_tokens=max_tokens, temperature=0
+            )
+            return (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        return ""
+
+    def _resolve_user_intent(self) -> str:
+        """Best-effort original user intent: delegation intent (written before a sub-agent call),
+        then persisted user intent, then the last user message in history. Used by both the
+        sub-agent validator and the per-step workflow validator."""
+        try:
+            if getattr(self, "main_persistence", None):
+                delegation = self.main_persistence.get_subagent_delegation_intent()
+                if delegation and delegation.get("intent"):
+                    return delegation["intent"]
+        except Exception:
+            pass
+        try:
+            if getattr(self, "main_persistence", None):
+                intent = self.main_persistence.get_user_intent() or ""
+                if intent:
+                    return intent
+        except Exception:
+            pass
+        if getattr(self, "history", None):
+            for msg in reversed(self.history):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    return msg.get("content", "") or ""
+        return ""
+
+    def _validate_step_output(
+        self, goal: str, result: str, tool: str, user_intent: str = ""
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Per-workflow-step validation: does this step's OUTPUT fulfil the step's GOAL?
+
+        Unlike _validate_subagent_result_with_llm, this has NO lenient "report saved → accept"
+        fast-path — that one would wave through an empty/wrong document just because the tool
+        reported success. Here the actual content is judged against the goal. Returns
+        (fulfilled, retry_hint). Any failure to decide → (True, None) so a flaky validator can
+        never break a workflow.
+        """
+        result = (result or "").strip()
+        goal = (goal or "").strip()
+        if not result or not goal:
+            return True, None
+
+        # Coding output with an explicit completion signal is trusted (the local model tends to
+        # false-negative on perfectly valid code), mirroring the sub-agent validator.
+        if tool == "coding_agent" and "[vaf_coding_agent_status: complete]" in result.lower():
+            return True, None
+
+        if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
+            return True, None  # no backend to validate with → accept
+
+        prompt = (
+            "You are a strict validator for ONE step of a multi-step workflow.\n"
+            "Judge ONLY whether the STEP OUTPUT actually fulfils the STEP GOAL — by its CONTENT, "
+            "not by whether a tool merely reported success.\n\n"
+            f"STEP GOAL: {goal[:600]}\n"
+            f"OVERALL USER INTENT: {(user_intent or '')[:400]}\n"
+            f"STEP OUTPUT: {result[:1200]}\n\n"
+            "Reply with EXACTLY one of:\n"
+            "- </true> if the output fulfils the goal\n"
+            "- </false> if it does NOT (empty, wrong content, missing the requested data, off-topic)\n\n"
+            "If </false>, add on the next line: RETRY: [one concrete instruction to fix it]"
+        )
+        stricter_prompt = (
+            "Reply with EXACTLY </true> or </false>. Nothing else.\n"
+            f"GOAL: {goal[:300]}\n"
+            f"OUTPUT: {result[:500]}\n"
+            "Does the output fulfil the goal? </true> or </false>"
+        )
+
+        for attempt in range(3):
+            try:
+                content = self._run_validation_llm(
+                    [{"role": "user", "content": stricter_prompt if attempt > 0 else prompt}],
+                    max_tokens=150,
+                )
+            except Exception:
+                return True, None  # backend error → never block the workflow
+            resp = (content or "").strip().lower()
+            if "</true>" in resp:
+                return True, None
+            if "</false>" in resp:
+                retry_hint = None
+                for line in (content or "").splitlines():
+                    if "retry:" in line.lower():
+                        retry_hint = line.split(":", 1)[-1].strip()
+                        break
+                return False, (retry_hint or f"The output did not fulfil the goal: {goal[:200]}")
+        # No decisive answer after retries → accept (don't burn workflow retries on indecision).
+        return True, None
+
     def _validate_subagent_result_with_llm(
         self, user_intent: str, task_description: str, result: str, agent_type: str
     ) -> Tuple[bool, Optional[str]]:
@@ -1395,36 +1510,7 @@ class Agent:
             content = ""
             try:
                 temp_history = [{"role": "user", "content": stricter_prompt if attempt > 0 else prompt}]
-                if self.use_server:
-                    payload = {
-                        "messages": temp_history,
-                        "max_tokens": 150,
-                        "temperature": 0,
-                        "stream": False,
-                    }
-                    res = requests.post(
-                        "http://127.0.0.1:8080/v1/chat/completions",
-                        json=payload,
-                        timeout=30,
-                    ).json()
-                    content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
-                elif self.api_backend:
-                    chunks = list(
-                        self.api_backend.chat_completion(
-                            messages=temp_history,
-                            max_tokens=150,
-                            temperature=0,
-                            stream=False,
-                        )
-                    )
-                    content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
-                elif self.llm:
-                    output = self.llm.create_chat_completion(
-                        messages=temp_history,
-                        max_tokens=150,
-                        temperature=0,
-                    )
-                    content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                content = self._run_validation_llm(temp_history, max_tokens=150)
             except Exception as e:
                 from vaf.cli.ui import UI
                 UI.event("Debug", f"Sub-agent validation LLM call failed: {e}", style="dim")

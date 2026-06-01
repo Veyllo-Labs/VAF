@@ -101,6 +101,12 @@ class Config:
                 # are only the worst-case ceiling.
                 "subagent_liveness_timeout_seconds": 60,
 
+                # Per-step workflow output validation: an opt-in LLM check that a content/agent
+                # step's output actually fulfils the step's goal, retried with a correction hint
+                # up to N times, then the last version is accepted and the workflow continues.
+                "workflow_step_validation_enabled": True,      # global kill-switch
+                "workflow_step_validation_max_retries": 3,     # retries before accepting the result
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

@@ -53,8 +53,9 @@ can no longer freeze the backend, and the Stop button cancels in-flight work. Th
 `subagent_liveness_timeout_seconds`) and can be force-killed individually via
 `POST /api/supervisor/cancel` `{task_id}` → `Platform.stop_webui_subagent_process_by_task`
 kills the child process tree and the IPC task is failed so any engine wait unblocks. The WebUI
-shows this inline in the running tool bubble (heartbeat · runtime · kill, between input and
-output) and in a fallback panel for units without a bubble (e.g. workflow steps).
+shows this inline in the sub-agent's tool bubble (gated on a live unit, so it stays while the
+delegated subprocess runs), and as lines in the Workflow Runtime terminal for sub-agents that have
+no bubble (workflow steps). See [Workflow UI Components](WORKFLOW_UI_COMPONENTS.md).
 
 ---
 

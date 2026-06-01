@@ -12,7 +12,7 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 4. **DocumentViewer** - Attachments panel (paperclip): PDF, DOCX, Office, and text display with quote-from-selection
 5. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and optional attachments mode with compact document switcher
 6. **BrowserLiveTile** - Live browser screenshots tiled to the left of the Workflow Runtime window while a browser sub-agent runs inside a workflow
-7. **WatchdogPanel** - Live running sub-agents (heartbeat · runtime · kill); shown inline in the running tool bubble, with a fallback panel (bottom-left) for units without a bubble
+7. **Watchdog** - Live running sub-agents (heartbeat · runtime · kill); shown inline in the sub-agent's tool bubble, and as lines in the Workflow Runtime terminal for sub-agents that have no bubble (workflow steps)
 
 ## Component Architecture
 
@@ -91,16 +91,21 @@ Frames are cleared on `workflow_start` (no stale frame) and `workflow_done` (til
 user can dismiss it (re-armed on the next run). This is the specific "two visual windows side by
 side" case — see [Window Tiling](WINDOW_TILING_DESIGN.md).
 
-### WatchdogPanel
+### Watchdog (in the tool bubble + workflow terminal)
 
-Located at `web/components/WatchdogPanel.tsx` (+ inline in `web/components/ToolMessage.tsx`)
+Live view of the supervised sub-agent units from `GET /api/supervisor/status` — agent type, runtime,
+heartbeat freshness (green < 10 s / amber / red = stale), and a per-unit **kill** button
+(`POST /api/supervisor/cancel`).
 
-Live view of the supervised sub-agent units from `GET /api/supervisor/status` — agent type,
-runtime, heartbeat freshness (green < 10 s / amber / red = stale), and a per-unit **kill** button
-(`POST /api/supervisor/cancel`). The primary surface is **inline in the running tool bubble**
-(`ToolMessage`, between input and output) for direct sub-agent calls; the bottom-left
-`WatchdogPanel` is a fallback for units **without** an inline bubble (e.g. workflow steps),
-hiding the agent types already shown inline (`excludeAgentTypes`).
+- **Direct sub-agent calls** show the watchdog **inline in their own tool bubble** (`web/components/ToolMessage.tsx`).
+  A spawned sub-agent delegates immediately, so the bubble's status flips to "completed" while the
+  subprocess keeps running — therefore the row is gated on a **live supervised unit** (matched by the
+  task id from the delegation marker), not on the bubble status, and the bubble is kept open while the
+  unit is alive.
+- **Workflow-step sub-agents** have no tool bubble, so their heartbeat/runtime is surfaced as **lines
+  in the Workflow Runtime terminal** (emitted by `WorkflowEngine._await_subagent`).
+
+There is no separate floating panel.
 
 ### DocumentEditor
 

@@ -15,6 +15,28 @@ from pathlib import Path
 
 import queue
 from datetime import datetime as _dt
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+
+
+# Fire-and-forget pool for bridging sub-agent events (browser frames/steps) from a sub-agent
+# subprocess to the main VAF process over HTTP, without blocking the caller's event loop.
+_BRIDGE_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="subagent-bridge")
+
+
+def _post_to_parent(data: dict) -> None:
+    """POST one event to the main process's /api/subagent/stream (used from sub-agent subprocesses,
+    which have no local WebSocket clients of their own)."""
+    try:
+        import requests as _req
+        from vaf.core.config import Config
+        port = 8005 if Config.get("local_network_tls_enabled", False) else 8001
+        _req.post(f"http://127.0.0.1:{port}/api/subagent/stream", json=data, timeout=1.5)
+    except Exception:
+        pass
+
+
+def _in_subagent_subprocess() -> bool:
+    return os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() in ("1", "true", "yes")
 
 
 def _diag_log(msg: str) -> None:
@@ -349,19 +371,34 @@ class WebInterfaceManager:
 
     def emit_browser_frame(self, frame_b64: str, url: str = "", session_id: str = None):
         """Emit a live browser screenshot frame for browser_agent live view in WebUI."""
-        self._push_session_update(session_id, {
+        payload = {
             "type": "browser_frame_update",
             "frame": frame_b64,
             "url": url,
-            "timestamp": __import__("datetime").datetime.now().isoformat()
-        })
+            "timestamp": _dt.now().isoformat(),
+        }
+        # browser_agent runs in its own subprocess (no local WS clients) and emits frames from
+        # inside the browser-use asyncio loop — bridge to the main process off-thread so the
+        # loop never blocks on the HTTP post.
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
 
     def emit_browser_step(self, line: str, session_id: str = None):
         """Emit a single browser-use agent log line to the WebUI SubAgent console."""
-        self._push_session_update(session_id, {
+        payload = {
             "type": "browser_step_update",
             "line": line,
-        })
+        }
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
 
     def emit_stats(self, stats: dict, session_id: str = None):
         """Emit context/token statistics."""

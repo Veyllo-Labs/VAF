@@ -2,8 +2,28 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
+import { cn, getApiBase } from '@/lib/utils';
+
+/** A sub-agent (librarian/research/document/coding/browser) — these run as supervised units. */
+const SUBAGENT_RE = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/;
+
+interface SupervisorUnit {
+    task_id: string;
+    agent_type: string;
+    status: string;
+    runtime_s?: number | null;
+    heartbeat_age_s?: number | null;
+    stale?: boolean;
+}
+
+function fmtDuration(s?: number | null): string {
+    if (s == null) return '—';
+    if (s < 60) return `${Math.round(s)}s`;
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return `${m}m ${sec}s`;
+}
 
 export interface ToolMessageProps {
     id: string;
@@ -101,6 +121,52 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     const [isExpanded, setIsExpanded] = useState(false);
     const animInput = extractMainInput(args);
     const wfBadge = name === 'create_agent_workflow' ? workflowBadge(args) : null;
+
+    // ── Live watchdog: while a sub-agent tool runs, surface its supervised unit
+    //    (heartbeat, runtime) and a kill button, matched by agent_type === tool name.
+    const isSubAgent = SUBAGENT_RE.test(name.toLowerCase());
+    const [liveUnit, setLiveUnit] = useState<SupervisorUnit | null>(null);
+    const [killing, setKilling] = useState(false);
+
+    useEffect(() => {
+        if (status !== 'running' || !isSubAgent) {
+            setLiveUnit(null);
+            return;
+        }
+        let stopped = false;
+        const poll = async () => {
+            try {
+                const r = await fetch(`${getApiBase()}/api/supervisor/status`, { credentials: 'include' });
+                if (!r.ok) return;
+                const d = await r.json();
+                const units: SupervisorUnit[] = Array.isArray(d.units) ? d.units : [];
+                const match = units.find((u) => (u.agent_type || '').toLowerCase() === name.toLowerCase()) || null;
+                if (!stopped) setLiveUnit(match);
+            } catch {
+                /* transient — keep last */
+            }
+        };
+        poll();
+        const id = setInterval(poll, 2000);
+        return () => { stopped = true; clearInterval(id); };
+    }, [status, isSubAgent, name]);
+
+    const killUnit = async () => {
+        if (!liveUnit?.task_id) return;
+        setKilling(true);
+        try {
+            await fetch(`${getApiBase()}/api/supervisor/cancel`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id: liveUnit.task_id }),
+            });
+        } catch {
+            /* next poll reflects reality */
+        }
+        setLiveUnit(null);
+        setKilling(false);
+    };
 
     // visualStatus lags behind the real status by 450ms on completion so the
     // cursor return-to-avatar animation finishes before the green checkmark appears
@@ -219,6 +285,46 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 </div>
                                             )
                                         }
+                                    </div>
+                                )}
+
+                                {/* Watchdog: live heartbeat + runtime + kill, between input and output */}
+                                {status === 'running' && liveUnit && (
+                                    <div className="mb-2">
+                                        <div className="flex items-center gap-1 opacity-70 mb-1 font-semibold">
+                                            <Activity className="h-3 w-3" />
+                                            <span>Watchdog</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 rounded border border-border/40 bg-background/60 px-2 py-1.5">
+                                            <span
+                                                className={cn(
+                                                    'h-2 w-2 rounded-full shrink-0',
+                                                    liveUnit.stale
+                                                        ? 'bg-red-500'
+                                                        : (liveUnit.heartbeat_age_s != null && liveUnit.heartbeat_age_s < 10)
+                                                            ? 'bg-emerald-500 animate-pulse'
+                                                            : 'bg-amber-400 animate-pulse'
+                                                )}
+                                            />
+                                            <span className="text-[11px] text-foreground">
+                                                {liveUnit.stale ? 'Kein Heartbeat — hängt evtl.' : 'Aktiv'}
+                                                {liveUnit.runtime_s != null && (
+                                                    <span className="text-muted-foreground"> · {fmtDuration(liveUnit.runtime_s)}</span>
+                                                )}
+                                                {liveUnit.heartbeat_age_s != null && (
+                                                    <span className="text-muted-foreground"> · ♥ {fmtDuration(liveUnit.heartbeat_age_s)}</span>
+                                                )}
+                                            </span>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); killUnit(); }}
+                                                disabled={killing}
+                                                title="Diesen Sub-Agent killen"
+                                                className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                                            >
+                                                {killing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Skull className="h-3 w-3" />}
+                                                Kill
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
 

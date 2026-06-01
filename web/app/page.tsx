@@ -1152,6 +1152,33 @@ function VAFDashboardContent() {
         next.has(idx) ? next.delete(idx) : next.add(idx);
         return next;
     });
+
+    // Auto-collapse long bot responses when the user sends a new message.
+    // collapsedBotMsgs tracks which assistant message indices are collapsed.
+    const [collapsedBotMsgs, setCollapsedBotMsgs] = useState<Set<number>>(new Set());
+    const BOT_COLLAPSE_THRESHOLD = 800; // chars — shorter replies stay fully visible
+    const BOT_COLLAPSED_PREVIEW = 300;  // chars shown when collapsed
+
+    // Watch for new user messages and collapse the previous bot reply if it's long.
+    const lastUserMsgCountRef = useRef(0);
+    useEffect(() => {
+        const userCount = messages.filter(m => m.role === 'user').length;
+        if (userCount <= lastUserMsgCountRef.current) return;
+        lastUserMsgCountRef.current = userCount;
+
+        // Find the last assistant message before the latest user message
+        const latestUserIdx = messages.map((m, i) => m.role === 'user' ? i : -1).filter(i => i >= 0).pop() ?? -1;
+        if (latestUserIdx <= 0) return;
+        for (let i = latestUserIdx - 1; i >= 0; i--) {
+            if (messages[i].role === 'assistant') {
+                const content = String(messages[i].content ?? '');
+                if (content.length > BOT_COLLAPSE_THRESHOLD) {
+                    setCollapsedBotMsgs(prev => new Set(prev).add(i));
+                }
+                break;
+            }
+        }
+    }, [messages]);
     // Reset offset when session changes so we always start at the bottom.
     useEffect(() => { setMsgOffset(0); }, [currentSessionId]);
     const visibleMessages = useMemo(() => {
@@ -4578,6 +4605,18 @@ function VAFDashboardContent() {
                                                                                             {expandedMsgs.has(trueIndex) ? '▲ Show less' : `▼ Show more (${displayAnswer.length.toLocaleString()} chars)`}
                                                                                         </button>
                                                                                     </>
+                                                                                ) : isBot && collapsedBotMsgs.has(trueIndex) ? (
+                                                                                    <>
+                                                                                        <div className="chat-markdown">
+                                                                                            <ChatMarkdown>{cleanAnswer.slice(0, BOT_COLLAPSED_PREVIEW) + '…'}</ChatMarkdown>
+                                                                                        </div>
+                                                                                        <button
+                                                                                            onClick={() => setCollapsedBotMsgs(prev => { const n = new Set(prev); n.delete(trueIndex); return n; })}
+                                                                                            className="mt-1 text-xs text-gray-400 hover:text-gray-700 transition-colors"
+                                                                                        >
+                                                                                            ▼ Show full response ({cleanAnswer.length.toLocaleString()} chars)
+                                                                                        </button>
+                                                                                    </>
                                                                                 ) : (
                                                                                     <div className="chat-markdown"><ChatMarkdown dark={!isBot}>{isBot ? cleanAnswer : displayAnswer}</ChatMarkdown></div>
                                                                                 )}
@@ -5245,7 +5284,7 @@ function VAFDashboardContent() {
             {/* Context Window Modal - Clean & Professional */}
             {isContextModalOpen && contextStats && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                    <div className="bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
                         {/* Header */}
                         <div className="shrink-0 px-8 py-6 border-b border-gray-100 bg-gray-50/80">
                             <div className="flex justify-between items-start">
@@ -5296,7 +5335,7 @@ function VAFDashboardContent() {
                         {/* Diagram area with legend */}
                         <div className="flex px-8 py-6 flex-1 min-h-0 gap-6">
                             {/* Legend - Left side with token count and percentage */}
-                            <div className="shrink-0 w-52 flex flex-col justify-center gap-3 text-sm">
+                            <div className="shrink-0 w-52 flex flex-col justify-start gap-3 text-sm">
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-gray-800 mt-1 shrink-0"></div>
                                     <div className="min-w-0">
@@ -5492,42 +5531,94 @@ function VAFDashboardContent() {
                                 })()}
                             </div>
 
-                            {/* Brain Panel - right side: working memory, plan, tasks, team */}
-                            <div className="shrink-0 w-56 flex flex-col gap-3 overflow-y-auto max-h-full border-l border-gray-100 pl-4">
-                                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest pb-1 border-b border-gray-100">🧠 Agent Brain</div>
-                                {/* Intent */}
-                                {brainData?.intent && (
-                                    <div>
-                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Goal</div>
-                                        <div className="text-xs text-gray-700 bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-200 leading-relaxed line-clamp-3" title={brainData.intent}>
-                                            {brainData.intent}
-                                        </div>
-                                    </div>
-                                )}
+                            {/* Brain + Tasks — unified panel, ganz rechts */}
+                            <div className="shrink-0 w-[420px] flex gap-0 border-l border-gray-200 rounded-r-xl overflow-hidden">
 
-                                {/* Plan */}
-                                {brainData && brainData.plan.length > 0 && (
-                                    <div>
-                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Plan</div>
-                                        <div className="space-y-0.5">
-                                            {brainData.plan.map((step, i) => (
-                                                <div key={i} className="flex items-start gap-1.5 text-xs text-gray-700">
-                                                    <span className="shrink-0 font-mono text-[10px] text-gray-400 mt-0.5">{i + 1}.</span>
-                                                    <span className="leading-relaxed">{step}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
+                                {/* Brain: Goal, Plan, Notes, Team */}
+                                <div className="flex-1 flex flex-col gap-3 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden bg-gray-50/60 px-4 py-3">
+                                    <div className="text-xs font-bold text-gray-500 uppercase tracking-widest pb-1 border-b border-gray-200">🧠 Agent Brain</div>
 
-                                {/* Tasks */}
-                                {brainData && brainData.tasks.length > 0 && (
-                                    <div>
-                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Tasks</div>
-                                        <div className="space-y-0.5">
+                                    {/* Goal */}
+                                    {brainData?.intent && (
+                                        <div>
+                                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Goal</div>
+                                            <div className="text-xs text-gray-700 bg-white rounded-lg px-2 py-1.5 border border-gray-200 leading-relaxed max-h-20 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                                {brainData.intent}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Plan */}
+                                    {brainData && brainData.plan.length > 0 && (
+                                        <div>
+                                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Plan</div>
+                                            <div className="space-y-0.5">
+                                                {brainData.plan.map((step, i) => (
+                                                    <div key={i} className="flex items-start gap-1.5 text-xs text-gray-700">
+                                                        <span className="shrink-0 font-mono text-[10px] text-gray-400 mt-0.5">{i + 1}.</span>
+                                                        <span className="leading-relaxed">{step}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Notes */}
+                                    {brainData && brainData.notes.length > 0 && (
+                                        <div>
+                                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Notes</div>
+                                            <div className="space-y-0.5 max-h-28 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                                {brainData.notes.map((n, i) => (
+                                                    <div key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
+                                                        <span className="shrink-0 text-gray-300 mt-0.5">·</span>
+                                                        <span className="leading-relaxed">{n}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Team */}
+                                    {brainData && brainData.agents.length > 0 && (
+                                        <div>
+                                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Team</div>
+                                            <div className="space-y-1.5 max-h-36 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                                {brainData.agents.map((a, i) => {
+                                                    const dot = a.status === 'running' ? 'bg-emerald-500 animate-pulse'
+                                                        : a.status === 'failed' ? 'bg-red-500'
+                                                        : a.status === 'needs_clarification' ? 'bg-amber-400 animate-pulse'
+                                                        : 'bg-gray-400';
+                                                    return (
+                                                        <div key={i} className="flex items-start gap-1.5">
+                                                            <span className={cn('shrink-0 mt-1 h-1.5 w-1.5 rounded-full', dot)} />
+                                                            <div className="min-w-0">
+                                                                <div className="text-[11px] font-semibold text-gray-800 truncate">{a.agent_type.replace(/_/g, ' ')}</div>
+                                                                {a.task && <div className="text-[10px] text-gray-500 truncate">{a.task}</div>}
+                                                                {a.question && <div className="text-[10px] text-amber-600 truncate">❓ {a.question}</div>}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {brainData && !brainData.intent && brainData.plan.length === 0 && brainData.notes.length === 0 && brainData.agents.length === 0 && (
+                                        <div className="text-xs text-gray-400 italic text-center pt-4">Nothing active</div>
+                                    )}
+                                    {!brainData && (
+                                        <div className="text-xs text-gray-400 italic text-center pt-4">Loading…</div>
+                                    )}
+                                </div>
+
+                                {/* Tasks — gleiche Einheit, durch dünne Linie getrennt */}
+                                <div className="w-44 shrink-0 flex flex-col gap-2 border-l border-gray-200 bg-gray-50/40 px-3 py-3">
+                                    <div className="text-xs font-bold text-gray-500 uppercase tracking-widest pb-1 border-b border-gray-200">✅ Tasks</div>
+                                    {brainData && brainData.tasks.length > 0 ? (
+                                        <div className="flex flex-col gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                                             {brainData.tasks.map((t, i) => (
                                                 <div key={i} className="flex items-start gap-1.5 text-xs">
-                                                    <span className={cn('shrink-0 mt-0.5', t.status === 'done' ? 'text-emerald-500' : 'text-amber-500')}>
+                                                    <span className={cn('shrink-0 mt-0.5 leading-none', t.status === 'done' ? 'text-emerald-500' : 'text-amber-400')}>
                                                         {t.status === 'done' ? '✓' : '○'}
                                                     </span>
                                                     <span className={cn('leading-relaxed', t.status === 'done' ? 'text-gray-400 line-through' : 'text-gray-700')}>
@@ -5536,56 +5627,11 @@ function VAFDashboardContent() {
                                                 </div>
                                             ))}
                                         </div>
-                                    </div>
-                                )}
+                                    ) : (
+                                        <div className="text-xs text-gray-400 italic pt-2">No tasks</div>
+                                    )}
+                                </div>
 
-                                {/* Notes */}
-                                {brainData && brainData.notes.length > 0 && (
-                                    <div>
-                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Notes</div>
-                                        <div className="space-y-0.5">
-                                            {brainData.notes.map((n, i) => (
-                                                <div key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
-                                                    <span className="shrink-0 text-gray-300 mt-0.5">·</span>
-                                                    <span className="leading-relaxed">{n}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Team / Sub-agents */}
-                                {brainData && brainData.agents.length > 0 && (
-                                    <div>
-                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Team</div>
-                                        <div className="space-y-1.5">
-                                            {brainData.agents.map((a, i) => {
-                                                const dot = a.status === 'running' ? 'bg-emerald-500 animate-pulse'
-                                                    : a.status === 'failed' ? 'bg-red-500'
-                                                    : a.status === 'needs_clarification' ? 'bg-amber-400 animate-pulse'
-                                                    : 'bg-gray-400';
-                                                return (
-                                                    <div key={i} className="flex items-start gap-1.5">
-                                                        <span className={cn('shrink-0 mt-1 h-1.5 w-1.5 rounded-full', dot)} />
-                                                        <div className="min-w-0">
-                                                            <div className="text-[11px] font-semibold text-gray-800 truncate">{a.agent_type.replace(/_/g, ' ')}</div>
-                                                            {a.task && <div className="text-[10px] text-gray-500 truncate">{a.task}</div>}
-                                                            {a.question && <div className="text-[10px] text-amber-600 truncate">❓ {a.question}</div>}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Empty state */}
-                                {brainData && !brainData.intent && brainData.plan.length === 0 && brainData.tasks.length === 0 && brainData.notes.length === 0 && brainData.agents.length === 0 && (
-                                    <div className="text-xs text-gray-400 italic text-center pt-4">Agent has no active plan or tasks</div>
-                                )}
-                                {!brainData && (
-                                    <div className="text-xs text-gray-400 italic text-center pt-4">Loading…</div>
-                                )}
                             </div>
                         </div>
 

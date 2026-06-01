@@ -657,18 +657,19 @@ class BrowserAgentTool(BaseTool):
                 from vaf.core.subagent_ipc import get_ipc, get_current_session_id
                 ipc = get_ipc()
                 task_id = ipc.create_task("browser_agent", task_description=task)
+                # Session/task context goes into the CHILD env only (not the parent's global env),
+                # so concurrent workers don't clobber each other's session.
                 _sid = get_current_session_id()
+                _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "browser_agent"}
                 if _sid:
-                    _os.environ["VAF_SESSION_ID"] = _sid
-                _os.environ["VAF_TASK_ID"] = task_id
-                _os.environ["VAF_AGENT_TYPE"] = "browser_agent"
+                    _sub_env["VAF_SESSION_ID"] = _sid
                 _parts = [_sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'browser_agent',
                           '--task', task, '--task-id', task_id]
                 if Platform.is_windows():
                     _cmd = ' '.join((f'"{p}"' if (' ' in p or '"' in p) else p) for p in _parts)
                 else:
                     _cmd = ' '.join(_shlex.quote(str(p)) for p in _parts)
-                if Platform.open_new_terminal(_cmd, title=f"VAF Browser Agent [{task_id}]"):
+                if Platform.open_new_terminal(_cmd, title=f"VAF Browser Agent [{task_id}]", extra_env=_sub_env):
                     ipc.mark_task_running(task_id)
                     return (f"[SUBAGENT_ASYNC:{task_id}:browser_agent] "
                             f"Browser agent running as a child process. Task: {task[:80]}...")

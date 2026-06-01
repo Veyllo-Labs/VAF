@@ -10,6 +10,7 @@ Architecture:
 - Each task has a unique ID for result matching
 - Workflows can pause and resume when waiting for sub-agent results
 """
+import contextvars
 import json
 import os
 import uuid
@@ -706,8 +707,19 @@ class SubAgentIPC:
 # Global IPC instance for convenience
 _ipc_instance: Optional[SubAgentIPC] = None
 
-# Current session ID - set when a new session starts
+# Current session ID - set when a new session starts.
+#
+# Stored two ways so multiple worker threads (parallel_main_workers > 1) don't clobber each
+# other while the single-worker default stays byte-for-byte unchanged:
+#   • _session_ctx (ContextVar): per-thread/context override — each worker thread sets and reads
+#     its OWN session id, so concurrent sessions never overwrite one another.
+#   • _current_session_id (module global): process-wide fallback used only when the ContextVar is
+#     unset (e.g. a background helper thread that reads it without one). At one worker the two are
+#     always in sync, so behaviour is identical to before.
 _current_session_id: Optional[str] = None
+_session_ctx: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "vaf_current_session_id", default=None
+)
 
 
 def get_ipc() -> SubAgentIPC:
@@ -721,14 +733,24 @@ def get_ipc() -> SubAgentIPC:
 def set_current_session_id(session_id: str):
     """
     Set the current session ID for sub-agent tracking.
-    Should be called when a new session starts.
+    Should be called when a new session starts (per worker thread).
     """
     global _current_session_id
-    _current_session_id = session_id
+    _current_session_id = session_id   # process-wide fallback (single-worker / legacy readers)
+    try:
+        _session_ctx.set(session_id)   # per-thread override (multi-worker safety)
+    except Exception:
+        pass
 
 
 def get_current_session_id() -> Optional[str]:
-    """Get the current session ID."""
+    """Get the current session ID — the per-thread value if set, else the process-wide fallback."""
+    try:
+        v = _session_ctx.get()
+        if v is not None:
+            return v
+    except Exception:
+        pass
     return _current_session_id
 
 

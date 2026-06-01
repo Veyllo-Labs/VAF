@@ -478,19 +478,19 @@ class ResearchAgentTool(BaseTool):
             # Use RAW topic for description so we see the full request
             task_id = ipc.create_task("research_agent", task_description=raw_topic)
             
-            # Pass session ID to sub-agent via environment variable
+            # Pass session/task context to the sub-agent via the CHILD env only (not the parent's
+            # process-global os.environ), so concurrent workers don't clobber each other's session.
             session_id = get_current_session_id()
+            _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "research_agent"}
             if session_id:
-                os.environ["VAF_SESSION_ID"] = session_id
-            os.environ["VAF_TASK_ID"] = task_id
-            os.environ["VAF_AGENT_TYPE"] = "research_agent"
-            
+                _sub_env["VAF_SESSION_ID"] = session_id
+
             # Pass provider configuration to sub-agent
             use_separate_provider = Config.get("subagent_use_separate_provider", False)
             if use_separate_provider:
                 subagent_provider = Config.get("subagent_provider", "inherit")
                 if subagent_provider != "inherit":
-                    os.environ["VAF_PROVIDER"] = subagent_provider
+                    _sub_env["VAF_PROVIDER"] = subagent_provider
             
             # Pass RAW topic to sub-agent (it will clean it up)
             cmd_parts = [sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'research_agent', '--topic', raw_topic, '--task-id', task_id]
@@ -515,7 +515,7 @@ class ResearchAgentTool(BaseTool):
                 cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
                 title = f"VAF Research Agent [{task_id}]"
             
-            if Platform.open_new_terminal(cmd, title=title):
+            if Platform.open_new_terminal(cmd, title=title, extra_env=_sub_env):
                 # Mark task as running
                 ipc.mark_task_running(task_id)
                 

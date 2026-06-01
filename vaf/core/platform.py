@@ -520,13 +520,18 @@ class Platform:
         return Platform.has_command("git")
     
     @staticmethod
-    def open_new_terminal(command: str, title: str = None) -> bool:
+    def open_new_terminal(command: str, title: str = None, extra_env: dict = None) -> bool:
         """
         Open a new terminal window and execute a command. OS-independent.
 
         Args:
             command: Command to execute in the new terminal
             title: Optional title for the terminal window
+            extra_env: Per-spawn environment overrides for the CHILD (e.g. VAF_SESSION_ID /
+                VAF_TASK_ID / VAF_AGENT_TYPE). Callers should pass session/task context here
+                instead of mutating the parent's process-global os.environ, so concurrent worker
+                threads (parallel_main_workers > 1) don't clobber each other's session context.
+                When omitted, the values are read from os.environ as before (single-worker / legacy).
 
         Returns:
             True if successful, False otherwise
@@ -534,6 +539,13 @@ class Platform:
         import subprocess
         from pathlib import Path
         import datetime
+
+        # Effective per-spawn context: prefer the explicit extra_env, fall back to the process
+        # environment (so unmigrated callers and the single-worker default behave exactly as before).
+        _ee = {k: str(v) for k, v in (extra_env or {}).items() if v is not None}
+        _eff_session = _ee.get("VAF_SESSION_ID") or os.environ.get("VAF_SESSION_ID", "")
+        _eff_task = _ee.get("VAF_TASK_ID") or os.environ.get("VAF_TASK_ID", "")
+        _eff_agent = _ee.get("VAF_AGENT_TYPE") or os.environ.get("VAF_AGENT_TYPE", "")
 
         # CRITICAL: Log IMMEDIATELY at function entry - NO try/except to ensure we see this
         log_dir = Path(os.environ.get("VAF_LOG_DIR", str(Path(__file__).resolve().parents[2] / "logs")))
@@ -547,15 +559,17 @@ class Platform:
             f.write(f"{ts} === open_new_terminal CALLED ===\n")
             f.write(f"{ts} Command: {command[:500]}\n")
             f.write(f"{ts} VAF_WEBUI_ACTIVE={webui_check}\n")
-            f.write(f"{ts} VAF_TASK_ID={os.environ.get('VAF_TASK_ID', 'NOT SET')}\n")
-            f.write(f"{ts} VAF_SESSION_ID={os.environ.get('VAF_SESSION_ID', 'NOT SET')}\n")
+            f.write(f"{ts} VAF_TASK_ID={_eff_task or 'NOT SET'}\n")
+            f.write(f"{ts} VAF_SESSION_ID={_eff_session or 'NOT SET'}\n")
 
         try:
 
             webui_active = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
             if webui_active:
-                # Copy current environment and ensure all VAF_ vars are passed
+                # Copy current environment and ensure all VAF_ vars are passed; per-spawn
+                # overrides (session/task/agent) go into the CHILD env only, never the parent's.
                 env = os.environ.copy()
+                env.update(_ee)
 
                 # stdout is piped (not a real terminal), so Rich Live TUI would
                 # flood the pipe buffer (4 KB on Windows) and deadlock the process.
@@ -587,16 +601,16 @@ class Platform:
                 # Track spawned sub-agent process for hard-stop from Web UI.
                 Platform.register_webui_subagent_process(
                     proc=proc,
-                    session_id=os.environ.get("VAF_SESSION_ID", "").strip() or None,
-                    task_id=os.environ.get("VAF_TASK_ID", "").strip() or None,
+                    session_id=_eff_session.strip() or None,
+                    task_id=_eff_task.strip() or None,
                     command=command,
                 )
                 try:
                     import requests
                     from vaf.core.config import Config
-                    session_id = os.environ.get("VAF_SESSION_ID", "").strip()
-                    task_id = os.environ.get("VAF_TASK_ID", "").strip()
-                    agent_type = os.environ.get("VAF_AGENT_TYPE", "").strip()
+                    session_id = _eff_session.strip()
+                    task_id = _eff_task.strip()
+                    agent_type = _eff_agent.strip()
 
                     # Resolve correct internal API port: when TLS is active the
                     # main backend on 8001 expects HTTPS; the non-SSL internal

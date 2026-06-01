@@ -77,10 +77,16 @@ class AgentWorkflowBuilderTool(BaseTool):
         "DO NOT use action='execute' — that does not exist. "
         "To run something NOW use action='run_temp'. "
         "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
-        "AUTOMATIC CLEANUP (run_temp only): All intermediate files created during the run "
-        "are automatically deleted after completion. Only the final write_file output is kept. "
-        "If the user wants to keep an additional file, pass keep_files=[\"/path/to/file\"]. "
-        "This means: use write_file only for the FINAL deliverable — not for intermediate scripts.\n\n"
+        "AUTOMATIC CLEANUP (run_temp only): throwaway scripts/scratch created during the run "
+        "(.py, .sh, .js, .tmp, …) are deleted after completion; the actual deliverable "
+        "(documents, reports, data, images) is kept. To keep an extra file explicitly, pass "
+        "keep_files=[\"/path/to/file\"]. Use write_file/document steps for the FINAL deliverable, "
+        "and plain scripts for intermediate work.\n\n"
+        "OUTPUT VALIDATION (run_temp only): on content/agent steps (document/research/coding/"
+        "browser/librarian) set \"validate\": true to have the step's output LLM-checked against its "
+        "goal and re-run up to 3x with a correction if it doesn't match, then accept and continue. "
+        "If you provide no validate flags on such steps, run_temp asks you to confirm — flag them "
+        "or pass skip_validation=true.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
         "and a 'tool'. AVAILABLE SUB-AGENTS AND TOOLS FOR STEPS:\n"
         "  coding_agent    — Write/edit code, create HTML/CSS/JS, generate structured files, "
@@ -223,6 +229,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                             },
                         },
                         "max_assertion_retries": {"type": "integer", "description": "How many times to retry on assertion failure (default: 1)."},
+                        "validate":    {"type": "boolean", "description": "Set true on content/agent steps (document/research/coding/browser/librarian) whose output must actually match the step's goal. The output is LLM-checked against the step description; on a mismatch the step is re-run with a correction hint up to 3 times, then the last version is accepted and the workflow continues."},
                     },
                     "required": ["input"],
                 },
@@ -246,10 +253,18 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "items": {"type": "string"},
                 "description": (
                     "For run_temp only: list of absolute file paths to preserve after the workflow "
-                    "finishes. All other intermediate files created during the run are automatically "
-                    "deleted. Use this when the final step produces a document/report the user wants "
-                    "to keep (e.g. keep_files=[\"/home/user/Documents/VAF_Projects/report.pdf\"]). "
-                    "The last write_file output is always kept automatically."
+                    "finishes. Throwaway scripts/scratch are auto-deleted; documents/reports/data are "
+                    "kept by default. Use this only to force-keep something unusual "
+                    "(e.g. keep_files=[\"/home/user/Documents/VAF_Projects/notes.py\"])."
+                ),
+            },
+            "skip_validation": {
+                "type": "boolean",
+                "description": (
+                    "For run_temp only: set true to confirm you intentionally want NO per-step output "
+                    "validation. If a workflow has content/agent steps but none set \"validate\": true and "
+                    "this is not set, run_temp will NOT execute — it asks you to either flag the steps that "
+                    "produce a critical deliverable or set this to confirm you want none."
                 ),
             },
         },
@@ -349,14 +364,14 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "description": s.get("description") or s.get("name") or f"Step {i + 1}",
             }
             for _f in ("on_success", "on_failure", "optional", "condition",
-                       "assertions", "max_assertion_retries", "args"):
+                       "assertions", "max_assertion_retries", "validate", "args"):
                 if _f in s:
                     step_dict[_f] = s[_f]
             normalised.append(step_dict)
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:
-            from vaf.workflows.engine import WorkflowEngine, create_workflow
+            from vaf.workflows.engine import WorkflowEngine, create_workflow, VALIDATABLE_TOOLS
         except ImportError as exc:
             return f"Error: could not import workflow engine: {exc}"
 
@@ -368,6 +383,27 @@ class AgentWorkflowBuilderTool(BaseTool):
             "steps":       normalised,
         }
         steps = create_workflow(template_dict)
+
+        # ── Validation confirmation gate ──────────────────────────────────────
+        # If this workflow has content/agent steps but none opted into per-step output
+        # validation, don't just run — bounce back so the agent consciously decides: flag the
+        # critical steps with validate:true, or confirm none is wanted via skip_validation:true.
+        _validatable_steps = [s for s in steps if s.tool in VALIDATABLE_TOOLS]
+        if (
+            _validatable_steps
+            and not any(getattr(s, "validate", False) for s in _validatable_steps)
+            and not kwargs.get("skip_validation")
+        ):
+            _names = ", ".join(sorted({s.tool for s in _validatable_steps}))
+            return (
+                f"[VALIDATION CHECK] This workflow has content/agent steps ({_names}) but NONE "
+                "has \"validate\": true. For each step that produces a critical deliverable (a "
+                "document, research report, code, or browser result), set \"validate\": true so its "
+                "output is checked against the step's goal and re-run up to 3x with a correction "
+                "hint if it does not match. Then call run_temp again.\n"
+                "If you intentionally want NO validation, call run_temp again with "
+                "skip_validation: true to confirm."
+            )
 
         # Tool registry: prefer agent's live tools (full set), fall back to stubs
         tools = self._collect_tools()
@@ -520,6 +556,15 @@ class AgentWorkflowBuilderTool(BaseTool):
         )
         engine._workflow_name = name   # used in debug logs
 
+        # Wire per-step output validation (opt-in via step.validate). Needs the agent's LLM
+        # backend; only available here in run_temp. Other workflow paths leave these unset.
+        if agent is not None and hasattr(agent, "_validate_step_output"):
+            try:
+                engine._workflow_user_intent = agent._resolve_user_intent()
+            except Exception:
+                engine._workflow_user_intent = ""
+            engine._validate_step = agent._validate_step_output
+
         # Stop wiring: let the Stop button abort the workflow — both between steps
         # (engine loop) and *during* a step (bounded-run inside the engine polls this).
         # IMPORTANT: the Stop button targets the *canonical* session id (what the WebSocket
@@ -546,10 +591,14 @@ class AgentWorkflowBuilderTool(BaseTool):
                 return False
 
         _orig_stdout = sys.stdout
-        _orig_stderr = sys.stderr
-        # VAF_IN_WORKFLOW_TERMINAL activates simple_mode in coding_agent:
-        # instead of the Rich Live TUI it prints "[Coder] ..." to sys.stdout,
-        # which _WebStreamWriter then captures and forwards as workflow_output_stream.
+        # Capture ONLY stdout into the workflow terminal. That is where the intended workflow
+        # output lives: the engine's Rich `UI.event(...)` step markers (the Console has no
+        # explicit file → it writes to the current sys.stdout), and VAF_IN_WORKFLOW_TERMINAL's
+        # simple_mode "[Coder] …" lines for any in-process step. The heavy agent steps
+        # (coding/research/document/librarian/browser) run as child PROCESSES — their output is
+        # drained separately and pushed as `subagent_output_stream`, not through here. We do NOT
+        # redirect sys.stderr: Python logging / library chatter defaults to stderr and would
+        # otherwise flood `workflow_output_stream` with noise that isn't workflow progress.
         _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
         _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
         from vaf.core.config import Config as _CfgWF
@@ -558,7 +607,6 @@ class AgentWorkflowBuilderTool(BaseTool):
         _wf_exc = None
         try:
             sys.stdout = _WebStreamWriter(sys.stdout)
-            sys.stderr = _WebStreamWriter(sys.stderr)
             os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
             if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                 os.environ["VAF_TOOL_MODEL"] = _subagent_model
@@ -570,7 +618,6 @@ class AgentWorkflowBuilderTool(BaseTool):
             _wf_exc = exc
         finally:
             sys.stdout = _orig_stdout
-            sys.stderr = _orig_stderr
             if _prev_wf_terminal is None:
                 os.environ.pop("VAF_IN_WORKFLOW_TERMINAL", None)
             else:
@@ -603,10 +650,12 @@ class AgentWorkflowBuilderTool(BaseTool):
             )
 
         # ── Intermediate file cleanup for run_temp ────────────────────────────
-        # After a temp workflow completes, delete all intermediate files that were
-        # created in the shared project path. The final answer is in result.final_output
-        # (text). If the last step produced a file the user wants to keep, the agent
-        # should pass keep_files=[path] to preserve it; everything else is removed.
+        # After a temp workflow completes, remove the throwaway scripts/scratch it created
+        # in the shared project path, but KEEP the deliverable. A final step such as
+        # document_agent writes the actual document and returns descriptive text (not a bare
+        # path), so we must not key "keep" off result.final_output being a file — that would
+        # wipe the very report the user asked for. Instead: delete only known script/scratch
+        # extensions; preserve every document/data/image file.
         _proj_path = (result.outputs or {}).get("workflow_project_path", "")
         if _proj_path and os.path.isdir(_proj_path):
             _keep_files = set()
@@ -615,17 +664,26 @@ class AgentWorkflowBuilderTool(BaseTool):
                 _kf = str(_kf).strip()
                 if _kf:
                     _keep_files.add(os.path.realpath(_kf))
-            # Infer final output file: if last step used write_file, keep that path
+            # If the last step's output happens to be a file path (e.g. write_file), keep it too
             _last_step_output = str(result.final_output or "")
-            # write_file tool returns the path it wrote to
             if _last_step_output and os.path.isfile(_last_step_output):
                 _keep_files.add(os.path.realpath(_last_step_output))
-            # Walk and delete intermediates
+
+            # Only these are treated as disposable intermediates; anything else (.docx, .pdf,
+            # .txt, .md, .html, .csv, .json, images, …) is a potential deliverable and is kept.
+            _INTERMEDIATE_EXTS = {
+                ".py", ".pyc", ".pyo", ".pyw", ".pyd",
+                ".js", ".mjs", ".cjs", ".ts",
+                ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
+                ".tmp", ".temp", ".lock",
+            }
             _deleted = 0
             for _root, _dirs, _files in os.walk(_proj_path, topdown=False):
                 for _fn in _files:
                     _fp = os.path.realpath(os.path.join(_root, _fn))
-                    if _fp not in _keep_files:
+                    if _fp in _keep_files:
+                        continue
+                    if os.path.splitext(_fn)[1].lower() in _INTERMEDIATE_EXTS:
                         try:
                             os.unlink(_fp)
                             _deleted += 1
@@ -634,10 +692,10 @@ class AgentWorkflowBuilderTool(BaseTool):
                 for _dn in _dirs:
                     _dp = os.path.join(_root, _dn)
                     try:
-                        os.rmdir(_dp)  # only removes if empty
+                        os.rmdir(_dp)  # only removes if it ended up empty
                     except Exception:
                         pass
-            # Remove the project dir itself if now empty
+            # Remove the project dir only if it is now empty (pure script-only run)
             try:
                 os.rmdir(_proj_path)
             except Exception:
@@ -711,7 +769,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "description": s.get("description") or f"Step {i + 1}",
             }
             for _f in ("on_success", "on_failure", "optional", "condition",
-                       "assertions", "max_assertion_retries", "args"):
+                       "assertions", "max_assertion_retries", "validate", "args"):
                 if _f in s:
                     step_dict2[_f] = s[_f]
             normalised.append(step_dict2)

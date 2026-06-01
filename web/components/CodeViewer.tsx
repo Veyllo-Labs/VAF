@@ -43,6 +43,16 @@ export function isCodeFile(filePath: string): boolean {
   return CODE_EXTENSIONS.has(ext);
 }
 
+// ── Plain-text / data files that should open in-app (read in this viewer) instead of
+//    being downloaded — otherwise the desktop window navigates to the raw file with no way back.
+const TEXT_VIEWER_EXTENSIONS = new Set(['txt', 'csv', 'tsv', 'log', 'text']);
+
+export function isTextFile(filePath: string): boolean {
+  const name = filePath.split('/').pop()?.toLowerCase() ?? '';
+  const ext = name.includes('.') ? name.split('.').pop() ?? '' : '';
+  return TEXT_VIEWER_EXTENSIONS.has(ext);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface CodeViewerProps {
   isOpen: boolean;
@@ -132,17 +142,21 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
     }
   }, [filePath, content, isDirty]);
 
-  // Ctrl+S
+  // Ctrl+S to save, Esc to close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's' && isOpen) {
+      if (!isOpen) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         handleSave();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, handleSave]);
+  }, [isOpen, handleSave, onClose]);
 
   if (!isOpen) return null;
 

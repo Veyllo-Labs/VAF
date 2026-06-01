@@ -932,7 +932,56 @@ class Platform:
                 except Exception:
                     pass
         return stopped
-    
+
+    @staticmethod
+    def stop_webui_subagent_process_by_task(task_id: str) -> int:
+        """
+        Hard-stop the tracked sub-agent child process for ONE specific task_id (used by the
+        watchdog "kill this unit" action). Returns the number of processes targeted (0 if none
+        is tracked — e.g. it already exited; the caller should still fail the IPC task).
+        """
+        tid = (task_id or "").strip()
+        if not tid:
+            return 0
+        lock = Platform._get_webui_subagent_lock()
+        with lock:
+            matches = [
+                (pid, meta)
+                for pid, meta in Platform._webui_subagent_processes.items()
+                if (meta.get("task_id") or "").strip() == tid
+            ]
+        if not matches:
+            return 0
+        stopped = 0
+        for pid, _meta in matches:
+            try:
+                try:
+                    import psutil  # type: ignore
+                    p = psutil.Process(pid)
+                    children = p.children(recursive=True)
+                    for c in children:
+                        try: c.terminate()
+                        except Exception: pass
+                    try: p.terminate()
+                    except Exception: pass
+                    _gone, alive = psutil.wait_procs([p] + children, timeout=1.5)
+                    for a in alive:
+                        try: a.kill()
+                        except Exception: pass
+                except Exception:
+                    if Platform.is_windows():
+                        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    else:
+                        os.kill(pid, 15)
+                stopped += 1
+            except Exception:
+                pass
+            finally:
+                try: Platform.unregister_webui_subagent_process(pid)
+                except Exception: pass
+        return stopped
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PATHS
     # ═══════════════════════════════════════════════════════════════════════════

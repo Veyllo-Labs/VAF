@@ -23,6 +23,7 @@ import CodeViewer, { isCodeFile } from '@/components/CodeViewer';
 import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
+import WatchdogPanel from '@/components/WatchdogPanel';
 import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
@@ -5153,6 +5154,9 @@ function VAFDashboardContent() {
             </div>
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
+
+            {/* Watchdog: live running sub-agents with per-unit kill */}
+            <WatchdogPanel />
 
             {/* Stop-button ripple portal — rendered at document.body level to bypass all overflow:hidden parents */}
             {stopPulsing && stopBtnPos && typeof document !== 'undefined' && createPortal(

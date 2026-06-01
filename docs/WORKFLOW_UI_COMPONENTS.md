@@ -8,9 +8,11 @@ When a workflow runs in VAF, the WebUI provides several visual components:
 
 1. **WorkflowChatElement** - Inline chat card showing workflow progress
 2. **VAFWorkflowRuntime** - Right panel with workflow steps and terminal output
-3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution)
+3. **SubAgentWindow** - Panel for sub-agent output (hidden during workflow execution; a browser sub-agent's live view is tiled separately — see BrowserLiveTile)
 4. **DocumentViewer** - Attachments panel (paperclip): PDF, DOCX, Office, and text display with quote-from-selection
 5. **DocumentEditor** - Single right-side document panel: workflow-generated documents (edit, save, PDF, download) and optional attachments mode with compact document switcher
+6. **BrowserLiveTile** - Live browser screenshots tiled to the left of the Workflow Runtime window while a browser sub-agent runs inside a workflow
+7. **WatchdogPanel** - Live running sub-agents (heartbeat · runtime · kill); shown inline in the running tool bubble, with a fallback panel (bottom-left) for units without a bubble
 
 ## Component Architecture
 
@@ -73,6 +75,32 @@ A docked panel for displaying sub-agent activity. Supports two modes:
 - Automatically hidden when a workflow is running (`isWorkflowRunningRef.current`)
 - Sub-agent output is routed to VAFWorkflowRuntime terminal instead
 - Can still be manually opened during workflow if needed
+- **Browser live frames are the exception:** they are visual and can't go to the terminal, so
+  during a workflow they are shown in the tiled `BrowserLiveTile` instead of this dock (standalone,
+  i.e. outside a workflow, the browser view still renders here in the dock)
+
+### BrowserLiveTile
+
+Located at `web/components/BrowserLiveTile.tsx`
+
+A slim fixed window showing a browser sub-agent's live view (header + URL bar + `<img>` JPEG
+frame) **tiled to the left of the Workflow Runtime window** (`right: 500px`, the runtime width on
+`md+`; `xl`-gated so the two ~500 px panels don't crush the chat). Driven by
+`subAgentState.browserFrame/browserUrl`; shown when `workflowPanelOpen && browserFrame && !dismissed`.
+Frames are cleared on `workflow_start` (no stale frame) and `workflow_done` (tile disappears); the
+user can dismiss it (re-armed on the next run). This is the specific "two visual windows side by
+side" case — see [Window Tiling](WINDOW_TILING_DESIGN.md).
+
+### WatchdogPanel
+
+Located at `web/components/WatchdogPanel.tsx` (+ inline in `web/components/ToolMessage.tsx`)
+
+Live view of the supervised sub-agent units from `GET /api/supervisor/status` — agent type,
+runtime, heartbeat freshness (green < 10 s / amber / red = stale), and a per-unit **kill** button
+(`POST /api/supervisor/cancel`). The primary surface is **inline in the running tool bubble**
+(`ToolMessage`, between input and output) for direct sub-agent calls; the bottom-left
+`WatchdogPanel` is a fallback for units **without** an inline bubble (e.g. workflow steps),
+hiding the agent types already shown inline (`excludeAgentTypes`).
 
 ### DocumentEditor
 

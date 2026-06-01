@@ -366,11 +366,12 @@ class MainPersistenceManager:
         self._save_json(self.context_dir / WORKING_MEMORY_FILE, mem)
 
     def _format_tasks_list(self, tasks: List) -> str:
-        """Format tasks for prompt: 'YYYY-MM-DD HH:MM [pending] text' or '[done] text'."""
+        """Format tasks for prompt: '[i] YYYY-MM-DD HH:MM [pending] text'.
+        The leading [i] is the index to pass to update_working_memory(mark_task_done=i)."""
         lines = []
-        for t in tasks:
+        for i, t in enumerate(tasks):
             if not isinstance(t, dict):
-                lines.append(f"(ohne Datum) [pending] - {t}")
+                lines.append(f"[{i}] (ohne Datum) [pending] {t}")
                 continue
             text = t.get("text", "")
             status = (t.get("status") or "pending").lower()
@@ -378,12 +379,34 @@ class MainPersistenceManager:
             if ts:
                 try:
                     dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-                    lines.append(f"{dt.strftime('%Y-%m-%d %H:%M')} [{status}] {text}")
+                    lines.append(f"[{i}] {dt.strftime('%Y-%m-%d %H:%M')} [{status}] {text}")
                 except (ValueError, TypeError):
-                    lines.append(f"(ohne Datum) [{status}] {text}")
+                    lines.append(f"[{i}] (ohne Datum) [{status}] {text}")
             else:
-                lines.append(f"(ohne Datum) [{status}] {text}")
+                lines.append(f"[{i}] (ohne Datum) [{status}] {text}")
         return "\n".join(lines) if lines else "(leer)"
+
+    @staticmethod
+    def _current_step(tasks: List) -> Optional[tuple]:
+        """Derive the current plan step = the FIRST task whose status is pending.
+        Returns (index, text, done_count, total_count) or None when no pending task exists.
+        Deriving (instead of storing an index) gives auto-advance for free and cannot desync
+        from the task list (e.g. when done tasks are pruned after their TTL)."""
+        if not isinstance(tasks, list) or not tasks:
+            return None
+        total = len(tasks)
+        done_count = 0
+        first_pending = None
+        for i, t in enumerate(tasks):
+            status = (t.get("status") if isinstance(t, dict) else None) or "pending"
+            if str(status).lower() == "done":
+                done_count += 1
+            elif first_pending is None:
+                text = (t.get("text", "") if isinstance(t, dict) else str(t)) or ""
+                first_pending = (i, str(text).strip())
+        if first_pending is None:
+            return None
+        return (first_pending[0], first_pending[1], done_count, total)
 
     # --- CONTEXT INJECTION HELPER ---
     def build_context_injection(self) -> str:
@@ -411,7 +434,24 @@ class MainPersistenceManager:
         notes_fmt = self._format_wm_list(memory.get("notes", []))
         plan_fmt = self._format_wm_list(memory.get("plan", []))
         tasks_fmt = self._format_tasks_list(memory.get("tasks", []))
-            
+
+        # Current-step reminder: focus the model on the first pending task each turn so it
+        # follows its plan step by step (mark each done before the next). Silent when there is no
+        # pending task (no nagging on plain chat). Kill-switch: plan_step_reminder_enabled.
+        step_reminder = ""
+        try:
+            from vaf.core.config import Config
+            if Config.get("plan_step_reminder_enabled", True):
+                step = self._current_step(memory.get("tasks", []))
+                if step is not None:
+                    _idx, _text, _done, _total = step
+                    step_reminder = (
+                        f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish THIS step, then "
+                        f"call update_working_memory(mark_task_done={_idx}) before starting another.\n\n"
+                    )
+        except Exception:
+            step_reminder = ""
+
         return f"""
 # 🧠 MAIN AGENT CONTEXT (Live System State)
 
@@ -424,7 +464,7 @@ class MainPersistenceManager:
 </team_state>
 
 <working_memory>
-Notes:
+{step_reminder}Notes:
 {notes_fmt}
 
 Plan:
@@ -436,7 +476,7 @@ Tasks (pending/done; done removed after 12h):
 
 Use the update_working_memory tool to save notes, plan, and tasks; they persist across turns and appear here.
 - Use notes/plan to set the full list (replaces existing), or add_notes/add_plan to append. On a new user task or after completing a task, replace or clear notes/plan so working memory does not grow without bound (e.g. update_working_memory(notes=[], plan=[]) when done).
-- Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are automatically removed after 12 hours. Pending = in progress or waiting on something.
+- Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are automatically removed after 12 hours. Pending = in progress or waiting on something. For multi-step work, record each step as a task (add_task) so progress is tracked and the current step is shown above.
 
 Long-term memories about the user/system (from memory_save/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_save to save new facts.
 """

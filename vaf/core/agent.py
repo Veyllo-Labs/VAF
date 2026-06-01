@@ -5132,7 +5132,9 @@ class Agent:
         # Tool Loop Protection: Max number of tool-result cycles in one interaction
         # Normal interactions usually need 1-3 tool turns.
         tool_turn_count = 0
-        MAX_TOOL_TURNS_PER_STEP = 15
+        SOFT_LIMIT_TOOL_TURNS = 50   # Inject goal-reminder, agent continues
+        MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
+        _hard_stop_injected = False   # True after hard-stop user message was injected once
         
         while empty_retry_count < MAX_EMPTY_RETRIES:
             # Stop check at the top of every loop iteration — catches stop clicks
@@ -6541,12 +6543,71 @@ class Agent:
                 # LOOP PROTECTION: Turn limit check
                 # ═══════════════════════════════════════════════════════════════
                 tool_turn_count += 1
-                if tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
-                    msg = f"⚠️ [LOOP_PROTECTION] Exceeded {MAX_TOOL_TURNS_PER_STEP} tool turns. Stopping recursion."
-                    UI.event("Emergency", msg, style="bold red")
-                    append_domain_log("backend", msg)
-                    self.history.append({"role": "assistant", "content": msg})
-                    return msg
+
+                # Hard kill at MAX_TOOL_TURNS_PER_STEP
+                # If tool_loop_unlimited=True in config, skip the hard kill entirely.
+                _unlimited_loop = bool(self.config.get("tool_loop_unlimited", False))
+                if not _unlimited_loop and tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
+                    if _hard_stop_injected:
+                        # Agent called another tool after the hard-stop message — true kill now.
+                        _kill_msg = f"⚠️ [LOOP_PROTECTION] Hard stop enforced after {MAX_TOOL_TURNS_PER_STEP} tool turns."
+                        UI.event("Emergency", _kill_msg, style="bold red")
+                        append_domain_log("backend", _kill_msg)
+                        self.history.append({"role": "assistant", "content": _kill_msg})
+                        return _kill_msg
+
+                    # First time hitting the limit: inject a message so the agent can inform the user.
+                    _hard_stop_injected = True
+                    _hl_intent = ""
+                    try:
+                        if hasattr(self, "main_persistence") and self.main_persistence:
+                            _hl_intent = self.main_persistence.get_user_intent() or ""
+                    except Exception:
+                        pass
+                    if not _hl_intent:
+                        for _hlmsg in reversed(self.history):
+                            if isinstance(_hlmsg, dict) and _hlmsg.get("role") == "user":
+                                _c = (_hlmsg.get("content") or "")
+                                if _c and not _c.startswith("[System"):
+                                    _hl_intent = _c[:400]
+                                    break
+                    _intent_line = f'\n\nDas originale Ziel war: "{_hl_intent}"' if _hl_intent else ""
+                    _hard_stop_injection = (
+                        f"[System: HARD STOP — du hast {MAX_TOOL_TURNS_PER_STEP} Tool-Aufrufe verbraucht ohne die Aufgabe abzuschließen.{_intent_line}\n\n"
+                        f"Du darfst KEINE weiteren Tools mehr aufrufen. "
+                        f"Informiere den User auf Deutsch direkt und freundlich: Erkläre kurz was du bisher erreicht hast und wo du stehst. "
+                        f"Frage dann ob er möchte, dass du in einer neuen Antwort weitermachst.]"
+                    )
+                    UI.event("Emergency", f"Hard stop at {MAX_TOOL_TURNS_PER_STEP} tool turns — asking agent to inform user.", style="bold red")
+                    append_domain_log("backend", f"hard_stop_injection at turn {MAX_TOOL_TURNS_PER_STEP}")
+                    self.history.append({"role": "user", "content": _hard_stop_injection})
+                    # Continue so the agent can produce its final response — no more tool calls allowed.
+
+                # Soft reminder at SOFT_LIMIT_TOOL_TURNS — inject goal reminder, agent continues
+                if tool_turn_count == SOFT_LIMIT_TOOL_TURNS:
+                    _original_intent = ""
+                    try:
+                        if hasattr(self, "main_persistence") and self.main_persistence:
+                            _original_intent = self.main_persistence.get_user_intent() or ""
+                    except Exception:
+                        pass
+                    if not _original_intent:
+                        for _hmsg in reversed(self.history):
+                            if isinstance(_hmsg, dict) and _hmsg.get("role") == "user":
+                                _c = (_hmsg.get("content") or "")
+                                if _c and not _c.startswith("[System"):
+                                    _original_intent = _c[:400]
+                                    break
+                    _intent_hint = f'\n\nDas originale Ziel des Users war: "{_original_intent}"' if _original_intent else ""
+                    _reminder = (
+                        f"[System: Du hast bereits {SOFT_LIMIT_TOOL_TURNS} Tool-Aufrufe gemacht und hast die Aufgabe noch nicht abgeschlossen.{_intent_hint}\n\n"
+                        f"Überdenke deine Strategie: Bist du noch auf dem richtigen Weg? "
+                        f"Fokussiere dich auf das Wesentliche und schließe die Aufgabe so direkt wie möglich ab. "
+                        f"Du hast noch {MAX_TOOL_TURNS_PER_STEP - SOFT_LIMIT_TOOL_TURNS} weitere Tool-Aufrufe bevor ein Hard-Stop ausgelöst wird.]"
+                    )
+                    UI.event("Warning", f"Soft limit reached ({SOFT_LIMIT_TOOL_TURNS} tool turns) — injecting goal reminder...", style="yellow")
+                    append_domain_log("backend", f"soft_limit_reminder injected at turn {SOFT_LIMIT_TOOL_TURNS}")
+                    self.history.append({"role": "user", "content": _reminder})
 
                 # Check stop flag after tool finishes — catches "Stop" clicked during tool execution
                 _post_tool_session = getattr(self, 'current_session_id', None) or getattr(self, '_session_id', None)
@@ -6563,7 +6624,7 @@ class Agent:
                     except Exception:
                         pass
 
-                UI.event("Debug", f"Summarizing intel (turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP})...", style="dim")
+                UI.event("Debug", f"Summarizing intel (turn {tool_turn_count}/{SOFT_LIMIT_TOOL_TURNS} soft / {MAX_TOOL_TURNS_PER_STEP} hard)...", style="dim")
                 continue
             
             # 2. Handle Empty / Think-Only Responses

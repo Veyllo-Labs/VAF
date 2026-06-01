@@ -88,7 +88,7 @@ For channel-origin tasks, the runtime prompt context is additionally bounded to 
 - The effective in-memory prompt is `system prompt + last N elements` (when a system prompt exists at index 0).
 - This is a sliding window: when a new element arrives, the oldest element in the window drops out.
 - Older messages are **not deleted** from session storage; they remain in the session file for persistence/debugging.
-- This window is independent from tool-loop protection. The separate "15 tool turns" limit controls recursion depth in one generation step, not session replay size.
+- This window is independent from tool-loop protection. The separate two-stage tool-turn limit (soft at 50, hard at 75) controls recursion depth in one generation step, not session replay size.
 
 When the session is loaded, `SessionManager.load(session_id, restore_state=True)` restores `runtime_state` (including ContextManager: intent, state, narrative summary) from the session file, so the agent has the correct high-level context for that session.
 

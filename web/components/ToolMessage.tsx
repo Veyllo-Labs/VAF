@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
@@ -122,34 +122,50 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     const animInput = extractMainInput(args);
     const wfBadge = name === 'create_agent_workflow' ? workflowBadge(args) : null;
 
-    // ── Live watchdog: while a sub-agent tool runs, surface its supervised unit
-    //    (heartbeat, runtime) and a kill button, matched by agent_type === tool name.
+    // ── Live watchdog: surface a running sub-agent's supervised unit (heartbeat, runtime, kill)
+    //    INSIDE its own tool bubble. A spawned sub-agent delegates immediately, so this bubble
+    //    flips to "completed" while the subprocess keeps running — therefore this is gated on a
+    //    LIVE supervisor unit existing, NOT on the bubble's own status. Matched by task id (from
+    //    the delegation marker in the result) when available, else by agent type.
     const isSubAgent = SUBAGENT_RE.test(name.toLowerCase());
+    const subAgentTaskId = useMemo(() => {
+        const text = String(result || '');
+        const m = text.match(/\[SUBAGENT_ASYNC:([^:\]]+)/) || text.match(/Task-?ID:\s*([A-Za-z0-9_-]+)/i);
+        return m ? m[1].trim() : null;
+    }, [result]);
     const [liveUnit, setLiveUnit] = useState<SupervisorUnit | null>(null);
     const [killing, setKilling] = useState(false);
 
     useEffect(() => {
-        if (status !== 'running' || !isSubAgent) {
-            setLiveUnit(null);
-            return;
-        }
+        if (!isSubAgent) { setLiveUnit(null); return; }
         let stopped = false;
+        let sawUnit = false;
+        let polls = 0;
+        let id: ReturnType<typeof setInterval> | null = null;
+        const finish = () => { stopped = true; if (id) clearInterval(id); };
         const poll = async () => {
+            polls += 1;
             try {
                 const r = await fetch(`${getApiBase()}/api/supervisor/status`, { credentials: 'include' });
                 if (!r.ok) return;
                 const d = await r.json();
                 const units: SupervisorUnit[] = Array.isArray(d.units) ? d.units : [];
-                const match = units.find((u) => (u.agent_type || '').toLowerCase() === name.toLowerCase()) || null;
-                if (!stopped) setLiveUnit(match);
+                const match = (subAgentTaskId
+                    ? units.find((u) => u.task_id === subAgentTaskId)
+                    : units.find((u) => (u.agent_type || '').toLowerCase() === name.toLowerCase())) || null;
+                if (stopped) return;
+                setLiveUnit(match);
+                if (match) sawUnit = true;
+                else if (sawUnit) finish();      // unit was live and is now gone → sub-agent finished
+                else if (polls >= 6) finish();    // never appeared (~12 s) → not a tracked unit
             } catch {
                 /* transient — keep last */
             }
         };
         poll();
-        const id = setInterval(poll, 2000);
-        return () => { stopped = true; clearInterval(id); };
-    }, [status, isSubAgent, name]);
+        id = setInterval(poll, 2000);
+        return () => { stopped = true; if (id) clearInterval(id); };
+    }, [isSubAgent, name, subAgentTaskId]);
 
     const killUnit = async () => {
         if (!liveUnit?.task_id) return;
@@ -183,11 +199,18 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     }, [status]);
 
     useEffect(() => {
+        // Keep the bubble open while the sub-agent's subprocess is still alive, so its watchdog
+        // row stays visible even though the tool call itself already "completed" (delegated).
+        if (liveUnit) { setIsExpanded(true); return; }
         if (visualStatus === 'completed' || visualStatus === 'error') {
             const t = setTimeout(() => setIsExpanded(false), 1500);
             return () => clearTimeout(t);
         }
-    }, [visualStatus]);
+    }, [visualStatus, liveUnit]);
+
+    // While a live sub-agent unit exists, present the bubble as "running" (the delegated tool call
+    // reads as completed, but the actual work is still going).
+    const headerStatus: 'running' | 'completed' | 'error' = liveUnit ? 'running' : visualStatus;
 
     return (
         <div className="w-full my-2">
@@ -221,7 +244,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 >
                     <div className="flex items-center gap-3">
                         <div className="relative flex h-8 w-8 items-center justify-center rounded-full border bg-muted/50 shrink-0">
-                            {visualStatus === 'running' && (
+                            {headerStatus === 'running' && (
                                 <span
                                     data-agent-tool-dot
                                     className="rounded-full"
@@ -233,8 +256,8 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                     }}
                                 />
                             )}
-                            {visualStatus === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                            {visualStatus === 'error'     && <AlertCircle className="h-4 w-4 text-destructive" />}
+                            {headerStatus === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
+                            {headerStatus === 'error'     && <AlertCircle className="h-4 w-4 text-destructive" />}
                         </div>
 
                         <div className="flex flex-col min-w-0">
@@ -247,9 +270,11 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                 )}
                             </div>
                             <span className="text-xs text-muted-foreground truncate">
-                                {visualStatus === 'running'   ? 'Running…' :
-                                 visualStatus === 'completed' ? 'Completed' : 'Failed'}
-                                {endTime && startTime && ` (${((endTime - startTime) / 1000).toFixed(1)}s)`}
+                                {headerStatus === 'running'   ? 'Running…' :
+                                 headerStatus === 'completed' ? 'Completed' : 'Failed'}
+                                {liveUnit && liveUnit.runtime_s != null
+                                    ? ` (${fmtDuration(liveUnit.runtime_s)})`
+                                    : (endTime && startTime ? ` (${((endTime - startTime) / 1000).toFixed(1)}s)` : '')}
                             </span>
                         </div>
                     </div>
@@ -288,8 +313,10 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                     </div>
                                 )}
 
-                                {/* Watchdog: live heartbeat + runtime + kill, between input and output */}
-                                {status === 'running' && liveUnit && (
+                                {/* Watchdog: live heartbeat + runtime + kill, between input and output.
+                                    Gated on a live supervised unit (NOT the bubble status), so it shows
+                                    while a delegated sub-agent's subprocess is still running. */}
+                                {liveUnit && (
                                     <div className="mb-2">
                                         <div className="flex items-center gap-1 opacity-70 mb-1 font-semibold">
                                             <Activity className="h-3 w-3" />

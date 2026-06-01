@@ -1027,6 +1027,8 @@ class WorkflowEngine:
         deadline = _time.monotonic() + max(1.0, float(timeout))
         poll = max(0.1, float(poll))
         _last_zombie_check = 0.0
+        _started = _time.monotonic()
+        _last_status = 0.0
         while True:
             try:
                 task = ipc.consume_result(task_id)
@@ -1061,6 +1063,27 @@ class WorkflowEngine:
                 _last_zombie_check = _now
                 try:
                     ipc.check_zombies(timeout_seconds=int(_liveness))
+                except Exception:
+                    pass
+
+            # Watchdog status as terminal output: a workflow-step sub-agent has no tool bubble to
+            # carry the inline watchdog, so surface its liveness here. The line goes to stdout →
+            # workflow_output_stream → the Workflow Runtime terminal.
+            if _now - _last_status >= 5.0:
+                _last_status = _now
+                _hb = None
+                try:
+                    from datetime import datetime as _dt
+                    for _t in ipc.get_active_tasks():
+                        if getattr(_t, "task_id", None) == task_id and getattr(_t, "last_heartbeat", None):
+                            _hb = max(0, int((_dt.now() - _dt.fromisoformat(_t.last_heartbeat)).total_seconds()))
+                            break
+                except Exception:
+                    _hb = None
+                _hb_txt = (f"no heartbeat for {_hb}s" if (_hb is not None and _hb > int(_liveness))
+                           else (f"heartbeat {_hb}s ago" if _hb is not None else "starting…"))
+                try:
+                    UI.event("Watchdog", f"{tool_name} · running {int(_now - _started)}s · {_hb_txt}", style="dim")
                 except Exception:
                     pass
 

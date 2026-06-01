@@ -294,6 +294,9 @@ class Agent:
         # Plan gate State (main agent: plan before a state-changing tool runs)
         self._plan_gate_blocks = 0
 
+        # Team-await State (main agent: don't declare done while sub-agents genuinely run)
+        self._team_await_blocks = 0
+
     def _plan_gate_decision(self, name, tool_instance):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
         ("explore freely, plan before you act"). Returns a block message (str) to show the model, or
@@ -340,6 +343,58 @@ class Agent:
             )
         except Exception:
             return None
+
+    def _detect_premature_done_claim(self, response_text):
+        """Team-await: detect a reply that declares the overall task complete while a sub-agent is
+        GENUINELY still running. Returns (blocked, [labels]). Anti-stuck by design: crashed/stale
+        sub-agents are reaped first and never block; a finished sub-agent has already left the active
+        list; any error fails open. Returns (False, []) when there is no completion claim (cheap, no
+        IPC touched)."""
+        try:
+            text = (response_text or "").lower()
+            if not text.strip():
+                return (False, [])
+            # Pre-filter: only proceed on a strong OVERALL-completion claim (multilingual).
+            completion_markers = (
+                "task complete", "task is complete", "task is done", "all done", "all set",
+                "everything is done", "finished everything", "fully complete", "completed the task",
+                "i have completed", "i've completed", "done with everything", "successfully completed",
+                "erledigt", "alles erledigt", "fertig", "abgeschlossen", "vollständig abgeschlossen",
+                "alles fertig", "habe alles", "ist fertig", "ist abgeschlossen",
+            )
+            if not any(m in text for m in completion_markers):
+                return (False, [])
+
+            from vaf.core.subagent_ipc import get_ipc
+            ipc = get_ipc()
+            # Liveness window (same as the agent's existing reaping): reap dead sub-agents first so
+            # a crashed one cannot block the agent on "done".
+            try:
+                hb_timeout = int(self.config.get("subagent_heartbeat_timeout_seconds", 90) or 90)
+            except Exception:
+                hb_timeout = 90
+            hb_timeout = max(20, min(600, hb_timeout))
+            try:
+                ipc.check_zombies(timeout_seconds=hb_timeout)
+            except Exception:
+                pass
+
+            from datetime import datetime as _dt
+            now = _dt.now()
+            labels = []
+            for t in ipc.get_active_tasks_for_current_session():
+                # Keep only genuinely-alive tasks (fresh heartbeat). Stale ones are dead-but-not-yet
+                # reaped and must NOT block.
+                last_seen = getattr(t, "last_heartbeat", None) or getattr(t, "created_at", None)
+                try:
+                    age = (now - _dt.fromisoformat(last_seen)).total_seconds() if last_seen else 0.0
+                except Exception:
+                    age = 0.0
+                if age < hb_timeout:
+                    labels.append(f"{getattr(t, 'agent_type', 'sub-agent')} (running {int(max(0, age))}s)")
+            return (len(labels) > 0, labels)
+        except Exception:
+            return (False, [])
 
     def _get_tokenizer(self):
         """
@@ -5018,6 +5073,7 @@ class Agent:
             self.history.append(_user_msg)
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
+            self._team_await_blocks = 0  # New turn: fresh team-await budget
 
             # ═══════════════════════════════════════════════════════════════════════
             # FIRST-TIME USER: Automatic Greeting & Language Detection
@@ -6194,6 +6250,60 @@ class Agent:
                             continue
                     else:
                         self._result_grounding_retries = 0
+
+            # Team-await gate: hold a "task complete" claim while a sub-agent is genuinely running.
+            if not streaming_tools and not tool_calls_detected and full_content.strip():
+                _ta_on = True
+                try:
+                    from vaf.core.config import Config as _CfgTA
+                    _ta_on = bool(_CfgTA.get("team_await_enabled", True))
+                except Exception:
+                    _ta_on = True
+                if _ta_on:
+                    _await_blocked, _await_labels = self._detect_premature_done_claim(full_content)
+                    if _await_blocked:
+                        self._team_await_blocks += 1
+                        try:
+                            from vaf.core.config import Config as _CfgTA2
+                            _ta_max = int(_CfgTA2.get("team_await_max_blocks", 3))
+                        except Exception:
+                            _ta_max = 3
+                        if self._team_await_blocks > _ta_max:
+                            UI.event("System", "Team-await: max bounces reached — proceeding.", style="error")
+                            self._team_await_blocks = 0
+                        else:
+                            _ta_list = ", ".join(_await_labels)
+                            UI.event("System", f"Sub-agent still running ({_ta_list}) - holding 'done' (attempt {self._team_await_blocks})...", style="warning")
+                            if _emit_to_web_ui():
+                                try:
+                                    from vaf.core.web_interface import get_web_interface
+                                    from vaf.core.subagent_ipc import get_current_session_id
+                                    _ta_sid = get_current_session_id()
+                                    get_web_interface().log(
+                                        f"Sub-agent still running ({_ta_list}) - holding 'done' (attempt {self._team_await_blocks})...",
+                                        level="warning", source="System", session_id=_ta_sid,
+                                    )
+                                    get_web_interface().emit_clear_last_assistant(_ta_sid)
+                                except Exception:
+                                    pass
+                            if stream_callback and hasattr(stream_callback, "clear"):
+                                try:
+                                    stream_callback.clear()
+                                except Exception:
+                                    pass
+                            self.history.append({"role": "assistant", "content": full_content})
+                            self.history.append({
+                                "role": "system",
+                                "content": (
+                                    "CORRECTION NEEDED: you indicated the task is complete, but these "
+                                    f"sub-agent(s) are still running: {_ta_list}. Do NOT declare completion "
+                                    "yet — wait for their result (it arrives via the Team status / pending "
+                                    "results) or stop them, then re-check before saying done."
+                                ),
+                            })
+                            continue
+                    else:
+                        self._team_await_blocks = 0
 
             # 1. Handle Tool Calls
             # ... (Tool logic unchanged) ...

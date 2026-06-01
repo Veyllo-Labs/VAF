@@ -170,7 +170,28 @@ class UpdateWorkingMemoryTool(BaseTool):
                     mirror_working_memory_snapshot(user_scope_id, snapshot)
             except Exception:
                 pass
-            return "✅ Working Memory updated."
+            # Out-of-order drift nudge: if a LATER task was marked done while an EARLIER one is
+            # still pending, gently flag a possibly-skipped step (soft reminder, not a block).
+            nudge = ""
+            try:
+                from vaf.core.config import Config as _CfgDrift
+                if mark_task_done is not None and bool(_CfgDrift.get("plan_drift_nudge_enabled", True)):
+                    _tasks = mpm.get_working_memory().get("tasks", [])
+                    _mt = int(mark_task_done)
+                    for _i in range(min(_mt, len(_tasks))):
+                        _t = _tasks[_i]
+                        _st = (_t.get("status") if isinstance(_t, dict) else None) or "pending"
+                        if str(_st).lower() == "pending":
+                            _txt = (_t.get("text", "") if isinstance(_t, dict) else str(_t)) or ""
+                            nudge = (
+                                f"\n\nNote: you marked task [{_mt}] done, but earlier task [{_i}] "
+                                f"(\"{str(_txt)[:60]}\") is still pending — did you skip it? Complete it "
+                                f"or update the plan. Ignore this if it is intentionally out of order."
+                            )
+                            break
+            except Exception:
+                nudge = ""
+            return "✅ Working Memory updated." + nudge
         except Exception as e:
             return f"❌ Error updating working memory: {e}"
 

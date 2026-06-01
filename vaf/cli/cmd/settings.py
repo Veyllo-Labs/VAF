@@ -246,17 +246,17 @@ def download_model_flow(repo_id: str, preselected_filename: str = None):
 
 
 def set_context_limit_menu():
-    current = Config.get("n_ctx", 8192)
+    current = Config.get("n_ctx", 32768)
     UI.clear()
-    UI.panel(f"Current Limit: {current}", title="Context Window Settings", style="highlight")
-    
+    UI.panel(f"Current Limit: {current}\n\nMinimum is 32768 — lower values are raised to 32768 on load.", title="Context Window Settings", style="highlight")
+
     questions = [
         inquirer.List('ctx',
                       message="Select Context Limit (Tokens)",
                       choices=[
-                          ('4096 (Speed)', 4096),
-                          ('8192 (Balanced)', 8192),
-                          ('16384 (Large)', 16384),
+                          ('32768 (Minimum / Balanced)', 32768),
+                          ('65536 (Large)', 65536),
+                          ('131072 (Max)', 131072),
                           ('Custom...', 'custom'),
                           ('Back', 'back'),
                       ],
@@ -274,12 +274,12 @@ def set_context_limit_menu():
     
     if selection == 'custom':
         while True:
-            val = UI.console.input("[bold cyan]Enter custom limit (e.g. 2048): [/bold cyan]")
+            val = UI.console.input("[bold cyan]Enter custom limit (e.g. 65536): [/bold cyan]")
             if not val: return
             try:
                 final_val = int(val)
-                if final_val < 512:
-                    UI.error("Too small. Min 512.")
+                if final_val < 32768:
+                    UI.error("Minimum is 32768 (lower values are raised to 32768 on load).")
                     continue
                 break
             except ValueError:

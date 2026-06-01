@@ -7,6 +7,8 @@ Runs as a daemon thread every gc_interval_hours (default 12).
 - Temp files: deletes by mtime (older than gc_max_age_hours).
 - Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
 - Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
+- Session context dirs (.vaf/main/sessions/<id>/): one accumulates per chat; deleted by the
+  newest-file mtime (gc_max_age_hours), skipping the currently-live session.
 Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours.
 """
 
@@ -147,6 +149,7 @@ class GarbageCollector:
         self._clean_old_thinking_sessions(stats)
         self._clean_old_thinking_run_logs(cutoff, stats)
         self._clean_subagent_debug_logs(cutoff, stats)
+        self._clean_old_session_persistence(cutoff, stats)
 
         return stats
 
@@ -234,6 +237,47 @@ class GarbageCollector:
                     if not session_dir.is_dir():
                         continue
                     self._delete_dir_if_old(session_dir, cutoff, stats)
+        except PermissionError:
+            stats["errors"] += 1
+
+    # -- Per-session main-agent context dirs (.vaf/main/sessions/<id>/) -------
+
+    def _clean_old_session_persistence(self, cutoff: datetime, stats: Dict[str, int]) -> None:
+        """Delete per-session main-agent context dirs (`.vaf/main/sessions/<id>/`) whose newest
+        file is older than cutoff. One accumulates per chat. Uses the NEWEST file mtime (not the
+        directory mtime, which a file rewrite does not bump) so an actively-updated session is
+        never deleted, and skips the currently-live session as a second safeguard.
+        """
+        try:
+            from vaf.core.main_persistence import MAIN_CONTEXT_DIR, MainPersistenceManager
+            sessions_dir = Path.cwd() / MAIN_CONTEXT_DIR / "sessions"
+        except Exception:
+            return
+        if not sessions_dir.exists():
+            return
+        active_name = None
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            _sid = get_current_session_id()
+            if _sid:
+                active_name = MainPersistenceManager._safe_session_dir(_sid)
+        except Exception:
+            active_name = None
+        try:
+            for sdir in sessions_dir.iterdir():
+                if not sdir.is_dir() or sdir.name == active_name:
+                    continue
+                try:
+                    files = [f for f in sdir.rglob("*") if f.is_file()]
+                    newest_ts = max((f.stat().st_mtime for f in files), default=sdir.stat().st_mtime)
+                    if datetime.fromtimestamp(newest_ts) < cutoff:
+                        size = sum(f.stat().st_size for f in files)
+                        shutil.rmtree(sdir, ignore_errors=True)
+                        stats["deleted"] += 1
+                        stats["freed_bytes"] += size
+                        logger.debug("[GC] Deleted old session context %s (%d bytes)", sdir.name, size)
+                except Exception:
+                    stats["errors"] += 1
         except PermissionError:
             stats["errors"] += 1
 

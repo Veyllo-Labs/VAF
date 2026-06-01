@@ -261,6 +261,8 @@ Set `"tool_loop_unlimited": true` in config to disable the hard limit entirely (
 
 **False promise retry:** When the model says it will use a tool (e.g. "Let me search…") but does not emit a tool call, the agent treats this as a false promise, appends a correction to history and retries. As with empty-response retry, the backend sends `clear_last_assistant` so the Web UI removes the faulty assistant message; only the retry response is shown.
 
+**Result grounding:** The false-promise check catches a *forward-looking* promise ("I'll run this now") with no tool call. The complementary case is a *backward-looking* confabulated result — a reply that asserts a concrete tool OUTCOME that never happened, e.g. "Workflow failed: Tool not found" when the workflow was never actually run. After a final text reply, the agent checks whether it claims a concrete outcome (a success, a failure, a saved/created file, a specific error, or a result/count) that the turn's ACTUAL tool results do not support — including a result for a tool that was never run this turn. A cheap keyword/regex pre-filter gates an LLM judge, so ordinary replies cost nothing; on a mismatch the reply is bounced back for correction (same `clear_last_assistant` + history-correction flow as false promise), capped at `result_grounding_max_retries` (default 2) before it proceeds so it can never loop. Toggle with `result_grounding_enabled` (default on). Any validator failure is treated as "grounded" so the guard never blocks a reply.
+
 ### Best Practices for Long Conversations
 
 To maintain maximum "depth" and accuracy in very long sessions (especially when using API providers like DeepSeek or OpenAI):

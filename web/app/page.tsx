@@ -23,7 +23,6 @@ import CodeViewer, { isCodeFile, isTextFile } from '@/components/CodeViewer';
 import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
-import WatchdogPanel from '@/components/WatchdogPanel';
 import CopyOnRightClick from '@/components/CopyOnRightClick';
 import BrowserLiveTile from '@/components/BrowserLiveTile';
 import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
@@ -927,18 +926,6 @@ function VAFDashboardContent() {
 
     // User dismissed the tiled browser live view for the current run (reset on next workflow start).
     const [browserTileClosed, setBrowserTileClosed] = useState(false);
-
-    // Sub-agent tools currently running inline in a tool bubble — the WatchdogPanel hides these
-    // so their live status/kill shows in the bubble (not duplicated bottom-left).
-    const inlineWatchdogAgentTypes = useMemo(
-        () => messages
-            .filter(m => m.role === 'tool'
-                && m.toolStatus === 'running'
-                && /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test((m.toolName || '').toLowerCase()))
-            .map(m => (m.toolName || '').toLowerCase()),
-        [messages]
-    );
-
 
     const [status, setStatus] = useState('connecting');
     const [modelLoaded, setModelLoaded] = useState<boolean | null>(null);
@@ -5251,10 +5238,6 @@ function VAFDashboardContent() {
                     onClose={() => setBrowserTileClosed(true)}
                 />
             )}
-
-            {/* Watchdog: live running sub-agents with per-unit kill (units without an inline
-                tool bubble — e.g. workflow steps; bubble-covered ones show in the bubble) */}
-            <WatchdogPanel excludeAgentTypes={inlineWatchdogAgentTypes} />
 
             {/* Right-click selected text → copy + brief "Kopiert" toast */}
             <CopyOnRightClick />

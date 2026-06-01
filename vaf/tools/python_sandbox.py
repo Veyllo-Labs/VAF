@@ -34,8 +34,9 @@ API features required.
 import base64
 import subprocess
 import logging
+import time
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from vaf.tools.base import BaseTool
 
 logger = logging.getLogger("vaf.python_sandbox")
@@ -156,8 +157,38 @@ class PythonSandboxTool(BaseTool):
         except Exception as e:
             return False, f"Docker check failed: {e}"
 
+    def _session_stop_check(self) -> Callable[[], bool]:
+        """Return a predicate that is True when the current session has requested Stop.
+        Lets a long sandbox exec be cancelled promptly instead of running to its timeout while
+        the worker thread is abandoned. Falls back to 'never' if the queue/session is unavailable."""
+        try:
+            from vaf.core.task_queue import TaskQueue
+            from vaf.core.subagent_ipc import get_current_session_id
+            sid = get_current_session_id()
+            tq = TaskQueue()
+            return lambda: bool(sid) and tq.should_stop(sid)
+        except Exception:
+            return lambda: False
+
+    def _kill_sandbox_exec(self, proc) -> None:
+        """Halt a sandbox exec: kill the host docker-exec client and best-effort the in-container
+        process (docker exec does not propagate the kill into the container, so the code would keep
+        running otherwise)."""
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["docker", "exec", SANDBOX_CONTAINER, "pkill", "-9", "-f", "python"],
+                capture_output=True, timeout=5, **self._get_subprocess_kwargs()
+            )
+        except Exception:
+            pass
+
     def _execute_in_persistent(self, command: str, timeout: int, workdir: str = "/workspace") -> Tuple[int, str, str]:
-        """Execute command in the persistent sandbox container."""
+        """Execute command in the persistent sandbox container, stop-aware: a Stop request kills the
+        exec promptly instead of letting it run to the timeout."""
         exec_cmd = [
             "docker", "exec",
             "-w", workdir,
@@ -166,18 +197,31 @@ class PythonSandboxTool(BaseTool):
         ]
 
         try:
-            result = subprocess.run(
-                exec_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+            proc = subprocess.Popen(
+                exec_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 **self._get_subprocess_kwargs()
             )
-            return result.returncode, result.stdout, result.stderr
-        except subprocess.TimeoutExpired:
-            return -1, "", f"Execution timed out after {timeout}s"
         except Exception as e:
             return -1, "", str(e)
+
+        stopped = self._session_stop_check()
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while True:
+            try:
+                out, err = proc.communicate(timeout=0.5)
+                return proc.returncode, out, err
+            except subprocess.TimeoutExpired:
+                pass
+            reason = "cancelled by stop request" if stopped() else (
+                f"timed out after {int(timeout)}s" if time.monotonic() >= deadline else None
+            )
+            if reason:
+                self._kill_sandbox_exec(proc)
+                try:
+                    out, err = proc.communicate(timeout=5)
+                except Exception:
+                    out, err = "", ""
+                return -1, out or "", f"{(err or '').strip()}\nExecution {reason}.".strip()
     
     def _execute_in_ephemeral(self, command: str, timeout: int) -> Tuple[int, str, str]:
         """Execute in an ephemeral container (fallback if persistent not available)."""

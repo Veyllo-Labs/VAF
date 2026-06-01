@@ -19,6 +19,7 @@ unkillable work belongs in a child process (run it out of process so it can be k
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -45,10 +46,17 @@ def is_abort_sentinel(value) -> bool:
 #     polling TaskQueue.should_stop + browser-use max_steps/max_failures internal limits.
 #   - create_agent_workflow / execute_workflow: orchestrators that run an already per-step
 #     bounded, stop-aware WorkflowEngine internally (bounding them again double-bounds).
+#   - python_sandbox: runs code in a Docker container and already supervises itself — its
+#     persistent-container path is a stop-aware poll loop with its own deadline that kills the
+#     docker exec (and the in-container process) the moment Stop is requested. Wrapping it in
+#     run_bounded would instead *abandon* the thread, and the abandoned thread can lose the
+#     should_stop flag to clear_stop before it gets to kill the exec. Self-supervising keeps the
+#     poll loop running in the worker thread, where should_stop is still set, so the kill is prompt.
 SELF_SUPERVISED_TOOLS = frozenset({
     "browser_agent",
     "create_agent_workflow",
     "execute_workflow",
+    "python_sandbox",
 })
 
 
@@ -98,9 +106,17 @@ def run_bounded(
     box: dict = {}
     done = threading.Event()
 
+    # Run the tool inside a COPY of the caller's context so context-locals (notably the current
+    # session id, see subagent_ipc) propagate into this worker thread. A bare threading.Thread
+    # otherwise starts with a fresh context and would fall back to the process-global session id —
+    # which is wrong under concurrent workers. The copy also means an *abandoned* worker (freed on
+    # timeout/stop but still running) keeps its OWN session context, so its late writes are tagged
+    # with the right session instead of whatever a later turn set globally.
+    _ctx = contextvars.copy_context()
+
     def _worker():
         try:
-            box["value"] = fn()
+            box["value"] = _ctx.run(fn)
         except BaseException as exc:  # noqa: BLE001 — preserved and re-raised below
             box["error"] = exc
         finally:

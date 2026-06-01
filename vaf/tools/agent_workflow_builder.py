@@ -520,6 +520,31 @@ class AgentWorkflowBuilderTool(BaseTool):
         )
         engine._workflow_name = name   # used in debug logs
 
+        # Stop wiring: let the Stop button abort the workflow — both between steps
+        # (engine loop) and *during* a step (bounded-run inside the engine polls this).
+        # IMPORTANT: the Stop button targets the *canonical* session id (what the WebSocket
+        # sends / what get_current_session_id() returns, e.g. "orange166279"). That can
+        # differ from `agent.current_session_id` captured above, so we check should_stop for
+        # ALL plausible session ids — otherwise Stop silently does nothing.
+        _stop_sid = session_id
+        def _check_stop() -> bool:
+            try:
+                from vaf.core.task_queue import TaskQueue
+                from vaf.core.subagent_ipc import get_current_session_id
+                tq = TaskQueue()
+                candidates = set()
+                if _stop_sid:
+                    candidates.add(str(_stop_sid))
+                _cur = get_current_session_id()
+                if _cur:
+                    candidates.add(str(_cur))
+                _env_sid = os.environ.get("VAF_SESSION_ID")
+                if _env_sid:
+                    candidates.add(str(_env_sid))
+                return any(tq.should_stop(s) for s in candidates)
+            except Exception:
+                return False
+
         _orig_stdout = sys.stdout
         _orig_stderr = sys.stderr
         # VAF_IN_WORKFLOW_TERMINAL activates simple_mode in coding_agent:
@@ -529,15 +554,20 @@ class AgentWorkflowBuilderTool(BaseTool):
         _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
         from vaf.core.config import Config as _CfgWF
         _subagent_model = _CfgWF.get("subagent_model", "")
+        result = None
+        _wf_exc = None
         try:
             sys.stdout = _WebStreamWriter(sys.stdout)
             sys.stderr = _WebStreamWriter(sys.stderr)
             os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
             if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                 os.environ["VAF_TOOL_MODEL"] = _subagent_model
-            result = engine.execute(steps, variables=variables)
+            result = engine.execute(
+                steps, variables=variables, check_stop=_check_stop,
+                wait_for_subagents=True,   # run sub-agents as killable child processes
+            )
         except Exception as exc:
-            return f"Error executing temporary workflow '{name}': {exc}"
+            _wf_exc = exc
         finally:
             sys.stdout = _orig_stdout
             sys.stderr = _orig_stderr
@@ -549,6 +579,22 @@ class AgentWorkflowBuilderTool(BaseTool):
                 os.environ.pop("VAF_TOOL_MODEL", None)
             else:
                 os.environ["VAF_TOOL_MODEL"] = _prev_tool_model
+            # workflow_start was sent at the top, so the WebUI must ALWAYS be told the run
+            # ended — otherwise the chat "workflow running" indicator (and the runtime panel)
+            # hang on "running" forever. Pushed after stdout is restored (not via the stream
+            # writer). Paused is a valid non-final state (resolved on resume), so skip it.
+            try:
+                if _wf_exc is not None:
+                    _push({"type": "workflow_done", "workflowId": workflow_id,
+                           "success": False, "error": str(_wf_exc)})
+                elif result is not None and not getattr(result, "paused", False):
+                    _push({"type": "workflow_done", "workflowId": workflow_id,
+                           "success": bool(result.success), "error": str(result.error or "")})
+            except Exception:
+                pass
+
+        if _wf_exc is not None:
+            return f"Error executing temporary workflow '{name}': {_wf_exc}"
 
         if result.paused:
             return (

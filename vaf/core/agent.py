@@ -6267,8 +6267,14 @@ class Agent:
                     from vaf.cli.ui import UI as UI_Class
                     result = None
                     try:
-                        # Special Case: Tools with their own immersive UI (no spinner needed)
-                        if function_name in ("coding_agent", "research_agent"):
+                        # Special Case: Tools with their own immersive UI (no spinner needed).
+                        # The workflow orchestrators MUST be here: they redirect sys.stdout to
+                        # the WebUI stream for the whole (possibly long) run, and Rich's
+                        # console.status spinner deadlocks on exit when stdout was swapped under
+                        # it — which left execute_tool never returning (no tool_end → the chat
+                        # tool-bubble hung "running").
+                        if function_name in ("coding_agent", "research_agent",
+                                             "create_agent_workflow", "execute_workflow"):
                             # Log agent-to-agent communication
                             if function_name == "coding_agent":
                                 # Check if this is a follow-up call (after answering questions)
@@ -7341,7 +7347,35 @@ class Agent:
                     goal = self._extract_subagent_goal(name, tool_args)
                     if intent or goal:
                         self.main_persistence.write_subagent_delegation_intent(intent, goal, name)
-                result = self.tools[name].run(**tool_args)
+                # Self-supervised tools (browser_agent + workflow orchestrators) manage their
+                # own cancellation/lifecycle and are legitimately long-running — bounding them
+                # here would abandon them mid-work (zombie) while they're still making progress.
+                # Run them directly; they handle their own Stop + internal limits.
+                from vaf.core.bounded_run import SELF_SUPERVISED_TOOLS as _SELF_SUPERVISED
+                if name in _SELF_SUPERVISED:
+                    result = self.tools[name].run(**tool_args)
+                else:
+                    # Bounded execution: never let a single in-process tool block the worker
+                    # forever, and poll the user's Stop flag *during* the call so the Stop
+                    # button actually works. See vaf/core/bounded_run.py.
+                    from vaf.core.bounded_run import run_bounded as _run_bounded, agent_timeout_seconds as _agent_to
+                    from vaf.core.config import Config as _CfgTT
+                    _tool_to = _agent_to(name)   # per-agent budget
+                    def _tool_stop_check():
+                        try:
+                            if not sid:
+                                return False
+                            from vaf.core.task_queue import TaskQueue as _TQ
+                            return bool(_TQ().should_stop(sid))
+                        except Exception:
+                            return False
+                    result = _run_bounded(
+                        lambda: self.tools[name].run(**tool_args),
+                        timeout=_tool_to,
+                        stop_check=_tool_stop_check,
+                        poll=float(_CfgTT.get("tool_stop_poll_seconds", 0.5)),
+                        label=name,
+                    )
             else:
                 result = f"Error: Unknown tool '{name}'"
         except Exception as e:

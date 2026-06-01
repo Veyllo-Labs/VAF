@@ -4395,7 +4395,7 @@ function VAFDashboardContent() {
                                                     // Render Tool Messages (same width as ThinkingDetails / assistant bubble content)
                                                     if (msg.role === 'tool') {
                                                         const toolLower = (msg.toolName || '').toLowerCase();
-                                                        const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding)_agent(?:$|[^a-z])/.test(toolLower);
+                                                        const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolLower);
                                                         const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
                                                             <div className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>

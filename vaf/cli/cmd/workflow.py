@@ -34,7 +34,19 @@ AUTO_CLOSE_DELAY = 5
 def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
     """
     Show a countdown and then exit (closing the terminal).
+
+    Only meaningful in a real terminal (CLI mode). In WebUI / piped mode (no tty) the countdown
+    is pointless and its output spams the WebUI, so skip it and exit immediately.
     """
+    _webui = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+    _is_tty = False
+    try:
+        _is_tty = bool(sys.stdout.isatty())
+    except Exception:
+        _is_tty = False
+    if _webui or not _is_tty:
+        sys.exit(0)
+
     print()  # Empty line for spacing
 
     for remaining in range(delay, 0, -1):

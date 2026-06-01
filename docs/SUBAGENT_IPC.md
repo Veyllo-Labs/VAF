@@ -214,6 +214,8 @@ Sub-Agents can now request help instead of failing blindly:
 2. Updates `team_state.json` with status `needs_clarification`.
 3. Main Agent sees this status in the next turn and asks the user.
 
+**Team-await gate (don't declare done early):** When a Main Agent reply asserts overall completion, it checks the live running state via `get_active_tasks_for_current_session()` and bounces the claim while any sub-agent is genuinely running, so it waits for the real result instead of finishing early. It is anti-stuck by design: `check_zombies()` reaps crashed/stale sub-agents first (so they never block), a finished sub-agent has already left `active_tasks.json`, and a per-turn block cap lets the claim through after a few bounces. See the plan-enforcement section in [Context Management](CONTEXT_MANAGEMENT.md).
+
 ### Step 4: Non-Blocking Processing (Chat Mode)
 
 ```

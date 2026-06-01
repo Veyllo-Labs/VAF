@@ -129,6 +129,19 @@ class Config:
                 "plan_gate_enabled": True,                     # global kill-switch
                 "plan_gate_max_blocks": 3,                     # blocks before proceeding without a plan
 
+                # Team-await gate (main agent): do not let the agent declare the task complete while
+                # a sub-agent is genuinely still running (fresh heartbeat). Crashed/stale sub-agents
+                # are reaped first (check_zombies) so they never block; a finished sub-agent leaves
+                # the active list so the block lifts on its own; after team_await_max_blocks bounces
+                # "done" proceeds anyway so the agent can never get stuck waiting.
+                "team_await_enabled": True,                    # global kill-switch
+                "team_await_max_blocks": 3,                    # bounces before proceeding anyway
+
+                # Out-of-order drift nudge: when the agent marks a later task done while an earlier
+                # one is still pending, update_working_memory appends a soft "did you skip it?" hint
+                # to its result (a reminder, never a block).
+                "plan_drift_nudge_enabled": True,              # global kill-switch
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

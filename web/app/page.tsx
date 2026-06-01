@@ -19,11 +19,13 @@ import NotificationsModal, { type NotificationItem } from '@/components/Notifica
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
-import CodeViewer, { isCodeFile } from '@/components/CodeViewer';
+import CodeViewer, { isCodeFile, isTextFile } from '@/components/CodeViewer';
 import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import WatchdogPanel from '@/components/WatchdogPanel';
+import CopyOnRightClick from '@/components/CopyOnRightClick';
+import BrowserLiveTile from '@/components/BrowserLiveTile';
 import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
 import { useWorkflowStore } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
@@ -923,6 +925,20 @@ function VAFDashboardContent() {
     const messagesRef = useRef<Message[]>([]); // Ref to access messages in WebSocket callback
     useEffect(() => { messagesRef.current = messages; }, [messages]);
 
+    // User dismissed the tiled browser live view for the current run (reset on next workflow start).
+    const [browserTileClosed, setBrowserTileClosed] = useState(false);
+
+    // Sub-agent tools currently running inline in a tool bubble — the WatchdogPanel hides these
+    // so their live status/kill shows in the bubble (not duplicated bottom-left).
+    const inlineWatchdogAgentTypes = useMemo(
+        () => messages
+            .filter(m => m.role === 'tool'
+                && m.toolStatus === 'running'
+                && /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test((m.toolName || '').toLowerCase()))
+            .map(m => (m.toolName || '').toLowerCase()),
+        [messages]
+    );
+
 
     const [status, setStatus] = useState('connecting');
     const [modelLoaded, setModelLoaded] = useState<boolean | null>(null);
@@ -1105,6 +1121,12 @@ function VAFDashboardContent() {
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
     // xraySection state removed - Context Window modal now shows only overview diagram
+
+    // Agent Brain: working memory, plan, tasks, intent, team state
+    type BrainTask = { text: string; status: 'pending' | 'done' };
+    type BrainAgent = { task_id: string; agent_type: string; status: string; task: string; question: string; result: string };
+    type BrainData = { intent: string; notes: string[]; plan: string[]; tasks: BrainTask[]; agents: BrainAgent[] };
+    const [brainData, setBrainData] = useState<BrainData | null>(null);
 
     // Memoize filtered messages so typing in the input box doesn't re-process
     // all messages on every keystroke (parseContent + ReactMarkdown are expensive).
@@ -2263,6 +2285,10 @@ function VAFDashboardContent() {
                         status: 'running'
                     });
 
+                    // Fresh run: drop any stale browser frame and re-arm the tiled live view.
+                    setBrowserTileClosed(false);
+                    setSubAgentState(prev => ({ ...prev, browserFrame: '', browserUrl: '' }));
+
                     // NOTE: We do NOT add a chat message here anymore!
                     // The workflow is already shown in:
                     // 1. The Runtime Panel on the right side
@@ -2289,6 +2315,8 @@ function VAFDashboardContent() {
                             workflow: s.workflow ? { ...s.workflow, status: data.success ? 'completed' : 'failed' } : null
                         }));
                     }
+                    // Browser is done with the workflow → remove the tiled live view.
+                    setSubAgentState(prev => ({ ...prev, browserFrame: '', browserUrl: '' }));
                 }
                 else if (data.type === 'workflow_output_stream') {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
@@ -3084,12 +3112,21 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'browser_frame_update') {
-                    // Live browser screenshot from browser_agent
+                    // Live browser screenshot from browser_agent. The frame is always stored; how it
+                    // is shown depends on context:
+                    //  • inside a workflow → the BrowserLiveTile docks left of the Workflow Runtime
+                    //    window (tiled, no overlap), so we do NOT open the dock here.
+                    //  • standalone → surface the SubAgent dock window as before.
+                    const inWorkflow = isWorkflowRunningRef.current;
                     setSubAgentState(prev => ({
                         ...prev,
                         browserFrame: data.frame || '',
                         browserUrl: data.url || '',
+                        agentName: prev.agentName || 'Browser Agent',
+                        presence: prev.presence === 'error' ? prev.presence : 'online',
+                        isOpen: (!inWorkflow && !subAgentUserClosedRef.current) ? true : prev.isOpen,
                     }));
+                    if (!inWorkflow && !subAgentUserClosedRef.current) setShowSubAgentPanel(true);
                 }
                 else if (data.type === 'browser_step_update' && data.line) {
                     // browser-use agent step log line → SubAgent console
@@ -3234,6 +3271,15 @@ function VAFDashboardContent() {
             });
         }
     }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Fetch brain data when the context modal opens
+    useEffect(() => {
+        if (!isContextModalOpen) return;
+        fetch(`${getApiBase()}/api/agent/brain`, { credentials: 'include' })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => d && !d.error ? setBrainData(d) : setBrainData(null))
+            .catch(() => setBrainData(null));
+    }, [isContextModalOpen]);
 
     // ESC: close context modal
     useEffect(() => {
@@ -4646,7 +4692,7 @@ function VAFDashboardContent() {
                                                                                 <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                                                                                 {f.name}
                                                                             </button>
-                                                                        ) : isCodeFile(f.path) ? (
+                                                                        ) : (isCodeFile(f.path) || isTextFile(f.path)) ? (
                                                                             <button
                                                                                 key={fi}
                                                                                 onClick={() => { setCodeViewerState({ isOpen: true, filePath: f.path, title: f.name }); setShowSubAgentPanel(true); }}
@@ -5155,8 +5201,24 @@ function VAFDashboardContent() {
             {/* Active Tools Panel Moved Inline */}
             <VAFWorkflowRuntime />
 
-            {/* Watchdog: live running sub-agents with per-unit kill */}
-            <WatchdogPanel />
+            {/* Browser live view, tiled to the LEFT of the Workflow Runtime window (which is
+                ~500px wide on lg) so the two visual windows sit side by side instead of overlapping. */}
+            {workflowPanelOpen && !browserTileClosed && (
+                <BrowserLiveTile
+                    frame={subAgentState.browserFrame}
+                    url={subAgentState.browserUrl}
+                    agentName={subAgentState.agentName || 'Browser Agent'}
+                    rightOffset={500}
+                    onClose={() => setBrowserTileClosed(true)}
+                />
+            )}
+
+            {/* Watchdog: live running sub-agents with per-unit kill (units without an inline
+                tool bubble — e.g. workflow steps; bubble-covered ones show in the bubble) */}
+            <WatchdogPanel excludeAgentTypes={inlineWatchdogAgentTypes} />
+
+            {/* Right-click selected text → copy + brief "Kopiert" toast */}
+            <CopyOnRightClick />
 
             {/* Stop-button ripple portal — rendered at document.body level to bypass all overflow:hidden parents */}
             {stopPulsing && stopBtnPos && typeof document !== 'undefined' && createPortal(
@@ -5300,7 +5362,7 @@ function VAFDashboardContent() {
                                 )}
                             </div>
 
-                            {/* Diagram - Right side (uses contextBreakdown) */}
+                            {/* Diagram - Center (uses contextBreakdown) */}
                             <div className="flex-1 flex flex-col min-h-0">
                                 {contextBreakdown && (() => {
                                     const { totalCap, used, systemEst, toolsEst, historyEst } = contextBreakdown;
@@ -5428,6 +5490,102 @@ function VAFDashboardContent() {
                                         </div>
                                     );
                                 })()}
+                            </div>
+
+                            {/* Brain Panel - right side: working memory, plan, tasks, team */}
+                            <div className="shrink-0 w-56 flex flex-col gap-3 overflow-y-auto max-h-full border-l border-gray-100 pl-4">
+                                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest pb-1 border-b border-gray-100">🧠 Agent Brain</div>
+                                {/* Intent */}
+                                {brainData?.intent && (
+                                    <div>
+                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Goal</div>
+                                        <div className="text-xs text-gray-700 bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-200 leading-relaxed line-clamp-3" title={brainData.intent}>
+                                            {brainData.intent}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Plan */}
+                                {brainData && brainData.plan.length > 0 && (
+                                    <div>
+                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Plan</div>
+                                        <div className="space-y-0.5">
+                                            {brainData.plan.map((step, i) => (
+                                                <div key={i} className="flex items-start gap-1.5 text-xs text-gray-700">
+                                                    <span className="shrink-0 font-mono text-[10px] text-gray-400 mt-0.5">{i + 1}.</span>
+                                                    <span className="leading-relaxed">{step}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Tasks */}
+                                {brainData && brainData.tasks.length > 0 && (
+                                    <div>
+                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Tasks</div>
+                                        <div className="space-y-0.5">
+                                            {brainData.tasks.map((t, i) => (
+                                                <div key={i} className="flex items-start gap-1.5 text-xs">
+                                                    <span className={cn('shrink-0 mt-0.5', t.status === 'done' ? 'text-emerald-500' : 'text-amber-500')}>
+                                                        {t.status === 'done' ? '✓' : '○'}
+                                                    </span>
+                                                    <span className={cn('leading-relaxed', t.status === 'done' ? 'text-gray-400 line-through' : 'text-gray-700')}>
+                                                        {t.text}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Notes */}
+                                {brainData && brainData.notes.length > 0 && (
+                                    <div>
+                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Notes</div>
+                                        <div className="space-y-0.5">
+                                            {brainData.notes.map((n, i) => (
+                                                <div key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
+                                                    <span className="shrink-0 text-gray-300 mt-0.5">·</span>
+                                                    <span className="leading-relaxed">{n}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Team / Sub-agents */}
+                                {brainData && brainData.agents.length > 0 && (
+                                    <div>
+                                        <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Team</div>
+                                        <div className="space-y-1.5">
+                                            {brainData.agents.map((a, i) => {
+                                                const dot = a.status === 'running' ? 'bg-emerald-500 animate-pulse'
+                                                    : a.status === 'failed' ? 'bg-red-500'
+                                                    : a.status === 'needs_clarification' ? 'bg-amber-400 animate-pulse'
+                                                    : 'bg-gray-400';
+                                                return (
+                                                    <div key={i} className="flex items-start gap-1.5">
+                                                        <span className={cn('shrink-0 mt-1 h-1.5 w-1.5 rounded-full', dot)} />
+                                                        <div className="min-w-0">
+                                                            <div className="text-[11px] font-semibold text-gray-800 truncate">{a.agent_type.replace(/_/g, ' ')}</div>
+                                                            {a.task && <div className="text-[10px] text-gray-500 truncate">{a.task}</div>}
+                                                            {a.question && <div className="text-[10px] text-amber-600 truncate">❓ {a.question}</div>}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Empty state */}
+                                {brainData && !brainData.intent && brainData.plan.length === 0 && brainData.tasks.length === 0 && brainData.notes.length === 0 && brainData.agents.length === 0 && (
+                                    <div className="text-xs text-gray-400 italic text-center pt-4">Agent has no active plan or tasks</div>
+                                )}
+                                {!brainData && (
+                                    <div className="text-xs text-gray-400 italic text-center pt-4">Loading…</div>
+                                )}
                             </div>
                         </div>
 

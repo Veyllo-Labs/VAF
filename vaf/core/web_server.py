@@ -316,6 +316,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Supervisor routes: {e}")
 
+# Mount Agent Brain routes (working memory, plan, intent, team state)
+try:
+    from vaf.api.brain_routes import router as brain_router
+    app.include_router(brain_router)
+    log("WebServer", "Agent Brain routes mounted at /api/agent")
+except Exception as e:
+    log("WebServer", f"Failed to mount Agent Brain routes: {e}")
+
 # Add authentication middleware if local network is enabled
 if Config.get("local_network_enabled", False):
     try:

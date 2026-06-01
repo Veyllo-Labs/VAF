@@ -60,9 +60,16 @@ class SystemPromptManager:
             self.decay_start = 3
             self.module_decay_turns = {"coding": 5, "research": 4, "filesystem": 3}
         
-        # Initialize Persistence Manager (lazy load in build_prompt if needed, or here)
+        # Initialize Persistence Manager, scoped to the current session so the injected
+        # <working_memory>/<team_state>/<user_intent> belong to THIS chat, not a shared global
+        # store. The agent also re-points this on session switch (_bind_session_persistence).
         try:
-            self.mpm = MainPersistenceManager(os.getcwd())
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                _sid = get_current_session_id()
+            except Exception:
+                _sid = None
+            self.mpm = MainPersistenceManager(os.getcwd(), session_id=_sid)
         except Exception:
             self.mpm = None
         
@@ -883,8 +890,11 @@ Then use the results to answer. Do NOT guess from your training data!
             try:
                 persistent_context = self.mpm.build_context_injection()
                 parts.append(persistent_context)
-            except Exception:
-                pass
+            except Exception as e:
+                # Do not swallow silently: if this throws, the whole live-state block
+                # (intent/plan/tasks/team) vanishes from the prompt. Log so it is diagnosable;
+                # still non-fatal (the prompt is built without the block rather than failing).
+                logging.warning("Persistent context injection failed; live-state block omitted: %s", e)
 
         # 
         # 5. TOOL DOCUMENTATION

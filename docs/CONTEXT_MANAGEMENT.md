@@ -167,7 +167,7 @@ Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, Dee
 
 The Context Manager dynamically adjusts its behavior based on the configured context limit (`n_ctx`). This ensures that small local models remain stable while large-context APIs can leverage their full potential.
 
-> **Note:** VAF enforces a minimum `n_ctx` of 32 768. The ≤ 8k / ≤ 12k rows below are retained for completeness but are not reachable in normal operation.
+> **Note:** VAF clamps `n_ctx` to a minimum of 32 768 in `Config.load` (lower values are raised on load), so the ≤ 8k / ≤ 12k rows below are not reachable in normal operation; they are kept for reference only.
 
 | Context Limit (`n_ctx`) | Trigger | Recent Memory | Strategy |
 |-------------------------|---------|---------------|----------|
@@ -607,6 +607,14 @@ The Orchestrator prompt module activates automatically when the tool router dete
 
 **Conditional hard enforcement (small context):** When the orchestrator module is active and context is small (`n_ctx` ≤ 12k), the agent enforces that a plan exists in working memory before allowing "heavy" tools (e.g. `read_file`, `web_search`, sub-agents such as `librarian_agent`, `coding_agent`, `research_agent`). If the model tries to call a heavy tool without a plan, it receives a block message and must call `update_working_memory(plan=[...])` first. In addition, at most 2 heavy tool calls per turn are allowed; on the 3rd, the model is asked to summarize progress and use `checkpoint_context` if needed. This prevents small-context models from skipping the plan and flooding the context with tool output.
 
+#### Plan enforcement — "explore freely, but plan before you act"
+
+The pattern above lets the agent *own* a plan; two always-on mechanisms make sure any model — from a small local model up to a large one — actually *follows* it instead of skipping or abandoning steps. The guiding principle is **"explore freely, but plan before you act":** reading and searching stay open (the agent needs them to form a plan), but committing to a state-changing action requires a plan first. Both mechanisms are independent of context size and sit on top of the conditional small-context enforcement above. The plan, tasks, and team they read from are stored per session (see [CONTEXT_GLUE.md](CONTEXT_GLUE.md) and [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md)), so one chat's plan never drives another.
+
+**Current-step reminder.** Whenever the working-memory plan has pending tasks, the agent injects a compact current-step reminder into the `<working_memory>` block each turn: the first pending task (derived, so it auto-advances as tasks are completed) together with the list index to pass to `update_working_memory(mark_task_done=...)`. Tasks are rendered with their `[i]` index so the model knows which one to close. The reminder is silent when no pending task exists (plain chat is unaffected) and is governed by the `plan_step_reminder_enabled` kill-switch. See [CONTEXT_GLUE.md](CONTEXT_GLUE.md) for where this block is injected.
+
+**Plan gate (main agent only).** Before the main agent runs a state-changing tool (`permission_level` `write` or `dangerous`, except `python_sandbox`), a plan must exist in working memory; read/search tools (`read_file`, `web_search`, `research_agent`) are never gated, so the agent can explore freely to build the plan. The block is satisfied in the same turn by calling `update_working_memory(plan=[...])` first (`update_working_memory` is a `system` tool, so it is never gated); a one-line plan with a verify step is enough — that verify habit also complements the result-grounding guard. After a few consecutive blocks the tool proceeds anyway so nothing hard-locks. Sub-agents (e.g. the coder) are never gated — they run their own task loops untouched. Governed by `plan_gate_enabled` / `plan_gate_max_blocks`. See [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) for the `permission_level` contract this builds on.
+
 ### Small context (e.g. llama.cpp with low n_ctx)
 
 When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compression is more aggressive. To reduce "context loss" (e.g. the model forgetting that it already used GitHub or other tools):
@@ -615,7 +623,7 @@ When `n_ctx` is small (e.g. 4k–12k), fewer messages are kept raw and compressi
 - **Preserved tool results:** Besides `set_todos`, `write_file`, `read_file`, the compressed history preserves truncated results from **GitHub tools** (`github_list_repos`, `github_get_file`, `github_list_issues`, `github_list_pulls`) and **web_search**. So the model can retain that it already accessed e.g. the repo.
 - **Tools used in summary:** For small contexts (≤ 16k), the context summary includes a "Tools used this session" line (last 10 tools). This reduces confusion about connectivity or which tools were already called.
 
-**Recommendation:** VAF enforces a minimum `n_ctx` of **32 768** — values below this are silently raised at startup. With 100+ tools the system prompt alone (~5.5k tokens) plus all tool schemas (~6k tokens) requires at least this much headroom. The small-context mitigations above apply only if you deliberately bypass the minimum.
+**Recommendation:** VAF enforces a minimum `n_ctx` of **32 768** — lower values are clamped up when the configuration is loaded (`Config.load`). With 100+ tools the system prompt alone (~5.5k tokens) plus all tool schemas (~6k tokens) requires at least this much headroom. The small-context mitigations above are therefore not reachable in normal operation and are kept for reference only.
 
 ### Implementation
 

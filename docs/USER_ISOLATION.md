@@ -163,6 +163,7 @@ Chat sessions in the Web UI are isolated by `user_scope_id`:
 - **Load session:** Before subscribing to a session, the backend verifies ownership: the session's `metadata.user_scope_id` must match the current user, or the user must be the local admin. Otherwise the server responds with "Access denied".
 - **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a shared global ID.
 - **Broadcasting:** Updates are sent only to connections subscribed to that session (`broadcast_to_session`); session list refreshes are sent only to that user's connections (`broadcast_to_user`). See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md).
+- **Agent context store:** Each chat's working memory — intent, plan, tasks, notes, and team state — is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](CONTEXT_GLUE.md).
 
 ## 3. Cache Isolation (Redis)
 

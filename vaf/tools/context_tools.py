@@ -30,6 +30,17 @@ def _run_async_in_new_loop(coro):
     return result[0]
 from vaf.core.main_persistence import MainPersistenceManager
 
+
+def _current_session_id() -> Optional[str]:
+    """Current session id (from the session context var), so persistence writes land in this
+    chat's isolated store instead of the shared global one. Sub-agents inherit the parent
+    session via VAF_SESSION_ID. None -> legacy global .vaf/main/."""
+    try:
+        from vaf.core.subagent_ipc import get_current_session_id
+        return get_current_session_id()
+    except Exception:
+        return None
+
 class UpdateIntentTool(BaseTool):
     """
     Update the User Intent (the session goal/task). 
@@ -63,7 +74,7 @@ class UpdateIntentTool(BaseTool):
             return "Error: Intent content is required."
         
         try:
-            mpm = MainPersistenceManager(base_dir)
+            mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             mpm.update_user_intent(intent)
             return "✅ User Intent updated successfully."
         except Exception as e:
@@ -144,7 +155,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         mark_task_done = kwargs.get('mark_task_done')
         
         try:
-            mpm = MainPersistenceManager(base_dir)
+            mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             mpm.update_working_memory(
                 notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan,
                 tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,
@@ -212,7 +223,7 @@ class AddTaskAliasTool(BaseTool):
             )
         try:
             base_dir = kwargs.get("base_dir", ".")
-            mpm = MainPersistenceManager(base_dir)
+            mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             mpm.update_working_memory(add_task=task_text.strip())
             return (
                 f"✅ Task added: \"{task_text.strip()}\"\n\n"
@@ -273,7 +284,7 @@ class RequestClarificationTool(BaseTool):
             return "Error: Question and Task ID are required."
         
         try:
-            mpm = MainPersistenceManager(base_dir)
+            mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             mpm.update_subagent_status(
                 task_id=task_id,
                 agent_type=agent_type,

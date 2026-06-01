@@ -63,16 +63,33 @@ class MainPersistenceManager:
     Implements the Hybrid Architecture: Memory Blocks + JSON State + Tiered Results.
     """
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str, session_id: Optional[str] = None):
         self.base_dir = Path(base_dir)
-        self.context_dir = self.base_dir / MAIN_CONTEXT_DIR
+        self.session_id = (str(session_id).strip() or None) if session_id else None
+        if self.session_id:
+            # Per-session isolation: each conversation gets its own intent/plan/tasks/notes/team so
+            # the live state never leaks across chats or users. Falls back to the legacy global
+            # .vaf/main/ when no session is known (e.g. single-shot CLI), preserving old behavior.
+            self.context_dir = self.base_dir / MAIN_CONTEXT_DIR / "sessions" / self._safe_session_dir(self.session_id)
+        else:
+            self.context_dir = self.base_dir / MAIN_CONTEXT_DIR
         self.results_dir = self.context_dir / RESULTS_DIR
-        
+
         # Ensure directory structure exists
         self.context_dir.mkdir(parents=True, exist_ok=True)
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._init_files()
+
+    @staticmethod
+    def _safe_session_dir(session_id: str) -> str:
+        """Sanitize a session id into a single safe path segment (prevents traversal):
+        non-allowed chars -> '_', dot-runs collapsed (no '..'), no leading/trailing punctuation."""
+        import re as _re
+        safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id).strip())
+        safe = _re.sub(r"\.+", ".", safe)          # collapse dot runs so no '..' survives
+        safe = safe.strip("._-") or "default"      # no leading/trailing punctuation
+        return safe[:128]
 
     def _init_files(self):
         """Initialize empty context files if they don't exist."""

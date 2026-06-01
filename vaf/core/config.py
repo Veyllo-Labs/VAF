@@ -27,7 +27,7 @@ class Config:
         "model": "Veyllo/VQ-1_Instruct-q4_k_m",
         "provider": "local",
         "gpu_layers": -1,
-        "n_ctx": 8192,
+        "n_ctx": 32768,  # Minimum supported context window; load() clamps lower values up to this.
         "n_parallel": 0, # 0 = Auto-detect based on VRAM (1 or 2); Set to 1 to force sequential if crashing
         "llama_cache_ram": 4096,  # Prompt cache size in MB. 0 = disabled. -1 = auto (40% free RAM, cap 8192).
         "temperature": 0.7,
@@ -119,6 +119,15 @@ class Config:
                 # follows its plan step by step instead of skipping or abandoning it. Silent when no
                 # pending task exists (no nagging on plain chat).
                 "plan_step_reminder_enabled": True,            # global kill-switch
+
+                # Plan gate (main agent only): a state-changing tool (permission_level write or
+                # dangerous, except python_sandbox) is blocked until a plan exists in working memory
+                # — "explore freely (read/search), plan before you act". Satisfied in the same turn
+                # by calling update_working_memory(plan=[...]) first; after plan_gate_max_blocks
+                # consecutive blocks it proceeds anyway so nothing hard-locks. Sub-agents are never
+                # gated (their own loops are untouched).
+                "plan_gate_enabled": True,                     # global kill-switch
+                "plan_gate_max_blocks": 3,                     # blocks before proceeding without a plan
 
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
@@ -349,6 +358,13 @@ class Config:
             # Security invariant: local network hosting must always run with TLS enabled.
             if bool(result.get("local_network_enabled", False)):
                 result["local_network_tls_enabled"] = True
+            # Enforce the minimum context window. VAF needs >= 32768 (system prompt ~5.5k +
+            # tool schemas ~6k + conversation headroom); sub-32k values are raised here so every
+            # reader sees one consistent, supported floor instead of an ad-hoc per-call clamp.
+            try:
+                result["n_ctx"] = max(int(result.get("n_ctx") or 32768), 32768)
+            except (TypeError, ValueError):
+                result["n_ctx"] = 32768
             return result
         except Exception:
             return cls.DEFAULTS.copy()

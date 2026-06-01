@@ -5,17 +5,25 @@ so the Web UI can show what the agent is currently thinking about.
 from __future__ import annotations
 
 import os
+from typing import Optional
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/api/agent", tags=["agent-brain"])
 
 
 @router.get("/brain")
-def get_brain():
-    """Return live working memory, intent, and team state."""
+def get_brain(session_id: Optional[str] = None):
+    """Return live working memory, intent, and team state for a session (defaults to the
+    currently active session). Each chat has its own isolated store."""
     try:
         from vaf.core.main_persistence import MainPersistenceManager
-        mpm = MainPersistenceManager(os.getcwd())
+        if not session_id:
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                session_id = get_current_session_id()
+            except Exception:
+                session_id = None
+        mpm = MainPersistenceManager(os.getcwd(), session_id=session_id)
 
         intent = mpm.get_user_intent() or ""
         memory = mpm.get_working_memory()

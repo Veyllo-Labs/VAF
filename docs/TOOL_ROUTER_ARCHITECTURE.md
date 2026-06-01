@@ -281,7 +281,7 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). |
+| `permission_level` | `"read"` \| `"write"` \| `"dangerous"` \| `"system"` | `"read"` | Access level. `dangerous` → confirmation gate. `system` → skips the legacy confirmation gate entirely (for internal/agent tools where prompting would be disruptive). For the **main agent**, `write`/`dangerous` (except `python_sandbox`) also require a plan in working memory before running — see the plan gate in [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md). |
 | `side_effect_class` | `"none"` \| `"reversible"` \| `"irreversible"` | `"none"` | Impact of the tool. Added to the confirmation message when `dangerous`. |
 | `admin_only` | `bool` | `False` | When `True`, the tool is **hard-blocked** for non-admin users at the `execute_tool()` level. The check uses `_current_user_role` and `_current_user_scope_id` (both set on the agent before each turn). This is a role-based check — distinct from `channel_restrictions` which is source-based. |
 | `channel_restrictions` | `tuple[str, ...]` | `()` | Sources where the tool is blocked. Common values: `"telegram"`, `"whatsapp"`, `"discord"`, `"channel"` (generic chat). |
@@ -290,9 +290,10 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 
 1. **`admin_only` check** — if `admin_only == True` and the current user is not an admin, the tool is hard-blocked. `is_admin` is derived from `_current_user_role` and `_current_user_scope_id` on the agent instance.
 2. **Channel check** — if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role).
-3. **Permission gate** — if `permission_level == "dangerous"`, the user is prompted (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line to the prompt.
-4. **`permission_level == "system"`** — bypasses the legacy confirmation gate entirely. Previously documented but never evaluated; now implemented.
-5. **Legacy trust gates** — existing risky-tool checks run as fallback for tools that predate the contract system.
+3. **Plan gate (main agent only)** — for `write`/`dangerous` tools (except `python_sandbox`), if no plan exists in working memory the call is blocked with a `[PLAN REQUIRED]` message asking the agent to write a short plan first; satisfied in the same turn, with a loop-cap escape so it never hard-locks. Skipped for sub-agents and non-interactive runs. See [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md).
+4. **Permission gate** — if `permission_level == "dangerous"`, the user is prompted (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line to the prompt.
+5. **`permission_level == "system"`** — bypasses the legacy confirmation gate entirely. Previously documented but never evaluated; now implemented.
+6. **Legacy trust gates** — existing risky-tool checks run as fallback for tools that predate the contract system.
 
 ### Examples
 

@@ -1,0 +1,5 @@
+# Ruff configuration for VAF.
+# Vendored third-party code (e.g. vaf/vendor/langid) and generated coder template
+# placeholders are not our code to lint, so they are excluded from checks. This keeps
+# the CI lint gate (E9,F63,F7,F82) green without patching vendored upstream files.
+extend-exclude = ["vaf/vendor", "vaf/tools/coder_templates"]

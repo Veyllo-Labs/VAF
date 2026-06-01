@@ -123,6 +123,7 @@ def test_execute_tool_uses_contract_for_noninteractive_gating():
         _current_chat_source="web",
         current_session_id=None,
         _record_tool_used=lambda name: None,
+        _plan_gate_decision=lambda name, tool: None,  # plan gate is a no-op here (noninteractive)
     )
 
     with patch("vaf.core.trust.get_tool_policy", return_value="ask"), patch(

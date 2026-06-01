@@ -288,6 +288,9 @@ class Agent:
         self._false_promise_retries = 0
         self._max_false_promise_retries = 20
 
+        # Result Grounding State (anti-confabulation of tool results)
+        self._result_grounding_retries = 0
+
     def _get_tokenizer(self):
         """
         Initializes and returns a lightweight Llama instance for tokenization.
@@ -4003,17 +4006,17 @@ class Agent:
 
                         from vaf.core.platform import Platform
 
-                        # Pass session ID to workflow terminal
+                        # Session/task context goes into the CHILD env only (not the parent's
+                        # global env), so concurrent workers don't clobber each other's session.
                         session_id = get_current_session_id()
+                        _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": f"workflow:{workflow_id}"}
                         if session_id:
-                            os.environ["VAF_SESSION_ID"] = session_id
-                        os.environ["VAF_TASK_ID"] = task_id
-                        os.environ["VAF_AGENT_TYPE"] = f"workflow:{workflow_id}"
-                        _debug_log(f"STEP 4: Env vars set, session_id={session_id}")
+                            _sub_env["VAF_SESSION_ID"] = session_id
+                        _debug_log(f"STEP 4: Child env prepared, session_id={session_id}")
 
                         # Pass Language Hint to workflow terminal
                         if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language:
-                            os.environ["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
+                            _sub_env["VAF_USER_LANGUAGE"] = self.prompt_manager.user_language
 
                         # Build command with proper escaping for the platform.
                         # Use sys.executable so the correct venv Python is used regardless
@@ -4031,7 +4034,7 @@ class Agent:
                         _debug_log(f"STEP 5: Command built: {cmd[:300]}")
 
                         _debug_log("STEP 6: Calling Platform.open_new_terminal...")
-                        result_ok = Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}")
+                        result_ok = Platform.open_new_terminal(cmd, title=f"VAF Workflow: {workflow_id}", extra_env=_sub_env)
                         _debug_log(f"STEP 7: open_new_terminal returned: {result_ok}")
                     except Exception as e:
                         _debug_log(f"ERROR: {type(e).__name__}: {e}")
@@ -6068,6 +6071,65 @@ class Agent:
             # Reset retry counter if tool calls were made or we passed the check
             self._false_promise_retries = 0
 
+            # 0b. RESULT GROUNDING (Anti-Confabulation)
+            # When the model produced a final text reply (no new tool call), make sure it isn't
+            # claiming a concrete tool OUTCOME that the turn's actual tool results don't support
+            # (e.g. "Workflow failed: Tool not found" when execute_workflow was never run). On a
+            # mismatch, bounce it back for correction — capped, then proceed so it never loops.
+            if not streaming_tools and not tool_calls_detected and full_content.strip():
+                _rg_on = True
+                try:
+                    from vaf.core.config import Config as _CfgRG
+                    _rg_on = bool(_CfgRG.get("result_grounding_enabled", True))
+                except Exception:
+                    _rg_on = True
+                if _rg_on:
+                    _ungrounded, _claim = self._detect_ungrounded_result_claim(
+                        full_content, self._turn_tool_results()
+                    )
+                    if _ungrounded:
+                        self._result_grounding_retries += 1
+                        try:
+                            from vaf.core.config import Config as _CfgRG2
+                            _rg_max = int(_CfgRG2.get("result_grounding_max_retries", 2))
+                        except Exception:
+                            _rg_max = 2
+                        if self._result_grounding_retries > _rg_max:
+                            UI.event("System", "Result grounding: max retries reached — proceeding.", style="error")
+                            self._result_grounding_retries = 0
+                        else:
+                            UI.event("System", f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - forcing correction...", style="warning")
+                            if _emit_to_web_ui():
+                                try:
+                                    from vaf.core.web_interface import get_web_interface
+                                    from vaf.core.subagent_ipc import get_current_session_id
+                                    _rg_sid = get_current_session_id()
+                                    get_web_interface().log(
+                                        f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - forcing correction...",
+                                        level="warning", source="System", session_id=_rg_sid,
+                                    )
+                                    get_web_interface().emit_clear_last_assistant(_rg_sid)
+                                except Exception:
+                                    pass
+                            if stream_callback and hasattr(stream_callback, "clear"):
+                                try:
+                                    stream_callback.clear()
+                                except Exception:
+                                    pass
+                            self.history.append({"role": "assistant", "content": full_content})
+                            self.history.append({
+                                "role": "system",
+                                "content": (
+                                    "CORRECTION NEEDED: your reply stated a tool outcome — "
+                                    f"\"{(_claim or '')[:200]}\" — that no tool actually produced this turn. "
+                                    "Do NOT report results you did not get. Either CALL the tool now to "
+                                    "actually perform it, or restate WITHOUT claiming a result that did not happen."
+                                ),
+                            })
+                            continue
+                    else:
+                        self._result_grounding_retries = 0
+
             # 1. Handle Tool Calls
             # ... (Tool logic unchanged) ...
             try:
@@ -7892,6 +7954,87 @@ class Agent:
         except Exception:
             # If validation fails, fallback to heuristic (conservative)
             return suspicion_score > 0.7
+
+    def _turn_tool_results(self) -> list:
+        """The actual tool outcomes of the CURRENT turn: walk history back to the last user message
+        and collect the role='tool' entries since then as (tool_name, truncated_result) pairs, in
+        order. Used by result grounding to compare the reply's claims against what tools returned."""
+        out = []
+        hist = getattr(self, "history", None) or []
+        for msg in reversed(hist):
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if role == "user":
+                break
+            if role == "tool":
+                name = str(msg.get("name") or "tool")
+                content = str(msg.get("content") or "")
+                out.append((name, content[:500]))
+        out.reverse()
+        return out
+
+    def _detect_ungrounded_result_claim(self, response_text: str, turn_results: list):
+        """
+        Result grounding (anti-confabulation): does the reply assert a concrete tool OUTCOME — a
+        success, a failure, a saved/created file, a specific error, or a result/count — that the
+        turn's ACTUAL tool results do not support, INCLUDING claiming a result for a tool that was
+        never run this turn? Returns (ungrounded, claim).
+
+        Conservative by design: a cheap keyword/regex pre-filter gates the LLM judge so ordinary
+        replies cost nothing, and any failure returns (False, None) so the guard never blocks a reply.
+        """
+        text = (response_text or "").strip()
+        if len(text) < 12:
+            return False, None
+
+        # Pre-filter: only replies that actually assert a tool outcome are worth the LLM check.
+        import re as _re
+        _low = text.lower()
+        _outcome_kw = (
+            "failed", "success", "succeed", "saved", "wrote", "written", "created", "deleted",
+            "removed", "sent", "crashed", "error", "not found", "no results", "executed",
+            "task complete", "fehlgeschlagen", "gespeichert", "erstellt", "gelöscht", "gesendet",
+            "ausgeführt", "bestätigt", "nicht gefunden", "kein ergebnis",
+        )
+        _has_outcome = any(k in _low for k in _outcome_kw) or bool(
+            _re.search(r'[✗✅❌]|found\s+\d+|\b\d+\s+(results|treffer|dateien|files)\b', text, _re.I)
+        )
+        if not _has_outcome:
+            return False, None
+
+        if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
+            return False, None
+
+        _results_block = (
+            "\n".join(f"- {n}: {(c or '')[:300]}" for n, c in turn_results)
+            if turn_results else "(no tools were run this turn)"
+        )
+        prompt = (
+            "You verify an AI assistant reply against the ACTUAL tool results of this turn.\n"
+            "Does the reply assert a concrete tool OUTCOME (a success, a failure, a saved/created "
+            "file, a specific error, or a result/count) that the tool results below do NOT support — "
+            "including claiming a result for a tool that was never run this turn?\n\n"
+            f"ASSISTANT REPLY:\n{text[:900]}\n\n"
+            f"ACTUAL TOOL RESULTS THIS TURN:\n{_results_block[:1500]}\n\n"
+            "Reply with EXACTLY one of:\n"
+            "- GROUNDED (every concrete outcome in the reply is supported by the results, or the reply "
+            "makes no concrete outcome claim)\n"
+            "- UNGROUNDED (the reply claims an outcome not supported / not actually performed)\n"
+            "If UNGROUNDED, add on the next line: CLAIM: [the unsupported claim, short]"
+        )
+        try:
+            content = self._run_validation_llm([{"role": "user", "content": prompt}], max_tokens=60)
+        except Exception:
+            return False, None
+        if "UNGROUNDED" not in (content or "").upper():
+            return False, None
+        claim = None
+        for line in (content or "").splitlines():
+            if "claim:" in line.lower():
+                claim = line.split(":", 1)[-1].strip()
+                break
+        return True, (claim or "a tool outcome that did not actually happen this turn")
 
     def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
         """Prepare messages for specific model quirks (e.g. Gemma)."""

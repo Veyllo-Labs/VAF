@@ -107,6 +107,13 @@ class Config:
                 "workflow_step_validation_enabled": True,      # global kill-switch
                 "workflow_step_validation_max_retries": 3,     # retries before accepting the result
 
+                # Result grounding: catch a reply that claims a concrete tool OUTCOME (succeeded /
+                # failed / saved / "N results" / a specific error) the turn's actual tool results do
+                # not support — including a result for a tool that was never run this turn. On a
+                # mismatch the reply is bounced back for correction (capped, then it proceeds).
+                "result_grounding_enabled": True,              # global kill-switch
+                "result_grounding_max_retries": 2,             # corrections before proceeding anyway
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

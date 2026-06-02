@@ -228,6 +228,21 @@ Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
 }
 ```
 
+### Per-turn persistence: tool calls & context summary
+
+Besides plain `user`/`assistant` text, each turn also persists what the agent *did*, so it stays aware of its own tool calls and their errors across reloads:
+
+- The `Message` model carries optional `tool_calls` (on assistant messages) and `tool_call_id` + `name` (on `role: "tool"` results). These are written to disk and restored on load, preserving valid `tool_use`/`tool_result` pairs (`load_session_context` keeps the linkage and no longer drops a tool-call assistant message just because its visible text is empty).
+- After the turn-end squash (see [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) — *Per-Turn Intermediate-Step Squash*), the raw tool scaffolding is usually replaced by a single `role: "system"` summary that starts with `[Context: …]` and lists each tool's outcome (`OK`/`FAILED` + a short snippet). That summary is persisted and, unlike other operational system messages, is **kept** on reload (it is exempt from the system-message ignore filter).
+
+Example of a tool turn as stored:
+
+```json
+{"role": "user", "content": "Transcribe this video: https://…"},
+{"role": "system", "content": "[Context: tools used this turn]\n- python_exec → FAILED: Object of type PosixPath is not JSON serializable\n- browser_agent → OK: no transcript/captions found"},
+{"role": "assistant", "content": "No transcript available…"}
+```
+
 ### Session Workspace (`project_path`)
 
 `project_path` is the **stable workspace root** for a chat session. It is set automatically on the first `file_created` event for that session (in `vaf/core/web_server.py`) and never overwritten afterward. This gives the session a permanent home directory even if the user creates multiple projects within the same chat.
@@ -279,4 +294,4 @@ console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, fr
 
 ---
 
-*Last updated: 2026-01-27*
+*Last updated: 2026-06-02*

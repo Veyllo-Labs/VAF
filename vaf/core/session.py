@@ -9,7 +9,7 @@ import random
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA CLASSES
@@ -24,13 +24,21 @@ class Message:
     tool_calls: Optional[List[Dict]] = None
     tool_results: Optional[Dict] = None
     metadata: Optional[Dict] = None
-    
+    # Tool-call linkage: assistant messages carry `tool_calls`; the matching
+    # role:"tool" result carries `tool_call_id` (+ `name`). Persisting these keeps
+    # the agent aware of its own tool calls and their results across reloads.
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
     def to_dict(self) -> Dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> "Message":
-        return cls(**data)
+        # Filter to known dataclass fields so legacy/unknown keys in stored
+        # sessions don't raise TypeError (backward compatibility).
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -88,9 +96,24 @@ class Session:
         return provider_data.get("state")
     
     def get_history(self, limit: int = None) -> List[Dict]:
-        """Get message history for API calls."""
+        """Get message history for API calls.
+
+        Preserves tool-call linkage (`tool_calls` on assistant messages,
+        `tool_call_id`/`name` on role:"tool" results) so restored history keeps
+        valid tool_use/tool_result pairs.
+        """
         messages = self.messages[-limit:] if limit else self.messages
-        return [{"role": m.role, "content": m.content} for m in messages]
+        out: List[Dict] = []
+        for m in messages:
+            entry: Dict[str, Any] = {"role": m.role, "content": m.content}
+            if getattr(m, "tool_calls", None):
+                entry["tool_calls"] = m.tool_calls
+            if getattr(m, "tool_call_id", None):
+                entry["tool_call_id"] = m.tool_call_id
+            if getattr(m, "name", None):
+                entry["name"] = m.name
+            out.append(entry)
+        return out
     
     def to_dict(self) -> Dict:
         return {
@@ -139,6 +162,49 @@ class Session:
                 return content + "..." if len(msg.content) > 50 else content
         
         return f"{len(self.messages)} messages"
+
+
+def turn_context_messages_since_last_user(history: List[Dict], user_input: str) -> List[Dict]:
+    """Extract the per-turn context artifacts of the latest turn from an agent
+    history (OpenAI-style dicts: role/content/tool_calls/tool_call_id/name).
+
+    Returns, in order, the messages that capture what the agent DID this turn and
+    that appear AFTER the last user message matching ``user_input`` (falling back
+    to the most recent user message):
+
+      * assistant messages carrying ``tool_calls`` and their ``role:"tool"``
+        results (when the raw tool scaffolding is still present), and
+      * the ``role:"system"`` ``[Context: ...]`` summary that replaces those
+        steps once the turn-end squash has run (the common case).
+
+    Plain assistant text is intentionally skipped — it is persisted separately as
+    the cleaned final response, avoiding duplication.
+    """
+    if not history:
+        return []
+    target = (user_input or "").strip()
+    start = None
+    fallback = None
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            if fallback is None:
+                fallback = i
+            if target and str(history[i].get("content") or "").strip() == target:
+                start = i
+                break
+    if start is None:
+        start = fallback
+    if start is None:
+        return []
+    out: List[Dict] = []
+    for m in history[start + 1:]:
+        role = m.get("role")
+        content = str(m.get("content") or "")
+        if (role == "assistant" and m.get("tool_calls")) or role == "tool":
+            out.append(m)
+        elif role == "system" and content.lstrip().startswith("[Context:"):
+            out.append(m)
+    return out
 
 
 def _generate_session_id() -> str:

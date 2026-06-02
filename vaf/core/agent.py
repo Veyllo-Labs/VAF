@@ -336,10 +336,11 @@ class Agent:
                     pass
                 return None
             return (
-                f"[PLAN REQUIRED] '{name}' changes state, so write a short plan first: "
-                "update_working_memory(plan=[\"<what you will do>\", \"verify it succeeded\"]). "
-                "A one-line plan with a verify step is enough; then call the tool again. "
-                "Read/search tools need no plan — use them freely to figure out the plan."
+                f"[PLAN REQUIRED] '{name}' changes state, so set your approach first: "
+                "update_working_memory(plan=[\"<your approach in a line or two>\"]). "
+                "Keep plan high-level; for multi-step work put the concrete steps in tasks (add_task). "
+                "A one-line approach is enough; then call the tool again. "
+                "Read/search tools need no plan — use them freely to work out the approach."
             )
         except Exception:
             return None

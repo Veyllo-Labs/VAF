@@ -7,6 +7,10 @@ from uuid import UUID
 from vaf.tools.base import BaseTool
 
 
+# session_id -> ts of the last "are you sure?" task-overwrite bounce (confirm-once guard, see run()).
+_TASK_OVERWRITE_CONFIRM: dict = {}
+
+
 def _run_async_in_new_loop(coro):
     """Run a coroutine in a new thread with its own event loop. Avoids 'attached to a different loop' when called from sync/other loop."""
     result = [None]
@@ -91,8 +95,9 @@ class UpdateWorkingMemoryTool(BaseTool):
     side_effect_class = "reversible"
     description = (
         "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
-        "Use notes/plan to set the full list (replaces existing). Use add_notes/add_plan to append. "
-        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are auto-removed after 12h. Pending = in progress or waiting on something."
+        "plan = your high-level approach (short); tasks = the concrete steps that carry it out (tracked and kept on course). "
+        "Set notes/plan to replace the list, add_notes/add_plan to append. "
+        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; for multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
     )
     
     parameters = {
@@ -106,7 +111,7 @@ class UpdateWorkingMemoryTool(BaseTool):
             "plan": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Full list of plan steps (replaces existing). Omit to keep current plan."
+                "description": "Your high-level approach (a line or two), replaces existing. Keep it short; put concrete steps in tasks. Omit to keep current plan."
             },
             "add_notes": {
                 "type": "array",
@@ -116,7 +121,7 @@ class UpdateWorkingMemoryTool(BaseTool):
             "add_plan": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Plan steps to append (does not replace existing)."
+                "description": "Approach lines to append to the plan (does not replace existing)."
             },
             "tasks": {
                 "type": "array",
@@ -156,6 +161,38 @@ class UpdateWorkingMemoryTool(BaseTool):
         
         try:
             mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
+            pre_tasks = mpm.get_working_memory().get("tasks", [])
+
+            # Overwrite guard: replacing the whole task list (tasks=[...]) while steps are still
+            # pending can silently drop work in progress. Bounce the first such replace with the
+            # pending steps listed; a re-call within the confirm window proceeds. Never a hard lock.
+            if tasks is not None:
+                try:
+                    from vaf.core.config import Config as _CfgOv
+                    if bool(_CfgOv.get("task_overwrite_guard_enabled", True)):
+                        import time as _time
+                        sid = _current_session_id() or "default"
+                        pending = [
+                            (i, t) for i, t in enumerate(pre_tasks)
+                            if str((t.get("status") if isinstance(t, dict) else None) or "pending").lower() != "done"
+                        ]
+                        armed = _TASK_OVERWRITE_CONFIRM.get(sid)
+                        window = float(_CfgOv.get("task_overwrite_confirm_window_seconds", 120))
+                        if pending and not (armed and (_time.time() - armed) < window):
+                            _TASK_OVERWRITE_CONFIRM[sid] = _time.time()
+                            listed = "; ".join(
+                                f"[{i}] \"{str(t.get('text', '') if isinstance(t, dict) else t)[:50]}\""
+                                for i, t in pending[:5]
+                            )
+                            return (
+                                f"⚠️ You're replacing the task list, but {len(pending)} step(s) are still pending: {listed}. "
+                                f"If you finished them or are intentionally dropping them, call update_working_memory(tasks=[...]) again to confirm. "
+                                f"Otherwise keep them — include them in the new list, or mark_task_done first."
+                            )
+                        _TASK_OVERWRITE_CONFIRM.pop(sid, None)
+                except Exception:
+                    pass
+
             mpm.update_working_memory(
                 notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan,
                 tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,

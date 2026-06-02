@@ -1210,6 +1210,9 @@ class Agent:
         # level (get_tools handler) not here, so the agent always has the full set.
         self._load_custom_tools()
 
+        # ── MCP tools (external servers from mcp_servers.json, registered as native tools) ──────
+        self._load_mcp_tools()
+
         # Provide tool registry to tools that expect it (e.g., list_tools)
         for tool in self.tools.values():
             if hasattr(tool, "available_tools"):
@@ -1257,6 +1260,43 @@ class Agent:
                 self.tools[instance.name] = instance
             except Exception as exc:
                 print(f"[ERROR] Failed to load custom tool '{tool_name}': {exc}")
+
+    def _load_mcp_tools(self) -> None:
+        """Discover the tools of the MCP servers in mcp_servers.json and register each as a native
+        tool (``mcp_<server>_<tool>``). Eager + parallel with a per-server timeout; a slow / hung /
+        misconfigured server is skipped and never blocks startup. Gated by mcp_native_tools_enabled.
+        The raw ``mcp_call`` tool is unaffected (it stays the low-level path)."""
+        self._mcp_tool_names = getattr(self, "_mcp_tool_names", set())
+        try:
+            if not bool(self.config.get("mcp_native_tools_enabled", True)):
+                return
+            from vaf.core.mcp_registry import discover_mcp_tools
+            timeout = float(self.config.get("mcp_discovery_timeout_seconds", 5) or 5)
+            tools = discover_mcp_tools(timeout_seconds=timeout)
+        except Exception as exc:
+            print(f"[WARN] MCP tool discovery skipped: {exc}")
+            return
+        for name, instance in tools.items():
+            # Never overwrite a native/custom tool with the same name.
+            if name in self.tools and name not in self._mcp_tool_names:
+                continue
+            self.tools[name] = instance
+            self._mcp_tool_names.add(name)
+
+    def reload_mcp_tools(self) -> None:
+        """Hot-reload MCP tools after mcp_servers.json changes: drop the previously-registered MCP
+        tools (tracked precisely, so native/custom tools are never touched) and re-discover."""
+        for name in list(getattr(self, "_mcp_tool_names", set())):
+            self.tools.pop(name, None)
+        self._mcp_tool_names = set()
+        self._load_mcp_tools()
+        # Refresh the registry reference for discovery tools (list_tools etc.)
+        for tool in self.tools.values():
+            if hasattr(tool, "available_tools"):
+                try:
+                    tool.available_tools = self.tools
+                except Exception:
+                    pass
 
     def reload_custom_tools(self) -> None:
         """

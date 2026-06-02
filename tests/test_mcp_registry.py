@@ -117,6 +117,66 @@ def test_discover_skips_bad_command(tmp_path, monkeypatch):
     assert status["bad"]["connected"] is False
 
 
+_TASK_STUB = (
+    "import sys, json\n"
+    "TOOLS=[{'name':'echo','description':'E','inputSchema':{'type':'object','properties':{}},'execution':{'taskSupport':'forbidden'}},\n"
+    "       {'name':'research','description':'R','inputSchema':{'type':'object','properties':{}},'execution':{'taskSupport':'required'}}]\n"
+    "for line in sys.stdin:\n"
+    "    line=line.strip()\n"
+    "    if not line: continue\n"
+    "    try: msg=json.loads(line)\n"
+    "    except Exception: continue\n"
+    "    mid=msg.get('id'); method=msg.get('method')\n"
+    "    if mid is None: continue\n"
+    "    if method=='initialize': r={'jsonrpc':'2.0','id':mid,'result':{'capabilities':{}}}\n"
+    "    elif method=='tools/list': r={'jsonrpc':'2.0','id':mid,'result':{'tools':TOOLS}}\n"
+    "    else: r={'jsonrpc':'2.0','id':mid,'result':{'content':[{'type':'text','text':'ok'}]}}\n"
+    "    sys.stdout.write(json.dumps(r)+'\\n'); sys.stdout.flush()\n"
+)
+
+
+def test_discover_skips_task_required_tools(tmp_path, monkeypatch):
+    stub = tmp_path / "task_stub.py"
+    stub.write_text(_TASK_STUB)
+    cmd = f"{sys.executable} {stub}"
+    monkeypatch.setattr(reg, "load_mcp_manifest",
+                        lambda: {"servers": {"tsk": {"command": cmd, "enabled": True}}})
+    tools, status = reg.discover_mcp_tools(timeout_seconds=10)
+    # A tool that requires MCP's optional task layer (taskSupport=required) cannot run over a plain
+    # synchronous tools/call, so it is skipped; the normal tool still registers.
+    assert "mcp_tsk_echo" in tools
+    assert "mcp_tsk_research" not in tools
+    assert status["tsk"]["connected"] is True and status["tsk"]["tool_count"] == 1
+
+
+_ENV_STUB = (
+    "import sys, json, os\n"
+    "for line in sys.stdin:\n"
+    "    line=line.strip()\n"
+    "    if not line: continue\n"
+    "    try: msg=json.loads(line)\n"
+    "    except Exception: continue\n"
+    "    mid=msg.get('id'); method=msg.get('method')\n"
+    "    if mid is None: continue\n"
+    "    if method=='initialize': r={'jsonrpc':'2.0','id':mid,'result':{'capabilities':{}}}\n"
+    "    elif method=='tools/list': r={'jsonrpc':'2.0','id':mid,'result':{'tools':[{'name':'whoami','description':'t','inputSchema':{'type':'object','properties':{}}}]}}\n"
+    "    elif method=='tools/call': r={'jsonrpc':'2.0','id':mid,'result':{'content':[{'type':'text','text':'TOKEN='+os.environ.get('MY_TOKEN','none')}]}}\n"
+    "    else: r={'jsonrpc':'2.0','id':mid,'error':{'code':-1,'message':'no'}}\n"
+    "    sys.stdout.write(json.dumps(r)+'\\n'); sys.stdout.flush()\n"
+)
+
+
+def test_env_passed_to_server(tmp_path):
+    from vaf.tools.mcp_client import get_mcp_client
+    stub = tmp_path / "env_stub.py"
+    stub.write_text(_ENV_STUB)
+    cmd = f"{sys.executable} {stub}"
+    metas = get_mcp_client().list_server_tools(cmd, env={"MY_TOKEN": "sekret"})
+    assert metas and metas[0]["name"] == "whoami"
+    tool = reg.make_mcp_tool("s", {"command": cmd, "env": {"MY_TOKEN": "sekret"}}, metas[0])()
+    assert tool.run() == "TOKEN=sekret"   # env from the manifest reached the server process
+
+
 def test_probe_mcp_server(tmp_path):
     stub = tmp_path / "stub_mcp.py"
     stub.write_text(_STUB)

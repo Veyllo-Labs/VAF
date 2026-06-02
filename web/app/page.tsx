@@ -1071,7 +1071,7 @@ function VAFDashboardContent() {
     const [customToolUsers, setCustomToolUsers]             = useState<Array<{ id: string; username: string; user_scope_id: string; role: string }>>([]);
     const [isCustomToolSaving, setIsCustomToolSaving]       = useState(false);
     const [customToolBackendError, setCustomToolBackendError] = useState<string | null>(null);
-    const [mcpServers, setMcpServers] = useState<Array<{ name: string; command: string; transport: string; url?: string; enabled: boolean; permission_level: string; connected?: boolean; tool_count?: number; error?: string | null }>>([]);
+    const [mcpServers, setMcpServers] = useState<Array<{ name: string; command: string; transport: string; url?: string; enabled: boolean; permission_level: string; env?: Record<string, string>; connected?: boolean; tool_count?: number; error?: string | null }>>([]);
     const [isMcpSaving, setIsMcpSaving] = useState(false);
     const [mcpBackendError, setMcpBackendError] = useState<string | null>(null);
     const [isMcpTesting, setIsMcpTesting] = useState(false);
@@ -2943,10 +2943,20 @@ function VAFDashboardContent() {
                     setMcpServers(data.servers || []);
                 }
                 else if (data.type === 'mcp_server_saved' || data.type === 'mcp_server_deleted') {
-                    // Save/delete succeeded — clear state and re-fetch the list (with refreshed status)
+                    // Save/delete succeeded. The reply carries the refreshed list, so the UI updates
+                    // immediately without a separate get_mcp_servers round-trip.
                     setIsMcpSaving(false);
                     setMcpBackendError(null);
-                    ws?.send(JSON.stringify({ type: 'get_mcp_servers' }));
+                    if (Array.isArray(data.servers)) {
+                        setMcpServers(data.servers);
+                    } else {
+                        ws?.send(JSON.stringify({ type: 'get_mcp_servers' }));
+                    }
+                    // A freshly-added server may still be downloading (npx) on first run, so its first
+                    // status is "offline". Refresh again shortly so it turns green without a manual click.
+                    if (data.type === 'mcp_server_saved') {
+                        setTimeout(() => { try { ws?.send(JSON.stringify({ type: 'get_mcp_servers' })); } catch { /* ws closed */ } }, 8000);
+                    }
                 }
                 else if (data.type === 'mcp_server_error') {
                     setIsMcpSaving(false);

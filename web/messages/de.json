@@ -597,7 +597,10 @@
         "errCommand": "Für stdio-Transport ist ein Befehl erforderlich.",
         "errUrl": "Für http/sse-Transport ist eine URL erforderlich.",
         "testOk": "{count} Tools verfügbar",
-        "testFail": "Verbindung fehlgeschlagen"
+        "testFail": "Verbindung fehlgeschlagen",
+        "pasteTitle": "Standard-Config (zum Auto-Ausfüllen einfügen)",
+        "pasteHint": "Füge einen { \"mcpServers\": … }-Block ein — das Formular füllt sich automatisch.",
+        "jsonInvalid": "Ungültiges JSON — bitte korrigieren, um das Formular zu synchronisieren."
       }
     },
     "workflows": {

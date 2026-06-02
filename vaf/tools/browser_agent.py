@@ -804,7 +804,7 @@ class BrowserAgentTool(BaseTool):
             self._screenshot_loop(browser, _session_id, stop_screenshots, log_queue)
         )
         stop_monitor_task = asyncio.create_task(
-            self._stop_monitor(_session_id, agent_task, stop_screenshots)
+            self._stop_monitor(_session_id, agent, agent_task, stop_screenshots)
         )
 
         try:
@@ -837,24 +837,44 @@ class BrowserAgentTool(BaseTool):
     @staticmethod
     async def _stop_monitor(
         session_id: Optional[str],
+        agent,
         agent_task: asyncio.Task,
         done_event: asyncio.Event,
     ) -> None:
         """
-        Poll TaskQueue.should_stop() every 0.5 s.
-        When the user presses Stop, cancel agent_task so _run_browser unblocks
-        immediately without waiting for the current LLM stream to finish.
+        Poll TaskQueue.should_stop() every 0.5 s. When the user presses Stop:
+
+          1. agent.stop() — browser-use's own cooperative stop. It sets
+             state.stopped and unblocks the agent's pause event, so the run halts
+             cleanly at the next step boundary. This is the reliable path: a bare
+             asyncio cancel cannot interrupt a blocking LLM call that runs in the
+             executor thread, and browser-use can swallow a single CancelledError
+             mid-step and keep going to max_steps.
+          2. agent_task.cancel() — fast unblock once the cooperative stop has had a
+             tick to take effect (covers awaits that ignore the stop flag).
+
+        We keep polling until the run actually ends instead of returning after a
+        single attempt, so a swallowed cancel can't leave the browser running.
         """
         if not session_id:
             return
         try:
             from vaf.core.task_queue import TaskQueue
             tq = TaskQueue()
-            while not done_event.is_set():
+            stop_signaled = False
+            while not done_event.is_set() and not agent_task.done():
                 if tq.should_stop(session_id):
-                    if not agent_task.done():
+                    if not stop_signaled:
+                        # Cooperative stop first — graceful halt at next step.
+                        try:
+                            if hasattr(agent, "stop"):
+                                agent.stop()
+                        except Exception:
+                            pass
+                        stop_signaled = True
+                    elif not agent_task.done():
+                        # Cooperative stop didn't end it within a tick — force-unblock.
                         agent_task.cancel()
-                    return
                 try:
                     await asyncio.wait_for(done_event.wait(), timeout=0.5)
                 except asyncio.TimeoutError:

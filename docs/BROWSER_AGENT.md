@@ -126,6 +126,15 @@ Once the agent calls `browser_agent`, the following happens:
 8. Return result string to VAF agent
 ```
 
+### Stopping a run
+
+For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). A background `_stop_monitor` polls this flag every 0.5 s and, when stop is requested:
+
+1. calls browser-use's cooperative `agent.stop()` — the run halts cleanly at the next step boundary. This is the reliable path: a bare asyncio cancel cannot interrupt a blocking LLM call running in the executor thread, and browser-use can swallow a single `CancelledError` mid-step.
+2. then cancels the run task to unblock as soon as the current step returns.
+
+The monitor keeps trying until the run actually ends, instead of giving up after one attempt, so a swallowed cancel can no longer leave the browser running to `max_steps`. A fully hung LLM call can only be interrupted once it returns, since the executor thread cannot be force-killed.
+
 ### Result format
 
 The tool always returns a plain string — the VAF agent reads it and incorporates it into its response to the user.

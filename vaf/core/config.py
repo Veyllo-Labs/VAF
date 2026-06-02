@@ -142,6 +142,20 @@ class Config:
                 # to its result (a reminder, never a block).
                 "plan_drift_nudge_enabled": True,              # global kill-switch
 
+                # Plan-without-tasks reminder: plan = the high-level approach, tasks = the concrete
+                # tracked steps (steps never belong in the plan). When the agent has a plan but no
+                # tasks, a per-turn line tells it to break the plan into tasks so each step is tracked
+                # and enforced. Silent once any task exists (the current-step reminder takes over) or
+                # when there is no plan (plain chat).
+                "plan_without_tasks_reminder_enabled": True,   # global kill-switch
+
+                # Task-overwrite guard: replacing the whole task list (tasks=[...]) while steps are
+                # still pending can silently drop work in progress. The first such replace is bounced
+                # once with the pending steps listed ("are you sure?"); a re-call within the window
+                # confirms and proceeds. Never a hard lock.
+                "task_overwrite_guard_enabled": True,          # global kill-switch
+                "task_overwrite_confirm_window_seconds": 120,  # re-call within this window = confirmed
+
                 # MCP native tools: discover the tools of servers in mcp_servers.json at startup and
                 # register each as a native tool (mcp_<server>_<tool>). The raw mcp_call tool stays
                 # available regardless. Discovery is parallel with a per-server timeout; a slow/hung

@@ -452,20 +452,31 @@ class MainPersistenceManager:
         plan_fmt = self._format_wm_list(memory.get("plan", []))
         tasks_fmt = self._format_tasks_list(memory.get("tasks", []))
 
-        # Current-step reminder: focus the model on the first pending task each turn so it
-        # follows its plan step by step (mark each done before the next). Silent when there is no
-        # pending task (no nagging on plain chat). Kill-switch: plan_step_reminder_enabled.
+        # Per-turn focus line. Two cases (steps live in tasks, never in plan):
+        #  - a task is pending  -> focus the model on the first pending step (follow the plan step by
+        #    step, mark each done before the next).  Kill-switch: plan_step_reminder_enabled.
+        #  - a plan but NO tasks -> the agent put its approach in plan but never broke it into trackable
+        #    steps, so nothing is enforced. Tell it to add tasks. Kill-switch:
+        #    plan_without_tasks_reminder_enabled.
+        # Silent otherwise (no nagging on plain chat).
         step_reminder = ""
         try:
             from vaf.core.config import Config
-            if Config.get("plan_step_reminder_enabled", True):
-                step = self._current_step(memory.get("tasks", []))
-                if step is not None:
-                    _idx, _text, _done, _total = step
-                    step_reminder = (
-                        f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish THIS step, then "
-                        f"call update_working_memory(mark_task_done={_idx}) before starting another.\n\n"
-                    )
+            _tasks = memory.get("tasks", [])
+            _plan = memory.get("plan", [])
+            step = self._current_step(_tasks) if Config.get("plan_step_reminder_enabled", True) else None
+            if step is not None:
+                _idx, _text, _done, _total = step
+                step_reminder = (
+                    f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish THIS step, then "
+                    f"call update_working_memory(mark_task_done={_idx}) before starting another.\n\n"
+                )
+            elif _plan and not _tasks and Config.get("plan_without_tasks_reminder_enabled", True):
+                step_reminder = (
+                    ">> You have a plan but no tasks. Steps belong in tasks, not the plan — break it "
+                    "into concrete steps with update_working_memory(add_task=\"...\") so each one is "
+                    "tracked and kept on course.\n\n"
+                )
         except Exception:
             step_reminder = ""
 
@@ -481,19 +492,21 @@ class MainPersistenceManager:
 </team_state>
 
 <working_memory>
-{step_reminder}Notes:
+{step_reminder}Notes (facts worth remembering):
 {notes_fmt}
 
-Plan:
+Plan (your high-level approach):
 {plan_fmt}
 
-Tasks (pending/done; done removed after 12h):
+Tasks (the concrete steps that carry out the plan; pending/done, done removed after 12h):
 {tasks_fmt}
 </working_memory>
 
-Use the update_working_memory tool to save notes, plan, and tasks; they persist across turns and appear here.
-- Use notes/plan to set the full list (replaces existing), or add_notes/add_plan to append. On a new user task or after completing a task, replace or clear notes/plan so working memory does not grow without bound (e.g. update_working_memory(notes=[], plan=[]) when done).
-- Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; done tasks are automatically removed after 12 hours. Pending = in progress or waiting on something. For multi-step work, record each step as a task (add_task) so progress is tracked and the current step is shown above.
+Use the update_working_memory tool to keep these current; they persist across turns and appear here.
+- plan = your high-level approach (a line or two: how you will tackle the intent). Keep it short and stable; replace it when the approach changes. The plan gate only needs this approach, not a full step list.
+- tasks = the concrete, ordered steps that carry out the plan. add_task to add a step, mark_task_done(index) when it is finished; the current step is shown above and done tasks drop after 12h. This is where multi-step work is tracked and kept on course — put the steps here, not in plan. (If you set a plan but no tasks, you'll be reminded to break it into tasks.)
+- notes = facts/observations worth remembering; add_notes to append.
+- On a new user task, reset what no longer applies (e.g. update_working_memory(plan=[], notes=[])).
 
 Long-term memories about the user/system (from memory_save/RAG) are injected as "Memory context" when relevant to the query; use them to answer questions like "what do you remember about me?" and use memory_save to save new facts.
 """

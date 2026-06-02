@@ -216,7 +216,12 @@ In addition to the RAM-based context above, VAF now employs a **Persistent Hybri
 **Files managed by `MainPersistenceManager`:**
 - **`user_intent.md`**: Stores the original user request. Read-only for sub-agents, updated only by user input. Acts as an "Intent Lock".
 - **`team_state.json`**: Tracks the status of all sub-agents (`running`, `completed`, `needs_clarification`).
-- **`working_memory.json`**: Persists notes, plan, and tasks across sessions. Each list is limited to 500 entries (oldest dropped when exceeded). Notes and plan entries store an optional timestamp (date/time) for time context. **Tasks** have two states: `pending` (in progress or waiting on something) and `done`; tasks marked done are automatically removed 12 hours after being marked. The agent should replace or clear notes/plan on a new user task or after completion so working memory does not grow without bound; use `add_task` / `mark_task_done` for checkable steps. In Thinking Mode, updates are additionally mirrored to Thinking Workspace snapshots for auditability.
+- **`working_memory.json`**: Persists notes, plan, and tasks across sessions, with distinct roles:
+  - **`plan`** = the agent's **high-level approach** (a line or two: how it will tackle the intent). Short and stable; the plan gate only requires this approach, not a full step list.
+  - **`tasks`** = the **concrete, ordered steps** that carry out the plan. Two states: `pending` (in progress or waiting on something) and `done`; done tasks are removed 12 hours after being marked. This is where multi-step work is tracked and kept on course — a per-step reminder focuses the model on the first pending task each turn, and the plan gate requires a plan before a state-changing tool runs.
+  - **`notes`** = facts/observations worth remembering.
+
+  Each list is limited to 500 entries (oldest dropped when exceeded); notes/plan entries store an optional timestamp. Set `notes`/`plan`/`tasks` to replace a list, `add_notes`/`add_plan`/`add_task` to append, `mark_task_done(index)` to complete a step. The agent should reset what no longer applies on a new user task. Two safeguards keep plan and tasks aligned: a **plan-without-tasks reminder** — steps never belong in the plan, so when the agent has a plan but no tasks, a per-turn line tells it to break the plan into tasks (`plan_without_tasks_reminder_enabled`); it goes silent once any task exists (the current-step reminder takes over); and an **overwrite guard** — replacing the whole task list while steps are still pending is bounced once ("are you sure?", with the pending steps listed) and proceeds on a re-call within `task_overwrite_confirm_window_seconds`. In Thinking Mode, updates are additionally mirrored to Thinking Workspace snapshots for auditability.
 - **`subagent_validation.json`**: Stores the retry count for sub-agent result validation (resets on new user message; see Sub-Agent Result Validation).
 
 ### Workspace Awareness
@@ -560,8 +565,8 @@ The Main Agent can now decompose complex tasks into steps and execute them one a
 │         PLAN-ACT-SUMMARIZE LOOP (Main Agent)                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  1. PLAN: Write step-by-step plan to working_memory         │
-│     └─ update_working_memory(plan=["Step 1", "Step 2", …]) │
+│  1. PLAN: Set the approach + steps in working_memory        │
+│     └─ plan=["approach"]; steps tracked as tasks (add_task) │
 │                          │                                  │
 │                          ▼                                  │
 │  2. ACT: Execute ONE step using appropriate tools           │
@@ -574,11 +579,11 @@ The Main Agent can now decompose complex tasks into steps and execute them one a
 │                          ▼                                  │
 │  4. CHECKPOINT (optional): Free context space               │
 │     └─ checkpoint_context(summary="Steps 1-3 done…")        │
-│     └─ Archives history, keeps system prompt + glue          │
+│     └─ Archives history, keeps system prompt + glue         │
 │                          │                                  │
 │                          ▼                                  │
-│  5. NEXT STEP: Continue from working_memory plan             │
-│     └─ Plan + notes survive → agent knows where it left off  │
+│  5. NEXT STEP: Continue from the tracked tasks + notes      │
+│     └─ Plan + tasks + notes survive → knows where it stopped│
 │                                                             │
 │  Repeat until all steps complete.                           │
 └─────────────────────────────────────────────────────────────┘
@@ -590,7 +595,7 @@ The Main Agent can now decompose complex tasks into steps and execute them one a
 |-----------|------|
 | `user_intent.md` | Stores the original request (Intent Lock — never changes mid-task) |
 | `working_memory.json` | Stores plan, notes, tasks (survives compression + checkpoint) |
-| `update_working_memory` | Tool to write plan steps, add notes, mark tasks done |
+| `update_working_memory` | Tool to set the approach (plan), track steps as tasks, add notes, mark tasks done |
 | `checkpoint_context` | Tool to archive history and start fresh (proactive wiping) |
 | Orchestrator Prompt Module | Activated by router for multi-step keywords; instructs Plan-Act-Summarize |
 | Context Compression | Existing reactive compression (70–85% threshold) as a safety net |

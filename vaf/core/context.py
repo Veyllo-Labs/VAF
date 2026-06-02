@@ -21,6 +21,61 @@ from typing import Dict, List, Any, Optional
 from vaf.core.config import Config
 
 
+# Marker prefix for the per-turn tool/reasoning summary that replaces squashed
+# intermediate steps. Used to recognize (and preserve) these messages on reload.
+TURN_CONTEXT_PREFIX = "[Context:"
+
+
+def _tool_result_is_error(content: str) -> bool:
+    """Heuristic: does a tool result represent a failure? Mirrors the detection
+    used in the agent's retry guard."""
+    low = content.lower()
+    return (
+        "error executing tool" in low
+        or low.lstrip().startswith("error")
+        or "traceback (most recent call last)" in low
+        or "❌" in content  # ❌
+        or ("failed" in low and ("tool" in low or "execution" in low))
+    )
+
+
+def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200) -> Optional[str]:
+    """Build a compact, readable summary of a turn's squashed intermediate steps.
+
+    Instead of only listing tool names, include each tool's outcome (OK/FAILED)
+    and a short single-line snippet of its result/error, so the agent stays aware
+    of WHAT happened (and which errors occurred) on later turns. Returns the
+    summary string (always starting with TURN_CONTEXT_PREFIX) or None if there is
+    nothing worth summarizing.
+    """
+    tool_outcomes = []  # (name, status, snippet)
+    thoughts_count = 0
+    for m in messages or []:
+        role = m.get("role", "")
+        content = str(m.get("content", "") or "")
+        if role == "tool":
+            name = m.get("name") or "UnknownTool"
+            status = "FAILED" if _tool_result_is_error(content) else "OK"
+            snippet = " ".join(content.split())  # collapse whitespace/newlines
+            if len(snippet) > snippet_limit:
+                snippet = snippet[:snippet_limit].rstrip() + "…"
+            tool_outcomes.append((name, status, snippet))
+        elif role == "assistant":
+            if "<think>" in content or "</think>" in content:
+                thoughts_count += 1
+
+    if tool_outcomes:
+        lines = [f"{TURN_CONTEXT_PREFIX} tools used this turn]"]
+        for name, status, snippet in tool_outcomes:
+            lines.append(f"- {name} → {status}: {snippet}" if snippet else f"- {name} → {status}")
+        if thoughts_count:
+            lines.append(f"(reasoning: {thoughts_count} steps squashed)")
+        return "\n".join(lines)
+    if thoughts_count:
+        return f"{TURN_CONTEXT_PREFIX} Reasoning: {thoughts_count} steps]"
+    return None
+
+
 @dataclass
 class IntentContext:
     """Tracks what the user is trying to achieve."""

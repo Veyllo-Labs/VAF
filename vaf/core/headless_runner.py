@@ -16,7 +16,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 import requests
 from vaf.core.agent import Agent
 from vaf.core.task_queue import TaskQueue
-from vaf.core.session import SessionManager, Session
+from vaf.core.session import SessionManager, Session, turn_context_messages_since_last_user
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
@@ -1649,6 +1649,24 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 if not hasattr(session, 'runtime_state') or session.runtime_state is None:
                                     session.runtime_state = {}
                                 session.runtime_state["user_turn_count"] = session.runtime_state.get("user_turn_count", 0) + 1
+                                # Persist this turn's context artifacts from the live agent
+                                # history — either the raw tool scaffolding (assistant tool_calls
+                                # + role:"tool" results) or, after the turn-end squash, the
+                                # "[Context: ...]" summary that records each tool's outcome/error.
+                                # This keeps the agent aware of what it did (and which errors it
+                                # hit) across session reloads. Plain assistant text is saved
+                                # separately below as _clean_response, so it is skipped here.
+                                try:
+                                    for _tm in turn_context_messages_since_last_user(getattr(agent, "history", []) or [], _user_input):
+                                        session.add_message(
+                                            role=_tm.get("role"),
+                                            content=str(_tm.get("content") or ""),
+                                            tool_calls=_tm.get("tool_calls"),
+                                            tool_call_id=_tm.get("tool_call_id"),
+                                            name=_tm.get("name"),
+                                        )
+                                except Exception:
+                                    pass
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response)
                                 session_mgr.save(session)

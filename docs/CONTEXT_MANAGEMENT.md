@@ -189,6 +189,14 @@ To prevent the context window from being flooded by large tool outputs (which wo
 
 **Best Practice:** When dealing with large datasets (e.g., reading a 2000-line log file or listing 50 emails), the agent sees a pruned version (head/tail) in history, but knows the full content is processed. This maintains conversational continuity without losing context "depth".
 
+### Per-Turn Intermediate-Step Squash (Tool Memory)
+
+After every turn, once the final answer is produced, VAF squashes the turn's intermediate steps (tool calls, tool results, reasoning) out of the live history and replaces them with a single compact `[Context: …]` summary, so long conversations stay lean.
+
+The summary records **each tool's outcome** — `OK` or `FAILED` plus a short single-line snippet of the result/error — not just the tool names. This way the agent still knows *what it did* and *which errors it hit* on later turns (for example it can report a previous `python_exec → FAILED: Object of type PosixPath is not JSON serializable` instead of guessing). The summary is persisted with the session and, unlike other operational system messages, is restored on reload, so this memory survives session switches and restarts. See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md) for the persisted format.
+
+This is distinct from threshold-based [Context Compression](#context-compression): the squash runs every turn for lean history, whereas compression only fires when the context-usage threshold is crossed.
+
 ### RAG and memory context (pre-generation injection)
 
 Retrieval for the current turn runs in the **input phase**, before the LLM is called. The model output stream does not trigger retrieval.

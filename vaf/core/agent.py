@@ -2385,18 +2385,44 @@ class Agent:
                             "Initializing Standalone Server", "Starting chat_step",
                             "Generation stopped", "Empty response detected"
                         ]
-                        if any(p in content for p in ignore_patterns) and "## PROJECT CONTEXT" not in content:
+                        # Keep the per-turn "[Context: ...]" tool/reasoning summary — it is
+                        # the agent's memory of what it did (and which errors it hit), so it
+                        # must survive reload even if a snippet contains an ignored substring.
+                        _is_turn_context = content.lstrip().startswith("[Context:")
+                        if (
+                            any(p in content for p in ignore_patterns)
+                            and "## PROJECT CONTEXT" not in content
+                            and not _is_turn_context
+                        ):
                             continue
+
+                    _tool_calls = getattr(msg, "tool_calls", None)
 
                     # Strip think blocks from LLM context (saved for UI display only)
                     if role == "assistant":
                         import re as _re
                         content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
                         content = content.strip()
-                        if not content:
+                        # Keep tool-call messages even if their text is empty — their
+                        # tool_calls are what anchor the following role:"tool" result.
+                        if not content and not _tool_calls:
                             continue
 
-                    self.history.append({"role": role, "content": content})
+                    entry = {"role": role, "content": content}
+                    # Preserve tool-call linkage so restored history keeps valid
+                    # tool_use/tool_result pairs (otherwise the pairing cleanup in
+                    # _prepare_messages drops the orphaned results).
+                    if role == "assistant" and _tool_calls:
+                        entry["tool_calls"] = _tool_calls
+                    elif role == "tool":
+                        _tcid = getattr(msg, "tool_call_id", None)
+                        if _tcid:
+                            entry["tool_call_id"] = _tcid
+                        _tname = getattr(msg, "name", None)
+                        if _tname:
+                            entry["name"] = _tname
+
+                    self.history.append(entry)
             
             # Update Pointer
             self.current_session_id = session_id
@@ -7346,38 +7372,21 @@ class Agent:
                 if end_idx > start_idx:
                     # We have intermediate steps (Tools, Thoughts, etc.)
                     msgs_to_squash = self.history[start_idx:end_idx]
-                    
-                    # Collect info about what was squashed
-                    tools_used = []
-                    thoughts_count = 0
-                    
-                    for m in msgs_to_squash:
-                        role = m.get('role', '')
-                        content = str(m.get('content', ''))
-                        
-                        if role == 'tool':
-                            tools_used.append(m.get('name', 'UnknownTool'))
-                        elif role == 'assistant':
-                            # Count thought blocks (reasoning traces)
-                            if '<think>' in content or '</think>' in content:
-                                thoughts_count += 1
-                    
+
                     # ALWAYS squash intermediate steps (not just when tools used)
                     if msgs_to_squash:
-                        unique_tools = list(set(tools_used))
-                        
+                        # Build a compact summary that preserves each tool's OUTCOME
+                        # (OK/FAILED + a short result/error snippet) — not just names —
+                        # so the agent stays aware of what it did and which errors it
+                        # hit on later turns. This summary is also persisted (see
+                        # headless_runner save) and survives session reloads.
+                        from vaf.core.context import summarize_tool_turn
+                        summary_msg = summarize_tool_turn(msgs_to_squash)
+
                         # Delete ALL intermediate messages
                         del self.history[start_idx:end_idx]
-                        
-                        # Build concise summary
-                        summary_parts = []
-                        if unique_tools:
-                            summary_parts.append(f"Tools: {', '.join(unique_tools)}")
-                        if thoughts_count > 0:
-                            summary_parts.append(f"Reasoning: {thoughts_count} steps")
-                        
-                        if summary_parts:
-                            summary_msg = f"[Context: {' | '.join(summary_parts)}]"
+
+                        if summary_msg:
                             self.history.insert(start_idx, {"role": "system", "content": summary_msg})
                         # If nothing to summarize, just delete without inserting
             except Exception as e:

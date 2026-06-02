@@ -102,9 +102,10 @@ class MCPClientTool(BaseTool):
         except Exception as e:
             return f"Error calling MCP tool: {e}"
     
-    def _ensure_server(self, server_command: str) -> Optional[subprocess.Popen]:
+    def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
         """Spawn (if needed) and initialize the stdio MCP server, cached by command. Returns the
-        running process, or None on failure. Shared by mcp_call, discovery, and dynamic MCP tools."""
+        running process, or None on failure. Shared by mcp_call, discovery, and dynamic MCP tools.
+        `env` (e.g. API tokens from the manifest) is merged onto os.environ for the child process."""
         cache_key = server_command
         proc = self._server_processes.get(cache_key)
         if proc is not None and proc.poll() is None:
@@ -120,6 +121,8 @@ class MCPClientTool(BaseTool):
                 "text": True,
                 "bufsize": 1,
             }
+            if env:
+                popen_kwargs["env"] = {**os.environ, **{str(k): str(v) for k, v in env.items()}}
             if platform.system() == "Windows":
                 popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             process = subprocess.Popen(cmd_parts, **popen_kwargs)
@@ -178,7 +181,7 @@ class MCPClientTool(BaseTool):
         return None
 
     def list_server_tools(self, server_command: str, transport: str = "stdio",
-                          server_url: str = "") -> List[Dict[str, Any]]:
+                          server_url: str = "", env: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         """Discover the tools a server offers via JSON-RPC tools/list. Returns a list of tool dicts
         (each with name / description / inputSchema), or [] on any failure (never raises)."""
         try:
@@ -194,7 +197,7 @@ class MCPClientTool(BaseTool):
                 return tools if isinstance(tools, list) else []
             if transport != "stdio":
                 return []  # sse discovery not supported
-            process = self._ensure_server(server_command)
+            process = self._ensure_server(server_command, env)
             if process is None:
                 return []
             resp = self._json_rpc(process, "tools/list", {}, request_id=3)
@@ -205,10 +208,11 @@ class MCPClientTool(BaseTool):
         except Exception:
             return []
 
-    def _call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+    def _call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any],
+                    env: Optional[Dict[str, str]] = None) -> str:
         """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout) — the most common MCP
         transport."""
-        process = self._ensure_server(server_command)
+        process = self._ensure_server(server_command, env)
         if process is None:
             return "Error: Failed to initialize MCP server"
 

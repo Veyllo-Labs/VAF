@@ -597,7 +597,10 @@
         "errCommand": "A command is required for stdio transport.",
         "errUrl": "A URL is required for http/sse transport.",
         "testOk": "{count} tools available",
-        "testFail": "Could not connect"
+        "testFail": "Could not connect",
+        "pasteTitle": "Standard config (paste to auto-fill)",
+        "pasteHint": "Paste a { \"mcpServers\": … } block — the form fills in automatically.",
+        "jsonInvalid": "Invalid JSON — fix it to sync the form."
       }
     },
     "workflows": {

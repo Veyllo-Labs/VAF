@@ -378,6 +378,36 @@ app.add_middleware(_SecurityHeadersMiddleware)
 
 log("WebServer", "Module initialization complete")
 
+def _mcp_servers_payload(agent) -> list:
+    """
+    Build the MCP-server list shown in the Settings UI: each configured server from the manifest,
+    merged with its live connection status (connected / tool_count / error) from the agent's last
+    discovery. Used by `get_mcp_servers` and returned directly in create/update/delete replies so
+    the UI list updates without a separate refetch round-trip.
+    """
+    from vaf.core.mcp_registry import load_mcp_manifest
+    servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
+    status = dict(getattr(agent, "_mcp_server_status", {}) or {})
+    out = []
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        st = status.get(name, {})
+        out.append({
+            "name": name,
+            "command": cfg.get("command", ""),
+            "transport": cfg.get("transport", "stdio"),
+            "url": cfg.get("url", ""),
+            "enabled": bool(cfg.get("enabled", True)),
+            "permission_level": cfg.get("permission_level", "write"),
+            "env": cfg.get("env") if isinstance(cfg.get("env"), dict) else {},
+            "connected": bool(st.get("connected", False)),
+            "tool_count": int(st.get("tool_count", 0) or 0),
+            "error": st.get("error"),
+        })
+    return out
+
+
 async def _broadcast_tools_update(manager) -> None:
     """
     Push a refreshed tools_list to every connected WebSocket client.
@@ -2051,6 +2081,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             tray_context.register_websocket_activity()
             try:
                 cmd = json.loads(data_str)
+                # Several handlers below read the incoming message via `data`; keep it as an alias of
+                # `cmd` so they work on a fresh connection. (Handlers that fetch over HTTP locally
+                # rebind `data = resp.json()`, which is unaffected by this alias.)
+                data = cmd
                 type = cmd.get("type")
                 
                 # --- SESSION MANAGEMENT ---
@@ -3407,27 +3441,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "get_mcp_servers":
                     # List configured MCP servers + live connection status for the Settings UI.
                     try:
-                        from vaf.core.mcp_registry import load_mcp_manifest
-                        _servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
                         agent = manager.agent_instance if manager else None
-                        _status = dict(getattr(agent, "_mcp_server_status", {}) or {})
-                        _out = []
-                        for _sn, _sc in _servers.items():
-                            if not isinstance(_sc, dict):
-                                continue
-                            _st = _status.get(_sn, {})
-                            _out.append({
-                                "name": _sn,
-                                "command": _sc.get("command", ""),
-                                "transport": _sc.get("transport", "stdio"),
-                                "url": _sc.get("url", ""),
-                                "enabled": bool(_sc.get("enabled", True)),
-                                "permission_level": _sc.get("permission_level", "write"),
-                                "connected": bool(_st.get("connected", False)),
-                                "tool_count": int(_st.get("tool_count", 0) or 0),
-                                "error": _st.get("error"),
-                            })
-                        await websocket.send_json({"type": "mcp_servers", "servers": _out})
+                        await websocket.send_json({"type": "mcp_servers", "servers": _mcp_servers_payload(agent)})
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
 
@@ -3462,19 +3477,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _srv = _manifest.get("servers")
                             if not isinstance(_srv, dict):
                                 _srv = {}
+                            _ms_env = data.get("env")
+                            if not isinstance(_ms_env, dict):
+                                _ms_env = {}
                             _srv[_ms_name] = {
                                 "command": _ms_cmd,
                                 "transport": _ms_transport,
                                 "url": (data.get("url") or "").strip(),
                                 "enabled": bool(data.get("enabled", True)),
                                 "permission_level": _ms_perm,
+                                "env": {str(k): str(v) for k, v in _ms_env.items()},
                             }
                             _manifest["servers"] = _srv
                             save_mcp_manifest(_manifest)
                             agent = manager.agent_instance if manager else None
                             if agent and hasattr(agent, "reload_mcp_tools"):
                                 agent.reload_mcp_tools()
-                            await websocket.send_json({"type": "mcp_server_saved", "name": _ms_name})
+                            # Return the refreshed list with the reply so the UI updates without a refetch.
+                            await websocket.send_json({"type": "mcp_server_saved", "name": _ms_name, "servers": _mcp_servers_payload(agent)})
                             await _broadcast_tools_update(manager)
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
@@ -3504,7 +3524,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             agent = manager.agent_instance if manager else None
                             if agent and hasattr(agent, "reload_mcp_tools"):
                                 agent.reload_mcp_tools()
-                            await websocket.send_json({"type": "mcp_server_deleted", "name": _md_name})
+                            # Return the refreshed list with the reply so the UI updates without a refetch.
+                            await websocket.send_json({"type": "mcp_server_deleted", "name": _md_name, "servers": _mcp_servers_payload(agent)})
                             await _broadcast_tools_update(manager)
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
@@ -3525,10 +3546,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if not _tm_admin:
                             await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": "Admin permission required."})
                         else:
+                            _tm_env = data.get("env") if isinstance(data.get("env"), dict) else {}
                             _tm_cfg = {
                                 "command": (data.get("command") or "").strip(),
                                 "transport": (data.get("transport") or "stdio").strip(),
                                 "url": (data.get("url") or "").strip(),
+                                "env": {str(k): str(v) for k, v in _tm_env.items()},
                             }
                             _tm_timeout = float(_CfgMcp.get("mcp_discovery_timeout_seconds", 5) or 5)
                             _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout)

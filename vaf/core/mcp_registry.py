@@ -106,12 +106,13 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
     command = str(server_cfg.get("command", ""))
     transport = str(server_cfg.get("transport", "stdio"))
     server_url = str(server_cfg.get("url", ""))
+    env = server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else None
 
     def _run(self, **kwargs) -> str:
         client = get_mcp_client()
         try:
             if transport == "stdio":
-                return client._call_stdio(command, real_tool, kwargs)
+                return client._call_stdio(command, real_tool, kwargs, env)
             if transport == "http":
                 return client._call_http(server_url, real_tool, kwargs)
             if transport == "sse":
@@ -158,6 +159,7 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
         try:
             discovered[name] = client.list_server_tools(
                 str(cfg.get("command", "")), str(cfg.get("transport", "stdio")), str(cfg.get("url", "")),
+                cfg.get("env") if isinstance(cfg.get("env"), dict) else None,
             )
         except Exception:
             discovered[name] = []
@@ -188,8 +190,17 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
             status[name] = {"connected": False, "tool_count": 0, "error": "timeout"}
             continue
         count = 0
+        skipped_task = 0
         for tm in discovered.get(name, []) or []:
             if not isinstance(tm, dict) or not tm.get("name"):
+                continue
+            # Skip tools that require MCP's optional task layer (tasks/* augmentation): VAF drives
+            # tools via a synchronous tools/call, so a "required" tool can never run — don't offer it
+            # to the LLM. "forbidden" / "optional" / absent all run fine over tools/call.
+            _exec = tm.get("execution")
+            if isinstance(_exec, dict) and str(_exec.get("taskSupport", "")).strip().lower() == "required":
+                skipped_task += 1
+                logger.info("mcp_registry: skipping task-only tool %s/%s (taskSupport=required)", name, tm.get("name"))
                 continue
             try:
                 inst = make_mcp_tool(name, cfg, tm)()
@@ -197,11 +208,13 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
                 count += 1
             except Exception as exc:
                 logger.warning("mcp_registry: failed to build tool %s/%s: %s", name, tm.get("name"), exc)
-        status[name] = {
-            "connected": count > 0,
-            "tool_count": count,
-            "error": None if count > 0 else "no tools (unreachable or empty)",
-        }
+        if count > 0:
+            status[name] = {"connected": True, "tool_count": count, "error": None}
+        elif skipped_task > 0:
+            # Reachable, but every tool needs the unsupported task layer — report it honestly.
+            status[name] = {"connected": True, "tool_count": 0, "error": "all tools require the unsupported task layer"}
+        else:
+            status[name] = {"connected": False, "tool_count": 0, "error": "no tools (unreachable or empty)"}
     if tools:
         logger.info("mcp_registry: registered %d MCP tool(s) from %d server(s)", len(tools), len(enabled))
     return tools, status
@@ -217,9 +230,11 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0) -
     url = str(server_cfg.get("url", ""))
     result: Dict[str, Any] = {}
 
+    _env = server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else None
+
     def _run() -> None:
         try:
-            result["tools"] = client.list_server_tools(cmd, transport, url)
+            result["tools"] = client.list_server_tools(cmd, transport, url, _env)
         except Exception as exc:
             result["error"] = str(exc)
 

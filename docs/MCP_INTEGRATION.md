@@ -40,6 +40,7 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
 | `enabled` | set `false` to keep the entry but not load it |
 | `permission_level` | `read` · `write` (default) · `dangerous` — see below |
 | `url` | only for `http` / `sse` |
+| `env` | optional environment variables for the server process (e.g. `{ "GITHUB_TOKEN": "…" }`); merged onto the VAF process environment |
 
 At startup VAF connects to every enabled server **in parallel** with a per-server timeout
 (`mcp_discovery_timeout_seconds`, default 5), lists its tools, and registers each as
@@ -53,7 +54,9 @@ LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.
 
 Admins can manage servers without editing JSON by hand: **Settings → Advanced → MCP** lists the
 configured servers (with a connection status dot and tool count per server) and lets you add, edit, or
-remove a server through a form (name, transport, command/url, enabled, `permission_level`). The
+remove a server through a form (name, transport, command/url, enabled, `permission_level`) — or paste
+a standard `{ "mcpServers": { … } }` config block (the format used by Claude Desktop / Cursor, with
+`command` + `args` + `env`) into the panel to auto-fill the form. The
 Advanced-tab row shows "N connected / M configured" at a glance. Saving writes `mcp_servers.json` and
 hot-reloads the tools immediately (no restart); the underlying manifest is the same file described
 above, so manual edits and the UI are interchangeable. Editing the manifest directly still takes
@@ -96,3 +99,13 @@ Once registered, MCP tools live in the agent's tool registry like any native too
 the LLM in the same mixed tool list and appear in `list_tools`. Native tools stay fully in-process
 (<1ms); MCP tools reuse a shared, warm server process per server (cached), so repeated calls do not
 re-spawn.
+
+## Scope: the `tools/` layer, not the `tasks/` layer
+
+VAF drives MCP tools through a synchronous `tools/call`. MCP also defines an **optional task
+augmentation** (`tasks/*` — for long-running operations that stream progress through multiple states);
+VAF does **not** implement it. A tool that advertises `execution.taskSupport: "required"` in
+`tools/list` can never run over a plain `tools/call`, so it is **skipped at discovery** rather than
+offered to the LLM as an always-failing tool (tools that mark it `forbidden`, `optional`, or leave it
+unset run normally). This affects only servers that hard-require the task layer — none of the common
+real-world servers do; it shows up mainly in the reference "everything" test server's research demo.

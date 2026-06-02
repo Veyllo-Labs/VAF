@@ -154,6 +154,7 @@ create_agent_workflow(
 - Available to the agent in **any session** (not admin-only).
 - The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones.
 - Each step's `output` is available as `{variable}` in subsequent steps.
+- **Minimum two steps.** A single-step `run_temp` is rejected with an error — a lone step has no output to chain and gains nothing from the engine, so the agent should call that tool directly instead. The only exception is a single `create_automation` step (scheduling a task, as the built-in "Create Scheduled Task" workflow does), which is allowed.
 
 ##### Step fields
 

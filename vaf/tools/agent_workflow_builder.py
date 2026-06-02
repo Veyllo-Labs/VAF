@@ -68,7 +68,9 @@ class AgentWorkflowBuilderTool(BaseTool):
         "WHEN TO USE WHICH ACTION:\n"
         "  run_temp — RIGHT NOW task, ad-hoc, no saving. This is the default choice for "
         "complex multi-step work (research → analyse → write report, etc.). "
-        "The workflow runs immediately and is discarded when done.\n"
+        "The workflow runs immediately and is discarded when done. "
+        "Needs 2+ steps that chain outputs — a single-step workflow is rejected; "
+        "for a one-off single tool call, call that tool directly instead.\n"
         "  create   — Save a workflow PERMANENTLY so it can be re-used later via "
         "execute_workflow or from the WebUI Workflows tab. Admin-only. "
         "Only use this if the user explicitly wants a reusable workflow.\n"
@@ -330,7 +332,10 @@ class AgentWorkflowBuilderTool(BaseTool):
         variables = dict(kwargs.get("variables") or {})
 
         if not raw_steps:
-            return "Error: 'steps' is required for action='run_temp'. Provide at least one step."
+            return (
+                "Error: 'steps' is required for action='run_temp'. Provide the workflow steps "
+                "(normally two or more — single-step workflows are rejected)."
+            )
 
         # Validate and normalise steps
         normalised: List[dict] = []
@@ -368,6 +373,24 @@ class AgentWorkflowBuilderTool(BaseTool):
                 if _f in s:
                     step_dict[_f] = s[_f]
             normalised.append(step_dict)
+
+        # ── Single-step guard ────────────────────────────────────────────────
+        # A temp workflow with only ONE step has no orchestration benefit over
+        # just calling that tool directly — there is nothing to chain. The one
+        # legitimate single-step case is scheduling an automation (the built-in
+        # "Create Scheduled Task" workflow), where create_automation is the whole
+        # job. Reject everything else so the agent calls the tool directly.
+        _SINGLE_STEP_OK = {"create_automation"}
+        if len(normalised) == 1 and normalised[0]["tool"] not in _SINGLE_STEP_OK:
+            only_tool = normalised[0]["tool"]
+            return (
+                f"Error: a run_temp workflow with only ONE step ('{only_tool}') is not allowed. "
+                "A single step gains nothing from the workflow engine — there is no output to chain "
+                f"into a next step. Just call the '{only_tool}' tool directly instead of wrapping it "
+                "in a workflow. Use run_temp only for genuine multi-step work (2+ steps where one "
+                "step's output feeds the next). The only valid single-step case is scheduling an "
+                "automation via the 'create_automation' tool."
+            )
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:

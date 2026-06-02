@@ -142,6 +142,13 @@ class Config:
                 # to its result (a reminder, never a block).
                 "plan_drift_nudge_enabled": True,              # global kill-switch
 
+                # MCP native tools: discover the tools of servers in mcp_servers.json at startup and
+                # register each as a native tool (mcp_<server>_<tool>). The raw mcp_call tool stays
+                # available regardless. Discovery is parallel with a per-server timeout; a slow/hung
+                # server is skipped and never blocks startup.
+                "mcp_native_tools_enabled": True,              # global kill-switch
+                "mcp_discovery_timeout_seconds": 5,            # per-batch discovery deadline
+
                 # Voice / STT Settings
                 "stt_enabled": False,                  # Enable Speech-to-Text
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)

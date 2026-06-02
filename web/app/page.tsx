@@ -1758,8 +1758,17 @@ function VAFDashboardContent() {
                 // If data.sessionId is missing, it's a global update -> Allow
                 // If activeSessionId is missing, we are in initial state -> Allow
                 if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
-                    // Exception: history_update, session_list, contact_reply_pending (show for any session)
-                    if (data.type !== 'session_list' && data.type !== 'history_update' && data.type !== 'contact_reply_pending') {
+                    // Exception: events that intentionally target other sessions must pass
+                    // through so the UI can react (show an unread badge, append proactive
+                    // automation results, etc.) instead of being silently dropped.
+                    const crossSessionAllowed = (
+                        data.type === 'session_list' ||
+                        data.type === 'history_update' ||
+                        data.type === 'contact_reply_pending' ||
+                        data.type === 'session_unread' ||
+                        data.type === 'agent_message_append'
+                    );
+                    if (!crossSessionAllowed) {
                         console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
                         return;
                     }
@@ -2101,6 +2110,30 @@ function VAFDashboardContent() {
                         }
                         return [...prev, { role: 'assistant', content, timestamp: Date.now() }];
                     });
+                }
+                else if (data.type === 'agent_message_append') {
+                    // Proactive, COMPLETE standalone message (e.g. an automation result).
+                    // Always append it as its own new bubble — never stream/merge in-place.
+                    const activeSessionId = currentSessionIdRef.current;
+                    const content = String(data.content ?? '');
+                    if (content.trim().length === 0) return;
+
+                    // No active session yet: adopt the target session and load it from disk
+                    // (the message was already persisted server-side, so it will appear).
+                    if (!activeSessionId && data.sessionId) {
+                        setCurrentSessionId(data.sessionId);
+                        ws?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                        return;
+                    }
+                    // Targets a different session: surface an unread badge, don't inject here.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
+                        setUnreadSessions(prev => new Set(prev).add(data.sessionId));
+                        return;
+                    }
+                    // Active session: append a fresh bubble. Do NOT touch isGenerating —
+                    // this is a finished message, not a live turn.
+                    setLoading(false);
+                    setMessages(prev => [...prev, { role: data.role || 'assistant', content, timestamp: Date.now() }]);
                 }
                 else if (data.type === 'clear_last_assistant') {
                     // Remove faulty assistant message so only the retry response is shown (empty-response retry).

@@ -558,8 +558,8 @@ OAuth client IDs (optional) at top level: `email_oauth_google_client_id`, `email
 
 - **Per-account credentials** (OAuth access/refresh tokens, IMAP/SMTP passwords) are **never** stored in `config.json`. They are stored in:
   - **Keyring** when available: Windows Credential Manager, macOS Keychain, or Linux Secret Service (via the same API), so behaviour is OS-independent.
-  - **Fallback**: If keyring is unavailable, an AES-256-GCM encrypted file under the platform data directory (see `Platform.data_dir()`) is used; the encryption key is stored in config. Paths and behaviour are cross-platform.
-- **OAuth client ID and client secret** (app-level, set by admin) are stored in config when provided. Do **not** commit config that contains client secrets to source control. Where the OS allows, use restrictive file permissions on the config file (e.g. `chmod 600` on Unix; on Windows, ensure only the running user can read the file).
+  - **Fallback**: If keyring is unavailable, an AES-256-GCM encrypted file under the platform data directory (see `Platform.data_dir()`) is used. Encryption is envelope-based: a random data key encrypts the file and is itself wrapped by a key-encryption key. That KEK is derived from a master passphrase (`VAF_MASTER_PASSPHRASE`, via scrypt) when one is set — in which case no encryption secret is written to disk — or otherwise from a random key held in `config.json`. The encrypted file, its wrapped-key sidecar, and `config.json` are all written with owner-only (`0600`) permissions. Read-modify-write is serialized with a process-local and a cross-process lock, so concurrent writers (e.g. backend and CLI) cannot lose updates. Paths and behaviour are cross-platform.
+- **OAuth client ID and client secret** (app-level, set by admin) are stored in config when provided. Do **not** commit config that contains client secrets to source control. VAF writes `config.json` with owner-only (`0600`) permissions on platforms that support it; on Windows, ensure only the running user can read `~/.vaf/`.
 
 ### Multi-user (network) mode
 

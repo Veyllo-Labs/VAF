@@ -28,8 +28,8 @@ The agent has access to "Heavy Tools" such as:
 While VAF implements "Trust Gating" (asking for permission on risky tools), a sophisticated **Prompt Injection** attack (where the model is tricked by malicious input or a website it searches) could potentially bypass these safeguards or convince the user to approve a dangerous action.
 
 ### 2. Credential Safety
-VAF stores your API keys and OAuth tokens in your **OS Keyring** (Windows Credential Manager, macOS Keychain) or an **encrypted fallback file**.
-- **Risk:** Anyone with physical or remote access to your user account on the host machine can potentially retrieve these credentials.
+VAF stores your OAuth tokens and IMAP/SMTP passwords in your **OS Keyring** (Windows Credential Manager, macOS Keychain, Linux Secret Service) or, when no keyring is available, an **AES-256-GCM encrypted fallback file**. API provider keys live in `config.json`, which VAF writes with owner-only (`0600`) permissions.
+- **Risk:** Anyone with access to your user account on the host machine can potentially retrieve these credentials. Setting a master passphrase (`VAF_MASTER_PASSPHRASE`) derives the fallback encryption key from it (scrypt) instead of writing the key to disk, so the encrypted fallback file resists access even by someone who can read your files.
 - **Risk:** If you share your VAF instance in "Local Network Mode", other users are isolated via `user_scope_id`, but the host administrator still has full visibility into all data.
 
 ### 3. Browser Agent (browser_agent tool)

@@ -48,8 +48,11 @@ in sync with backend session updates; otherwise the frontend will filter out mes
 Key rules:
 - `chat` must include `sessionId`.
 - WebSocket responses are tagged with `sessionId`.
-- Frontend ignores messages where `data.sessionId !== currentSessionId` (except
-  `session_list` and `history_update`).
+- Frontend ignores messages where `data.sessionId !== currentSessionId`, **except**
+  events that intentionally target other sessions: `session_list`, `history_update`,
+  `contact_reply_pending`, `session_unread`, and `agent_message_append`. These pass the
+  cross-session filter so the UI can refresh lists, show an unread badge, or surface a
+  proactive message instead of silently dropping it.
 - WebUI enqueue path rejects implicit fallback into messenger sessions (`telegram_*`, `discord_*`, `whatsapp_*`) when `sessionId` is missing, to prevent cross-channel routing.
 
 ## Message Types
@@ -87,6 +90,8 @@ These endpoints are used only for the native DOCX editor path. The legacy HTML e
 - `session_list`: available sessions
 - `history_update`: session history (also sets active session). The frontend does not clear document-panel attachment state for that session, so per-session attachment documents persist across repeated switches. Tool messages now include `toolName`, `toolId`, and `toolStatus` (either from `metadata.*` or from top-level keys `name`/`tool_call_id`; status defaults to `"completed"` if content is present). The frontend extracts these fields when parsing server messages to ensure tool cards display correctly after reload.
 - `agent_message_update`: streaming assistant text (full content so far). The frontend shows a **separate** assistant bubble when the last message is a tool card: only the text after the previous assistant content is shown in the new bubble, so tool use and the follow-up answer appear distinctly.
+- `agent_message_append`: a complete, **standalone** assistant message that is always appended as its own new bubble — never streamed or merged in-place. Used for proactive messages (e.g. automation results) where there is no live agent turn to attach to; the streaming `agent_message_update` path would otherwise overwrite the previous reply or drop the text. If it targets the active session the frontend appends it; if it targets another session the frontend shows an unread badge instead; if no session is active yet the frontend adopts and loads the target session.
+- `session_unread`: marks a session as having a new unread agent message (e.g. an automation result delivered to a session that is not currently open). Broadcast to all of the user's connections; the frontend shows an unread badge on that session in the sidebar when it is not the active one.
 - `clear_last_assistant`: request to remove the last assistant message (used before empty-response and false-promise retries so only the retry response is shown). **Guard:** the frontend only removes the message if its timestamp is from the current turn (≥ the user's last send time). This prevents repeated retries from eating completed assistant messages from earlier turns.
 - `new_log`: system/status timeline entries. When the agent gives up after API empty-response delayed retries, it sends the final message only via `new_log` (return value `[SYSTEM_LOG_ONLY]...`); the headless runner does **not** send `agent_message_update` for that response, so the UI shows a system timeline entry only.
 - `tool_update`: tool start/end/error. **Note:** Tool events are always emitted — they are NOT gated by `_emit_to_web_ui()`. The previous gating caused a race condition where the process-wide `VAF_THINKING_MODE` env var (set by background thinking) would block tool updates for active WebUI sessions. Tool events use `broadcast_to_session(session_id)` for safe, session-scoped delivery.
@@ -220,6 +225,7 @@ If the tool card expands but the panel does not open:
 | Tool cards stuck on "Executing..." | `_emit_to_web_ui()` gated by `VAF_THINKING_MODE` env var, blocking tool events for active sessions during background thinking | Removed `_emit_to_web_ui()` gate from tool start/end in `agent.py`; events now always emit via `broadcast_to_session` |
 | Tool cards show "Executing..." after reload | Backend `history_update` did not include `toolName`/`toolId`/`toolStatus` for tool messages | Fixed `web_server.py` to read top-level `name`/`tool_call_id` keys and default `toolStatus` to `"completed"` |
 | Messages in wrong order after reload | Timestamp sort mixed client/server times; orphan cache messages misplaced | Removed timestamp sort; added turn-based role sort as safety net |
+| Automation result not shown in WebUI (only created files appear) | Result delivered via streaming `agent_message_update`, which overwrote/dropped the bubble when no live turn was active; the `session_unread` fallback was filtered out by the cross-session guard | Deliver results via `agent_message_append` (always appends a new bubble); allow `session_unread` and `agent_message_append` through the cross-session filter |
 
 ## Message Ordering (history_update)
 
@@ -246,4 +252,4 @@ When a WebSocket connection is established, the user's role from the JWT token i
 - `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy with connection pooling)
 - `web/app/page.tsx` (frontend session filtering, message ordering & render)
 
-*Last updated: 2026-03-09*
+*Last updated: 2026-06-02*

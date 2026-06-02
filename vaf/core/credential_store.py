@@ -6,48 +6,35 @@ with fallback to an AES-256-GCM encrypted file under Platform.data_dir() when
 keyring is unavailable. No credentials are stored in config.json.
 """
 
-import base64
 import json
 import logging
-import secrets
 import threading
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log_always
+from vaf.core.secure_store import SecureBlobStore, keyring_available
 
 logger = logging.getLogger("vaf.core.credential_store")
 
 SERVICE_NAME = "vaf-email"
-_KEYRING_AVAILABLE: Optional[bool] = None
-_KEYRING_LOCK = threading.Lock()
-_FALLBACK_PATH: Optional[Path] = None
-_CREDENTIALS_KEY = "email_credentials_key"
-_KEY_SIZE = 32
-_NONCE_SIZE = 12
+_CREDENTIALS_KEY = "email_credentials_key"  # legacy config key; migrated to a wrapped DEK by secure_store
+
+_store_singleton: Optional[SecureBlobStore] = None
+_store_lock = threading.Lock()
 
 
-def _keyring_available() -> bool:
-    """Check if keyring backend is available (thread-safe)."""
-    global _KEYRING_AVAILABLE
-    with _KEYRING_LOCK:
-        if _KEYRING_AVAILABLE is None:
-            try:
-                import keyring
-                keyring.get_keyring()
-                # Probe: set and get a test value
-                keyring.set_password(SERVICE_NAME, "__vaf_probe__", "x")
-                keyring.get_password(SERVICE_NAME, "__vaf_probe__")
-                keyring.delete_password(SERVICE_NAME, "__vaf_probe__")
-                _KEYRING_AVAILABLE = True
-            except Exception as e:
-                logger.info("Keyring unavailable, using encrypted file fallback: %s", e)
-                _KEYRING_AVAILABLE = False
-        return _KEYRING_AVAILABLE
+def _store() -> SecureBlobStore:
+    """Lazily-created encrypted fallback store (path resolved on first use)."""
+    global _store_singleton
+    if _store_singleton is None:
+        with _store_lock:
+            if _store_singleton is None:
+                _store_singleton = SecureBlobStore(
+                    "email", Platform.data_dir() / "email_credentials.enc", _CREDENTIALS_KEY
+                )
+    return _store_singleton
 
 
 def _local_admin_scope_id() -> str:
@@ -90,58 +77,6 @@ def _cred_key_scope(user_scope_id: Optional[str]) -> Optional[str]:
     if str(user_scope_id).strip() == _local_admin_scope_id():
         return None
     return str(user_scope_id).strip()
-
-
-def _get_fallback_path() -> Path:
-    global _FALLBACK_PATH
-    if _FALLBACK_PATH is None:
-        _FALLBACK_PATH = Platform.data_dir() / "email_credentials.enc"
-    return _FALLBACK_PATH
-
-
-def _get_or_create_encryption_key() -> bytes:
-    """Get or create 32-byte key for fallback file. Stored in config (base64)."""
-    encoded = Config.get(_CREDENTIALS_KEY, "")
-    if encoded:
-        try:
-            return base64.b64decode(encoded)
-        except Exception:
-            pass
-    new_key = secrets.token_bytes(_KEY_SIZE)
-    Config.set(_CREDENTIALS_KEY, base64.b64encode(new_key).decode())
-    return new_key
-
-
-def _load_fallback_data() -> Dict[str, str]:
-    """Load and decrypt fallback file. Returns dict mapping credential_key -> json string."""
-    path = _get_fallback_path()
-    if not path.exists():
-        return {}
-    try:
-        raw = path.read_bytes()
-        if len(raw) < _NONCE_SIZE:
-            return {}
-        nonce = raw[:_NONCE_SIZE]
-        ciphertext = raw[_NONCE_SIZE:]
-        key = _get_or_create_encryption_key()
-        aes = AESGCM(key)
-        decrypted = aes.decrypt(nonce, ciphertext, None).decode("utf-8")
-        return json.loads(decrypted)
-    except Exception as e:
-        logger.warning("Failed to load credential fallback file: %s", e)
-        return {}
-
-
-def _save_fallback_data(data: Dict[str, str]) -> None:
-    """Encrypt and write fallback file. Key from config only."""
-    path = _get_fallback_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = _get_or_create_encryption_key()
-    nonce = secrets.token_bytes(_NONCE_SIZE)
-    aes = AESGCM(key)
-    payload = json.dumps(data).encode("utf-8")
-    ciphertext = aes.encrypt(nonce, payload, None)
-    path.write_bytes(nonce + ciphertext)
 
 
 def get_email_credentials(
@@ -187,7 +122,7 @@ def get_email_credentials(
     # Log candidates for debugging
     # append_domain_log_always("backend", f"CRED_LOOKUP account={account_id} candidates={','.join(keys_to_try)}")
 
-    if _keyring_available():
+    if keyring_available():
         import keyring
         for key in keys_to_try:
             try:
@@ -199,7 +134,7 @@ def get_email_credentials(
                 logger.debug("Keyring get failed for %s: %s", _mask(key), e)
         return None
 
-    data = _load_fallback_data()
+    data = _store().load()
     for key in keys_to_try:
         raw = data.get(key)
         if raw:
@@ -228,16 +163,14 @@ def set_email_oauth_tokens(
         "expires_at": expires_at,
         "type": "oauth",
     })
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             keyring.set_password(SERVICE_NAME, key, value)
             return
         except Exception as e:
             logger.warning("Keyring set failed, using fallback: %s", e)
-    data = _load_fallback_data()
-    data[key] = value
-    _save_fallback_data(data)
+    _store().update(lambda d: d.__setitem__(key, value))
 
 
 def set_email_imap_password(
@@ -249,16 +182,14 @@ def set_email_imap_password(
     """Store IMAP/SMTP password for an account. Prefer keyring; fallback to encrypted file. Optional username/user_scope_id for multi-user scope."""
     key = _credential_key(account_id, "imap", _cred_key_username(username), user_scope_id=_cred_key_scope(user_scope_id))
     value = json.dumps({"password": password, "type": "imap"})
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             keyring.set_password(SERVICE_NAME, key, value)
             return
         except Exception as e:
             logger.warning("Keyring set failed, using fallback: %s", e)
-    data = _load_fallback_data()
-    data[key] = value
-    _save_fallback_data(data)
+    _store().update(lambda d: d.__setitem__(key, value))
 
 
 def delete_email_credentials(
@@ -292,7 +223,7 @@ def delete_email_credentials(
     for aid, p, u, s in base_keys:
         keys_to_delete.append(_credential_key(aid, p, u, user_scope_id=s))
 
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             for k in keys_to_delete:
@@ -303,10 +234,11 @@ def delete_email_credentials(
             return
         except Exception as e:
             logger.warning("Keyring delete failed, cleaning fallback: %s", e)
-    data = _load_fallback_data()
-    for k in keys_to_delete:
-        data.pop(k, None)
-    _save_fallback_data(data)
+
+    def _drop(d):
+        for k in keys_to_delete:
+            d.pop(k, None)
+    _store().update(_drop)
 
 
 def _mask(s: str) -> str:
@@ -318,4 +250,4 @@ def _mask(s: str) -> str:
 
 def is_keyring_used() -> bool:
     """Return True if keyring backend is in use (for UI hint)."""
-    return _keyring_available()
+    return keyring_available()

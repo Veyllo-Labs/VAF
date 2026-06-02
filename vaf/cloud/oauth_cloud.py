@@ -412,7 +412,10 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        set_cloud_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, cred_user)
+        # Honor refresh-token rotation (Microsoft / Google with rotation): persist the
+        # new refresh_token when present, otherwise keep the existing one.
+        new_refresh = data.get("refresh_token") or refresh
+        set_cloud_oauth_tokens(account_id, provider, new_access, new_refresh, new_expires_at, cred_user)
         return new_access
     except Exception as e:
         logger.warning("Cloud token refresh error for %s: %s", provider, e)

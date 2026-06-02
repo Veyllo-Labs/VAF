@@ -94,6 +94,19 @@ Attempts to write these keys via `PATCH /api/config` are silently ignored.
 
 To change them you must edit `~/.vaf/config.json` directly and restart the service.
 
+## Credential Encryption (headless)
+
+Headless servers often have no OS keyring (no Secret Service running), so VAF falls back to an AES-256-GCM encrypted file under the data directory for OAuth tokens and IMAP/SMTP passwords. By default the encryption key is wrapped by a random key stored in `config.json` (owner-only, `0600`).
+
+For stronger protection, set a master passphrase so the encryption key is derived from it (scrypt) and never written to disk:
+
+```bash
+# In the unit's environment (e.g. systemd drop-in or the service's EnvironmentFile)
+VAF_MASTER_PASSPHRASE="<a long, unique passphrase>"
+```
+
+With the passphrase set, the encrypted fallback cannot be opened without it — even by someone who can read the files. Keep it out of `config.json` and shell history; supply it via the service environment. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
+
 ## Reverting to Desktop Mode
 
 To switch back to desktop mode:

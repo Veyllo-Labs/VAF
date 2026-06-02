@@ -399,7 +399,11 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
-        
+        # Honor refresh-token rotation: providers like Microsoft (and Google with
+        # rotation enabled) issue a new refresh_token on each refresh and invalidate
+        # the old one. Fall back to the existing token when the response omits it.
+        new_refresh = data.get("refresh_token") or refresh
+
         # Determine best scope for saving back the refreshed token
         save_scope = user_scope_id
         # If we found it in a fallback scope, we should probably keep it there?
@@ -407,7 +411,7 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
         if not user_scope_id or str(user_scope_id).strip() == str(Config.get("local_admin_scope_id")).strip():
             save_scope = None
 
-        set_email_oauth_tokens(account_id, provider, new_access, refresh, new_expires_at, username, user_scope_id=save_scope)
+        set_email_oauth_tokens(account_id, provider, new_access, new_refresh, new_expires_at, username, user_scope_id=save_scope)
         append_domain_log_always("backend", f"OAUTH_REFRESH_SUCCESS account={account_id}")
         return new_access
     except Exception as e:

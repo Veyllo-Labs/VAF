@@ -17,6 +17,8 @@ import {
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
 import CustomToolEditor from './settings/CustomToolEditor';
+import McpServerEditor from './settings/McpServerEditor';
+import type { McpServerInfo } from './settings/McpServerEditor';
 import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
@@ -195,6 +197,24 @@ export interface SettingsModalProps {
     isWorkflowSaving?: boolean;
     /** Last error from the backend for a workflow operation */
     workflowBackendError?: string | null;
+    /** Configured MCP servers + live connection status (admin only) */
+    mcpServers?: McpServerInfo[];
+    /** Re-fetch the MCP server list (sent when the MCP modal opens) */
+    onRefreshMcpServers?: () => void;
+    /** Add or edit an MCP server (admin only) */
+    onSaveMcpServer?: (data: McpServerInfo) => void;
+    /** Remove an MCP server (admin only) */
+    onDeleteMcpServer?: (name: string) => void;
+    /** Whether an MCP server save/delete is in progress */
+    isMcpSaving?: boolean;
+    /** Last error from the backend for an MCP server operation */
+    mcpBackendError?: string | null;
+    /** Probe a server config (test connection) without saving */
+    onTestMcpServer?: (cfg: { command: string; transport: string; url: string }) => void;
+    /** Result of the last test connection */
+    mcpTestResult?: { connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null;
+    /** Whether a test connection is in progress */
+    isMcpTesting?: boolean;
     trustedSources?: { categories: Array<{ id: string; name: string; description: string; is_custom?: boolean; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> };
     onAddTrustedSource?: (categoryId: string, name: string, url: string) => void;
     onRemoveTrustedSource?: (domain: string, is_custom: boolean) => void;
@@ -302,7 +322,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -336,6 +356,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         initialSharedWith?: string[];
     } | null>(null);
     const [showWorkflowsModal, setShowWorkflowsModal] = useState(false);
+    // MCP servers modal + editor state: null = closed; { server: null } = add; { server: {...} } = edit
+    const [showMcpModal, setShowMcpModal] = useState(false);
+    const [mcpServerEditor, setMcpServerEditor] = useState<{ server: McpServerInfo | null } | null>(null);
+    const [mcpSearch, setMcpSearch] = useState('');
+    const mcpConnectedCount = mcpServers.filter((s) => s.connected).length;
     // Workflow creator state: null = closed; { workflowId: null } = create; { workflowId: "x" } = edit
     const [workflowCreator, setWorkflowCreator] = useState<{
         workflowId: string | null;
@@ -2549,6 +2574,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </button>
                                     <div className="h-4" />
                                     <button
+                                        onClick={() => { onRefreshMcpServers?.(); setShowMcpModal(true); }}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('mcp')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('mcpConnected', { count: mcpConnectedCount, total: mcpServers.length })}</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
+                                    <div className="h-4" />
+                                    <button
                                         onClick={() => setShowWorkflowsModal(true)}
                                         className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
                                     >
@@ -3236,6 +3272,120 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* MCP Servers Modal */}
+            {showMcpModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowMcpModal(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        {/* Header */}
+                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">{tModals('mcp.title')}</h2>
+                                <p className="text-sm text-gray-500">{tModals('mcp.configured', { connected: mcpConnectedCount, total: mcpServers.length })}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {onRefreshMcpServers && (
+                                    <button onClick={onRefreshMcpServers} className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100 transition-colors" title={tModals('mcp.refresh')}>
+                                        <RefreshCw size={20} />
+                                    </button>
+                                )}
+                                <button onClick={() => setShowMcpModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Search Bar */}
+                        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
+                            <div className="relative max-w-md">
+                                <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder={tModals('mcp.searchPlaceholder')}
+                                    value={mcpSearch}
+                                    onChange={(e) => setMcpSearch(e.target.value)}
+                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500 transition-all"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Body */}
+                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                            {currentUser?.role !== 'admin' ? (
+                                <div className="text-center text-gray-400 py-12">{tModals('mcp.adminRequired')}</div>
+                            ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+
+                                    {/* "Add MCP server" card (admin only, always first) */}
+                                    {onSaveMcpServer && mcpSearch === '' && (
+                                        <button
+                                            onClick={() => setMcpServerEditor({ server: null })}
+                                            className="group aspect-square bg-white rounded-2xl border-2 border-dashed border-gray-300 hover:border-amber-400 hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-3 text-gray-400 hover:text-amber-500"
+                                            title={tModals('mcp.addServer')}
+                                        >
+                                            <div className="w-12 h-12 rounded-full border-2 border-dashed border-current flex items-center justify-center text-2xl font-light">+</div>
+                                            <span className="text-sm font-medium">{tModals('mcp.addServer')}</span>
+                                        </button>
+                                    )}
+
+                                    {mcpServers
+                                        .filter((srv) =>
+                                            mcpSearch === '' ||
+                                            srv.name.toLowerCase().includes(mcpSearch.toLowerCase()) ||
+                                            (srv.command || '').toLowerCase().includes(mcpSearch.toLowerCase())
+                                        )
+                                        .map((srv) => (
+                                        <button
+                                            key={srv.name}
+                                            onClick={() => setMcpServerEditor({ server: srv })}
+                                            className="group relative aspect-square text-left bg-white rounded-2xl border-2 border-amber-200 hover:border-amber-500 hover:shadow-xl hover:-translate-y-1 transition-all overflow-hidden p-5 flex flex-col"
+                                        >
+                                            {/* Decoration */}
+                                            <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                                <Network size={160} />
+                                            </div>
+                                            <div className="relative z-10 flex items-start justify-between mb-2">
+                                                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-amber-50 text-amber-600 group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                                                    <Network size={20} />
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className={`w-2 h-2 rounded-full ${srv.connected ? 'bg-green-500' : (srv.enabled ? 'bg-red-400' : 'bg-gray-300')}`} />
+                                                    <span className="text-[11px] text-gray-500">{srv.connected ? tModals('mcp.tools', { count: srv.tool_count ?? 0 }) : (srv.enabled ? tModals('mcp.offline') : tModals('mcp.disabled'))}</span>
+                                                </div>
+                                            </div>
+                                            <h3 className="relative z-10 text-base font-bold text-gray-800 truncate">{srv.name}</h3>
+                                            <p className="relative z-10 text-xs text-gray-400 mt-1 line-clamp-2 break-all">{srv.transport === 'stdio' ? srv.command : srv.url}</p>
+                                            <div className="relative z-10 mt-auto pt-2 flex items-center gap-1.5">
+                                                <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider rounded-md">MCP</span>
+                                                <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-md">{srv.permission_level}</span>
+                                            </div>
+                                        </button>
+                                    ))}
+                                    {mcpServers.length === 0 && !onSaveMcpServer && (
+                                        <div className="col-span-full text-center text-gray-400 py-12">{tModals('mcp.noServers')}</div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MCP Server Editor (add / edit) */}
+            {mcpServerEditor && (
+                <McpServerEditor
+                    server={mcpServerEditor.server}
+                    isSaving={isMcpSaving}
+                    backendError={mcpBackendError}
+                    onSave={(data) => { onSaveMcpServer?.(data); setMcpServerEditor(null); }}
+                    onDelete={(name) => { onDeleteMcpServer?.(name); setMcpServerEditor(null); }}
+                    onClose={() => setMcpServerEditor(null)}
+                    onTest={onTestMcpServer}
+                    testResult={mcpTestResult}
+                    isTesting={isMcpTesting}
+                />
             )}
 
             {/* Workflows Modal */}

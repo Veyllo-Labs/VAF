@@ -1267,12 +1267,15 @@ class Agent:
         misconfigured server is skipped and never blocks startup. Gated by mcp_native_tools_enabled.
         The raw ``mcp_call`` tool is unaffected (it stays the low-level path)."""
         self._mcp_tool_names = getattr(self, "_mcp_tool_names", set())
+        self._mcp_server_status = getattr(self, "_mcp_server_status", {})
         try:
             if not bool(self.config.get("mcp_native_tools_enabled", True)):
+                self._mcp_server_status = {}
                 return
             from vaf.core.mcp_registry import discover_mcp_tools
             timeout = float(self.config.get("mcp_discovery_timeout_seconds", 5) or 5)
-            tools = discover_mcp_tools(timeout_seconds=timeout)
+            tools, status = discover_mcp_tools(timeout_seconds=timeout)
+            self._mcp_server_status = status
         except Exception as exc:
             print(f"[WARN] MCP tool discovery skipped: {exc}")
             return

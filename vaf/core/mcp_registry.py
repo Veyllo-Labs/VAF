@@ -97,7 +97,10 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
     parameters = tool_meta.get("inputSchema")
     if not isinstance(parameters, dict):
         parameters = {"type": "object", "properties": {}}
-    permission = str(server_cfg.get("permission_level", "write")).strip().lower()
+    # Permission: an optional per-tool override (server_cfg["tool_permissions"][<tool>]) wins,
+    # otherwise the per-server level, default "write".
+    _tool_perms = server_cfg.get("tool_permissions") if isinstance(server_cfg.get("tool_permissions"), dict) else {}
+    permission = str(_tool_perms.get(real_tool) or server_cfg.get("permission_level", "write")).strip().lower()
     if permission not in ("read", "write", "dangerous", "system"):
         permission = "write"
     command = str(server_cfg.get("command", ""))
@@ -131,10 +134,12 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
 
 # ── Eager + parallel discovery ─────────────────────────────────────────────────────────────────────
 
-def discover_mcp_tools(timeout_seconds: float = 5.0) -> Dict[str, Any]:
-    """Connect to every enabled server in the manifest in parallel, list its tools, and return a
-    {tool_name: BaseTool instance} dict. A server slower than the shared deadline is terminated and
-    skipped — discovery never blocks longer than ~timeout_seconds and never raises."""
+def discover_mcp_tools(timeout_seconds: float = 5.0):
+    """Connect to every enabled server in the manifest in parallel, list its tools, and return
+    ``(tools, status)`` where ``tools`` is {tool_name: BaseTool instance} and ``status`` is
+    {server_name: {"connected": bool, "tool_count": int, "error": str|None}} for the UI. A server
+    slower than the shared deadline is terminated and skipped — discovery never blocks longer than
+    ~timeout_seconds and never raises."""
     manifest = load_mcp_manifest()
     servers = manifest.get("servers", {}) if isinstance(manifest, dict) else {}
     enabled = [
@@ -142,7 +147,7 @@ def discover_mcp_tools(timeout_seconds: float = 5.0) -> Dict[str, Any]:
         if isinstance(cfg, dict) and cfg.get("enabled", True) and cfg.get("command")
     ]
     if not enabled:
-        return {}
+        return {}, {}
 
     from vaf.tools.mcp_client import get_mcp_client
     client = get_mcp_client()
@@ -169,6 +174,7 @@ def discover_mcp_tools(timeout_seconds: float = 5.0) -> Dict[str, Any]:
         th.join(max(0.0, deadline - time.monotonic()))
 
     tools: Dict[str, Any] = {}
+    status: Dict[str, Any] = {}
     for name, cfg, th in threads:
         if th.is_alive():
             # Timed out: terminate the server process to unblock the daemon thread, then skip it.
@@ -179,15 +185,60 @@ def discover_mcp_tools(timeout_seconds: float = 5.0) -> Dict[str, Any]:
             except Exception:
                 pass
             logger.warning("MCP server '%s' timed out during discovery — skipped", name)
+            status[name] = {"connected": False, "tool_count": 0, "error": "timeout"}
             continue
+        count = 0
         for tm in discovered.get(name, []) or []:
             if not isinstance(tm, dict) or not tm.get("name"):
                 continue
             try:
                 inst = make_mcp_tool(name, cfg, tm)()
                 tools[inst.name] = inst
+                count += 1
             except Exception as exc:
                 logger.warning("mcp_registry: failed to build tool %s/%s: %s", name, tm.get("name"), exc)
+        status[name] = {
+            "connected": count > 0,
+            "tool_count": count,
+            "error": None if count > 0 else "no tools (unreachable or empty)",
+        }
     if tools:
         logger.info("mcp_registry: registered %d MCP tool(s) from %d server(s)", len(tools), len(enabled))
-    return tools
+    return tools, status
+
+
+def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0) -> Dict[str, Any]:
+    """Test a single server config (for the UI "test connection" button): list its tools with a
+    timeout, terminating a hung server. Returns {connected, tool_count, tools, error}; never raises."""
+    from vaf.tools.mcp_client import get_mcp_client
+    client = get_mcp_client()
+    cmd = str(server_cfg.get("command", ""))
+    transport = str(server_cfg.get("transport", "stdio"))
+    url = str(server_cfg.get("url", ""))
+    result: Dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            result["tools"] = client.list_server_tools(cmd, transport, url)
+        except Exception as exc:
+            result["error"] = str(exc)
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(max(1.0, float(timeout_seconds)))
+    if th.is_alive():
+        try:
+            proc = client._server_processes.get(cmd)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
+        return {"connected": False, "tool_count": 0, "tools": [], "error": "timeout"}
+    tools = result.get("tools") or []
+    names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]
+    return {
+        "connected": len(names) > 0,
+        "tool_count": len(names),
+        "tools": names,
+        "error": result.get("error") or (None if names else "no tools (unreachable or empty)"),
+    }

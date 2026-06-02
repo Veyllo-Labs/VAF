@@ -36,7 +36,7 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
 | Field | Meaning |
 |---|---|
 | `command` | command that starts the server (stdio transport) |
-| `transport` | `stdio` (default) · `http` · `sse` |
+| `transport` | `stdio` (default) · `http` · `sse`. Tool **discovery** is full for `stdio`, best-effort for `http`, and not supported for `sse` (an `sse` server registers no tools — use `stdio`/`http`, or the raw `mcp_call` tool). |
 | `enabled` | set `false` to keep the entry but not load it |
 | `permission_level` | `read` · `write` (default) · `dangerous` — see below |
 | `url` | only for `http` / `sse` |
@@ -44,10 +44,21 @@ A hot-reloadable manifest in the VAF data directory (next to the custom-tools da
 At startup VAF connects to every enabled server **in parallel** with a per-server timeout
 (`mcp_discovery_timeout_seconds`, default 5), lists its tools, and registers each as
 `mcp_<server>_<tool>`. A server that is slow, hung, or misconfigured is terminated and **skipped** —
-it never blocks startup. Edit the manifest and call `agent.reload_mcp_tools()` for a live reload.
+it never blocks startup.
 
 Naming is `mcp_<server>_<tool>` (e.g. `mcp_filesystem_read_file`): unambiguous, no dotted names in
 LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.
+
+## Managing servers in the UI
+
+Admins can manage servers without editing JSON by hand: **Settings → Advanced → MCP** lists the
+configured servers (with a connection status dot and tool count per server) and lets you add, edit, or
+remove a server through a form (name, transport, command/url, enabled, `permission_level`). The
+Advanced-tab row shows "N connected / M configured" at a glance. Saving writes `mcp_servers.json` and
+hot-reloads the tools immediately (no restart); the underlying manifest is the same file described
+above, so manual edits and the UI are interchangeable. Editing the manifest directly still takes
+effect on the next reload. See [WEB_UI.md](WEB_UI.md) for the Settings layout and
+[WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md) for the underlying messages.
 
 ## Permissions
 
@@ -62,8 +73,16 @@ usable unattended. Override per server:
   for untrusted servers you only run interactively.
 - **`read`** — read-only, no gate, no prompt (e.g. a safe search/lookup server).
 
-The level is **per server** (a server exposing both read and write tools shares one level); per-tool
-overrides are a later refinement.
+The level is **per server** by default. For finer control, add a `tool_permissions` map to a server
+entry to override individual tools (the rest fall back to the server level) — manifest only, no UI:
+
+```json
+"filesystem": {
+  "command": "npx -y @modelcontextprotocol/server-filesystem /path",
+  "permission_level": "read",
+  "tool_permissions": { "write_file": "dangerous", "move_file": "write" }
+}
+```
 
 ## Settings
 

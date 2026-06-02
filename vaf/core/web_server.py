@@ -3404,6 +3404,138 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "error": str(e),
                         })
 
+                elif type == "get_mcp_servers":
+                    # List configured MCP servers + live connection status for the Settings UI.
+                    try:
+                        from vaf.core.mcp_registry import load_mcp_manifest
+                        _servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
+                        agent = manager.agent_instance if manager else None
+                        _status = dict(getattr(agent, "_mcp_server_status", {}) or {})
+                        _out = []
+                        for _sn, _sc in _servers.items():
+                            if not isinstance(_sc, dict):
+                                continue
+                            _st = _status.get(_sn, {})
+                            _out.append({
+                                "name": _sn,
+                                "command": _sc.get("command", ""),
+                                "transport": _sc.get("transport", "stdio"),
+                                "url": _sc.get("url", ""),
+                                "enabled": bool(_sc.get("enabled", True)),
+                                "permission_level": _sc.get("permission_level", "write"),
+                                "connected": bool(_st.get("connected", False)),
+                                "tool_count": int(_st.get("tool_count", 0) or 0),
+                                "error": _st.get("error"),
+                            })
+                        await websocket.send_json({"type": "mcp_servers", "servers": _out})
+                    except Exception as e:
+                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+
+                elif type in ("create_mcp_server", "update_mcp_server"):
+                    # Add or edit an MCP server in mcp_servers.json, then hot-reload.
+                    # Payload: { name, command, transport?, url?, enabled?, permission_level? }
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
+
+                        _ms_scope = manager.get_connection_user(websocket) if manager else None
+                        _ms_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _ms_admin = (
+                            _ms_role == "admin"
+                            or (_ms_scope is not None and str(_ms_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _ms_admin:
+                            await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
+                        else:
+                            import re as _re
+                            _ms_name = (data.get("name") or "").strip()
+                            if not _re.match(r'^[A-Za-z][A-Za-z0-9_-]*$', _ms_name):
+                                raise ValueError("Server name must start with a letter and use only letters, digits, _ or -.")
+                            _ms_transport = (data.get("transport") or "stdio").strip()
+                            _ms_cmd = (data.get("command") or "").strip()
+                            if _ms_transport == "stdio" and not _ms_cmd:
+                                raise ValueError("A command is required for stdio transport.")
+                            _ms_perm = (data.get("permission_level") or "write").strip().lower()
+                            if _ms_perm not in ("read", "write", "dangerous"):
+                                _ms_perm = "write"
+                            _manifest = load_mcp_manifest() or {}
+                            _srv = _manifest.get("servers")
+                            if not isinstance(_srv, dict):
+                                _srv = {}
+                            _srv[_ms_name] = {
+                                "command": _ms_cmd,
+                                "transport": _ms_transport,
+                                "url": (data.get("url") or "").strip(),
+                                "enabled": bool(data.get("enabled", True)),
+                                "permission_level": _ms_perm,
+                            }
+                            _manifest["servers"] = _srv
+                            save_mcp_manifest(_manifest)
+                            agent = manager.agent_instance if manager else None
+                            if agent and hasattr(agent, "reload_mcp_tools"):
+                                agent.reload_mcp_tools()
+                            await websocket.send_json({"type": "mcp_server_saved", "name": _ms_name})
+                            await _broadcast_tools_update(manager)
+                    except Exception as e:
+                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+
+                elif type == "delete_mcp_server":
+                    # Remove an MCP server from mcp_servers.json, then hot-reload. Payload: { name }
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core.mcp_registry import load_mcp_manifest, save_mcp_manifest
+
+                        _md_scope = manager.get_connection_user(websocket) if manager else None
+                        _md_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _md_admin = (
+                            _md_role == "admin"
+                            or (_md_scope is not None and str(_md_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _md_admin:
+                            await websocket.send_json({"type": "mcp_server_error", "error": "Admin permission required to manage MCP servers."})
+                        else:
+                            _md_name = (data.get("name") or "").strip()
+                            _manifest = load_mcp_manifest() or {}
+                            _srv = _manifest.get("servers")
+                            if isinstance(_srv, dict) and _md_name in _srv:
+                                del _srv[_md_name]
+                                _manifest["servers"] = _srv
+                                save_mcp_manifest(_manifest)
+                            agent = manager.agent_instance if manager else None
+                            if agent and hasattr(agent, "reload_mcp_tools"):
+                                agent.reload_mcp_tools()
+                            await websocket.send_json({"type": "mcp_server_deleted", "name": _md_name})
+                            await _broadcast_tools_update(manager)
+                    except Exception as e:
+                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+
+                elif type == "test_mcp_server":
+                    # Probe a server config (without saving) so the admin can validate it in the
+                    # editor. Payload: { command, transport?, url? }. Reply: mcp_server_test_result.
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id, Config as _CfgMcp
+                        from vaf.core.mcp_registry import probe_mcp_server
+
+                        _tm_scope = manager.get_connection_user(websocket) if manager else None
+                        _tm_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _tm_admin = (
+                            _tm_role == "admin"
+                            or (_tm_scope is not None and str(_tm_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _tm_admin:
+                            await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": "Admin permission required."})
+                        else:
+                            _tm_cfg = {
+                                "command": (data.get("command") or "").strip(),
+                                "transport": (data.get("transport") or "stdio").strip(),
+                                "url": (data.get("url") or "").strip(),
+                            }
+                            _tm_timeout = float(_CfgMcp.get("mcp_discovery_timeout_seconds", 5) or 5)
+                            _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout)
+                            await websocket.send_json({"type": "mcp_server_test_result", **_tm_res})
+                    except Exception as e:
+                        await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": str(e)})
+
                 elif type == "update_custom_tool_permissions":
                     # Change which users can see a custom tool.
                     # Payload: { name: str, shared_with: list[str] }

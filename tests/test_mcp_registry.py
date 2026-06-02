@@ -33,6 +33,14 @@ def test_make_mcp_tool_defaults_permission_to_write():
     assert cls2().permission_level == "write"
 
 
+def test_make_mcp_tool_per_tool_permission_override():
+    cfg = {"command": "x", "permission_level": "write", "tool_permissions": {"danger_tool": "dangerous"}}
+    t1 = reg.make_mcp_tool("srv", cfg, {"name": "danger_tool", "inputSchema": {}})()
+    t2 = reg.make_mcp_tool("srv", cfg, {"name": "safe_tool", "inputSchema": {}})()
+    assert t1.permission_level == "dangerous"   # per-tool override wins
+    assert t2.permission_level == "write"        # falls back to the server level
+
+
 def test_safe_naming():
     assert reg._safe("file system") == "file_system"
     assert reg._safe("a.b/c") == "a_b_c"
@@ -53,9 +61,9 @@ def test_load_manifest_missing_and_malformed(tmp_path, monkeypatch):
 
 def test_discover_empty_manifest(monkeypatch):
     monkeypatch.setattr(reg, "load_mcp_manifest", lambda: {})
-    assert reg.discover_mcp_tools() == {}
+    assert reg.discover_mcp_tools() == ({}, {})
     monkeypatch.setattr(reg, "load_mcp_manifest", lambda: {"servers": {}})
-    assert reg.discover_mcp_tools() == {}
+    assert reg.discover_mcp_tools() == ({}, {})
 
 
 # ── end-to-end via a real stub MCP server (JSON-RPC over stdio) ────────────────────────────────────
@@ -86,10 +94,11 @@ def test_discover_via_stub_server(tmp_path, monkeypatch):
     monkeypatch.setattr(reg, "load_mcp_manifest",
                         lambda: {"servers": {"stub": {"command": cmd, "enabled": True}}})
 
-    tools = reg.discover_mcp_tools(timeout_seconds=10)
+    tools, status = reg.discover_mcp_tools(timeout_seconds=10)
     assert "mcp_stub_echo" in tools
     inst = tools["mcp_stub_echo"]
     assert inst.run(text="hi") == "echoed: hi"
+    assert status["stub"]["connected"] is True and status["stub"]["tool_count"] == 1
 
 
 def test_discover_skips_bad_command(tmp_path, monkeypatch):
@@ -100,7 +109,18 @@ def test_discover_skips_bad_command(tmp_path, monkeypatch):
         "bad": {"command": "definitely_not_a_real_cmd_zzz", "enabled": True},
         "stub": {"command": good, "enabled": True},
     }})
-    tools = reg.discover_mcp_tools(timeout_seconds=10)
+    tools, status = reg.discover_mcp_tools(timeout_seconds=10)
     # The bad server is skipped; the good one still registers — discovery never raises.
     assert "mcp_stub_echo" in tools
     assert not any("bad" in k for k in tools)
+    assert status["stub"]["connected"] is True
+    assert status["bad"]["connected"] is False
+
+
+def test_probe_mcp_server(tmp_path):
+    stub = tmp_path / "stub_mcp.py"
+    stub.write_text(_STUB)
+    ok = reg.probe_mcp_server({"command": f"{sys.executable} {stub}", "transport": "stdio"}, timeout_seconds=10)
+    assert ok["connected"] is True and "echo" in ok["tools"] and ok["tool_count"] == 1
+    bad = reg.probe_mcp_server({"command": "definitely_not_a_real_cmd_zzz", "transport": "stdio"}, timeout_seconds=10)
+    assert bad["connected"] is False and bad["tool_count"] == 0

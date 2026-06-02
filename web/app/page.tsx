@@ -1071,6 +1071,11 @@ function VAFDashboardContent() {
     const [customToolUsers, setCustomToolUsers]             = useState<Array<{ id: string; username: string; user_scope_id: string; role: string }>>([]);
     const [isCustomToolSaving, setIsCustomToolSaving]       = useState(false);
     const [customToolBackendError, setCustomToolBackendError] = useState<string | null>(null);
+    const [mcpServers, setMcpServers] = useState<Array<{ name: string; command: string; transport: string; url?: string; enabled: boolean; permission_level: string; connected?: boolean; tool_count?: number; error?: string | null }>>([]);
+    const [isMcpSaving, setIsMcpSaving] = useState(false);
+    const [mcpBackendError, setMcpBackendError] = useState<string | null>(null);
+    const [isMcpTesting, setIsMcpTesting] = useState(false);
+    const [mcpTestResult, setMcpTestResult] = useState<{ connected: boolean; tool_count: number; tools?: string[]; error?: string | null } | null>(null);
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>>([]);
     const [isWorkflowSaving, setIsWorkflowSaving]       = useState(false);
     const [workflowBackendError, setWorkflowBackendError] = useState<string | null>(null);
@@ -1374,6 +1379,10 @@ function VAFDashboardContent() {
             // Ensure tools are loaded if list is empty
             if (tools.length === 0 && ws) {
                 ws.send(JSON.stringify({ type: 'get_tools' }));
+            }
+            // Load MCP server list + connection status (for the Advanced-tab "N connected" count)
+            if (ws) {
+                ws.send(JSON.stringify({ type: 'get_mcp_servers' }));
             }
 
             // Merge Tools + Commands (Tools First!)
@@ -2928,6 +2937,24 @@ function VAFDashboardContent() {
                     // Backend rejected the operation (e.g. no BaseTool subclass found, invalid name)
                     setIsCustomToolSaving(false);
                     setCustomToolBackendError(data.error || 'Unknown error');
+                }
+                else if (data.type === 'mcp_servers') {
+                    // Configured MCP servers + live connection status
+                    setMcpServers(data.servers || []);
+                }
+                else if (data.type === 'mcp_server_saved' || data.type === 'mcp_server_deleted') {
+                    // Save/delete succeeded — clear state and re-fetch the list (with refreshed status)
+                    setIsMcpSaving(false);
+                    setMcpBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'get_mcp_servers' }));
+                }
+                else if (data.type === 'mcp_server_error') {
+                    setIsMcpSaving(false);
+                    setMcpBackendError(data.error || 'Unknown error');
+                }
+                else if (data.type === 'mcp_server_test_result') {
+                    setIsMcpTesting(false);
+                    setMcpTestResult({ connected: !!data.connected, tool_count: data.tool_count || 0, tools: data.tools || [], error: data.error ?? null });
                 }
                 else if (data.type === 'custom_tool_users') {
                     // List of non-admin users for the share picker
@@ -5700,6 +5727,15 @@ function VAFDashboardContent() {
                 }}
                 isWorkflowSaving={isWorkflowSaving}
                 workflowBackendError={workflowBackendError}
+                mcpServers={mcpServers}
+                onRefreshMcpServers={() => ws?.send(JSON.stringify({ type: 'get_mcp_servers' }))}
+                onSaveMcpServer={(d) => { setIsMcpSaving(true); setMcpBackendError(null); ws?.send(JSON.stringify({ type: 'create_mcp_server', ...d })); }}
+                onDeleteMcpServer={(name) => { setIsMcpSaving(true); setMcpBackendError(null); ws?.send(JSON.stringify({ type: 'delete_mcp_server', name })); }}
+                isMcpSaving={isMcpSaving}
+                mcpBackendError={mcpBackendError}
+                onTestMcpServer={(cfg) => { setIsMcpTesting(true); setMcpTestResult(null); ws?.send(JSON.stringify({ type: 'test_mcp_server', ...cfg })); }}
+                mcpTestResult={mcpTestResult}
+                isMcpTesting={isMcpTesting}
                 trustedSources={trustedSources}
                 onAddTrustedSource={(categoryId, name, url) => ws?.send(JSON.stringify({ type: 'add_trusted_source', category_id: categoryId, name, url }))}
                 onRemoveTrustedSource={(domain, is_custom) => ws?.send(JSON.stringify({ type: 'remove_trusted_source', domain, is_custom }))}

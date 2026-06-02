@@ -182,8 +182,18 @@ class MCPClientTool(BaseTool):
         """Discover the tools a server offers via JSON-RPC tools/list. Returns a list of tool dicts
         (each with name / description / inputSchema), or [] on any failure (never raises)."""
         try:
+            if transport == "http":
+                # Best-effort HTTP discovery (mirrors the simple _call_http shape). SSE is not
+                # supported for discovery.
+                if not server_url:
+                    return []
+                import requests
+                r = requests.post(f"{server_url}/tools/list", json={}, timeout=15)
+                r.raise_for_status()
+                tools = (r.json() or {}).get("tools", [])
+                return tools if isinstance(tools, list) else []
             if transport != "stdio":
-                return []  # discovery over http/sse not supported yet
+                return []  # sse discovery not supported
             process = self._ensure_server(server_command)
             if process is None:
                 return []

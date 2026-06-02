@@ -6,49 +6,34 @@ and encrypted fallback file (cloud_credentials.enc) to avoid interfering with em
 credentials.
 """
 
-import base64
 import json
 import logging
-import secrets
 import threading
-from pathlib import Path
 from typing import Any, Dict, Optional
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+from vaf.core.secure_store import SecureBlobStore, keyring_available
 
 logger = logging.getLogger("vaf.cloud.credentials")
 
 SERVICE_NAME = "vaf-cloud"
-_KEYRING_AVAILABLE: Optional[bool] = None
-_KEYRING_LOCK = threading.Lock()
-_FALLBACK_PATH: Optional[Path] = None
-_CREDENTIALS_KEY = "cloud_credentials_key"
-_KEY_SIZE = 32
-_NONCE_SIZE = 12
+_CREDENTIALS_KEY = "cloud_credentials_key"  # legacy config key; migrated to a wrapped DEK by secure_store
+
+_store_singleton: Optional[SecureBlobStore] = None
+_store_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-#  Keyring
-# ---------------------------------------------------------------------------
-
-def _keyring_available() -> bool:
-    global _KEYRING_AVAILABLE
-    with _KEYRING_LOCK:
-        if _KEYRING_AVAILABLE is None:
-            try:
-                import keyring
-                keyring.get_keyring()
-                keyring.set_password(SERVICE_NAME, "__vaf_probe__", "x")
-                keyring.get_password(SERVICE_NAME, "__vaf_probe__")
-                keyring.delete_password(SERVICE_NAME, "__vaf_probe__")
-                _KEYRING_AVAILABLE = True
-            except Exception as e:
-                logger.info("Keyring unavailable for cloud, using encrypted file: %s", e)
-                _KEYRING_AVAILABLE = False
-        return _KEYRING_AVAILABLE
+def _store() -> SecureBlobStore:
+    """Lazily-created encrypted fallback store (path resolved on first use)."""
+    global _store_singleton
+    if _store_singleton is None:
+        with _store_lock:
+            if _store_singleton is None:
+                _store_singleton = SecureBlobStore(
+                    "cloud", Platform.data_dir() / "cloud_credentials.enc", _CREDENTIALS_KEY
+                )
+    return _store_singleton
 
 
 # ---------------------------------------------------------------------------
@@ -71,59 +56,6 @@ def _cred_key_username(username: Optional[str]) -> Optional[str]:
     if str(username).strip().lower() == local_admin:
         return None
     return str(username).strip()
-
-
-# ---------------------------------------------------------------------------
-#  Encrypted fallback file
-# ---------------------------------------------------------------------------
-
-def _get_fallback_path() -> Path:
-    global _FALLBACK_PATH
-    if _FALLBACK_PATH is None:
-        _FALLBACK_PATH = Platform.data_dir() / "cloud_credentials.enc"
-    return _FALLBACK_PATH
-
-
-def _get_or_create_encryption_key() -> bytes:
-    encoded = Config.get(_CREDENTIALS_KEY, "")
-    if encoded:
-        try:
-            return base64.b64decode(encoded)
-        except Exception:
-            pass
-    new_key = secrets.token_bytes(_KEY_SIZE)
-    Config.set(_CREDENTIALS_KEY, base64.b64encode(new_key).decode())
-    return new_key
-
-
-def _load_fallback_data() -> Dict[str, str]:
-    path = _get_fallback_path()
-    if not path.exists():
-        return {}
-    try:
-        raw = path.read_bytes()
-        if len(raw) < _NONCE_SIZE:
-            return {}
-        nonce = raw[:_NONCE_SIZE]
-        ciphertext = raw[_NONCE_SIZE:]
-        key = _get_or_create_encryption_key()
-        aes = AESGCM(key)
-        decrypted = aes.decrypt(nonce, ciphertext, None).decode("utf-8")
-        return json.loads(decrypted)
-    except Exception as e:
-        logger.warning("Failed to load cloud credential fallback: %s", e)
-        return {}
-
-
-def _save_fallback_data(data: Dict[str, str]) -> None:
-    path = _get_fallback_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = _get_or_create_encryption_key()
-    nonce = secrets.token_bytes(_NONCE_SIZE)
-    aes = AESGCM(key)
-    payload = json.dumps(data).encode("utf-8")
-    ciphertext = aes.encrypt(nonce, payload, None)
-    path.write_bytes(nonce + ciphertext)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +91,7 @@ def get_cloud_credentials(account_id: str, provider: str, username: Optional[str
 
 def _get_credential_raw(key: str) -> Optional[str]:
     """Get raw credential JSON string by key from keyring or fallback file."""
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             value = keyring.get_password(SERVICE_NAME, key)
@@ -167,8 +99,7 @@ def _get_credential_raw(key: str) -> Optional[str]:
                 return value
         except Exception as e:
             logger.debug("Keyring get failed for cloud %s: %s", _mask(key), e)
-    data = _load_fallback_data()
-    return data.get(key)
+    return _store().load().get(key)
 
 
 def set_cloud_oauth_tokens(
@@ -192,11 +123,9 @@ def set_cloud_oauth_tokens(
         "type": "oauth",
     })
     # Always write to fallback file (reliable across processes/Keyring backends on Windows)
-    data = _load_fallback_data()
-    data[key] = value
-    _save_fallback_data(data)
+    _store().update(lambda d: d.__setitem__(key, value))
     # Also try keyring for systems where it works
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             keyring.set_password(SERVICE_NAME, key, value)
@@ -219,31 +148,27 @@ def set_cloud_webdav_credentials(
         "password": password,
         "type": "webdav",
     })
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             keyring.set_password(SERVICE_NAME, key, value)
             return
         except Exception as e:
             logger.warning("Keyring set failed for cloud, using fallback: %s", e)
-    data = _load_fallback_data()
-    data[key] = value
-    _save_fallback_data(data)
+    _store().update(lambda d: d.__setitem__(key, value))
 
 
 def delete_cloud_credentials(account_id: str, provider: str, username: Optional[str] = None) -> None:
     """Remove stored credentials for a cloud account."""
     key = _credential_key(account_id, provider, username)
-    if _keyring_available():
+    if keyring_available():
         try:
             import keyring
             keyring.delete_password(SERVICE_NAME, key)
             return
         except Exception:
             pass
-    data = _load_fallback_data()
-    data.pop(key, None)
-    _save_fallback_data(data)
+    _store().update(lambda d: d.pop(key, None))
 
 
 def _mask(s: str) -> str:

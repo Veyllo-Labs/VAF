@@ -254,17 +254,17 @@ API request timed out for openai
 
 ⚠️ **Important Security Notes:**
 
-1. **Base64 is NOT encryption** - It's basic obfuscation only
-2. **Config file is plain text** - Store `~/.vaf/` with restricted permissions
-3. **For production**, consider:
-   - System keyring integration (e.g., `keyring` Python package)
+1. **Base64 is NOT encryption** - API keys in `config.json` are Base64-encoded (obfuscation), not encrypted.
+2. **Owner-only config** - VAF writes `config.json` with `0600` permissions automatically where the OS supports it, so other local users cannot read it. On Windows, ensure only the running user can read `~/.vaf/`.
+3. **For stronger protection**, consider:
    - Environment variables: `export ANTHROPIC_API_KEY="..."`
+   - System keyring for API keys (OAuth and IMAP credentials already use it — see [CONNECTIONS.md](CONNECTIONS.md))
    - Secret management services (AWS Secrets Manager, etc.)
 
-**Recommended File Permissions:**
+**Verify file permissions (Unix):**
 
 ```bash
-chmod 600 ~/.vaf/config.json
+ls -l ~/.vaf/config.json   # expect -rw------- (600)
 ```
 
 ## API Provider Details

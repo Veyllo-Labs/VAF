@@ -338,6 +338,7 @@ class Config:
         "email_config_by_scope": None,  # { "<user_scope_id_uuid>": { "accounts": [...] } } — UUID-based per-user config (preferred)
         "email_config_by_user": None,  # { "<username>": { "accounts": [...] } } — legacy per-username config
         "email_credentials_key": "",  # AES key (Base64) for fallback encrypted file; auto-generated if empty
+        "secure_store_kek": "",  # Key-encryption-key (Base64) for credential fallback when no master passphrase is set; auto-generated. See vaf.core.secure_store
         # OAuth2: callback base URL must point to this backend (default http://127.0.0.1:8001). Set if behind proxy or different port.
         "email_oauth_callback_base_url": "",
         # OAuth2 client IDs (register app in Google Cloud Console / Azure / Apple; redirect_uri = {email_oauth_callback_base_url or http://127.0.0.1:PORT}/api/email/oauth/callback)
@@ -409,6 +410,7 @@ class Config:
         "local_network_jwt_secret",
         "email_credentials_key",
         "cloud_credentials_key",
+        "secure_store_kek",
     ]
 
     # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
@@ -592,6 +594,15 @@ class Config:
         with open(cls.CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)
 
+        # config.json holds secrets (KEK, JWT secret, base64 API keys): owner-only.
+        # Lazy import avoids a circular dependency (secure_store imports Config).
+        try:
+            from vaf.core.secure_store import harden_dir, harden_path
+            harden_dir(cls.APP_DIR)
+            harden_path(cls.CONFIG_FILE)
+        except Exception:
+            pass
+
     @classmethod
     def get(cls, key: str, default=None):
         return cls.load().get(key, default if default is not None else cls.DEFAULTS.get(key))
@@ -774,7 +785,16 @@ class Config:
 
         with open(cls.CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=4)
-            
+
+        # config.json holds secrets (KEK, JWT secret, base64 API keys): owner-only.
+        # Lazy import avoids a circular dependency (secure_store imports Config).
+        try:
+            from vaf.core.secure_store import harden_dir, harden_path
+            harden_dir(cls.APP_DIR)
+            harden_path(cls.CONFIG_FILE)
+        except Exception:
+            pass
+
         # Detect and notify changes for critical keys
         # local_network_* for server restart; provider for tray VRAM load/unload; model for llama-server reload
         critical_keys = [

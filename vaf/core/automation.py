@@ -213,7 +213,10 @@ def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) ->
             loaded.add_message(role="assistant", content=msg)
             sm.save(loaded)
         if wi:
-            wi.emit_agent_message("assistant", msg, session_id=sid)
+            # Append as a standalone bubble — automation results are proactive and
+            # have no live agent turn, so the streaming update path would overwrite
+            # the previous reply instead of showing a new "done" message.
+            wi.emit_agent_message_append(msg, session_id=sid)
             wi.emit_session_unread(sid)
         web_ok = True
     except Exception as _e:
@@ -1545,6 +1548,23 @@ vaf automation delete <id>   # Delete task
             except Exception:
                 pass
 
+            # einmalig = einmalig: a one-time automation is consumed by its first
+            # firing. Remove it here so it is gone whether execution succeeded OR
+            # raised. The success/early-return paths above already delete it; this
+            # finally only kicks in when the run errored out before reaching them —
+            # otherwise the file lingers and the scheduler re-registers and re-runs
+            # it on the next refresh/restart (showing up as "next run tomorrow").
+            if task.frequency == Frequency.ONCE and task.id in self.tasks:
+                try:
+                    from vaf.core.log_helper import append_domain_log_always
+                    self.delete(task.id, permanent=True)
+                    append_domain_log_always(
+                        "backend",
+                        f"Automation '{task.name}' ({task.id}) frequency is 'once' - removed after run attempt.",
+                    )
+                except Exception:
+                    pass
+
             # Clean up environment variables
             import os
             os.environ.pop("VAF_IN_AUTOMATION", None)
@@ -1652,6 +1672,19 @@ vaf automation delete <id>   # Delete task
             )
 
         elif task.frequency == Frequency.ONCE:
+            # einmalig = einmalig: never re-arm a one-time task that has already
+            # fired. Guards against a lingering file being re-registered after a
+            # restart or scheduler refresh, which would otherwise run it again.
+            if task.last_run or task.last_completed_local_date:
+                self._log_scheduler_event(
+                    f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} "
+                    f"reason='once already ran' last_run={task.last_run}"
+                )
+                try:
+                    self.delete(task.id, permanent=True)
+                except Exception:
+                    pass
+                return
             # Run exactly once at the specified time (today if still in the future,
             # tomorrow if the time has already passed).  Returning schedule.CancelJob
             # from the callback removes the job automatically after it fires.

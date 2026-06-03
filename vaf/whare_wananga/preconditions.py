@@ -77,6 +77,23 @@ def _connection_for_tool(tool: str) -> Optional[str]:
     return None  # calendar / github / cloud / everything else: no precondition yet
 
 
+def tool_class(tool: str, all_tools=None) -> set:
+    """The set of tools allowed during training of `tool` (the training "sandbox").
+
+    = the tool itself plus its connection-class siblings (e.g. all whatsapp_* tools share
+    the whatsapp class). Tools without a connection form a singleton class {tool}. This is
+    the scope the trainer may call -- not OS-level isolation.
+    """
+    conn = _connection_for_tool(tool)
+    if not conn:
+        return {tool}
+    siblings = {tool}
+    for t in (all_tools or []):
+        if _connection_for_tool(t) == conn:
+            siblings.add(t)
+    return siblings
+
+
 def tool_precondition(tool: str) -> Dict[str, object]:
     """Return {'requires_config', 'configured', 'connection'} for a tool.
 

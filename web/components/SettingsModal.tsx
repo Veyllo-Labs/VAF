@@ -418,6 +418,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [codeModal, setCodeModal] = useState<{name: string, code: string} | null>(null);
     const [trainStatus, setTrainStatus] = useState<string | null>(null);
     const [trainingDashboard, setTrainingDashboard] = useState<string | null>(null);
+    const [trainStateOverrides, setTrainStateOverrides] = useState<Record<string, string>>({});
     
     // Memory System State
     const [memoryStats, setMemoryStats] = useState<{ memories: number; chunks: number; connections: number; db_connected: boolean } | null>(null);
@@ -3242,12 +3243,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <span className="font-mono text-sm font-medium text-gray-200">{codeModal.name}.py</span>
                             </div>
                             <div className="flex items-center gap-2">
-                                {/* WW action: red "not configured" (no dashboard) / amber "Train tool now"
-                                    (opens dashboard) / nothing when already learned. */}
+                                {/* WW action: red "not configured" (no dashboard) / green "Tool trained"
+                                    (opens dashboard, view metrics) / amber "Train tool now" (trains + opens). */}
                                 {(() => {
-                                    const _t = tools.find(t => t.name === codeModal?.name);
+                                    const _name = codeModal?.name ?? '';
+                                    const _t = tools.find(t => t.name === _name);
+                                    const _state = trainStateOverrides[_name] ?? _t?.learned_state ?? 'unlearned';
                                     const _notConfigured = _t?.requires_config === true && _t?.configured === false;
-                                    const _notLearned = !['learned', 'learning'].includes(_t?.learned_state ?? 'unlearned');
                                     if (_notConfigured) {
                                         return (
                                             <span
@@ -3258,18 +3260,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </span>
                                         );
                                     }
-                                    if (_notLearned) {
+                                    if (_state === 'learned') {
                                         return (
                                             <button
-                                                onClick={() => { const _n = codeModal?.name ?? ''; handleTrainTool(_n); setTrainingDashboard(_n); }}
-                                                disabled={trainStatus === 'requesting'}
-                                                className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 text-white hover:bg-amber-500 disabled:opacity-60 transition-colors"
+                                                onClick={() => setTrainingDashboard(_name)}
+                                                title="View training metrics"
+                                                className="px-3 py-1.5 text-xs font-semibold rounded-md bg-emerald-500/90 text-white hover:bg-emerald-500 transition-colors"
                                             >
-                                                {trainStatus === 'requesting' ? 'Requesting…' : (trainStatus || 'Train tool now')}
+                                                Tool trained
                                             </button>
                                         );
                                     }
-                                    return null;
+                                    return (
+                                        <button
+                                            onClick={() => { handleTrainTool(_name); setTrainingDashboard(_name); }}
+                                            disabled={trainStatus === 'requesting'}
+                                            className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 text-white hover:bg-amber-500 disabled:opacity-60 transition-colors"
+                                        >
+                                            {trainStatus === 'requesting' ? 'Requesting…' : (trainStatus || 'Train tool now')}
+                                        </button>
+                                    );
                                 })()}
                                 <button onClick={() => setCodeModal(null)} className="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-gray-700 transition-colors">
                                     <X size={18} />
@@ -3287,7 +3297,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Whare Wananga training dashboard (z-[85], above the code viewer) */}
             {trainingDashboard && (
-                <TrainingDashboard toolName={trainingDashboard} onClose={() => setTrainingDashboard(null)} />
+                <TrainingDashboard
+                    toolName={trainingDashboard}
+                    onClose={() => setTrainingDashboard(null)}
+                    onStateChange={(tool, st) => setTrainStateOverrides(p => ({ ...p, [tool]: st }))}
+                />
             )}
 
             {/* ── Workflow Creator (z-[80], above code viewer / tool editor) ── */}

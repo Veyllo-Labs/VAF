@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     X, Activity, Zap, AlertTriangle, CheckCircle2, Clock, Eye, ShieldAlert, ListChecks, Loader2,
 } from 'lucide-react';
@@ -31,31 +31,54 @@ const STATE_LABEL: Record<string, string> = {
     learned: 'Learned', learning: 'Learning', stale: 'Stale', unlearned: 'Not learned',
 };
 
-export default function TrainingDashboard({ toolName, onClose }: { toolName: string; onClose: () => void }) {
+export default function TrainingDashboard({ toolName, onClose, onStateChange }: { toolName: string; onClose: () => void; onStateChange?: (tool: string, state: string) => void }) {
     const [loading, setLoading] = useState(true);
     const [state, setState] = useState<string>('unlearned');
     const [rec, setRec] = useState<ToolKnowledge | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [job, setJob] = useState<any>(null);
 
+    const loadRecord = useCallback(async (): Promise<string> => {
+        let st = 'unlearned';
+        try {
+            const res = await fetch(`/api/whare_wananga/tool_knowledge/${encodeURIComponent(toolName)}`);
+            const data = await res.json().catch(() => ({}));
+            st = data.state || 'unlearned';
+            setState(st);
+            setRec(data.record || null);
+            if (!data.ok && data.error) setError(String(data.error));
+        } catch (e) {
+            setError(String(e));
+        } finally {
+            setLoading(false);
+        }
+        return st;
+    }, [toolName]);
+
+    useEffect(() => { setLoading(true); loadRecord(); }, [loadRecord]);
+
+    // Poll live training status while a job runs; refresh the record once it finishes.
     useEffect(() => {
         let alive = true;
-        (async () => {
-            setLoading(true);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const poll = async () => {
             try {
-                const res = await fetch(`/api/whare_wananga/tool_knowledge/${encodeURIComponent(toolName)}`);
+                const res = await fetch(`/api/whare_wananga/training_status/${encodeURIComponent(toolName)}`);
                 const data = await res.json().catch(() => ({}));
                 if (!alive) return;
-                setState(data.state || 'unlearned');
-                setRec(data.record || null);
-                if (!data.ok && data.error) setError(String(data.error));
-            } catch (e) {
-                if (alive) setError(String(e));
-            } finally {
-                if (alive) setLoading(false);
-            }
-        })();
-        return () => { alive = false; };
-    }, [toolName]);
+                const st = data.status;
+                setJob(st);
+                if (st && (st.state === 'done' || st.state === 'error' || st.state === 'skipped')) {
+                    const newState = await loadRecord();
+                    onStateChange?.(toolName, newState);
+                    return;  // finished -> stop polling
+                }
+            } catch { /* ignore transient poll errors */ }
+            if (alive) timer = setTimeout(poll, 1500);
+        };
+        poll();
+        return () => { alive = false; if (timer) clearTimeout(timer); };
+    }, [toolName, loadRecord]);
 
     const success = rec?.success ?? 0;
     const fail = rec?.fail ?? 0;
@@ -110,11 +133,27 @@ export default function TrainingDashboard({ toolName, onClose }: { toolName: str
 
                 {/* Body */}
                 <div className="flex-1 overflow-auto p-6 space-y-6">
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
-                        <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                        <span>The predict-then-verify learning runner is not implemented yet. These metrics read the stored
-                            tool_knowledge record and will populate live once a training pass runs.</span>
-                    </div>
+                    {job?.state === 'running' ? (
+                        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-2">
+                            <Loader2 size={16} className="animate-spin shrink-0" />
+                            <span>Training… attempt {job.attempt ?? 0}/{job.max_attempts ?? '?'} · correct predictions {job.hits ?? 0}</span>
+                        </div>
+                    ) : job?.state === 'done' ? (
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 flex items-center gap-2">
+                            <CheckCircle2 size={16} className="shrink-0" />
+                            <span>Training complete — status: {job.status ?? state}, confidence {Math.round((((job.confidence ?? rec?.confidence) ?? 0) as number) * 100)}%.</span>
+                        </div>
+                    ) : job?.state === 'skipped' ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
+                            <AlertTriangle size={16} className="shrink-0" />
+                            <span>Skipped: {job.reason || 'not eligible for training'}.</span>
+                        </div>
+                    ) : (
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 flex items-center gap-2">
+                            <Activity size={16} className="shrink-0" />
+                            <span>Showing the stored tool_knowledge record. Use &quot;Train tool now&quot; to run a fresh pass.</span>
+                        </div>
+                    )}
 
                     {/* Metrics */}
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -129,13 +168,40 @@ export default function TrainingDashboard({ toolName, onClose }: { toolName: str
                     {/* Error-rate / progress graph (placeholder until the runner streams attempts) */}
                     <div className="rounded-xl border border-gray-200 bg-gray-50/40 p-4">
                         <div className="text-[11px] uppercase tracking-wide font-semibold text-gray-500 mb-2 flex items-center gap-1.5">
-                            <Activity size={13} /> Error rate over attempts
+                            <Activity size={13} /> Predict-then-verify attempts
                         </div>
-                        <div className="h-40 flex items-center justify-center text-sm text-gray-400 border border-dashed border-gray-300 rounded-lg">
-                            {loading
-                                ? <span className="flex items-center gap-2"><Loader2 size={16} className="animate-spin" /> Loading…</span>
-                                : 'No attempt data yet — appears here while the runner practises the tool.'}
-                        </div>
+                        {(() => {
+                            const live = (job?.events ?? []) as Array<{ i?: number; match?: boolean; predicted_outcome?: string; actual_outcome?: string }>;
+                            const fromRec = (rec?.predict_records ?? []).map((p, i) => ({
+                                i: i + 1, match: p.match,
+                                predicted_outcome: String(p.predicted ?? '').split(':')[0],
+                                actual_outcome: String(p.actual ?? '').split(':')[0],
+                            }));
+                            const items = live.length ? live : fromRec;
+                            if (!items.length) {
+                                return (
+                                    <div className="h-24 flex items-center justify-center text-sm text-gray-400 border border-dashed border-gray-300 rounded-lg">
+                                        {loading || job?.state === 'running' ? 'Probing…' : 'No attempts yet — use "Train tool now".'}
+                                    </div>
+                                );
+                            }
+                            return (
+                                <div className="flex flex-col gap-1.5">
+                                    <div className="flex gap-1.5 flex-wrap">
+                                        {items.map((it, i) => (
+                                            <div
+                                                key={i}
+                                                title={`#${it.i ?? i + 1}: predicted ${it.predicted_outcome} / actual ${it.actual_outcome}`}
+                                                className={`w-7 h-7 rounded-md flex items-center justify-center text-[11px] font-bold ${it.match ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}
+                                            >
+                                                {it.match ? '✓' : '✗'}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="text-[11px] text-gray-400">green = prediction matched reality · red = surprise</div>
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     {/* Three baskets (Nga Kete) */}

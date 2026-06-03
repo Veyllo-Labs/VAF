@@ -1040,25 +1040,46 @@ async def whare_wananga_tool_knowledge(name: str):
 
 @app.post("/api/whare_wananga/train/{name}")
 async def whare_wananga_train(name: str):
-    """Queue a Whare Wananga training pass for a tool.
-
-    STUB: the predict-then-verify learning runner is not implemented yet, so this only
-    records the request (terminal + backend log) and acknowledges. Wiring the real runner
-    here is the next step.
-    """
+    """Start a Whare Wananga predict-then-verify training pass for a tool (background job)."""
     try:
         from vaf.core.log_helper import append_domain_log
         append_domain_log("backend", f"[WHARE-WANANGA] train requested: {name}")
     except Exception:
         pass
-    print(f"[WHARE-WANANGA] train requested: {name} (runner not yet implemented)")
-    return {
-        "ok": True,
-        "tool": name,
-        "status": "queued",
-        "implemented": False,
-        "message": "Training requested (runner coming soon)",
-    }
+    agent = manager.agent_instance if manager else None
+    if agent is None or not hasattr(agent, "tools"):
+        return {"ok": False, "tool": name, "state": "error", "message": "Agent not available"}
+    if name not in getattr(agent, "tools", {}):
+        return {"ok": False, "tool": name, "state": "error", "message": "Unknown tool"}
+    # Precondition: never train a tool whose connection is not configured.
+    try:
+        from vaf.whare_wananga.preconditions import tool_precondition
+        pc = tool_precondition(name)
+        if pc.get("requires_config") and not pc.get("configured"):
+            return {"ok": False, "tool": name, "state": "skipped", "message": "Connection not configured"}
+    except Exception:
+        pass
+    try:
+        from vaf.whare_wananga import jobs
+        try:
+            _ma = int(Config.get("whare_wananga_max_attempts", 21) or 21)
+        except Exception:
+            _ma = 21
+        st = jobs.start_training(agent, name, max_attempts=_ma)
+        print(f"[WHARE-WANANGA] training started: {name} (max_attempts={_ma})")
+        return {"ok": True, "tool": name, **st}
+    except Exception as e:
+        return {"ok": False, "tool": name, "state": "error", "message": str(e)}
+
+
+@app.get("/api/whare_wananga/training_status/{name}")
+async def whare_wananga_training_status(name: str):
+    """Live status of a Whare Wananga training job (polled by the dashboard)."""
+    try:
+        from vaf.whare_wananga import jobs
+        return {"ok": True, "tool": name, "status": jobs.get_status(name)}
+    except Exception as e:
+        return {"ok": False, "tool": name, "status": None, "error": str(e)}
 
 
 @app.post("/api/subagent/stream")

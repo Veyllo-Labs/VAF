@@ -240,7 +240,7 @@ function extractFilePaths(text: string): { path: string; start: number; end: num
 
 // Helper to parse and merge thinking blocks
 // Returns: { thought, answer, isThinkingComplete }
-const parseContent = (content: string): { thought: string | null; answer: string; isThinkingComplete: boolean } => {
+const parseThinkBlocks = (content: string): { thought: string | null; answer: string; isThinkingComplete: boolean } => {
     if (!content) return { thought: null, answer: "", isThinkingComplete: true };
 
     // Clean Rich markup tags and "resposta" prefix
@@ -256,11 +256,17 @@ const parseContent = (content: string): { thought: string | null; answer: string
     const closeTag = "</think>";
     const openIndex = merged.indexOf(openTag);
 
-    // Method 1: Explicit <think> tags
-    if (openIndex !== -1) {
-        const closeIndex = merged.lastIndexOf(closeTag);
-        if (closeIndex !== -1 && closeIndex > openIndex) {
-            // Complete thinking block - has both open and close tags
+    // Method 1: Explicit <think> tags — ONLY when the reasoning LEADS the message.
+    // If real answer text precedes the first <think>, the tag is something the agent
+    // *mentioned* in its answer (e.g. explaining the tag format) — not a reasoning block.
+    // In that case we must NOT pull it into the Thinking panel; leave it in the answer.
+    const leadsMessage = openIndex !== -1 && merged.substring(0, openIndex).trim() === "";
+    if (openIndex !== -1 && leadsMessage) {
+        // First close AFTER the open (NOT lastIndexOf): a later <think> the agent mentions
+        // inside its answer must not swallow everything in between into the Thinking panel.
+        const closeIndex = merged.indexOf(closeTag, openIndex + openTag.length);
+        if (closeIndex !== -1) {
+            // Complete leading thinking block
             const thought = merged.substring(openIndex + openTag.length, closeIndex).trim();
             const answer = (merged.substring(0, openIndex) + merged.substring(closeIndex + closeTag.length)).trim();
             // Safeguard: content inside think tags may be a user-facing answer (API models sometimes misuse tags)
@@ -270,7 +276,7 @@ const parseContent = (content: string): { thought: string | null; answer: string
             }
             return { thought, answer, isThinkingComplete: true };
         } else {
-            // Incomplete thinking - has open tag but no close tag (still streaming)
+            // Incomplete thinking - leading open tag, close not streamed yet
             const thought = merged.substring(openIndex + openTag.length).trim();
             const answer = merged.substring(0, openIndex).trim();
             return { thought, answer, isThinkingComplete: false };
@@ -323,6 +329,51 @@ const parseContent = (content: string): { thought: string | null; answer: string
     }
 
     return { thought: null, answer: merged, isThinkingComplete: true };
+};
+
+// Wraps parseThinkBlocks and additionally extracts an <Action>...</Action> block.
+// Returns: { thought, answer, action, isThinkingComplete }
+const parseContent = (content: string): { thought: string | null; answer: string; action: string | null; isThinkingComplete: boolean; isActionComplete: boolean } => {
+    const base = parseThinkBlocks(content);
+    let answer = base.answer;
+    let isThinkingComplete = base.isThinkingComplete;
+    let isActionComplete = true;
+    const thoughts: string[] = base.thought ? [base.thought] : [];
+    const actions: string[] = [];
+
+    // Pull EVERY complete <think>...</think> block out of the answer (the model may emit a
+    // second one after it already started answering). Prose around them stays as the answer —
+    // raw tags must NEVER appear in the answer bubble. Non-greedy => no swallowing.
+    answer = answer.replace(/<think>([\s\S]*?)<\/think>/gi, (_m, inner) => {
+        const t = String(inner).trim(); if (t) thoughts.push(t); return '';
+    });
+    // Pull EVERY complete <Action>...</Action> block, wherever it appears.
+    answer = answer.replace(/<action>([\s\S]*?)<\/action>/gi, (_m, inner) => {
+        const a = String(inner).trim(); if (a) actions.push(a); return '';
+    });
+    // Trailing unterminated tag (still streaming): take the remainder as that block.
+    const tOpen = answer.search(/<think>/i);
+    if (tOpen !== -1) {
+        const t = answer.substring(tOpen).replace(/<think>/i, '').trim();
+        if (t) thoughts.push(t);
+        answer = answer.substring(0, tOpen);
+        isThinkingComplete = false;
+    }
+    const aOpen = answer.search(/<action>/i);
+    if (aOpen !== -1) {
+        const a = answer.substring(aOpen).replace(/<action>/i, '').trim();
+        if (a) actions.push(a);
+        answer = answer.substring(0, aOpen);
+        isActionComplete = false;
+    }
+
+    return {
+        thought: thoughts.length ? thoughts.join('\n\n') : null,
+        answer: answer.trim(),
+        action: actions.length ? actions.join('\n\n') : null,
+        isThinkingComplete,
+        isActionComplete,
+    };
 };
 
 /** Detect thinking-mode system prompt so we can hide it in the Web UI when viewing a thinking session. */
@@ -529,6 +580,79 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
                 )}
             >
                 {thought}
+            </div>
+        </div>
+    );
+};
+
+// Component: Action Accordion — same collapse behaviour as ThinkingDetails, amber accent.
+// Open while streaming, auto-collapses when the stream completes.
+const ActionDetails = ({ action, isComplete = true }: { action: string; isComplete?: boolean }) => {
+    const [isOpen, setIsOpen] = useState(!isComplete);
+    const openedAtRef = useRef<number>(Date.now());
+    const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const MIN_OPEN_MS = 800;
+    const CLOSE_DELAY_MS = 400;
+
+    useEffect(() => {
+        if (!isComplete) {
+            if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+            }
+            openedAtRef.current = Date.now();
+            setIsOpen(true);
+            return;
+        }
+        const elapsed = Date.now() - openedAtRef.current;
+        const delay = Math.max(MIN_OPEN_MS - elapsed, 0) + CLOSE_DELAY_MS;
+        if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+        closeTimeoutRef.current = setTimeout(() => {
+            setIsOpen(false);
+            closeTimeoutRef.current = null;
+        }, delay);
+        return () => {
+            if (closeTimeoutRef.current) {
+                clearTimeout(closeTimeoutRef.current);
+                closeTimeoutRef.current = null;
+            }
+        };
+    }, [isComplete]);
+
+    if (!action) return null;
+
+    return (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/40 overflow-hidden w-full max-w-[95%] shadow-sm">
+            <button
+                type="button"
+                onClick={() => {
+                    if (closeTimeoutRef.current) {
+                        clearTimeout(closeTimeoutRef.current);
+                        closeTimeoutRef.current = null;
+                    }
+                    const next = !isOpen;
+                    if (next) openedAtRef.current = Date.now();
+                    setIsOpen(next);
+                }}
+                className="w-full px-4 py-2.5 flex items-center justify-between text-[11px] uppercase tracking-wide font-semibold text-amber-600 hover:bg-amber-100/50 transition-colors"
+            >
+                <span className="flex items-center gap-2">
+                    {!isComplete ? (
+                        <Loader2 size={14} className="animate-spin text-amber-600" />
+                    ) : (
+                        <Zap size={14} />
+                    )}
+                    {!isComplete ? "Action..." : "Action"}
+                </span>
+                <ChevronRight size={14} className={cn("text-amber-400 transition-transform duration-200", isOpen && "rotate-90")} />
+            </button>
+            <div
+                className={cn(
+                    "text-xs text-slate-700 font-mono leading-relaxed border-t border-amber-200 bg-white/50 overflow-y-auto transition-all duration-300 ease-out whitespace-pre-wrap",
+                    isOpen ? "max-h-[500px] opacity-100 px-4 py-3" : "max-h-0 opacity-0 px-0 py-0 border-t-transparent"
+                )}
+            >
+                {action}
             </div>
         </div>
     );
@@ -2699,9 +2823,11 @@ function VAFDashboardContent() {
 
                     const cachedMsgs = sessionCache.current[data.sessionId] || [];
 
-                    // Normalize content for comparison (strip <think> blocks so server "answer only" matches cache "think + answer")
+                    // Normalize content for comparison (strip <think> and <Action> blocks so a server
+                    // "answer only" version matches the cache "think + action + answer" version)
                     const normContent = (s: string) => (s ?? '')
                         .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                        .replace(/<Action>[\s\S]*?<\/Action>/gi, '')
                         .replace(/\s+/g, ' ')
                         .trim()
                         .slice(0, 400);
@@ -2736,13 +2862,14 @@ function VAFDashboardContent() {
                                 };
                             }
                         }
-                        // Assistant: prefer cache version if it contains <think> so Thinking appears above answer after reload
+                        // Assistant: prefer cache version if it contains <think> OR <Action> tags
+                        // so the Thinking / Action panels survive reload (server may store answer-only).
                         if (srvMsg.role === 'assistant') {
                             const srvNorm = normContent(String(srvMsg.content ?? ''));
                             const withThink = cachedMsgs.find(cm =>
                                 cm.role === 'assistant' &&
                                 (normContent(String(cm.content ?? '')) === srvNorm || Math.abs((cm.timestamp ?? 0) - (srvMsg.timestamp ?? 0)) < 2000) &&
-                                /<think>[\s\S]*?<\/think>/i.test(String(cm.content ?? ''))
+                                (/<think>[\s\S]*?<\/think>/i.test(String(cm.content ?? '')) || /<Action>[\s\S]*?<\/Action>/i.test(String(cm.content ?? '')))
                             );
                             if (withThink) {
                                 return { ...srvMsg, content: withThink.content, _order: srvMsg._order };
@@ -2798,6 +2925,7 @@ function VAFDashboardContent() {
                     // the same messages (server content cleaned, timestamps differ), causing duplicates
                     const norm = (s: string) => (s ?? '')
                         .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                        .replace(/<Action>[\s\S]*?<\/Action>/gi, '')
                         .replace(/\s+/g, ' ')
                         .trim()
                         .slice(0, 400);
@@ -4580,13 +4708,14 @@ function VAFDashboardContent() {
                                                         );
                                                     }
 
-                                                    const { thought, answer, isThinkingComplete } = parseContent(msg.content);
+                                                    const { thought, answer, action, isThinkingComplete, isActionComplete } = parseContent(msg.content);
                                                     const isBot = msg.role === 'assistant';
                                                     // Use trueIndex (position in full messages array) — visibleMessages may be a subset
                                                     const isLastMessage = trueIndex === messages.length - 1;
                                                     // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                                     // For non-last messages, always treat as complete
                                                     const thinkingDone = !isLastMessage || isThinkingComplete;
+                                                    const actionDone = !isLastMessage || isActionComplete;
                                                     // For user messages: don't show attachment content in bubble (strip --- FILE: ... --- blocks); keep chips from msg.files or parsed from content after reload
                                                     const attachmentStripped = !isBot ? stripAttachmentBlocks(msg.content) : null;
                                                     const displayAnswer = !isBot && attachmentStripped ? attachmentStripped.text : answer;
@@ -4603,13 +4732,15 @@ function VAFDashboardContent() {
                                                     // When there is nothing to show (no bubble, no thinking), don't render the row at all (no avatar, no timestamp, no empty space)
                                                     const hasVisibleContent = isBot
                                                         // keep visible when there's a think tag at all (even after reload when thought may be empty)
-                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== '') || msg.content.includes('<think>'))
+                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== '') || !!(action && action.trim() !== '') || msg.content.includes('<think>'))
                                                         : hasBubbleContent;
                                                     if (!hasVisibleContent) return null;
 
                                                     const bubbleContent = (
                                                         <>
                                                             {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
+
+                                                            {isBot && action && <ActionDetails action={action} isComplete={actionDone} />}
 
                                                             {/* Show answer bubble only when there is content (never show empty speech bubble) */}
                                                             {hasBubbleContent && (

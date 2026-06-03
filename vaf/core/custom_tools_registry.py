@@ -52,7 +52,15 @@ logger = logging.getLogger(__name__)
 
 # Protects manifest read/write across threads (the web server is async but
 # importlib.util is sync, and multiple WS messages can arrive concurrently).
-_manifest_lock = threading.Lock()
+#
+# Must be an RLock: the mutators (register_tool/delete_tool/update_tool_source/
+# update_tool_permissions) hold this lock to make load+modify+save atomic, and
+# call load_manifest() — which re-acquires the same lock — from inside that
+# critical section. A plain Lock would deadlock the calling thread forever on
+# that re-acquisition (and, since the thread never releases, every later manifest
+# operation would block too). RLock lets the same thread re-enter while still
+# blocking other threads.
+_manifest_lock = threading.RLock()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Directory helpers

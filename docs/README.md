@@ -11,6 +11,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **USER_IDENTITY.md**: Current user profile (user_identity.json), update_user_identity tool, and Settings UI.
 - **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
 - **ACTION_TAG.md**: The `<Action>` tag — agent declares the tool it is about to use; separate collapsible Action panel in the Web UI, persistence, and LLM-context behavior.
+- **WHARE_WANANGA.md**: Tool self-learning subsystem — learns per-tool `tool_knowledge` (Aronui/Tuatea/Tuarua facets); the built store/schema and the planned learning loop.
 - **GATEWAY.md**: Persistent gateway server and multi-channel access.
 - **WEB_UI.md**: Browser-based dashboard and WebSocket API.
 - **DOCUMENT_EDITOR_NATIVE_DOCX.md**: Native DOCX editor architecture, import/export model, editor split, and Gotenberg's role.

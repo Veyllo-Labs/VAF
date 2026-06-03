@@ -1190,6 +1190,9 @@ function VAFDashboardContent() {
         shared_with?: string[];
         created_by?: string;
         updated_at?: string;
+        learned_state?: string;
+        requires_config?: boolean;
+        configured?: boolean;
     }>>([]);
     // Custom tool management state (admin only)
     const [customToolUsers, setCustomToolUsers]             = useState<Array<{ id: string; username: string; user_scope_id: string; role: string }>>([]);

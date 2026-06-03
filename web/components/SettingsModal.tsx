@@ -123,6 +123,7 @@ import { languages } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
+import TrainingDashboard from './TrainingDashboard';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
 import { vafLicenseText, thirdPartyLicenses } from '@/lib/licenses_data';
 import ReactMarkdown from 'react-markdown';
@@ -169,6 +170,12 @@ export interface SettingsModalProps {
         shared_with?: string[];
         created_by?: string;
         updated_at?: string;
+        /** Whare Wananga learned state: unlearned | learning | learned | stale */
+        learned_state?: string;
+        /** True if the tool depends on a connection that must be configured */
+        requires_config?: boolean;
+        /** False when a required connection is not configured yet */
+        configured?: boolean;
     }>;
     /** Request fresh tool list from backend (e.g. after installing PyGithub and restarting VAF). */
     onRefreshTools?: () => void;
@@ -409,6 +416,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [newCategoryName, setNewCategoryName] = useState('');
     const [showCreateCategoryForm, setShowCreateCategoryForm] = useState(false);
     const [codeModal, setCodeModal] = useState<{name: string, code: string} | null>(null);
+    const [trainStatus, setTrainStatus] = useState<string | null>(null);
+    const [trainingDashboard, setTrainingDashboard] = useState<string | null>(null);
     
     // Memory System State
     const [memoryStats, setMemoryStats] = useState<{ memories: number; chunks: number; connections: number; db_connected: boolean } | null>(null);
@@ -1058,6 +1067,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             }
             const data = await res.json();
             if (data.code) {
+                setTrainStatus(null);
                 setCodeModal({ name, code: data.code });
             } else {
                 alert("Could not load code: " + (data.error || "Unknown error"));
@@ -1065,6 +1075,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         } catch (e) {
             console.error(e);
             alert("Failed to fetch code: " + String(e));
+        }
+    };
+
+    // Whare Wananga: request a training pass for a (not-yet-learned) tool. The runner is
+    // not implemented yet -- the backend stub records the request and acknowledges.
+    const handleTrainTool = async (name: string) => {
+        if (!name) return;
+        setTrainStatus('requesting');
+        try {
+            const res = await fetch(`/api/whare_wananga/train/${encodeURIComponent(name)}`, { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            setTrainStatus((data && data.message) || (res.ok ? 'Training requested' : 'Request failed'));
+        } catch (e) {
+            console.error(e);
+            setTrainStatus('Request failed');
         }
     };
 
@@ -3105,6 +3130,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 {tool.category}
                                                             </span>
                                                         )}
+                                                        {/* Whare Wananga learned-state badge (neutral) */}
+                                                        {tool.learned_state && (
+                                                            <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md ${
+                                                                tool.learned_state === 'learned' ? 'bg-emerald-100 text-emerald-700'
+                                                                : tool.learned_state === 'learning' ? 'bg-amber-100 text-amber-700'
+                                                                : 'bg-gray-100 text-gray-400'
+                                                            }`}>
+                                                                {tool.learned_state === 'learned' ? 'Learned'
+                                                                 : tool.learned_state === 'learning' ? 'Learning'
+                                                                 : tool.learned_state === 'stale' ? 'Stale'
+                                                                 : 'Not learned'}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 
@@ -3203,17 +3241,53 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <Cpu size={18} className="text-blue-400" />
                                 <span className="font-mono text-sm font-medium text-gray-200">{codeModal.name}.py</span>
                             </div>
-                            <button onClick={() => setCodeModal(null)} className="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-gray-700 transition-colors">
-                                <X size={18} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {/* WW action: red "not configured" (no dashboard) / amber "Train tool now"
+                                    (opens dashboard) / nothing when already learned. */}
+                                {(() => {
+                                    const _t = tools.find(t => t.name === codeModal?.name);
+                                    const _notConfigured = _t?.requires_config === true && _t?.configured === false;
+                                    const _notLearned = !['learned', 'learning'].includes(_t?.learned_state ?? 'unlearned');
+                                    if (_notConfigured) {
+                                        return (
+                                            <span
+                                                title="Connection not configured — set it up first"
+                                                className="px-3 py-1.5 text-xs font-semibold rounded-md bg-rose-500/90 text-white select-none cursor-not-allowed"
+                                            >
+                                                Tool not configured
+                                            </span>
+                                        );
+                                    }
+                                    if (_notLearned) {
+                                        return (
+                                            <button
+                                                onClick={() => { const _n = codeModal?.name ?? ''; handleTrainTool(_n); setTrainingDashboard(_n); }}
+                                                disabled={trainStatus === 'requesting'}
+                                                className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 text-white hover:bg-amber-500 disabled:opacity-60 transition-colors"
+                                            >
+                                                {trainStatus === 'requesting' ? 'Requesting…' : (trainStatus || 'Train tool now')}
+                                            </button>
+                                        );
+                                    }
+                                    return null;
+                                })()}
+                                <button onClick={() => setCodeModal(null)} className="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-gray-700 transition-colors">
+                                    <X size={18} />
+                                </button>
+                            </div>
                         </div>
-                        
+
                         {/* Code Content */}
                         <div className="flex-1 overflow-auto p-4 font-mono text-sm text-[#d4d4d4] leading-relaxed selection:bg-blue-500/30">
                             <pre>{codeModal.code}</pre>
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Whare Wananga training dashboard (z-[85], above the code viewer) */}
+            {trainingDashboard && (
+                <TrainingDashboard toolName={trainingDashboard} onClose={() => setTrainingDashboard(null)} />
             )}
 
             {/* ── Workflow Creator (z-[80], above code viewer / tool editor) ── */}

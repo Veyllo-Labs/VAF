@@ -35,6 +35,44 @@ def _emit_to_web_ui() -> bool:
     return os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes")
 
 
+def _extract_action_text(text: str):
+    """Return the inner text of the first <Action>...</Action> block, or None.
+
+    Part of the Action-Tag parser (see docs/ACTION_TAG.md). This reads the agent's
+    committed intent from its own output; it is unrelated to the Web UI display parser.
+    """
+    import re
+    if not text:
+        return None
+    m = re.search(r'<action>([\s\S]*?)</action>', text, re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _match_action_to_tools(action_text: str, tool_names):
+    """Cheap fuzzy match of the committed <Action> text against tool names (no LLM).
+
+    Full tool name appears in the text => score 1.0; otherwise the fraction of the
+    tool name's tokens (split on non-alphanumerics) that occur in the action text.
+    Returns a list of (name, score) sorted by score descending.
+    """
+    import re
+    text = (action_text or "").lower()
+    text_tokens = set(re.findall(r'[a-z0-9]+', text))
+    scored = []
+    for name in tool_names:
+        n = str(name).lower()
+        if n and n in text:
+            score = 1.0
+        else:
+            parts = [p for p in re.split(r'[^a-z0-9]+', n) if p]
+            hits = sum(1 for p in parts if p in text_tokens)
+            score = (hits / len(parts)) if parts else 0.0
+        if score > 0:
+            scored.append((name, round(score, 2)))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
 def _get_debug_log_dir():
     candidates = []
     env_dir = os.environ.get("VAF_LOG_DIR")
@@ -6568,6 +6606,30 @@ class Agent:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
             except Exception:
                 pass
+
+            # ── Action-Tag PARSER (first step: debug only) ─────────────────────────
+            # Read the agent's committed <Action> intent and fuzzy-match it against the
+            # currently loaded tool list; print the match(es) + score to the terminal.
+            # No know-how injection yet. See docs/ACTION_TAG.md "Action-Tag parser".
+            try:
+                _act = _extract_action_text(full_response)
+                if _act:
+                    _avail = list(self._active_tools) if self._active_tools else list(self.tools.keys())
+                    _matches = _match_action_to_tools(_act, _avail)
+                    print(f"[ACTION-MATCH] action=\"{_act[:80]}\" (candidates={len(_avail)})")
+                    if _matches:
+                        for _name, _score in _matches[:3]:
+                            print(f"[ACTION-MATCH] match: {_name} (score: {int(round(_score * 100))}%)")
+                    else:
+                        print("[ACTION-MATCH] no tool match")
+                    try:
+                        append_domain_log("backend", f"[ACTION-MATCH] action={_act[:120]!r} top={_matches[:3]}")
+                    except Exception:
+                        pass
+            except Exception as _e:
+                print(f"[ACTION-MATCH] parser error: {_e}")
+            # ───────────────────────────────────────────────────────────────────────
+
             if tool_calls_detected:
                 content_for_history = full_content if full_content else "Thinking..."
                 if self.use_server and not full_content:

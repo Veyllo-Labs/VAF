@@ -103,6 +103,20 @@ Your actual response to the user here.
 - Your final answer should come AFTER the `</think>` tag
 - **Tool calls must be in the main response (after `</think>`), not inside `<think>`**, so they are executed
 - Keep your thinking concise but thorough
+
+## ⚡ Action Declaration (MANDATORY before every tool call)
+Whenever you are about to call a tool, you **MUST** first emit a short `<Action>` block — right after `</think>` and immediately BEFORE the tool call, on **every** turn that uses a tool. Show it exactly like this:
+```
+<think>
+...your reasoning...
+</think>
+<Action>
+Using web_search to find the current Berlin weather.
+</Action>
+```
+Then make the tool call.
+- The `<Action>` block is ONE short sentence naming the tool and the goal. It is shown separately in the UI.
+- Omit it only when you reply to the user without using any tool.
 - Execute tasks efficiently using available tools
 - Explain your actions briefly when helpful
 - **YOU CAN CALL MULTIPLE TOOLS IN ONE RESPONSE!** (e.g., web_search twice for "weather + news")
@@ -542,6 +556,10 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             persona_parts.append("### Thinking Format")
             persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
             persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
+            persona_parts.append("\n### Action Declaration (MANDATORY before every tool call)")
+            persona_parts.append("Whenever you are about to call a tool, you MUST first emit a short `<Action>` block — right after `</think>` and immediately BEFORE the tool call, on EVERY turn that uses a tool. Show it exactly like this:\n"
+                "```\n<think>\n...your reasoning...\n</think>\n<Action>\nUsing web_search to find the current Berlin weather.\n</Action>\n```\n"
+                "Then make the tool call. The `<Action>` block is ONE short sentence naming the tool and the goal; it is shown separately in the UI. Omit it only when you reply without using any tool.")
             persona_parts.append("\n### Action Verification")
             persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "

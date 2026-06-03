@@ -57,12 +57,16 @@ invalidate stored know-how when a tool's definition changes.
 The Settings tool list shows each tool's learned state as a neutral badge
 (`Learned` / `Learning` / `Stale` / `Not learned`), derived from `learned_state()` and
 attached to the tools list the backend sends (`web_server.py` `_attach_learned_states`).
-Until the learning loop runs, every tool correctly shows "Not learned".
+Until a tool has been trained, it shows "Not learned".
 
-Opening a not-yet-learned tool's detail (the code viewer) shows a **Train tool now** button
-that POSTs to `/api/whare_wananga/train/{name}`. That endpoint is currently a stub: it
-records the request and acknowledges. The predict-then-verify runner that performs the
-actual training is the next step.
+The tool detail (code viewer) shows one of three buttons depending on the tool's state:
+red **"Tool not configured"** (a connection that isn't set up; does not open the dashboard),
+green **"Tool trained"** (already learned; opens the dashboard to view metrics), or amber
+**"Train tool now"** (configured + not yet learned; POSTs `/api/whare_wananga/train/{name}`,
+which starts the predict-then-verify background job, and opens the dashboard). The button
+flips to green as soon as training confirms the tool. Default depth is 21 attempts
+(`whare_wananga_max_attempts` in config); a fast tool trains in roughly 1-2 minutes
+(LLM latency dominates).
 
 That button opens a **training dashboard** (`web/components/TrainingDashboard.tsx`) -- a
 large panel that reads `GET /api/whare_wananga/tool_knowledge/{name}` and shows the tool's
@@ -79,11 +83,28 @@ In the UI, a not-yet-configured connection tool shows a red **"Tool not configur
 instead of the training button, and does not open the dashboard. (calendar / github / cloud
 currently default to configured; their checks can be added to the resolver later.)
 
-## Learning loop (design, not implemented)
+## Learning loop
+
+The **core predict-then-verify loop is built** (`vaf/whare_wananga/runner.py`,
+`train_tool()`) for probe-safe tools, verified live, and **wired to the UI**: the
+"Train tool now" button POSTs `train/{name}`, which starts a background job
+(`vaf/whare_wananga/jobs.py`); the dashboard polls `training_status/{name}`, shows the live
+predict-then-verify attempts, and refreshes the record on completion (badge -> "Learned").
+The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the
+tool being trained plus its connection-class siblings -- e.g. all `whatsapp_*` tools share
+the whatsapp class; non-connection tools are singletons (`preconditions.tool_class`,
+enforced by a guard in the runner). Side-effecting tools are tiered by `side_effect_class`:
+**reversible** tools (e.g. `create_agent_tool`) are learned via the **error/validation path**
+-- probed only with invalid/incomplete inputs the tool rejects before acting (no real effect),
+halting if an invalid probe is unexpectedly accepted; **irreversible** tools (e.g. `send_mail`,
+payments, deletion) are **not probed at all** (gated), since one accepted probe would be a real
+irreversible effect. Still pending: the online Teacher, and (optional) real-success observation
+for file-writing tools via an isolated context. Training currently runs on the shared agent
+instance.
 
 How a record gets filled:
 
-- **predict-then-verify:** before each practice call the model predicts the tool's response
+- **predict-then-verify (built):** before each practice call the model predicts the tool's response
   (a success shape OR a specific expected error), calls it, then compares. "Learned" =
   predictions stop being wrong (a correctly predicted error counts as learned). This both
   produces the `verification` checks and terminates practice automatically.

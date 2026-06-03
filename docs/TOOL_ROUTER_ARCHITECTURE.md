@@ -379,3 +379,23 @@ def run(self, **kwargs) -> str:
 5. **Local server fallback** — if no API key is configured, hits the local OpenAI-compatible endpoint.
 
 Use `query_llm()` instead of calling provider SDKs directly — it stays provider-agnostic and inherits the agent's current model configuration automatically.
+
+---
+
+## 12. Related: Whare Wananga (tool self-learning) & the Action Tag
+
+Two adjacent systems build on the tool layer described here:
+
+- **Whare Wananga** ([WHARE_WANANGA.md](WHARE_WANANGA.md)) learns per-tool `tool_knowledge`.
+  The Settings tools list (`tools_list`) now carries three extra per-tool fields, attached
+  server-side in `_attach_learned_states`:
+  - `learned_state` — `unlearned` / `learning` / `learned` / `stale`;
+  - `requires_config` + `configured` — whether the tool depends on a connection and whether
+    that connection is set up (resolved in `vaf/whare_wananga/preconditions.py` from the
+    existing `telegram_config` / `discord_config` / `whatsapp_config` / `email_config`).
+
+  The Declarative Tool Contract's `side_effect_class` (Section 9) is also the basis for
+  Whare Wananga's safety gating (probe-safe read-only tools vs side-effecting ones, which
+  may only be learned via the error/validation path).
+- **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) — the agent declares the tool it is about
+  to use; a backend parser matches that intent against the loaded tool list.

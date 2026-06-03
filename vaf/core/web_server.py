@@ -408,6 +408,28 @@ def _mcp_servers_payload(agent) -> list:
     return out
 
 
+def _attach_learned_states(tools_list: list) -> list:
+    """Annotate each tool entry with its Whare Wananga learned_state (best-effort).
+
+    learned_state in {"unlearned","learning","learned","stale"} (derived from the
+    tool_knowledge store). Surfaced in the Settings tool list. Never raises.
+    """
+    try:
+        from vaf.whare_wananga import learned_states
+        from vaf.whare_wananga.preconditions import tool_precondition
+        names = [e.get("name", "") for e in tools_list]
+        states = learned_states(names)
+        for e in tools_list:
+            nm = e.get("name", "")
+            e["learned_state"] = states.get(nm, "unlearned")
+            pc = tool_precondition(nm)
+            e["requires_config"] = pc["requires_config"]
+            e["configured"] = pc["configured"]
+    except Exception:
+        pass
+    return tools_list
+
+
 async def _broadcast_tools_update(manager) -> None:
     """
     Push a refreshed tools_list to every connected WebSocket client.
@@ -463,6 +485,7 @@ async def _broadcast_tools_update(manager) -> None:
                                 entry["created_by"]  = meta.get("created_by", "")
                                 entry["updated_at"]  = meta.get("updated_at", "")
                         tools_list.append(entry)
+                    _attach_learned_states(tools_list)
                     await ws.send_json({"type": "tools_list", "tools": tools_list})
             except Exception:
                 pass  # Ignore disconnected / errored sockets
@@ -1003,6 +1026,39 @@ class SubAgentStreamUpdate(BaseModel):
     name: Optional[str] = None
 
     model_config = {"extra": "allow"}
+
+
+@app.get("/api/whare_wananga/tool_knowledge/{name}")
+async def whare_wananga_tool_knowledge(name: str):
+    """Return the stored tool_knowledge record + learned state for a tool (or null)."""
+    try:
+        from vaf.whare_wananga import load as _ww_load, learned_state as _ww_state
+        return {"ok": True, "tool": name, "state": _ww_state(name), "record": _ww_load(name)}
+    except Exception as e:
+        return {"ok": False, "tool": name, "state": "unlearned", "record": None, "error": str(e)}
+
+
+@app.post("/api/whare_wananga/train/{name}")
+async def whare_wananga_train(name: str):
+    """Queue a Whare Wananga training pass for a tool.
+
+    STUB: the predict-then-verify learning runner is not implemented yet, so this only
+    records the request (terminal + backend log) and acknowledges. Wiring the real runner
+    here is the next step.
+    """
+    try:
+        from vaf.core.log_helper import append_domain_log
+        append_domain_log("backend", f"[WHARE-WANANGA] train requested: {name}")
+    except Exception:
+        pass
+    print(f"[WHARE-WANANGA] train requested: {name} (runner not yet implemented)")
+    return {
+        "ok": True,
+        "tool": name,
+        "status": "queued",
+        "implemented": False,
+        "message": "Training requested (runner coming soon)",
+    }
 
 
 @app.post("/api/subagent/stream")
@@ -3269,6 +3325,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         entry["updated_at"]   = meta.get("updated_at", "")
                                 tools_list.append(entry)
 
+                            _attach_learned_states(tools_list)
                             manager.tools_cache = tools_list
                             await websocket.send_json({
                                 "type": "tools_list",

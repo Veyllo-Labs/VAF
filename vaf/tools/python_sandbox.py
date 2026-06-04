@@ -63,6 +63,11 @@ class PythonSandboxTool(BaseTool):
     name = "python_sandbox"
     permission_level = "write"
     side_effect_class = "reversible"
+    # Whare Wananga: probe this in full rather than via the error path. Executing self-contained
+    # probe code here is harmless and leaves nothing permanent (Docker-isolated; the host-tool
+    # bridge `with_vaf_tools` is opt-in and defaults to False), and full probing is the only way
+    # to learn a tool whose whole job is to ACCEPT and run code.
+    whare_wananga_full_probe = True
     description = (
         "Execute Python code safely in a Docker-isolated sandbox. "
         "Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU). "

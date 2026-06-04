@@ -64,15 +64,17 @@ red **"Tool not configured"** (a connection that isn't set up; does not open the
 green **"Tool trained"** (already learned; opens the dashboard to view metrics), or amber
 **"Train tool now"** (configured + not yet learned; POSTs `/api/whare_wananga/train/{name}`,
 which starts the predict-then-verify background job, and opens the dashboard). The button
-flips to green as soon as training confirms the tool. Default depth is 21 attempts
-(`whare_wananga_max_attempts` in config); a fast tool trains in roughly 1-2 minutes
-(LLM latency dominates).
+flips to green as soon as training confirms the tool. Training depth is adaptive (see the
+learning loop below): a tool whose behaviour is predictable confirms in one validation round
+(~15 probes, roughly 1 minute, LLM latency dominates); a flaky tool runs further rounds up to
+a cap.
 
 That button opens a **training dashboard** (`web/components/TrainingDashboard.tsx`) -- a
 large panel that reads `GET /api/whare_wananga/tool_knowledge/{name}` and shows the tool's
-status, error rate, predictions, and the three baskets (Aronui / Tuatea / Tuarua). Live
-metrics (duration, error rate over attempts) populate once the runner streams a training
-pass; until then those areas are placeholders.
+status, error rate, predictions, and the three baskets (Aronui / Tuatea / Tuarua). While a
+training job runs, the metric cards and the predict-then-verify grid update live from the
+job's streamed events (confidence, error rate, correct/total) rather than only at the end;
+duration remains a placeholder.
 
 **Preconditions.** A tool is only trainable once its dependency is configured.
 `vaf/whare_wananga/preconditions.py` (`tool_precondition`) maps connection tools to the
@@ -89,7 +91,49 @@ The **core predict-then-verify loop is built** (`vaf/whare_wananga/runner.py`,
 `train_tool()`) for probe-safe tools, verified live, and **wired to the UI**: the
 "Train tool now" button POSTs `train/{name}`, which starts a background job
 (`vaf/whare_wananga/jobs.py`); the dashboard polls `training_status/{name}`, shows the live
-predict-then-verify attempts, and refreshes the record on completion (badge -> "Learned").
+predict-then-verify attempts (stats update during the run, not only at the end), and
+refreshes the record on completion (badge -> "Learned").
+
+The loop is **adaptive**: an initial learning batch (`LEARN_N` = 21 probes) builds the
+tool_knowledge and distils the three baskets, then a **validation batch** (`VALIDATE_N` = 9
+probes) re-predicts each outcome from the learned record. If all nine are predicted correctly, the tool is **confirmed**
+(`status=confirmed`) and training stops. If any prediction is wrong, the runner runs another
+6 learning probes, re-distils, and validates a fresh batch of 9 -- repeating until a full
+9/9 batch passes or `MAX_ROUNDS` (4) is reached (then `status=draft`). Confidence is the
+overall hit rate across all probes. The dashboard banner reflects the current phase
+("Learning" vs. "Validating -- round R/4") and the last validation batch's score.
+
+**The judge.** In the validation phase each call is graded by an **LLM judge** rather than a
+string heuristic: the agent states what it expects, the tool is called, and the judge decides
+`pass` / `fail` from the prediction and the real response. The judge prompt encodes that
+**transient infrastructure problems are not a tool failure** -- a rate limit, quota, timeout,
+or network error returns `pass` (the agent's understanding stands; the environment hiccuped),
+so flaky infrastructure does not block confirmation. Learning probes keep the cheap heuristic
+(their match is only informational). The judge's verdict and one-line reason are stored on each
+validation `predict_record` and streamed to the UI.
+
+**The challenge (final test of the test).** A clean 9/9 only proves the agent can predict probes
+*it chose itself*. So after confirmation a **challenge phase** runs where the **judge invents the
+inputs** (`CHALLENGE_PASS` = 3 scenarios the agent must pass). To pose informed, non-obvious
+challenges the judge is given the tool's own metadata (name, `description`, parameter schema --
+straight from the tool) plus the distilled `aronui` + `tuatea` pitfalls and the already-tried
+inputs (to avoid repeats); it picks a fresh input (respecting the same safety mode), the agent
+predicts the outcome, the tool runs, the judge grades pass/fail. The agent must reach 3 passes to
+be **mastered**. `CHALLENGE_ROUND_FAILS` = 3 fails within a round trigger a re-distil + a fresh
+round; `CHALLENGE_MAX_FAILS` = 10 total fails end the challenge -- the tool then stays `confirmed`
+(from the 9/9) but `challenge_passed=False` (deemed not truly learned). This removes the agent's
+ability to self-select easy probes.
+
+**The training stage.** The dashboard shows a live stage at the bottom: the **agent** on the
+left, the **tool under test** in the middle, and -- only during the validation phase -- the
+**judge** on the right. The agent is the living white dot (shared `AgentAvatar`): it is
+`waiting` (slow morph) at rest and `talking` while it calls the tool. The judge is the same
+avatar **inverted** (a dark dot on a light container -- the negative of the agent): `thinking`
+(focused pulse + glow) while it awaits a call, `talking` while it judges; below it a `pass`
+(green) / `fail` (red) pill and the judge's one-line reason. The tool in the middle is the very
+same tool bubble used in the chat (`ToolMessage`), just smaller, fed by the latest probe's
+args and response. During learning it is just agent -> tool; the judge slides in for the final
+test.
 The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the
 tool being trained plus its connection-class siblings -- e.g. all `whatsapp_*` tools share
 the whatsapp class; non-connection tools are singletons (`preconditions.tool_class`,
@@ -98,7 +142,11 @@ enforced by a guard in the runner). Side-effecting tools are tiered by `side_eff
 -- probed only with invalid/incomplete inputs the tool rejects before acting (no real effect),
 halting if an invalid probe is unexpectedly accepted; **irreversible** tools (e.g. `send_mail`,
 payments, deletion) are **not probed at all** (gated), since one accepted probe would be a real
-irreversible effect. Still pending: the online Teacher, and (optional) real-success observation
+irreversible effect. A sandboxed/ephemeral **executor** can opt out of the error path by
+declaring `whare_wananga_full_probe = True` (e.g. `python_sandbox`: Docker-isolated, the host
+bridge `with_vaf_tools` is opt-in) -- the error path is wrong for a tool whose whole job is to
+*accept and run* input (it would halt the instant a probe is accepted), so it is probed in full
+with harmless, self-contained snippets that leave nothing permanent. Still pending: the online Teacher, and (optional) real-success observation
 for file-writing tools via an isolated context. Training currently runs on the shared agent
 instance.
 
@@ -133,7 +181,12 @@ remain in context via the real tool calls and their results.
 | Path | Role |
 |------|------|
 | `vaf/whare_wananga/store.py` | `tool_knowledge` store + schema (built) |
+| `vaf/whare_wananga/runner.py` | adaptive predict-then-verify loop + LLM judge (built) |
+| `vaf/whare_wananga/jobs.py` | background training jobs + live status (built) |
+| `vaf/whare_wananga/preconditions.py` | trainability + class sandbox resolver (built) |
 | `vaf/whare_wananga/__init__.py` | package exports |
+| `web/components/TrainingDashboard.tsx` | dashboard + live training stage (agent/tool/judge) |
+| `web/components/AgentAvatar.tsx` | shared living-white-dot agent avatar |
 | `docs/ACTION_TAG.md` | the `<Action>` tag and the delivery side |
 
 ## Related
@@ -146,4 +199,4 @@ remain in context via the real tool calls and their results.
 
 ---
 
-*Last updated: 2026-06-03*
+*Last updated: 2026-06-04*

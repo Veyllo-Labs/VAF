@@ -3,7 +3,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     X, Activity, Zap, AlertTriangle, CheckCircle2, Clock, Eye, ShieldAlert, ListChecks, Loader2,
+    Gavel, ArrowRight, XCircle,
 } from 'lucide-react';
+import { AgentAvatar } from '@/components/AgentAvatar';
 
 // Whare Wananga training dashboard.
 // Big panel (Memory-Graph sized) that shows, per tool: status, error rate, predictions,
@@ -30,6 +32,48 @@ interface ToolKnowledge {
 const STATE_LABEL: Record<string, string> = {
     learned: 'Learned', learning: 'Learning', stale: 'Stale', unlearned: 'Not learned',
 };
+
+// Stage helpers are defined at module scope (NOT inside the component): an inline component
+// gets a new identity on every poll, which would remount its subtree — making the ToolMessage
+// bubble replay its entrance animation (appear/disappear) every 1.5s instead of mounting once.
+function StageCol({ label, sub, footer, children }: { label?: React.ReactNode; sub?: string; footer?: React.ReactNode; children: React.ReactNode }) {
+    return (
+        <div className="flex flex-col items-center gap-2">
+            <div className="flex items-center justify-center">{children}</div>
+            {(label || sub || footer) && (
+                <div className="text-center">
+                    {label ? <div className="text-xs font-bold text-gray-800 truncate max-w-[170px]">{label}</div> : null}
+                    {sub ? <div className="text-[10px] text-gray-400">{sub}</div> : null}
+                    {footer}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function Connector({ on }: { on: boolean }) {
+    return <ArrowRight size={22} className={`shrink-0 ${on ? 'text-amber-500 animate-pulse' : 'text-gray-300'}`} />;
+}
+
+// Pull the main string argument (the code/query/etc.) out of the probe's args JSON for display.
+function mainInput(argsJson?: string): string {
+    if (!argsJson) return '';
+    try {
+        const o = JSON.parse(argsJson) as Record<string, unknown>;
+        for (const k of ['code', 'query', 'q', 'text', 'content', 'prompt', 'input', 'command', 'path', 'url']) {
+            const v = o[k];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+        for (const v of Object.values(o)) if (typeof v === 'string' && v.trim()) return v.trim();
+    } catch { /* not JSON */ }
+    return argsJson;
+}
+
+function fmtDur(s?: number | null): string {
+    if (s == null || !isFinite(s) || s < 0) return '—';
+    if (s < 60) return `${Math.round(s)}s`;
+    return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+}
 
 export default function TrainingDashboard({ toolName, onClose, onStateChange }: { toolName: string; onClose: () => void; onStateChange?: (tool: string, state: string) => void }) {
     const [loading, setLoading] = useState(true);
@@ -73,6 +117,10 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                     onStateChange?.(toolName, newState);
                     return;  // finished -> stop polling
                 }
+                // While running, refresh the stored record too so the three baskets appear as
+                // soon as the runner distils them (after the initial learning phase) and update
+                // after each refinement round.
+                if (st && st.state === 'running') await loadRecord();
             } catch { /* ignore transient poll errors */ }
             if (alive) timer = setTimeout(poll, 1500);
         };
@@ -80,13 +128,56 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
         return () => { alive = false; if (timer) clearTimeout(timer); };
     }, [toolName, loadRecord]);
 
-    const success = rec?.success ?? 0;
-    const fail = rec?.fail ?? 0;
-    const totalRuns = success + fail;
-    const errorRate = totalRuns > 0 ? Math.round((fail / totalRuns) * 100) : null;
-    const predicts = rec?.predict_records ?? [];
-    const predHits = predicts.filter((p) => p.match).length;
+    // Live metrics: while a job runs, read from the job's events (the record is only saved at
+    // the end of training); otherwise read from the stored record.
+    const running = job?.state === 'running';
+    const liveEvents = (job?.events ?? []) as Array<{ i?: number; match?: boolean; phase?: string; predicted_outcome?: string; actual_outcome?: string; verdict?: string; reason?: string; intent?: string; actual?: string }>;
+    // Cumulative counters come from the job (full counts, not the capped event list).
+    const attemptsCount = running ? (job?.attempt ?? liveEvents.length) : ((rec?.success ?? 0) + (rec?.fail ?? 0));
+    const failCount = running ? (job?.fails ?? liveEvents.filter((e) => e.actual_outcome === 'error').length) : (rec?.fail ?? 0);
+    const predTotal = running ? (job?.attempt ?? liveEvents.length) : (rec?.predict_records ?? []).length;
+    const hitsCount = running ? (job?.hits ?? liveEvents.filter((e) => e.match).length) : (rec?.predict_records ?? []).filter((p) => p.match).length;
+    const errorRate = attemptsCount > 0 ? Math.round((failCount / attemptsCount) * 100) : null;
+    const confidencePct = running
+        ? (predTotal ? Math.round((hitsCount / predTotal) * 100) : 0)
+        : (rec ? Math.round((rec.confidence ?? 0) * 100) : null);
+    const inValidation = job?.phase === 'validate';
+    const inChallenge = job?.phase === 'challenge';
+    const phaseLabel = inChallenge
+        ? `Challenge — judge poses the test${job?.challenge ? ` (${job.challenge.round_pass ?? 0}/${job.challenge.need ?? 3} passed, ${job.challenge.total_fails ?? 0}/${job.challenge.max_fails ?? 10} fails)` : ''}`
+        : inValidation
+            ? `Validating — round ${job?.round ?? 1}${job?.max_rounds ? `/${job.max_rounds}` : ''}`
+            : 'Learning';
+    const statusLabel = running ? phaseLabel : (STATE_LABEL[state] ?? state);
     const empty = <span className="text-gray-400 italic">— empty —</span>;
+
+    // Training stage: agent -> tool -> judge. The judge appears in the validation phase AND the
+    // challenge phase (both judge-graded); during plain learning it's just agent -> tool.
+    const lastEvent = liveEvents[liveEvents.length - 1];
+    const judgeEvents = liveEvents.filter((e) => e.phase === 'validate' || e.phase === 'challenge');
+    const lastJudge = judgeEvents[judgeEvents.length - 1];
+    const judgeActive = inValidation || inChallenge;
+    const showJudge = judgeActive || judgeEvents.length > 0;
+    const judgeVerdict = lastJudge?.verdict;   // 'pass' | 'fail' | undefined
+    const judgeReason = lastJudge?.reason;
+
+    // Avatar modes (per the agent's animation language):
+    //   Agent  — waiting (rest); talking while it freely calls the tool; thinking while it only
+    //            predicts the judge's fixed input (challenge phase).
+    //   Judge  — inverted avatar; thinking while awaiting; talking while it judges (validate/challenge).
+    const agentMode: 'waiting' | 'talking' | 'thinking' = running ? (inChallenge ? 'thinking' : 'talking') : 'waiting';
+    const judgeMode: 'thinking' | 'talking' = (running && judgeActive) ? 'talking' : 'thinking';
+
+    // Tool bubble (same component as the chat, just smaller): driven by the latest probe.
+    const toolStatus: 'running' | 'completed' | 'error' =
+        running ? 'running' : (lastEvent?.actual_outcome === 'error' ? 'error' : 'completed');
+    const toolArgs = lastEvent?.intent;
+    const toolResult = lastEvent?.actual;
+
+    // Duration: live (now - started_at) while running, total (ended_at - started_at) when done.
+    const durationS = (typeof job?.started_at === 'number')
+        ? ((typeof job?.ended_at === 'number' ? job.ended_at : Date.now() / 1000) - job.started_at)
+        : null;
 
     const Metric = ({ icon, label, value, hint }: { icon: React.ReactNode; label: string; value: React.ReactNode; hint?: string }) => (
         <div className="rounded-xl border border-gray-200 bg-gray-50/60 px-4 py-3">
@@ -136,17 +227,34 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                     {job?.state === 'running' ? (
                         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-2">
                             <Loader2 size={16} className="animate-spin shrink-0" />
-                            <span>Training… attempt {job.attempt ?? 0}/{job.max_attempts ?? '?'} · correct predictions {job.hits ?? 0}</span>
+                            <span>
+                                {phaseLabel} · {job.attempt ?? 0} probes · {job.hits ?? 0} correct
+                                {job.validate ? ` · last batch ${job.validate.hits}/${job.validate.n}` : ''}
+                            </span>
                         </div>
                     ) : job?.state === 'done' ? (
-                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 flex items-center gap-2">
-                            <CheckCircle2 size={16} className="shrink-0" />
-                            <span>Training complete — status: {job.status ?? state}, confidence {Math.round((((job.confidence ?? rec?.confidence) ?? 0) as number) * 100)}%.</span>
+                        <div className={`rounded-xl border px-4 py-3 text-sm flex items-center gap-2 ${job.confirmed && job.challenge_passed && !job.halted ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                            {job.confirmed && job.challenge_passed && !job.halted ? <CheckCircle2 size={16} className="shrink-0" /> : <AlertTriangle size={16} className="shrink-0" />}
+                            <span>
+                                {job.halted
+                                    ? 'Training halted — an invalid probe was unexpectedly accepted (possible side effect); see Tuatea.'
+                                    : (job.confirmed && job.challenge_passed)
+                                        ? `Mastered — confirmed 9/9 and passed the judge's challenge.`
+                                        : job.confirmed
+                                            ? `Learned — confirmed 9/9, but did not pass the judge's challenge (${job.challenge_fails ?? job.challenge?.total_fails ?? 0} fails). Stays confirmed.`
+                                            : `Stopped after ${job.rounds ?? 0} rounds — not fully validated (status ${job.status ?? state}).`}
+                                {' '}Confidence {Math.round((((job.confidence ?? rec?.confidence) ?? 0) as number) * 100)}%.
+                            </span>
                         </div>
                     ) : job?.state === 'skipped' ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
                             <AlertTriangle size={16} className="shrink-0" />
                             <span>Skipped: {job.reason || 'not eligible for training'}.</span>
+                        </div>
+                    ) : job?.state === 'error' ? (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 flex items-center gap-2">
+                            <XCircle size={16} className="shrink-0" />
+                            <span>Stopped — {job.error || 'training failed'}</span>
                         </div>
                     ) : (
                         <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 flex items-center gap-2">
@@ -157,12 +265,12 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
 
                     {/* Metrics */}
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                        <Metric icon={<Activity size={13} />} label="Status" value={STATE_LABEL[state] ?? state} />
-                        <Metric icon={<CheckCircle2 size={13} />} label="Confidence" value={rec ? `${Math.round((rec.confidence ?? 0) * 100)}%` : '—'} />
-                        <Metric icon={<Clock size={13} />} label="Duration" value="—" hint="live during a run" />
-                        <Metric icon={<Zap size={13} />} label="Uses" value={rec?.uses ?? 0} />
-                        <Metric icon={<AlertTriangle size={13} />} label="Error rate" value={errorRate === null ? '—' : `${errorRate}%`} hint={totalRuns ? `${fail}/${totalRuns} failed` : 'no runs yet'} />
-                        <Metric icon={<CheckCircle2 size={13} />} label="Predictions" value={predicts.length ? `${predHits}/${predicts.length}` : '—'} hint="correct / total" />
+                        <Metric icon={<Activity size={13} />} label="Status" value={statusLabel} />
+                        <Metric icon={<CheckCircle2 size={13} />} label="Confidence" value={confidencePct === null ? '—' : `${confidencePct}%`} />
+                        <Metric icon={<Clock size={13} />} label="Duration" value={fmtDur(durationS)} hint={running ? 'running' : (durationS != null ? 'total' : '')} />
+                        <Metric icon={<Zap size={13} />} label="Uses" value={attemptsCount} />
+                        <Metric icon={<AlertTriangle size={13} />} label="Error rate" value={errorRate === null ? '—' : `${errorRate}%`} hint={attemptsCount ? `${failCount}/${attemptsCount} failed` : 'no runs yet'} />
+                        <Metric icon={<CheckCircle2 size={13} />} label="Predictions" value={predTotal ? `${hitsCount}/${predTotal}` : '—'} hint="correct / total" />
                     </div>
 
                     {/* Error-rate / progress graph (placeholder until the runner streams attempts) */}
@@ -232,6 +340,98 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                     : null}
                             </Facet>
                         </div>
+                    </div>
+
+                    {/* Training stage — agent learns the tool; in the final test a judge grades
+                        each call. Agent (left) -> Tool (middle) -> Judge (right, validation only). */}
+                    <div className="rounded-xl border border-gray-200 bg-gradient-to-b from-gray-50 to-white p-5">
+                        <div className="text-[11px] uppercase tracking-wide font-semibold text-gray-500 mb-4 flex items-center gap-1.5">
+                            <Activity size={13} /> Training stage
+                            {running && <span className="text-gray-400 normal-case font-normal">· {phaseLabel}</span>}
+                            {showJudge && <span className="ml-auto text-gray-400 normal-case font-normal flex items-center gap-1"><Gavel size={11} /> final test — the judge decides pass / fail</span>}
+                        </div>
+                        <div className="flex items-center justify-center gap-2 md:gap-4">
+                            {/* Agent — the learner (living white dot). waiting at rest, talking while it calls tools. */}
+                            <StageCol label="Agent" sub={running ? 'calling tool' : 'learning'}>
+                                <div className="h-20 w-20 flex items-center justify-center">
+                                    <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={agentMode} /></div>
+                                </div>
+                            </StageCol>
+
+                            <Connector on={running} />
+
+                            {/* Tool under test — a FIXED-size card (styled like the chat tool bubble:
+                                status dot, name, output). Always the same size; only the content
+                                updates and the output area scrolls, so it never jumps per call. */}
+                            <StageCol>
+                                <div className="w-[260px] h-[184px] rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden flex flex-col">
+                                    <div className="flex items-center gap-2 p-2.5 border-b border-gray-100 shrink-0">
+                                        <div className="relative flex h-7 w-7 items-center justify-center rounded-full border bg-gray-100 shrink-0">
+                                            {toolStatus === 'running' ? (
+                                                <span className="animate-pulse" style={{ width: 10, height: 10, backgroundColor: '#111827', borderRadius: '50%', boxShadow: '0 0 6px 2px rgba(0,0,0,0.25)' }} />
+                                            ) : toolStatus === 'error' ? (
+                                                <XCircle size={16} className="text-rose-500" />
+                                            ) : (
+                                                <CheckCircle2 size={16} className="text-emerald-500" />
+                                            )}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="text-xs font-semibold text-gray-800 truncate">{toolName}</div>
+                                            <div className="text-[10px] text-gray-400">{toolStatus === 'running' ? 'Running…' : toolStatus === 'error' ? 'Failed' : 'Completed'}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-1.5 font-mono text-[10px] leading-relaxed">
+                                        {toolArgs ? (
+                                            <div className="rounded border border-gray-200 bg-gray-50 px-1.5 py-1 text-gray-700 break-all">{mainInput(toolArgs)}</div>
+                                        ) : null}
+                                        {toolResult ? (
+                                            <div className="rounded border border-gray-200 bg-gray-50 px-1.5 py-1 text-gray-600 whitespace-pre-wrap break-all">{toolResult}</div>
+                                        ) : (!toolArgs ? <div className="text-gray-300 italic">idle</div> : null)}
+                                    </div>
+                                </div>
+                            </StageCol>
+
+                            {/* Judge — only in the validation (final-test) phase. Inverted avatar:
+                                thinking while awaiting, talking while it judges. */}
+                            {showJudge && (
+                                <>
+                                    <Connector on={inValidation} />
+                                    <StageCol
+                                        label="Judge"
+                                        footer={
+                                            <div className="mt-0.5 flex items-center justify-center gap-1">
+                                                {judgeVerdict === 'pass' ? (
+                                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600"><CheckCircle2 size={12} /> pass</span>
+                                                ) : judgeVerdict === 'fail' ? (
+                                                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-rose-600"><XCircle size={12} /> fail</span>
+                                                ) : (
+                                                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400"><Gavel size={11} /> {inValidation ? 'judging…' : 'pass / fail'}</span>
+                                                )}
+                                            </div>
+                                        }
+                                    >
+                                        <div className="h-20 w-20 flex items-center justify-center">
+                                            <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={judgeMode} invert /></div>
+                                        </div>
+                                    </StageCol>
+                                </>
+                            )}
+                        </div>
+                        {showJudge && judgeReason && (
+                            <div className="mt-3 text-center text-[11px] text-gray-500 italic max-w-xl mx-auto">“{judgeReason}”</div>
+                        )}
+                        {job?.challenge ? (
+                            <div className="mt-4 text-center text-[11px] text-gray-500">
+                                Judge challenge: <span className="font-bold text-gray-800">{job.challenge.round_pass ?? 0}/{job.challenge.need ?? 3}</span> passed
+                                {' · '}{job.challenge.total_fails ?? 0}/{job.challenge.max_fails ?? 10} fails
+                                {job.challenge.passed ? ' — mastered.' : ''}
+                            </div>
+                        ) : job?.validate ? (
+                            <div className="mt-4 text-center text-[11px] text-gray-500">
+                                Last validation batch: <span className="font-bold text-gray-800">{job.validate.hits}/{job.validate.n}</span> predicted correctly
+                                {job.validate.hits === job.validate.n ? ' — tool confirmed.' : ' — refining and retrying.'}
+                            </div>
+                        ) : null}
                     </div>
 
                     {error && <div className="text-sm text-rose-600">Error: {error}</div>}

@@ -6,6 +6,11 @@ The avatar is **not an icon, not a robot, not a symbol** — it is the agent its
 A living, organic dot that shows the user what the agent is doing internally right now.  
 Like a facial expression, but abstract.
 
+> **Brand & ownership:** the agent avatar — the living-dot visual identity and its animated
+> states — is a brand asset of **Veyllo GmbH**. The source code is available under the
+> repository license; the brand/identity itself is reserved (see `LICENSE`, section
+> "Trademarks and Brand Assets").
+
 ---
 
 ## Visual States

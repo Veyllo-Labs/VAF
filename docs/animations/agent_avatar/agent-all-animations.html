@@ -139,7 +139,7 @@
   .scaler { --scale:1; position:relative; flex:none; width:calc(36px*var(--scale)); height:calc(36px*var(--scale)); }
   .avatar { position:absolute; top:0; left:0; transform:scale(var(--scale)); transform-origin:top left; width:36px; height:36px; display:flex; align-items:center; justify-content:center; }
   .avatar .body { position:absolute; inset:0; z-index:0; background:#111827; border-radius:12px; transform-origin:center bottom; }
-  .avatar.dim .body { background:#e5e7eb; }
+  .avatar.dim .body { background:#e5e7eb; box-shadow: 0 0 0 1px rgba(0,0,0,.22), 0 1px 4px rgba(0,0,0,.08); }
   .avatar .aura { position:absolute; z-index:1; width:20px; height:20px; border-radius:50%; background:#fff; opacity:0; filter:blur(2.5px); }
   .avatar.idle .aura { opacity:.13; } .avatar.dim .aura { opacity:0; }
   .avatar .dot { position:relative; z-index:2; width:14px; height:14px; border-radius:50%; background:#fff; transform-origin:center; }
@@ -199,26 +199,26 @@
     35%{opacity:.82;filter:brightness(.85);} 55%{opacity:1;filter:brightness(1.3);background-position:0 0,-4px 2px;}
     70%{opacity:.9;filter:brightness(1);} 85%{opacity:1;filter:brightness(1.55);} 100%{opacity:.92;filter:brightness(1);background-position:0 0,0 0;}
   }
-  @keyframes eyeTv { 0%,100%{transform:translate(-3px,0) scaleY(1);} 48%{transform:translate(-3px,0) scaleY(1);} 54%{transform:translate(-3px,0) scaleY(.18);} 58%{transform:translate(-3px,0) scaleY(1);} }
+  @keyframes eyeTv { 0%,100%{transform:translate(0,0) scaleY(1);} 14%,48%{transform:translate(-3px,0) scaleY(1);} 54%{transform:translate(-3px,0) scaleY(.18);} 58%,86%{transform:translate(-3px,0) scaleY(1);} }
   @keyframes glowFlickerCool { 0%,100%{box-shadow:0 0 8px 2px rgba(150,190,255,.3);} 30%{box-shadow:0 0 12px 3px rgba(150,190,255,.5);} 55%{box-shadow:0 0 7px 2px rgba(150,190,255,.25);} 85%{box-shadow:0 0 16px 4px rgba(185,212,255,.6);} }
   @keyframes bodySip { 0%,42%,100%{transform:translate(0,0) rotate(0);} 22%{transform:translate(22px,2px) rotate(8deg);} 32%{transform:translate(22px,2px) rotate(8deg);} 42%{transform:translate(0,0) rotate(0);} 50%{transform:translate(0,-3px) scale(.96,1.08);} 58%{transform:translate(0,0);} }
   @keyframes eyeSip { 0%,42%,100%{transform:translate(0,0) scaleY(1);} 12%{transform:translate(2px,3px) scaleY(1);} 22%{transform:translate(3px,4px) scaleY(.5);} 32%{transform:translate(3px,4px) scaleY(.5);} 42%{transform:translate(0,0) scaleY(1);} }
   @keyframes awaySteam { 0%{transform:translateY(0) scaleX(1);opacity:0;} 25%{opacity:.55;} 100%{transform:translateY(-20px) scaleX(.5);opacity:0;} }
   @keyframes bodyJuggle { 0%,100%{transform:translateX(-2px);} 50%{transform:translateX(2px);} }
-  @keyframes eyeTrackUp { 0%,100%{transform:translate(-2px,-3px);} 50%{transform:translate(2px,-3px);} }
+  @keyframes eyeTrackUp { 0%,100%{transform:translate(0,0);} 18%{transform:translate(-2px,-3px);} 50%{transform:translate(2px,-3px);} 82%{transform:translate(-2px,-3px);} }
   @keyframes awayShower { 0%{transform:translate(12px,0);} 30%{transform:translate(6px,-36px);} 50%{transform:translate(-6px,-40px);} 70%{transform:translate(-12px,-4px);} 85%{transform:translate(0,2px);} 100%{transform:translate(12px,0);} }
   @keyframes bodyGroove { 0%,100%{transform:rotate(-4deg) translateY(0);} 25%{transform:rotate(-4deg) translateY(-3px);} 50%{transform:rotate(4deg) translateY(0);} 75%{transform:rotate(4deg) translateY(-3px);} }
-  @keyframes eyeGroove { 0%,100%{transform:translate(-1px,0);} 50%{transform:translate(1px,0);} }
+  @keyframes eyeGroove { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-1px,0);} 50%{transform:translate(1px,0);} 80%{transform:translate(-1px,0);} }
   @keyframes awayNote { 0%{transform:translate(0,0) rotate(-8deg);opacity:0;} 20%{opacity:.85;} 100%{transform:translate(16px,-30px) rotate(12deg);opacity:0;} }
   @keyframes bodyBallWatch { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-1px);} }
-  @keyframes eyeBall { 0%,100%{transform:translate(3px,-2px);} 50%{transform:translate(3px,3px);} }
+  @keyframes eyeBall { 0%,100%{transform:translate(0,0);} 18%{transform:translate(3px,-2px);} 50%{transform:translate(3px,3px);} 82%{transform:translate(3px,-2px);} }
   @keyframes awayBounce { 0%,100%{transform:translateY(-34px) scaleY(1.12) scaleX(.9);} 45%{transform:translateY(0) scaleY(1) scaleX(1);} 50%{transform:translateY(2px) scaleY(.65) scaleX(1.35);} 55%{transform:translateY(0) scaleY(1) scaleX(1);} }
   @keyframes bodyGaze { 0%,100%{transform:rotate(-4deg);} 50%{transform:rotate(-2deg);} }
-  @keyframes eyeGaze { 0%,100%{transform:translate(-2px,-4px);} 50%{transform:translate(2px,-4px);} }
+  @keyframes eyeGaze { 0%,100%{transform:translate(0,0);} 18%{transform:translate(-2px,-4px);} 50%{transform:translate(2px,-4px);} 82%{transform:translate(-2px,-4px);} }
   @keyframes awayTwinkle { 0%,100%{opacity:.25;transform:scale(.7);} 50%{opacity:1;transform:scale(1.3);} }
   @keyframes awayShoot { 0%,74%,100%{opacity:0;transform:translate(0,0) rotate(25deg);} 80%{opacity:.9;} 92%{opacity:0;transform:translate(82px,40px) rotate(25deg);} }
   @keyframes bodyNap { 0%,100%{transform:translateY(2px) scale(1.03,.96);} 50%{transform:translateY(0) scale(.99,1.05);} }
-  @keyframes eyeNap { 0%,100%{transform:translateY(1px) scaleY(.12);} 50%{transform:translateY(1px) scaleY(.17);} }
+  @keyframes eyeNap { 0%,100%{transform:translateY(1px) scaleY(1);} 22%{transform:translateY(1px) scaleY(.12);} 78%{transform:translateY(1px) scaleY(.16);} }
   @keyframes awayZzz { 0%{transform:translate(0,0) scale(.6);opacity:0;} 18%{opacity:.85;} 100%{transform:translate(14px,-26px) scale(1.2);opacity:0;} }
 
   /* Aktivitaet */
@@ -227,18 +227,18 @@
   @keyframes ringExpand { 0%{transform:scale(.3);opacity:0;} 30%{opacity:.55;} 100%{transform:scale(1.7);opacity:0;} }
   @keyframes iPulse { 0%,100%{opacity:.6;transform:scale(1);} 50%{opacity:1;transform:scale(1.12);} }
   @keyframes bSearch { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(0);} }
-  @keyframes eSearch { 0%,100%{transform:translate(2px,-1px);} 50%{transform:translate(3px,2px);} }
+  @keyframes eSearch { 0%,100%{transform:translate(0,0);} 15%{transform:translate(2px,-1px);} 50%{transform:translate(3px,2px);} 85%{transform:translate(2px,-1px);} }
   @keyframes iLens { 0%{transform:translate(0,0);} 25%{transform:translate(38px,2px);} 50%{transform:translate(8px,22px);} 75%{transform:translate(44px,24px);} 100%{transform:translate(0,0);} }
   @keyframes bWrite { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-.5px);} }
-  @keyframes eWrite { 0%,100%{transform:translate(2px,1px);} 30%{transform:translate(3px,1px);} 60%{transform:translate(1px,1px);} }
+  @keyframes eWrite { 0%,100%{transform:translate(0,0);} 15%{transform:translate(2px,1px);} 35%{transform:translate(3px,1px);} 60%{transform:translate(1px,1px);} 85%{transform:translate(2px,1px);} }
   @keyframes iType { 0%{width:0;} 70%{width:48px;} 100%{width:48px;} }
   @keyframes bExec { 0%,100%{transform:translate(0,0);} 25%{transform:translate(-.6px,.4px);} 50%{transform:translate(.5px,-.3px);} 75%{transform:translate(-.4px,-.4px);} }
   @keyframes eExec { 0%,100%{transform:scale(1);} 50%{transform:scale(1.1);} }
   @keyframes bBrowse { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(0);} }
-  @keyframes eBrowse { 0%,100%{transform:translate(3px,0);} 50%{transform:translate(2px,0);} }
+  @keyframes eBrowse { 0%,100%{transform:translate(0,0);} 18%{transform:translate(3px,0);} 50%{transform:translate(2px,0);} 82%{transform:translate(3px,0);} }
   @keyframes iGlobe { from{background-position:0 0;} to{background-position:64px 0;} }
   @keyframes bAbsorb { 0%,100%{transform:scale(1,1);} 50%{transform:scale(1.05,.95);} }
-  @keyframes eUp { 0%,100%{transform:translate(0,-3px);} 50%{transform:translate(0,-2px);} }
+  @keyframes eUp { 0%,100%{transform:translate(0,0);} 25%{transform:translate(0,-3px);} 75%{transform:translate(0,-2px);} }
   @keyframes pktDrop { 0%{transform:translateY(-52px);opacity:0;} 15%{opacity:1;} 80%{opacity:1;} 100%{transform:translateY(0);opacity:0;} }
   @keyframes pktRise { 0%{transform:translateY(0);opacity:0;} 15%{opacity:1;} 80%{opacity:1;} 100%{transform:translateY(-52px);opacity:0;} }
   @keyframes bSuccess { 0%,100%{transform:translateY(0) scale(1,1);} 20%{transform:translateY(0) scale(1.1,.9);} 40%{transform:translateY(-8px) scale(.9,1.1);} 60%{transform:translateY(0) scale(1.08,.92);} 75%{transform:translateY(0) scale(1,1);} }
@@ -253,11 +253,11 @@
   @keyframes eAsk { 0%,100%{transform:scale(1);} 50%{transform:scale(1.12);} }
   @keyframes iAskBob { 0%,100%{transform:translateY(0);opacity:.8;} 50%{transform:translateY(-3px);opacity:1;} }
   @keyframes bBlocked { 0%,100%{transform:translateX(0);} 20%{transform:translateX(8px);} 30%{transform:translateX(5px) scaleX(.94);} 40%{transform:translateX(0);} 55%{transform:translateX(8px);} 65%{transform:translateX(5px) scaleX(.94);} 75%{transform:translateX(0);} }
-  @keyframes eBlocked { 0%,100%{transform:translate(3px,0);} 50%{transform:translate(2px,0);} }
+  @keyframes eBlocked { 0%,100%{transform:translate(0,0);} 18%{transform:translate(3px,0);} 50%{transform:translate(2px,0);} 82%{transform:translate(3px,0);} }
   @keyframes bWake { 0%{transform:scale(0);opacity:0;} 40%{transform:scale(.2);opacity:.3;} 60%{transform:scale(1.12);opacity:1;} 75%{transform:scale(.96);} 85%{transform:scale(1);} 100%{transform:scale(1);} }
   @keyframes eWake { 0%,55%{transform:scaleY(0);} 70%{transform:scaleY(1.2);} 80%{transform:scaleY(1);} 100%{transform:scaleY(1);} }
   @keyframes bConnect { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(0);} }
-  @keyframes eConnect { 0%,100%{transform:translate(3px,0) scaleY(1);} 70%{transform:translate(3px,0) scaleY(1);} 76%{transform:translate(3px,0) scaleY(.15);} 82%{transform:translate(3px,0) scaleY(1);} }
+  @keyframes eConnect { 0%,100%{transform:translate(0,0) scaleY(1);} 14%,70%{transform:translate(3px,0) scaleY(1);} 76%{transform:translate(3px,0) scaleY(.15);} 82%,90%{transform:translate(3px,0) scaleY(1);} }
   @keyframes iNode { 0%,100%{opacity:.5;transform:scale(1);} 50%{opacity:1;transform:scale(1.2);} }
   @keyframes iDash { from{background-position:0 0;} to{background-position:10px 0;} }
   @keyframes bOffline { 0%,100%{transform:translateY(0);} 50%{transform:translateY(.5px);} }
@@ -268,20 +268,20 @@
   @keyframes bShutdown { 0%,50%{transform:scaleX(1) scaleY(1);opacity:1;} 68%{transform:scaleX(1.05) scaleY(.05);opacity:1;} 85%{transform:scaleX(.06) scaleY(.05);opacity:.9;} 100%{transform:scaleX(0) scaleY(0);opacity:0;} }
   @keyframes eShutdown { 0%,50%{transform:scaleY(1);opacity:1;} 64%{transform:scaleY(.08);opacity:1;} 80%{transform:scale(.3);opacity:.8;} 100%{transform:scale(0);opacity:0;} }
   @keyframes bDelegate { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-3px) scaleX(1.05);} 30%{transform:translateX(0);} }
-  @keyframes eDelegate { 0%,100%{transform:translate(2px,0);} 50%{transform:translate(3px,0);} }
+  @keyframes eDelegate { 0%,100%{transform:translate(0,0);} 18%{transform:translate(2px,0);} 50%{transform:translate(3px,0);} 82%{transform:translate(2px,0);} }
   @keyframes iSpawn { 0%{transform:translate(0,0) scale(0);opacity:0;} 20%{transform:translate(6px,0) scale(.5);opacity:1;} 60%{transform:translate(46px,-4px) scale(1);} 85%{transform:translate(46px,-4px) scale(1);opacity:1;} 100%{transform:translate(46px,-4px) scale(1);opacity:0;} }
   @keyframes bHandoff { 0%,100%{transform:rotate(0);} 30%{transform:rotate(3deg);} 60%{transform:rotate(0);} }
-  @keyframes eHandoff { 0%,100%{transform:translate(2px,0);} 50%{transform:translate(3px,1px);} }
+  @keyframes eHandoff { 0%,100%{transform:translate(0,0);} 18%{transform:translate(2px,0);} 50%{transform:translate(3px,1px);} 82%{transform:translate(2px,0);} }
   @keyframes iToken { 0%{transform:translate(0,0);opacity:0;} 12%{opacity:1;} 50%{transform:translate(34px,-12px);} 88%{transform:translate(64px,0);opacity:1;} 100%{transform:translate(64px,0);opacity:0;} }
   @keyframes iPeerRecv { 0%,80%,100%{transform:scale(1);} 88%{transform:scale(1.4);} 94%{transform:scale(1);} }
   @keyframes bLearn { 0%,100%{transform:scale(1,1);} 88%{transform:scale(1.08,.92);} 94%{transform:scale(.97,1.05);} }
-  @keyframes eLearn { 0%,100%{transform:scale(1);} 50%{transform:scale(1.15);} 90%{transform:scale(1.3);} }
+  @keyframes eLearn { 0%,100%{transform:scale(1);} 50%{transform:scale(1.05);} 90%{transform:scale(1.1);} }
   @keyframes iAbsorb { 0%{transform:translate(var(--dx),var(--dy)) scale(1);opacity:0;} 20%{opacity:1;} 100%{transform:translate(0,0) scale(.3);opacity:0;} }
   @keyframes bRemember { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-1px);} }
-  @keyframes eRemember { 0%,100%{transform:translate(0,-3px);} 50%{transform:translate(-2px,-4px);} }
+  @keyframes eRemember { 0%,100%{transform:translate(0,0);} 18%{transform:translate(0,-3px);} 50%{transform:translate(-2px,-4px);} 82%{transform:translate(0,-3px);} }
   @keyframes iMem { 0%,100%{opacity:.2;box-shadow:none;} 30%{opacity:1;box-shadow:0 0 6px 1px var(--glow);} }
   @keyframes bPlan { 0%,100%{transform:rotate(1deg);} 50%{transform:rotate(0);} }
-  @keyframes ePlan { 0%{transform:translate(1px,0);} 80%{transform:translate(4px,0);} 100%{transform:translate(1px,0);} }
+  @keyframes ePlan { 0%,100%{transform:translate(0,0);} 18%{transform:translate(1px,0);} 60%{transform:translate(4px,0);} 85%{transform:translate(1px,0);} }
   @keyframes iStep { 0%{opacity:0;transform:scale(.4);} 12%{opacity:1;transform:scale(1);} 82%{opacity:1;transform:scale(1);} 100%{opacity:0;transform:scale(.9);} }
 
   /* ============================================================
@@ -306,7 +306,7 @@
 
   /* ---- AWAY: pro Szene ---- */
   .scene.newspaper .agent { left:64px; top:48px; } .scene.newspaper .body { animation: bodyRead 3.6s ease-in-out infinite; } .scene.newspaper .eye { animation: eyeRead 2.6s ease-in-out infinite; }
-  @keyframes eyeRead { 0%{transform:translate(-3px,1px) scaleY(1);} 40%{transform:translate(3px,1px) scaleY(1);} 45%{transform:translate(-3px,2px) scaleY(1);} 82%{transform:translate(3px,2px) scaleY(1);} 88%{transform:translate(0,1px) scaleY(.15);} 92%{transform:translate(0,1px) scaleY(1);} 100%{transform:translate(-3px,1px) scaleY(1);} }
+  @keyframes eyeRead { 0%,100%{transform:translate(0,0) scaleY(1);} 12%{transform:translate(-3px,1px) scaleY(1);} 40%{transform:translate(3px,1px) scaleY(1);} 66%{transform:translate(-3px,2px) scaleY(1);} 78%{transform:translate(0,1px) scaleY(.15);} 82%{transform:translate(0,1px) scaleY(1);} 90%{transform:translate(-2px,1px) scaleY(1);} }
   .scene.newspaper .np { position:absolute; left:58px; top:80px; width:84px; height:46px; z-index:3; background:repeating-linear-gradient(0deg,rgba(40,48,66,.55) 0 1.5px,transparent 1.5px 6px),var(--paper); border-radius:3px; border:1px solid var(--paper-edge); box-shadow:0 3px 8px rgba(0,0,0,.35); transform-origin:left center; animation: awayPageFlip 5s ease-in-out infinite; }
   .scene.newspaper .np .mh { position:absolute; top:4px; left:6px; right:6px; height:5px; background:#2a3142; border-radius:1px; }
   .scene.newspaper .np::after { content:""; position:absolute; top:14px; bottom:4px; left:50%; width:1px; background:rgba(40,48,66,.4); }
@@ -444,10 +444,13 @@
   /* ---- Transition-Player ---- */
   .tpanel { background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:16px; padding:18px; }
   body.lite .tpanel { background:#fff; border-color:#dde2ea; }
-  .tslot { position:relative; height:300px; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:12px; }
-  .titem { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) scale(1); opacity:1; filter:blur(0);
-    transition: opacity .5s ease, transform .55s cubic-bezier(.34,1.4,.5,1), filter .5s ease; }
-  .titem.in, .titem.out { opacity:0; transform:translate(-50%,-50%) scale(.45); filter:blur(5px); }
+  .tstage { position:relative; min-height:300px; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:12px; padding:16px 0; }
+  /* the agent is ONE persistent element that glides between scene positions, never destroyed */
+  #tscene .agent { z-index:3; transition: left .6s cubic-bezier(.5,0,.2,1), top .6s cubic-bezier(.5,0,.2,1); }
+  #tscene .body, #tscene .eye { transition: transform .3s ease; }            /* ease to neutral when animation is (un)set */
+  .scene.gliding .body, .scene.gliding .eye { animation: none !important; }  /* calm pose while gliding -> no restart jitter */
+  /* only the surroundings cross-fade; the agent itself never fades */
+  #tprops { position:absolute; inset:0; transition: opacity .3s ease; }
   .tmeta { text-align:center; margin-top:10px; font-size:13px; }
   .tmeta b { color:#fff; } body.lite .tmeta b { color:#11151c; }
   .tmeta .nx { color:var(--text-dim); font-size:12px; }
@@ -485,14 +488,21 @@
 <main>
   <section>
     <h2>0 · Transitions — the transition player</h2>
-    <p class="lead">Runs through a random list of ALL states and animates from each into the next — that's how you see the transitions. Every state collapses to a soft point and blooms into the next.</p>
+    <p class="lead">One continuous agent glides from one activity to the next — only the surroundings cross-fade. It runs through the away &amp; activity states; the agent (body + eye) is never swapped, so it reads as a single character, not a slideshow.</p>
     <div class="tpanel">
-      <div class="tslot" id="tslot"></div>
+      <div class="tstage" id="tstage">
+        <div class="scene-scaler" style="--s:1.55;">
+          <div class="scene away newspaper" id="tscene">
+            <div class="agent"><div class="body"><div class="eye"></div></div></div>
+            <div class="tprops" id="tprops"></div>
+          </div>
+        </div>
+      </div>
       <div class="tmeta"><b id="t-now">—</b> &nbsp;·&nbsp; <span class="nx">next: <span id="t-next">—</span></span></div>
       <div class="tctrl">
         <button id="t-play">Pause</button>
         <button id="t-shuffle">Reshuffle</button>
-        <label>Duration per state <input id="t-speed" type="range" min="1200" max="5000" step="200" value="2600" /><span id="t-speed-val">2.6s</span></label>
+        <label>Duration per state <input id="t-speed" type="range" min="1600" max="5000" step="200" value="2600" /><span id="t-speed-val">2.6s</span></label>
       </div>
     </div>
   </section>
@@ -594,41 +604,53 @@
   // Aktivitaet (gruppiert)
   grouped(document.getElementById('g-act'), ACT, ([t,l,s,html])=>cell(scene('',t,1.05,html),l,s));
 
-  // ---------- TRANSITION-PLAYER: jede Animation -> jede andere ----------
-  const PLAYLIST = [];
-  BASE.forEach(([cls,l]) => PLAYLIST.push({ m:'av', cls, label:l }));
-  EMO.forEach(([g,items]) => items.forEach(([cls,l]) => PLAYLIST.push({ m:'av', cls, label:l })));
-  AWAY.forEach(([t,l,s,html]) => PLAYLIST.push({ m:'sc', marker:'away', type:t, html, label:l }));
-  ACT.forEach(([g,items]) => items.forEach(([t,l,s,html]) => PLAYLIST.push({ m:'sc', marker:'', type:t, html, label:l })));
+  // ---------- TRANSITION PLAYER: one persistent agent, only the surroundings cross-fade ----------
+  // Only the body+eye scene states (away + activity) can share a single, continuous agent.
+  const TPLAY = [];
+  AWAY.forEach(([t,l,s,html]) => TPLAY.push({ marker:'away', type:t, label:l, props: html.split(AGENT).join('') }));
+  ACT.forEach(([g,items]) => items.forEach(([t,l,s,html]) => TPLAY.push({ marker:'', type:t, label:l, props: html.split(AGENT).join('') })));
 
   function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
-  function renderItem(it){
-    if (it.m==='av') return avatar(it.cls, 3.4);
-    return scene(it.marker, it.type, 1.5, it.html, document.body.classList.contains('lite'));
-  }
 
-  const tslot=document.getElementById('tslot'), tNow=document.getElementById('t-now'), tNext=document.getElementById('t-next');
+  const tscene=document.getElementById('tscene'), tprops=document.getElementById('tprops');
+  const tNow=document.getElementById('t-now'), tNext=document.getElementById('t-next');
   const tPlayBtn=document.getElementById('t-play'), tShufBtn=document.getElementById('t-shuffle'),
         tSpeed=document.getElementById('t-speed'), tSpeedVal=document.getElementById('t-speed-val');
-  let order=shuffle(PLAYLIST.slice()), tIdx=0, tTimer=null, tCur=null, tPlaying=false, tHold=2600;
+  let order=shuffle(TPLAY.slice()), tIdx=0, tTimer=null, tPlaying=false, tHold=2600;
+
+  function applyState(it){
+    const lite = document.body.classList.contains('lite');
+    tscene.className = 'scene ' + (it.marker ? it.marker+' ' : '') + it.type + (lite ? ' light' : '');
+    tprops.innerHTML = it.props;
+    tNow.textContent = it.label;
+    tNext.textContent = order[(tIdx+1) % order.length].label;
+  }
+  applyState(order[0]);   // initial, no fade
 
   function tStep(){
-    const it = order[tIdx % order.length];
-    const node = document.createElement('div'); node.className='titem in';
-    node.appendChild(renderItem(it)); tslot.appendChild(node);
-    requestAnimationFrame(()=>requestAnimationFrame(()=>node.classList.remove('in')));  // -> blendet ein
-    if (tCur){ const prev=tCur; prev.classList.add('out'); setTimeout(()=>prev.remove(),580); }  // alter -> blendet aus
-    tCur=node;
-    tNow.textContent=it.label; tNext.textContent=order[(tIdx+1)%order.length].label;
     tIdx++;
-    tTimer=setTimeout(tStep, tHold);
+    const it = order[tIdx % order.length];
+    const lite = document.body.classList.contains('lite');
+    tprops.style.opacity = '0';                                   // step 1: old surroundings fade out (agent stays visible)
+    setTimeout(()=>{                                              // step 2: agent glides to the new spot in a calm/neutral pose, no props yet
+      tscene.className = 'scene gliding ' + (it.marker ? it.marker+' ' : '') + it.type + (lite ? ' light' : '');
+      tprops.innerHTML = '';
+      tNow.textContent = it.label;
+      tNext.textContent = order[(tIdx+1) % order.length].label;
+    }, 260);
+    setTimeout(()=>{                                             // step 3: agent has arrived -> start its animation + bring surroundings in
+      tscene.classList.remove('gliding');
+      tprops.innerHTML = it.props;
+      tprops.style.opacity = '1';
+    }, 900);
+    tTimer = setTimeout(tStep, tHold);
   }
-  function tPlay(){ if(tPlaying) return; tPlaying=true; tPlayBtn.textContent='Pause'; tStep(); }
+  function tPlay(){ if(tPlaying) return; tPlaying=true; tPlayBtn.textContent='Pause'; tTimer=setTimeout(tStep, tHold); }
   function tPause(){ tPlaying=false; tPlayBtn.textContent='Play'; if(tTimer){clearTimeout(tTimer); tTimer=null;} }
   tPlayBtn.addEventListener('click', ()=> tPlaying ? tPause() : tPlay());
-  tShufBtn.addEventListener('click', ()=>{ order=shuffle(PLAYLIST.slice()); tIdx=0; });
+  tShufBtn.addEventListener('click', ()=>{ order=shuffle(TPLAY.slice()); tIdx=0; applyState(order[0]); });
   tSpeed.addEventListener('input', ()=>{ tHold=parseInt(tSpeed.value,10); tSpeedVal.textContent=(tHold/1000).toFixed(1)+'s'; });
-  tPlay();  // Autostart
+  tPlay();  // autostart
 
   // Hell/Dunkel global
   let lite=false;

@@ -236,13 +236,50 @@
   82%  { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
   100% { transform: translateY(0)    scale(1,1);     }
 }
+/* Energy rings fire on the LANDING (60% = dot back at centre) so they sync with the dot. */
 @keyframes emoRing {
-  0%   { transform: scale(0.35); opacity: 0; }
-  20%  { opacity: 0; }
-  32%  { opacity: .55; }
-  100% { transform: scale(2.8);  opacity: 0; }
+  0%, 52% { transform: scale(0.30); opacity: 0; }
+  60%     { transform: scale(0.55); opacity: .6; }
+  100%    { transform: scale(2.60); opacity: 0; }
 }
 @keyframes emoOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Subtle idle wink — clip-path only, so it doesn't disturb the dot's transform animation. */
+@keyframes wink {
+  0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
+  95%           { clip-path: inset(42% 0% 42% 0%); }
+}
+
+/* Body keyframes (NEW, subtle) — the dark square reacts along with the dot's emotion. */
+@keyframes bodySurprised { 0%,100%{transform:translateY(0) scale(1,1);} 6%{transform:translateY(1px) scale(1.04,.96);} 16%{transform:translateY(-3px) scale(.96,1.05);} 34%{transform:translateY(-2px) scale(1.02,.99);} 60%{transform:translateY(0) scale(1,1);} }
+@keyframes bodyCurious   { 0%,100%{transform:rotate(0);} 22%{transform:rotate(-4deg);} 46%{transform:rotate(0);} 70%{transform:rotate(4deg);} 90%{transform:rotate(0);} }
+@keyframes bodyConfused  { 0%,100%{transform:rotate(0);} 14%{transform:rotate(-3deg);} 30%{transform:rotate(2deg);} 52%{transform:rotate(2deg);} 72%{transform:rotate(-1deg);} }
+@keyframes bodyIdea      { 0%,40%{transform:translateY(1px) scale(1.02,.98);} 50%{transform:translateY(-2px) scale(.98,1.04);} 64%{transform:translateY(0) scale(1,1);} 100%{transform:translateY(1px) scale(1.02,.98);} }
+@keyframes bodyHappy     { 0%,100%{transform:translateY(0) scale(1,1);} 26%{transform:translateY(-3px) scale(.97,1.03);} 40%{transform:translateY(0) scale(1.03,.97);} 52%{transform:translateY(-2px) scale(.98,1.02);} 64%{transform:translateY(0) scale(1.02,.98);} }
+@keyframes bodyExcited   { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-.7px,.4px);} 45%{transform:translate(.7px,-.4px);} 70%{transform:translate(-.5px,-.3px);} }
+@keyframes bodySad       { 0%,100%{transform:translateY(1px) scale(1.03,.97);} 50%{transform:translateY(2px) scale(1.05,.95);} }
+@keyframes bodySleepy    { 0%,100%{transform:scale(1,1);} 50%{transform:translateY(-.5px) scale(1.02,1.03);} }
+@keyframes bodyNod       { 0%,100%{transform:translateY(0);} 30%{transform:translateY(1.5px);} 60%{transform:translateY(1.5px);} }
+@keyframes bodyShake     { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-2px);} 30%{transform:translateX(2px);} 45%{transform:translateX(-1.5px);} 60%{transform:translateX(1.5px);} 75%{transform:translateX(0);} }
+@keyframes bodyListen    { 0%,100%{transform:scale(1,1);} 30%{transform:scale(1.02,1.02);} 60%{transform:scale(1.03,1.03);} }
+@keyframes bodySearch    { 0%,100%{transform:translateX(0);} 20%{transform:translateX(-2px);} 50%{transform:translateX(0);} 80%{transform:translateX(2px);} }
+@keyframes bodyCelebrate { 0%,100%{transform:translateY(0) scale(1,1);} 15%{transform:translateY(1px) scale(1.04,.96);} 32%{transform:translateY(-4px) scale(.96,1.05);} 60%{transform:translateY(0) scale(1.04,.94);} 72%{transform:translateY(0) scale(.99,1.02);} 84%{transform:translateY(0) scale(1,1);} }
+@keyframes bodyWorking   { 0%,100%{transform:scale(1,1);} 50%{transform:scale(1.02,1.02);} }
+
+/* ── Activity states (body+eye+icon model, from agent-activity-states.html) — used for the
+   Whare Wananga LEARN phase: learns (knowledge orbs absorbed), success (jump + check + ring),
+   error (shake + bang). Body keyframes drive the square; e* drive the dot/eye; i* the overlays. ── */
+@keyframes bLearn   { 0%,100%{transform:scale(1,1);} 88%{transform:scale(1.08,.92);} 94%{transform:scale(.97,1.05);} }
+@keyframes eLearn   { 0%,100%{transform:scale(1);} 50%{transform:scale(1.05);} 90%{transform:scale(1.1);} }
+@keyframes iAbsorb  { 0%{transform:translate(var(--dx),var(--dy)) scale(1);opacity:0;} 20%{opacity:1;} 100%{transform:translate(0,0) scale(.3);opacity:0;} }
+@keyframes bSuccess { 0%,100%{transform:translateY(0) scale(1,1);} 20%{transform:translateY(0) scale(1.1,.9);} 40%{transform:translateY(-8px) scale(.9,1.1);} 60%{transform:translateY(0) scale(1.08,.92);} 75%{transform:translateY(0) scale(1,1);} }
+@keyframes eSuccess { 0%,100%{transform:translateY(0) scale(1);} 40%{transform:translateY(-1px) scale(1.12);} }
+@keyframes iCheck   { 0%,25%{transform:scale(0);opacity:0;} 38%{transform:scale(1.3);opacity:1;} 50%{transform:scale(1);opacity:1;} 90%{opacity:1;} 100%{opacity:0;} }
+@keyframes bError   { 0%{transform:translateX(0);} 8%{transform:translateX(-3px) rotate(-3deg);} 16%{transform:translateX(3px) rotate(3deg);} 24%{transform:translateX(-2px);} 32%{transform:translateX(2px);} 40%{transform:translateX(0);} 100%{transform:translateX(0);} }
+@keyframes eError   { 0%{transform:scale(1);} 10%{transform:scale(1.4);} 30%{transform:scale(1);} 100%{transform:scale(1);} }
+@keyframes iBang    { 0%,100%{opacity:0;transform:scale(.6);} 10%{opacity:1;transform:scale(1.2);} 25%{opacity:1;transform:scale(1);} 45%{opacity:.2;} 55%{opacity:1;} 70%{opacity:1;} 85%{opacity:0;} }
+@keyframes ringExpand { 0%{transform:scale(.3);opacity:0;} 30%{opacity:.55;} 100%{transform:scale(1.7);opacity:0;} }
+@keyframes wwSpin     { to { transform: rotate(360deg); } }
 
 /* Whare Wananga training stage: data flowing from one actor to the next (agent -> tool ->
    judge). GPU-cheap (transform only); only runs while a step is active. */

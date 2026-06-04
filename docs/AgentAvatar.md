@@ -74,60 +74,105 @@ Like a facial expression, but abstract.
 - `thinking → talking`: animation switches immediately — the moment thinking becomes speaking is intentionally abrupt
 - `talking/thinking → idle`: active dot shrinks and fades with fast ease-in, idle dot eases back in with float animation
 
-### Universal morph — any state to any state
+### Transitions between states — keeping the agent in one piece
 
-The transitions above cover `idle <-> active`. Going *directly* between two active modes
-(e.g. `thinking -> celebrate`, `surprised -> happy`) currently swaps the inner animation
-abruptly. To make **every** state flow into **every** other state, use a *collapse-to-neutral,
-then bloom* morph. This is the technique the standalone reference player uses (the
-"Uebergaenge" / transition player in `docs/animations/agent_avatar/agent-all-animations.html`):
+The hard case is going *between* states (e.g. `reads newspaper -> juggles`, or
+`thinking -> celebrate`). The naive approach — render the new state as a fresh element and
+cross-fade it over the old one — always reads as a **slideshow**: two different-looking agents
+dissolving into each other. The goal instead is a single, continuous character whose
+*surroundings* and *behaviour* change while the character itself never disappears.
 
-1. On a `mode` change, **collapse** the active-dot wrapper toward a small neutral point:
-   `opacity -> 0`, `transform: scale(0.45)`, `filter: blur(4-5px)` over ~0.26 s.
-2. At the neutral point, **swap** the rendered mode so the new emotion's keyframes start fresh.
-3. **Bloom** back: `opacity -> 1`, `scale(1)`, `blur(0)` over ~0.3 s with the spring curve.
+**Four rules make a transition feel like one piece:**
 
-Because the morph runs on a *wrapper* (opacity / scale / blur), it is animation-agnostic — it
-works for any pair in either direction, and stays compositor-only (no `border-radius` or
-`box-shadow` repaint), so it respects the idle performance rule above.
+1. **Persist the agent.** Never destroy, re-create, or fade out the whole agent on a state
+   change. Keep one `body + eye` (or one dot) element alive across the whole session; only
+   change what is *around* it and which animation runs *on* it.
+2. **Settle to neutral, then start the new animation — never hard-swap mid-motion.** Swapping
+   the running `@keyframes` while the old one is mid-cycle makes the element jump to the new
+   animation's first frame. Instead, briefly remove the animation so the element eases back to
+   its rest pose, and only start the new animation once it has settled.
+3. **Author every keyframe to start and end at neutral (`0%` and `100%` = rest).** This is the
+   rule that makes (2) work — and it is exactly what was missing for the eye. If an eye that
+   "looks left" is written `0%,100% { transform: translate(-3px,0) }`, a freshly started
+   animation snaps the eye 3px left. Write it `0%,100% { translate(0,0) }` with the look held
+   in the middle (`15% .. 85% { translate(-3px,0) }`): now the animation *eases into* the look
+   from rest, just like the body, and the loop boundary never snaps either.
+4. **Change the surroundings only after the agent has arrived.** Fade the old props out, move
+   the agent, then fade the new props in *after* the move completes — otherwise props appear at
+   a position the agent has not reached yet.
 
-**Minimal integration in `web/components/AgentAvatar.tsx`** — render a `shown` mode that lags
-the incoming `mode` prop by one collapse phase, and drive everything (`ANIM`, `size`,
-`ORIGIN_BOTTOM`, rings/satellite) off `shown` instead of `mode`:
+#### Reference implementation
 
-```tsx
-const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+The transition player in `docs/animations/agent_avatar/agent-all-animations.html` (section
+"0 · Transitions") applies all four to the body+eye scene states (away + activity): one
+persistent agent **glides** between each scene's position while only the props cross-fade.
 
-const [shown, setShown] = React.useState<AvatarMode>(mode);
-const [collapsed, setCollapsed] = React.useState(false);
+CSS:
 
-React.useEffect(() => {
-  if (mode === shown) return;
-  setCollapsed(true);                 // 1) collapse current to the neutral point
-  const t = setTimeout(() => {
-    setShown(mode);                   // 2) swap mode at the neutral point
-    setCollapsed(false);              // 3) bloom into the new state
-  }, 260);                            // ~ collapse duration
-  return () => clearTimeout(t);
-}, [mode, shown]);
+```css
+/* one persistent agent that glides between scene positions, never destroyed */
+#tscene .agent { transition: left .6s cubic-bezier(.5,0,.2,1), top .6s cubic-bezier(.5,0,.2,1); }
+/* hold a calm, neutral pose during the glide -> no animation-restart jitter */
+.scene.gliding .body { animation: none !important; }
+#tscene .body, #tscene .eye { transition: transform .3s ease; }  /* ease back to rest */
+/* only the surroundings cross-fade; the agent itself never fades */
+#tprops { position: absolute; inset: 0; transition: opacity .3s ease; }
+```
 
-// active-dot wrapper style:
-{
-  opacity: collapsed ? 0 : 1,
-  transform: collapsed ? 'scale(0.45)' : 'scale(1)',
-  filter: collapsed ? 'blur(4px)' : 'blur(0)',
-  transition: `opacity .26s ease, transform .3s ${SPRING}, filter .26s ease`,
+JS — three phases per step (props out -> glide in a neutral pose -> arrive: animate + props in).
+The agent element is created once and never recreated; each step only swaps the scene class
+(which repositions the agent and picks its animation via `.scene.<type> .agent` /
+`.scene.<type> .body`) and the contents of the props layer:
+
+```js
+function tStep() {
+  const it = order[++tIdx % order.length];
+  const lite = () => document.body.classList.contains('lite') ? ' light' : '';
+  tprops.style.opacity = '0';                                   // 1) old surroundings fade out (agent stays visible)
+  setTimeout(() => {                                            // 2) agent glides to the new spot in a neutral pose, no props
+    tscene.className = 'scene gliding ' + (it.marker ? it.marker + ' ' : '') + it.type + lite();
+    tprops.innerHTML = '';
+  }, 260);
+  setTimeout(() => {                                            // 3) arrived: drop `gliding` -> animation starts; props fade in
+    tscene.classList.remove('gliding');
+    tprops.innerHTML = it.props;                                // props only — the persistent agent is untouched
+    tprops.style.opacity = '1';
+  }, 900);                                                      // 260 (fade-out) + ~640 (glide)
 }
 ```
 
-Tuning knobs (match the reference player): neutral scale `0.45`, blur `4-5px`, collapse
-`~0.26 s`, bloom `~0.3 s`. Raise the neutral scale or drop the blur for a snappier, less
-"dreamy" morph; a neutral scale of `0` makes the agent disappear fully through the point.
-Debounce rapid `mode` changes so a burst of updates does not stack collapses.
+#### Tuning knobs
 
-The same morph powers the Whare Wananga training stage, where the avatar cycles through the
-full emotion range — there it is the *primary* feedback, so the universal morph (not the
-abrupt active->active swap) is the better default.
+Glide `.6s`; arrival at `900 ms` (= 260 fade-out + ~640 glide); props fade `.3s`. Keep the
+per-state hold (time between steps) larger than the full transition (~1.2 s) so steps never
+overlap — in the player the hold slider starts at 1.6 s for this reason.
+
+#### Same-position switches (the in-chat avatar)
+
+When the avatar only changes *mode* in place — no new position, no props, e.g. the chat avatar
+going `thinking -> talking` — rules 1-3 are enough on their own: keep the dot element, let it
+settle to neutral, start the next animation (whose `0%` is neutral, so it eases in). No glide
+and no cross-fade are needed. Drive everything off a `shown` state that lags the `mode` prop by
+the settle duration, so the new animation only starts after the dot has eased to rest:
+
+```tsx
+const [shown, setShown] = React.useState<AvatarMode>(mode);
+const [settling, setSettling] = React.useState(false);
+React.useEffect(() => {
+  if (mode === shown) return;
+  setSettling(true);                         // drop the animation -> dot eases to neutral (CSS transition on transform)
+  const t = setTimeout(() => { setShown(mode); setSettling(false); }, 200);  // then start the new mode from rest
+  return () => clearTimeout(t);
+}, [mode, shown]);
+// the animated dot: animation = settling ? 'none' : ANIM[shown]; with `transition: transform .2s ease`
+```
+
+#### Constraint
+
+A single continuous agent only works across states that share the **same representation**. The
+away + activity states all use the `body + eye` model, so they share one gliding agent. The base
++ emotion states use the dot-in-square model (different DOM + keyframes) — to fold them into the
+same continuous agent, port them to `body + eye` first.
 
 ---
 

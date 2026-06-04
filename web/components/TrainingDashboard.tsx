@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     X, Activity, Zap, AlertTriangle, CheckCircle2, Clock, Eye, ShieldAlert, ListChecks, Loader2,
     Gavel, XCircle,
@@ -106,15 +106,54 @@ function fmtDur(s?: number | null): string {
     return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
 }
 
+// Per-emotion animation loop length (ms), so a flashed reaction can play at least one full cycle.
+const CYCLE_MS: Partial<Record<AvatarMode, number>> = {
+    surprised: 2400, curious: 4000, confused: 2800, idea: 2800,
+    happy: 1900, excited: 900, sad: 4000, sleepy: 4800,
+    nod: 1700, shake: 1400, listening: 2200, search: 3400,
+    celebrate: 2400, success: 2400, error: 2200,
+};
+// A reaction is held for at least 2s AND at least one full cycle -> it never looks cut off.
+const reactionHold = (m: AvatarMode): number => Math.max(2000, CYCLE_MS[m] ?? 2000);
+
+// Flash an avatar reaction that is guaranteed to finish: the current reaction is held for
+// reactionHold(mode); a reaction requested while one is playing is queued (latest wins) and
+// shown afterwards, instead of cutting the running animation short.
+function useReactionFlash(): readonly [AvatarMode | null, (m: AvatarMode) => void] {
+    const [react, setReact] = useState<AvatarMode | null>(null);
+    const holdUntil = useRef(0);
+    const queued = useRef<AvatarMode | null>(null);
+    const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showRef = useRef<(m: AvatarMode) => void>(() => {});
+    showRef.current = (mode: AvatarMode) => {
+        setReact(mode);
+        const dur = reactionHold(mode);
+        holdUntil.current = Date.now() + dur;
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => {
+            const q = queued.current;
+            queued.current = null;
+            if (q) showRef.current(q); else setReact(null);
+        }, dur);
+    };
+    const fire = useCallback((mode: AvatarMode) => {
+        if (Date.now() >= holdUntil.current) showRef.current(mode);
+        else queued.current = mode;   // a reaction is playing -> show this one after it finishes
+    }, []);
+    useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+    return [react, fire] as const;
+}
+
 export default function TrainingDashboard({ toolName, onClose, onStateChange }: { toolName: string; onClose: () => void; onStateChange?: (tool: string, state: string) => void }) {
     const [loading, setLoading] = useState(true);
     const [state, setState] = useState<string>('unlearned');
     const [rec, setRec] = useState<ToolKnowledge | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [job, setJob] = useState<any>(null);
-    // Transient emotional reactions (flash ~1.2s on an event, then fall back to the phase mode).
-    const [agentReact, setAgentReact] = useState<AvatarMode | null>(null);
-    const [judgeReact, setJudgeReact] = useState<AvatarMode | null>(null);
+    // Transient emotional reactions — each held until it has played a full cycle (>= 2s),
+    // queued (latest wins) so rapid live events never cut an animation short.
+    const [agentReact, fireAgent] = useReactionFlash();
+    const [judgeReact, fireJudge] = useReactionFlash();
 
     const loadRecord = useCallback(async (): Promise<string> => {
         let st = 'unlearned';
@@ -177,11 +216,14 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
         : (rec ? Math.round((rec.confidence ?? 0) * 100) : null);
     const inValidation = job?.phase === 'validate';
     const inChallenge = job?.phase === 'challenge';
-    const phaseLabel = inChallenge
-        ? `Challenge — judge poses the test${job?.challenge ? ` (${job.challenge.round_pass ?? 0}/${job.challenge.need ?? 3} passed, ${job.challenge.total_fails ?? 0}/${job.challenge.max_fails ?? 10} fails)` : ''}`
-        : inValidation
-            ? `Validating — round ${job?.round ?? 1}${job?.max_rounds ? `/${job.max_rounds}` : ''}`
-            : 'Learning';
+    const inPrep = job?.phase === 'prep';
+    const phaseLabel = inPrep
+        ? `Preparing prerequisites${job?.prereqs?.length ? ` (${job.prereqs.join(', ')})` : ''}`
+        : inChallenge
+            ? `Challenge — judge poses the test${job?.challenge ? ` (${job.challenge.round_pass ?? 0}/${job.challenge.need ?? 3} passed, ${job.challenge.total_fails ?? 0}/${job.challenge.max_fails ?? 10} fails)` : ''}`
+            : inValidation
+                ? `Validating — round ${job?.round ?? 1}${job?.max_rounds ? `/${job.max_rounds}` : ''}`
+                : 'Learning';
     const statusLabel = running ? phaseLabel : (STATE_LABEL[state] ?? state);
     const empty = <span className="text-gray-400 italic">— empty —</span>;
 
@@ -198,39 +240,39 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
     // Fire the transient reactions on the relevant live signals.
     const lastIdx = lastEvent?.i;
     const lastMatch = lastEvent?.match;
+    const lastPhase = lastEvent?.phase;
     useEffect(() => {
         if (!running || lastIdx == null) return;
-        setAgentReact(lastMatch ? 'nod' : 'confused');       // right -> nod, wrong -> confused
-        const t = setTimeout(() => setAgentReact(null), 1200);
-        return () => clearTimeout(t);
-    }, [lastIdx, lastMatch, running]);
+        // Learn phase uses the activity states (success / error); validate & challenge use the
+        // lighter emotion beats (nod / confused).
+        fireAgent(lastPhase === 'learn'
+            ? (lastMatch ? 'success' : 'error')
+            : (lastMatch ? 'nod' : 'confused'));
+    }, [lastIdx, lastMatch, lastPhase, running, fireAgent]);
 
     const distils = job?.distils ?? 0;
     useEffect(() => {
         if (!running || !distils) return;
-        setAgentReact('idea');                                // consolidated the document -> AHA
-        const t = setTimeout(() => setAgentReact(null), 1300);
-        return () => clearTimeout(t);
-    }, [distils, running]);
+        fireAgent('idea');                                    // consolidated the document -> AHA
+    }, [distils, running, fireAgent]);
 
     const lastJudgeIdx = lastJudge?.i;
     const lastJudgeVerdict = lastJudge?.verdict;
     useEffect(() => {
         if (!running || lastJudgeIdx == null) return;
-        setJudgeReact(lastJudgeVerdict === 'pass' ? 'nod' : 'shake');  // approve / reject
-        const t = setTimeout(() => setJudgeReact(null), 1200);
-        return () => clearTimeout(t);
-    }, [lastJudgeIdx, lastJudgeVerdict, running]);
+        fireJudge(lastJudgeVerdict === 'pass' ? 'nod' : 'shake');  // approve / reject
+    }, [lastJudgeIdx, lastJudgeVerdict, running, fireJudge]);
 
-    // Avatar emotions:
-    //   Agent  — working (Stage 1 probing), thinking (Stage 2 predicting), listening (Stage 3
-    //            awaiting the judge's input); nod/confused per result, idea on a re-distil;
-    //            celebrate when mastered, sad on draft/halt, idle at rest.
+    // Avatar states:
+    //   Agent  — Stage 1 (learn): the "learn" activity state (knowledge orbs), with success/error
+    //            activity beats per probe; Stage 2 (validate): thinking + nod/confused; Stage 3
+    //            (challenge): listening + nod/confused; idea on a re-distil; celebrate when
+    //            mastered, sad on draft/halt, idle at rest.
     //   Judge (inverted) — thinking while grading, talking while posing a challenge; nod/shake
     //            per verdict; idle when resting.
     let agentMode: AvatarMode;
     if (running) {
-        agentMode = agentReact ?? (inChallenge ? 'listening' : inValidation ? 'thinking' : 'working');
+        agentMode = agentReact ?? (inChallenge ? 'listening' : inValidation ? 'thinking' : 'learn');
     } else if (job?.state === 'done') {
         agentMode = job.halted ? 'sad' : job.challenge_passed ? 'celebrate' : job.confirmed ? 'idle' : 'sad';
     } else if (job?.state === 'error') {
@@ -309,6 +351,15 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                             <span>
                                 {phaseLabel} · {job.attempt ?? 0} probes · {job.hits ?? 0} correct
                                 {job.validate ? ` · last batch ${job.validate.hits}/${job.validate.n}` : ''}
+                            </span>
+                        </div>
+                    ) : job?.state === 'done' && job.declared ? (
+                        <div className={`rounded-xl border px-4 py-3 text-sm flex items-center gap-2 ${job.confirmed ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                            {job.confirmed ? <CheckCircle2 size={16} className="shrink-0" /> : <AlertTriangle size={16} className="shrink-0" />}
+                            <span>
+                                {job.confirmed
+                                    ? 'Learned from the tool’s declaration — this tool mutates session state and has no rejectable inputs, so it was not probed; the baskets come from its description + schema.'
+                                    : 'Could not distil usable knowledge from the tool’s declaration (and it is not safe to probe).'}
                             </span>
                         </div>
                     ) : job?.state === 'done' ? (

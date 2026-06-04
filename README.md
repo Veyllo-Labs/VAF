@@ -288,4 +288,6 @@ Linux headless mode requires no display server. See [docs/LINUX_SETUP.md](docs/L
 
 MIT License with Commons Clause v1.0. Source-available; commercial redistribution and SaaS use require a separate license. See [LICENSE](LICENSE) for full terms.
 
+**Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSE](LICENSE).
+
 For business and OEM licensing, contact Veyllo Labs.

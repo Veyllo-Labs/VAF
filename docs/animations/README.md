@@ -12,3 +12,9 @@ reference / spec, **not part of the built product**.
   The component design and the transition integration live in `docs/AgentAvatar.md`.
 
 New animation systems get their own subfolder here.
+
+---
+
+**Brand & ownership:** these references depict the VAF agent avatar — a brand asset of
+**Veyllo GmbH**. The code is reusable under the repository license; the agent-avatar and VAF
+logo brand identity is reserved (see `LICENSE`, section "Trademarks and Brand Assets").

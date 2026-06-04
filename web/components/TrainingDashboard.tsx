@@ -5,7 +5,7 @@ import {
     X, Activity, Zap, AlertTriangle, CheckCircle2, Clock, Eye, ShieldAlert, ListChecks, Loader2,
     Gavel, XCircle,
 } from 'lucide-react';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 
 // Whare Wananga training dashboard.
 // Big panel (Memory-Graph sized) that shows, per tool: status, error rate, predictions,
@@ -51,19 +51,36 @@ function StageCol({ label, sub, footer, children }: { label?: React.ReactNode; s
     );
 }
 
-// Data-flow link between two actors: small dots stream left -> right while the step is active
-// (the agent feeding input to the tool, the tool feeding its result to the judge); a faint
-// static line when idle. Replaces the old static arrow.
-function FlowLink({ on }: { on: boolean }) {
+// Glyphs that "flow" as data — geometric shapes + digits, varied over the run via a seed.
+const FLOW_GLYPHS = ['▲', '■', '●', '◆', '7', '3', '5', '0', '9', '2', '△', '◇'];
+const flowGlyph = (n: number) => FLOW_GLYPHS[((n % FLOW_GLYPHS.length) + FLOW_GLYPHS.length) % FLOW_GLYPHS.length];
+
+// Data-flow link between two actors. Forward (left -> right): grey shapes/digits while the step
+// is active (the agent feeding input to the tool, the tool feeding the judge). Return
+// (right -> left): coloured shapes for the latest result — green = pass, red = fail. A faint
+// static line when idle. `seed` rotates the glyphs as the run progresses.
+function FlowLink({ on, back, seed = 0 }: { on: boolean; back?: 'pass' | 'fail' | null; seed?: number }) {
+    const backColor = back === 'pass' ? 'text-emerald-500' : 'text-rose-500';
     return (
-        <div className="relative h-5 w-16 shrink-0 self-center overflow-hidden" aria-hidden>
+        <div className="relative h-8 w-16 shrink-0 self-center overflow-hidden" aria-hidden>
             <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-gray-200" />
             {on && [0, 1, 2].map((i) => (
                 <span
-                    key={i}
-                    className="absolute top-1/2 h-1.5 w-1.5 rounded-full bg-amber-500"
-                    style={{ left: 0, marginTop: -3, animation: `wwFlow 1.15s linear ${i * 0.38}s infinite` }}
-                />
+                    key={`f${i}`}
+                    className="absolute top-0.5 text-[10px] leading-none font-bold text-gray-400 select-none"
+                    style={{ left: 0, animation: `wwFlow 1.3s linear ${i * 0.42}s infinite` }}
+                >
+                    {flowGlyph(seed + i * 4)}
+                </span>
+            ))}
+            {on && back && [0, 1].map((i) => (
+                <span
+                    key={`b${i}`}
+                    className={`absolute bottom-0.5 text-[10px] leading-none font-bold select-none ${backColor}`}
+                    style={{ right: 0, animation: `wwFlowBack 1.3s linear ${i * 0.5}s infinite` }}
+                >
+                    {flowGlyph(seed + 5 + i * 3)}
+                </span>
             ))}
         </div>
     );
@@ -95,6 +112,9 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
     const [rec, setRec] = useState<ToolKnowledge | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [job, setJob] = useState<any>(null);
+    // Transient emotional reactions (flash ~1.2s on an event, then fall back to the phase mode).
+    const [agentReact, setAgentReact] = useState<AvatarMode | null>(null);
+    const [judgeReact, setJudgeReact] = useState<AvatarMode | null>(null);
 
     const loadRecord = useCallback(async (): Promise<string> => {
         let st = 'unlearned';
@@ -175,12 +195,57 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
     const judgeVerdict = lastJudge?.verdict;   // 'pass' | 'fail' | undefined
     const judgeReason = lastJudge?.reason;
 
-    // Avatar modes (per the agent's animation language):
-    //   Agent  — waiting (rest); talking while it freely calls the tool; thinking while it only
-    //            predicts the judge's fixed input (challenge phase).
-    //   Judge  — inverted avatar; thinking while awaiting; talking while it judges (validate/challenge).
-    const agentMode: 'waiting' | 'talking' | 'thinking' = running ? (inChallenge ? 'thinking' : 'talking') : 'waiting';
-    const judgeMode: 'thinking' | 'talking' = (running && judgeActive) ? 'talking' : 'thinking';
+    // Fire the transient reactions on the relevant live signals.
+    const lastIdx = lastEvent?.i;
+    const lastMatch = lastEvent?.match;
+    useEffect(() => {
+        if (!running || lastIdx == null) return;
+        setAgentReact(lastMatch ? 'nod' : 'confused');       // right -> nod, wrong -> confused
+        const t = setTimeout(() => setAgentReact(null), 1200);
+        return () => clearTimeout(t);
+    }, [lastIdx, lastMatch, running]);
+
+    const distils = job?.distils ?? 0;
+    useEffect(() => {
+        if (!running || !distils) return;
+        setAgentReact('idea');                                // consolidated the document -> AHA
+        const t = setTimeout(() => setAgentReact(null), 1300);
+        return () => clearTimeout(t);
+    }, [distils, running]);
+
+    const lastJudgeIdx = lastJudge?.i;
+    const lastJudgeVerdict = lastJudge?.verdict;
+    useEffect(() => {
+        if (!running || lastJudgeIdx == null) return;
+        setJudgeReact(lastJudgeVerdict === 'pass' ? 'nod' : 'shake');  // approve / reject
+        const t = setTimeout(() => setJudgeReact(null), 1200);
+        return () => clearTimeout(t);
+    }, [lastJudgeIdx, lastJudgeVerdict, running]);
+
+    // Avatar emotions:
+    //   Agent  — working (Stage 1 probing), thinking (Stage 2 predicting), listening (Stage 3
+    //            awaiting the judge's input); nod/confused per result, idea on a re-distil;
+    //            celebrate when mastered, sad on draft/halt, idle at rest.
+    //   Judge (inverted) — thinking while grading, talking while posing a challenge; nod/shake
+    //            per verdict; idle when resting.
+    let agentMode: AvatarMode;
+    if (running) {
+        agentMode = agentReact ?? (inChallenge ? 'listening' : inValidation ? 'thinking' : 'working');
+    } else if (job?.state === 'done') {
+        agentMode = job.halted ? 'sad' : job.challenge_passed ? 'celebrate' : job.confirmed ? 'idle' : 'sad';
+    } else if (job?.state === 'error') {
+        agentMode = 'sad';
+    } else {
+        agentMode = 'idle';
+    }
+    let judgeMode: AvatarMode;
+    if (running && judgeActive) {
+        judgeMode = judgeReact ?? (inChallenge ? 'talking' : 'thinking');
+    } else if (job?.state === 'done' && showJudge) {
+        judgeMode = job.challenge_passed ? 'nod' : 'idle';
+    } else {
+        judgeMode = 'idle';
+    }
 
     // Tool bubble (same component as the chat, just smaller): driven by the latest probe.
     const toolStatus: 'running' | 'completed' | 'error' =
@@ -283,8 +348,8 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                         <Metric icon={<CheckCircle2 size={13} />} label="Confidence" value={confidencePct === null ? '—' : `${confidencePct}%`} />
                         <Metric icon={<Clock size={13} />} label="Duration" value={fmtDur(durationS)} hint={running ? 'running' : (durationS != null ? 'total' : '')} />
                         <Metric icon={<Zap size={13} />} label="Uses" value={attemptsCount} />
-                        <Metric icon={<AlertTriangle size={13} />} label="Error rate" value={errorRate === null ? '—' : `${errorRate}%`} hint={attemptsCount ? `${failCount}/${attemptsCount} failed` : 'no runs yet'} />
-                        <Metric icon={<CheckCircle2 size={13} />} label="Predictions" value={predTotal ? `${hitsCount}/${predTotal}` : '—'} hint="correct / total" />
+                        <Metric icon={<AlertTriangle size={13} />} label="Tool error rate" value={errorRate === null ? '—' : `${errorRate}%`} hint={attemptsCount ? `${failCount}/${attemptsCount} tool errors` : 'no runs yet'} />
+                        <Metric icon={<CheckCircle2 size={13} />} label="Predictions" value={predTotal ? `${hitsCount}/${predTotal}` : '—'} hint="correct / all probes" />
                     </div>
 
                     {/* Error-rate / progress graph (placeholder until the runner streams attempts) */}
@@ -299,7 +364,10 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                 predicted_outcome: String(p.predicted ?? '').split(':')[0],
                                 actual_outcome: String(p.actual ?? '').split(':')[0],
                             }));
-                            const items = live.length ? live : fromRec;
+                            // While running, stream the live events; once done, render the FULL
+                            // stored record (the live events are capped, so using them after the
+                            // run made the badge count disagree with the "Predictions" metric).
+                            const items = running ? (live.length ? live : fromRec) : (fromRec.length ? fromRec : live);
                             if (!items.length) {
                                 return (
                                     <div className="h-24 flex items-center justify-center text-sm text-gray-400 border border-dashed border-gray-300 rounded-lg">
@@ -372,7 +440,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                 </div>
                             </StageCol>
 
-                            <FlowLink on={running} />
+                            <FlowLink on={running} seed={job?.attempt ?? 0} back={running && lastEvent ? (lastEvent.match ? 'pass' : 'fail') : null} />
 
                             {/* Tool under test — a FIXED-size card (styled like the chat tool bubble:
                                 status dot, name, output). Always the same size; only the content
@@ -409,7 +477,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                 thinking while awaiting, talking while it judges. */}
                             {showJudge && (
                                 <>
-                                    <FlowLink on={judgeActive} />
+                                    <FlowLink on={running && judgeActive} seed={(job?.attempt ?? 0) + 2} back={running && judgeActive && lastJudge ? (lastJudge.verdict === 'pass' ? 'pass' : 'fail') : null} />
                                     <StageCol
                                         label="Judge"
                                         footer={

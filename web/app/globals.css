@@ -122,6 +122,128 @@
   84%  { transform: scale(1.11) translate(0.85px,  0.4px);  }
   100% { transform: scale(1)    translate(0px,     0px);    }
 }
+/* ── Agent character emotions (ported 1:1 from the showcase). Applied to the avatar dot to
+   give the living dot expressive states in the Whare Wananga training stage. ── */
+@keyframes emoSurprised {
+  0%,100% { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+  6%      { transform: translateY(2px) scale(1.18,0.78); }
+  16%     { transform: translateY(-9px) scale(0.74,1.36); box-shadow: 0 0 18px 6px rgba(255,255,255,.65); }
+  24%     { transform: translateY(-8px) scale(1.34,0.84); }
+  34%     { transform: translateY(-8px) scale(1.18,1.04); }
+  46%     { transform: translateY(-8px) scale(1.24,0.96); }
+  60%     { transform: translateY(-2px) scale(0.96,1.06); }
+  72%     { transform: translateY(0)   scale(1.05,0.97); }
+  82%     { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+}
+@keyframes emoCurious {
+  0%,100% { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+  18%     { transform: rotate(-13deg) translateX(-4px) scale(1.03,0.99); }
+  30%     { transform: rotate(-11deg) translateX(-4px) scale(1.05,0.97); }
+  46%     { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+  64%     { transform: rotate(12deg)  translateX(4px)  scale(1.03,0.99); }
+  76%     { transform: rotate(10deg)  translateX(4px)  scale(1.05,0.97); }
+  90%     { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+}
+@keyframes emoConfused {
+  0%,100% { transform: rotate(0deg)   translateX(0);    }
+  12%     { transform: rotate(-9deg)  translateX(-2px); }
+  26%     { transform: rotate(7deg)   translateX(2px);  }
+  40%     { transform: rotate(-6deg)  translateX(-1px); }
+  52%     { transform: rotate(5deg)   translateX(1px);  }
+  62%     { transform: rotate(-3deg)  translateX(0);    }
+  80%     { transform: rotate(-3deg)  translateX(0);    }
+}
+@keyframes emoIdea {
+  0%   { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+  35%  { transform: translateY(3px) scale(0.88,0.90); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+  44%  { transform: translateY(1px) scale(0.96,0.98); }
+  50%  { transform: translateY(-6px) scale(1.42,1.42); box-shadow: 0 0 28px 11px rgba(255,255,255,.95); }
+  58%  { transform: translateY(-4px) scale(1.12,1.12); box-shadow: 0 0 16px 6px rgba(255,255,255,.70); }
+  68%  { transform: translateY(0)   scale(1.0,1.0);    box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  100% { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+}
+@keyframes emoHappy {
+  0%   { transform: translateY(0)    scale(1,1);     }
+  10%  { transform: translateY(0)    scale(1.12,0.84); }
+  26%  { transform: translateY(-12px) scale(0.86,1.18); }
+  40%  { transform: translateY(0)    scale(1.14,0.82); }
+  52%  { transform: translateY(-9px) scale(0.90,1.12); }
+  64%  { transform: translateY(0)    scale(1.10,0.88); }
+  74%  { transform: translateY(0)    scale(1,1);     }
+  100% { transform: translateY(0)    scale(1,1);     }
+}
+@keyframes emoExcited {
+  0%,100% { transform: translate(0,0)     scale(1,1);     }
+  10% { transform: translate(-1px,-1px) scale(1.12,1.12); }
+  20% { transform: translate(1px,1px)   scale(0.92,0.92); }
+  30% { transform: translate(-1px,1px)  scale(1.14,1.14); }
+  40% { transform: translate(1px,-1px)  scale(0.94,0.94); }
+  50% { transform: translate(-1px,0)    scale(1.12,1.12); }
+  60% { transform: translate(1px,0)     scale(0.95,0.95); }
+  70% { transform: translate(0,-1px)    scale(1.10,1.10); }
+}
+@keyframes emoSad {
+  0%,100% { transform: translateY(4px) scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
+  50%     { transform: translateY(6px) scale(1.20,0.78); box-shadow: 0 0 4px 1px rgba(255,255,255,.11); }
+}
+@keyframes emoSleepy {
+  0%,100% { transform: translateY(3px) scale(1.08,0.90); box-shadow: 0 0 6px 2px rgba(255,255,255,.16); }
+  50%     { transform: translateY(1px) scale(1.0,1.14);  box-shadow: 0 0 12px 4px rgba(255,255,255,.30); }
+}
+@keyframes emoNod {
+  0%,100% { transform: translateY(0)   scale(1,1);     }
+  15% { transform: translateY(-3px) scale(0.97,1.04); }
+  30% { transform: translateY(4px)  scale(1.05,0.94); }
+  45% { transform: translateY(-2px) scale(0.98,1.03); }
+  60% { transform: translateY(4px)  scale(1.05,0.94); }
+  75% { transform: translateY(0)    scale(1,1);     }
+}
+@keyframes emoShake {
+  0%,100% { transform: translateX(0)    rotate(0deg);  }
+  15% { transform: translateX(-5px) rotate(-6deg); }
+  30% { transform: translateX(5px)  rotate(6deg);  }
+  45% { transform: translateX(-4px) rotate(-5deg); }
+  60% { transform: translateX(4px)  rotate(5deg);  }
+  72% { transform: translateX(-2px) rotate(-2deg); }
+  82% { transform: translateX(0)    rotate(0deg);  }
+}
+@keyframes emoListening {
+  0%   { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  12%  { transform: scale(1.16,1.16); box-shadow: 0 0 14px 4px rgba(255,255,255,.55); }
+  20%  { transform: scale(1.05,1.05); }
+  30%  { transform: scale(1.12,1.12); }
+  38%  { transform: scale(1.04,1.04); }
+  55%  { transform: scale(1.20,1.20); box-shadow: 0 0 16px 5px rgba(255,255,255,.60); }
+  65%  { transform: scale(1.05,1.05); }
+  80%  { transform: scale(1.10,1.10); }
+  100% { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+}
+@keyframes emoSearch {
+  0%,100% { transform: translateX(0)    translateY(0)    scale(1,1);     }
+  15% { transform: translateX(-8px) translateY(1px)  scale(1.05,0.96); }
+  25% { transform: translateX(-8px) translateY(1px)  scale(1.05,0.96); }
+  50% { transform: translateX(0)    translateY(-2px) scale(1.02,1.02); }
+  75% { transform: translateX(8px)  translateY(1px)  scale(1.05,0.96); }
+  85% { transform: translateX(8px)  translateY(1px)  scale(1.05,0.96); }
+}
+@keyframes emoCelebrate {
+  0%   { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  15%  { transform: translateY(2px)  scale(1.16,0.82); }
+  32%  { transform: translateY(-14px) scale(0.84,1.22); box-shadow: 0 0 22px 8px rgba(255,255,255,.85); }
+  46%  { transform: translateY(-12px) scale(1.18,0.96); }
+  60%  { transform: translateY(0)    scale(1.12,0.90); }
+  72%  { transform: translateY(0)    scale(0.98,1.04); }
+  82%  { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  100% { transform: translateY(0)    scale(1,1);     }
+}
+@keyframes emoRing {
+  0%   { transform: scale(0.35); opacity: 0; }
+  20%  { opacity: 0; }
+  32%  { opacity: .55; }
+  100% { transform: scale(2.8);  opacity: 0; }
+}
+@keyframes emoOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 /* Whare Wananga training stage: data flowing from one actor to the next (agent -> tool ->
    judge). GPU-cheap (transform only); only runs while a step is active. */
 @keyframes wwFlow {
@@ -129,6 +251,13 @@
   20%  { opacity: 1; }
   80%  { opacity: 1; }
   100% { transform: translateX(58px); opacity: 0; }
+}
+/* Result flowing BACK (tool -> agent / judge -> tool): pass = green, fail = red. */
+@keyframes wwFlowBack {
+  0%   { transform: translateX(0);     opacity: 0; }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateX(-58px); opacity: 0; }
 }
 @keyframes stopRipple {
   0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.65; }

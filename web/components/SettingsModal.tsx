@@ -977,6 +977,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         return () => cancelAnimationFrame(start);
     }, [isLoggingOut]);
 
+    // After an edit saved from the visualizer completes, re-fetch the workflow so the flow
+    // visualization behind the editor reflects the new definition. MUST be declared before the
+    // `if (!isOpen) return null` early return below — otherwise the hook count changes when the
+    // modal opens (React #310 "Rendered more hooks than during the previous render").
+    const prevWorkflowSavingRef = useRef(isWorkflowSaving);
+    const [vizNeedsRefresh, setVizNeedsRefresh] = useState(false);
+    useEffect(() => {
+        const wasSaving = prevWorkflowSavingRef.current;
+        prevWorkflowSavingRef.current = isWorkflowSaving;
+        if (wasSaving && !isWorkflowSaving && vizNeedsRefresh) {
+            setVizNeedsRefresh(false);
+            if (!workflowBackendError && workflowModal?.id) {
+                handleViewWorkflow({ id: workflowModal.id, is_custom: workflowModal.is_custom });
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isWorkflowSaving, vizNeedsRefresh, workflowBackendError]);
+
     if (!isOpen) return null;
 
     const handleChange = (key: string, value: any) => {
@@ -1123,21 +1141,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         });
     };
 
-    // After an edit saved from the visualizer completes, re-fetch the workflow
-    // so the flow visualization behind the editor reflects the new definition.
-    const prevWorkflowSavingRef = useRef(isWorkflowSaving);
-    const [vizNeedsRefresh, setVizNeedsRefresh] = useState(false);
-    useEffect(() => {
-        const wasSaving = prevWorkflowSavingRef.current;
-        prevWorkflowSavingRef.current = isWorkflowSaving;
-        if (wasSaving && !isWorkflowSaving && vizNeedsRefresh) {
-            setVizNeedsRefresh(false);
-            if (!workflowBackendError && workflowModal?.id) {
-                handleViewWorkflow({ id: workflowModal.id, is_custom: workflowModal.is_custom });
-            }
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isWorkflowSaving, vizNeedsRefresh, workflowBackendError]);
+    // (The workflow-saving viz-refresh hooks were moved ABOVE the `if (!isOpen) return null`
+    //  early return — see Rules of Hooks. They must run on every render.)
 
     const handleViewWorkflow = async (wf: { id: string; is_custom?: boolean }) => {
         try {

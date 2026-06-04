@@ -226,6 +226,17 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             verdict = "pass" if (predicted_outcome == _classify_actual(actual)) else "fail"
         return {"verdict": verdict, "reason": _safe(jd.get("reason") or "", 200)}
 
+    def _knowledge_brief() -> str:
+        """Compact view of the distilled tool_knowledge, so the agent predicts FROM the document
+        (empty until the first distillation; populated for every repeat afterwards)."""
+        a = rec.get("aronui", {})
+        u = rec.get("tuarua", {})
+        pit = [p.get("text") for p in rec.get("tuatea", {}).get("pitfalls", [])]
+        return _safe(json.dumps({"when_to_use": a.get("when_to_use", ""),
+                                 "output_shape": a.get("output_shape", ""),
+                                 "pitfalls": pit, "procedure": u.get("procedure", []),
+                                 "verification": u.get("verification", [])}), 900)
+
     def _one_probe(phase: str) -> bool:
         """One predict-then-verify probe. Returns whether the prediction matched (validation
         is graded by the LLM judge; learning uses the cheap heuristic)."""
@@ -234,6 +245,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             {"role": "user", "content": (
                 f"Tool: {tool_name}\nDescription: {description}\n"
                 f"Parameters: {json.dumps(params)[:1200]}\n"
+                f"What you have learned so far (use it to predict): {_knowledge_brief()}\n"
                 f"Phase: {phase}. Earlier attempts: {json.dumps(all_attempts[-6:])[:1000]}")},
         ]
         raw = tool.query_llm(predict_prompt, max_tokens=_MAX_TOKENS, temperature=0.4) or ""
@@ -377,7 +389,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             {"role": "user", "content": (
                 f"Tool: {tool_name}\nDescription: {description}\n"
                 f"Call args (fixed by the judge): {json.dumps(cargs)[:800]}\n"
-                f"What you know: {json.dumps(rec.get('aronui', {}))[:400]}")},
+                f"What you have learned (use it to predict): {_knowledge_brief()}")},
         ]
         praw = tool.query_llm(predict_prompt, max_tokens=_MAX_TOKENS, temperature=0.3) or ""
         pplan = _extract_json(praw) or {}
@@ -458,7 +470,11 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         if not state["halted"] and vhits == validate_n:
             confirmed = True
             break
-        # refine and re-distil, then validate again
+        # Stage 2 failed. Update the document with everything so far BEFORE repeating Stage 1,
+        # so the refine probes work from corrected knowledge; refine; then update AGAIN before the
+        # Stage 2 retry, so the next validation predicts from the freshest document.
+        if not state["halted"]:
+            _distil()
         for _ in range(refine_n):
             if state["halted"]:
                 break

@@ -96,10 +96,15 @@ refreshes the record on completion (badge -> "Learned").
 
 The loop is **adaptive**: an initial learning batch (`LEARN_N` = 21 probes) builds the
 tool_knowledge and distils the three baskets, then a **validation batch** (`VALIDATE_N` = 9
-probes) re-predicts each outcome from the learned record. If all nine are predicted correctly, the tool is **confirmed**
-(`status=confirmed`) and training stops. If any prediction is wrong, the runner runs another
-6 learning probes, re-distils, and validates a fresh batch of 9 -- repeating until a full
-9/9 batch passes or `MAX_ROUNDS` (4) is reached (then `status=draft`). Confidence is the
+probes) re-predicts each outcome **from the distilled document** (every prediction prompt --
+learning, validation, challenge -- includes a compact view of the three baskets, so the agent
+predicts from the document, not just from raw recent attempts). If all nine are predicted
+correctly, the tool is **confirmed** (`status=confirmed`) and training stops. If any prediction
+is wrong, the runner **re-distils the document with all data so far** (so it corrects from the
+wrong predictions), runs another 6 learning probes from that fresher document, **re-distils
+again**, then validates a fresh batch of 9 -- i.e. the document is refreshed *before* each repeat
+and *before* each retry. This repeats until a full 9/9 batch passes or `MAX_ROUNDS` (4) is reached
+(then `status=draft`). Confidence is the
 overall hit rate across all probes. The dashboard banner reflects the current phase
 ("Learning" vs. "Validating -- round R/4") and the last validation batch's score.
 

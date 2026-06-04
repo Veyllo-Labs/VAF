@@ -1061,12 +1061,8 @@ async def whare_wananga_train(name: str):
         pass
     try:
         from vaf.whare_wananga import jobs
-        try:
-            _ma = int(Config.get("whare_wananga_max_attempts", 21) or 21)
-        except Exception:
-            _ma = 21
-        st = jobs.start_training(agent, name, max_attempts=_ma)
-        print(f"[WHARE-WANANGA] training started: {name} (max_attempts={_ma})")
+        st = jobs.start_training(agent, name)
+        print(f"[WHARE-WANANGA] training started: {name} (validate/refine loop)")
         return {"ok": True, "tool": name, **st}
     except Exception as e:
         return {"ok": False, "tool": name, "state": "error", "message": str(e)}

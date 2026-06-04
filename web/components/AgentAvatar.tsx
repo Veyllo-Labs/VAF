@@ -7,6 +7,16 @@ import React from 'react';
 // Shared by the chat header (basic modes) and the Whare Wananga training stage (full emotion +
 // activity range, plus `invert` for the judge: dark dot on a light square).
 //
+// PERFORMANCE — READ BEFORE ADDING/EDITING AN ANIMATION (see the ANTI-LEAK RULE in globals.css):
+// This avatar renders on EVERY message and runs in QtWebEngine's in-process GPU. Any animation
+// that runs `infinite` (idle wink/float, the stage avatars) MUST animate only `transform` /
+// `opacity`. NEVER animate `clip-path`, `box-shadow`, `border-radius`, `filter`, `background`,
+// `width`/`height` on a continuous animation — each repaints every frame and leaks GPU tiles into
+// the renderer (we crashed at 6 GB once: the idle `wink` used clip-path, several `emo*` animated
+// box-shadow). The dot's glow is therefore a STATIC box-shadow (`glow` below); the blob-morph
+// (border-radius) is allowed only in the chat's short-lived thinking/talking, and the long-running
+// stage avatars pass `lite` to drop it. Confirm with the leak_diag logger (VAF_LEAK_DIAG=1).
+//
 // One unified figure, faithful to docs/animations/agent_avatar: a dark square (the BODY) with
 // the white dot (the EYE) NESTED inside it, so when the body jumps/shakes the eye moves with it.
 // Emotion modes keep the body subtle and the dot expressive; activity modes (learn/success/error)
@@ -78,7 +88,19 @@ const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
 
-export function AgentAvatar({ mode = 'idle', dim = false, invert = false }: { mode?: AvatarMode; dim?: boolean; invert?: boolean }) {
+// `lite` (used by the long-running Whare Wananga training stage): swap the modes that animate
+// border-radius (the blob-morph) for transform-only variants. Animating border-radius forces a
+// per-frame REPAINT, and QtWebEngine's in-process GPU leaks tiles when an avatar repaints
+// continuously for minutes (which the stage does). Compositor-only (transform/opacity) is safe.
+const LITE: Partial<Record<AvatarMode, string>> = {
+    waiting: 'agentAvatarBreathe 4.0s ease-in-out infinite',
+    thinking: 'agentAvatarBreathe 0.7s ease-in-out infinite',
+    working: 'agentAvatarBreathe 0.8s ease-in-out infinite',
+    talking: 'agentAvatarBreathe 0.5s ease-in-out infinite',
+    confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
+};
+
+export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean }) {
     // Settle-to-neutral transition (docs/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
@@ -109,15 +131,16 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false }: { mo
     const overlayGlow = '0 0 4px 1px rgba(30,36,52,0.35)';
     const overlayRing = 'rgba(30,36,52,0.6)';
     const bodyColor = dim ? '#e5e7eb' : invert ? '#f3f4f6' : '#111827';
-    // A light square (judge `invert`, or `dim` archive) is invisible on a light background —
-    // give it a subtle outline + lift so it stays delineated in light mode (harmless on dark).
+    // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
+    // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light mode.
     const lightBody = dim || invert;
 
     const bodyAnimation = dim ? 'none' : (act ? (B_ACT[shown] ?? 'none') : (BODY_ANIM[shown] ?? 'none'));
     const eyeAnimation = dim ? 'none'
-        : shown === 'idle' ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s, wink 5.5s ease-in-out infinite'
+        : shown === 'idle' ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s, wink 7s ease-in-out infinite'
             : act ? (E_ACT[shown] ?? 'none')
-                : (ANIM[shown] ?? 'none');
+                : lite ? (LITE[shown] ?? ANIM[shown] ?? 'none')   // stage: no continuous border-radius repaint
+                    : (ANIM[shown] ?? 'none');
     const eyeSize = dim ? 14 : shown === 'talking' ? 15 : 14;
 
     return (
@@ -202,7 +225,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false }: { mo
                     back to their rest pose, so the next animation starts from neutral. */}
                 <div style={{
                     position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
-                    boxShadow: lightBody ? '0 0 0 1px rgba(0,0,0,0.22), 0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                    boxShadow: lightBody ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
                     transformOrigin: act ? 'center' : 'center bottom',
                     animation: settling ? 'none' : bodyAnimation,
                     transition: 'transform 0.2s ease',

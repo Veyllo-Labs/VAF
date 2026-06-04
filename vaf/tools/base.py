@@ -102,6 +102,12 @@ class BaseTool(ABC):
     #   "irreversible"— cannot be undone (e.g. sending an email, deleting a file)
     side_effect_class: Literal["none", "reversible", "irreversible"] = "none"
 
+    # whare_wananga_prereqs: tool names that must run FIRST to set up the state this tool needs
+    # (e.g. a plan). During Whare Wananga training these prerequisites are added to the (otherwise
+    # class-scoped) sandbox and the agent runs them once before probing this tool, so a tool that
+    # "wants a plan first" can actually be exercised. Empty = no prerequisites.
+    whare_wananga_prereqs: tuple[str, ...] = ()
+
     # admin_only: when True the tool is blocked for non-admin users at the
     # execute_tool() level — the agent simply cannot call it during a session
     # with a regular user.  This is checked via the session's user_scope_id /

@@ -109,6 +109,25 @@ def _tool_params(tool) -> Any:
             or {})
 
 
+def _force_invalid(args: Any, params: Any) -> dict:
+    """Keep an error-path probe safely rejectable. The model's *already-invalid* probes are kept
+    as-is (so different invalid inputs -- empty, wrong field, etc. -- are observed); only a
+    probe that would be a COMPLETE, valid call is neutralised (its required fields dropped) so the
+    tool rejects it before acting. Net effect: no real side effect and the safety halt can't fire,
+    while the probes still vary instead of being a single empty `{}`."""
+    a = dict(args) if isinstance(args, dict) else {}
+    required = params.get("required") if isinstance(params, dict) else None
+    if not (isinstance(required, list) and required):
+        return a  # no declared required fields -> nothing to neutralise (halt stays the net)
+    _empty = (None, "", [], {})
+    already_invalid = any((r not in a) or (a.get(r) in _empty) for r in required)
+    if already_invalid:
+        return a  # the model already made it rejectable -> keep it (preserves variety)
+    for r in required:  # a complete valid call -> drop required fields so it gets rejected
+        a.pop(r, None)
+    return a
+
+
 def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]] = None,
                learn_n: int = LEARN_N, validate_n: int = VALIDATE_N, refine_n: int = REFINE_N,
                max_rounds: int = MAX_ROUNDS, challenge_pass: int = CHALLENGE_PASS,
@@ -151,9 +170,13 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     params = _tool_params(tool)
     schema_hash = store.compute_tool_hash(tool)
 
-    # Training sandbox: only the trained tool + its connection-class siblings may be executed.
+    # Training sandbox: only the trained tool + its connection-class siblings may be executed,
+    # PLUS this tool's declared prerequisites (the "plan first" tools), so a tool that needs setup
+    # can have it run before probing.
     from vaf.whare_wananga.preconditions import tool_class
-    allowed = tool_class(tool_name, list(getattr(agent, "tools", {}).keys()))
+    _all_tools = getattr(agent, "tools", {})
+    prereqs = [p for p in (getattr(tool, "whare_wananga_prereqs", ()) or ()) if isinstance(p, str) and p in _all_tools]
+    allowed = set(tool_class(tool_name, list(_all_tools.keys()))) | set(prereqs)
 
     def _probe(name: str, args: dict) -> str:
         if name not in allowed:
@@ -167,10 +190,14 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         tool_name, side_effect_class=sec, tool_schema_hash=schema_hash, source="whare_wananga")
     rec["tool_schema_hash"] = schema_hash
     rec["status"] = "learning"
-    # Each training run is a fresh assessment: start the predict-then-verify catalogue empty so
-    # a re-train doesn't mix in a previous (e.g. failed/draft) run's probes.
+    # Each training run is a fresh assessment: start the predict-then-verify catalogue AND the
+    # three baskets empty so a re-train doesn't mix in (or pile up, e.g. the halt warning) a
+    # previous run's results. The baskets are re-distilled from scratch on a clean run.
     rec["predict_records"] = []
     rec["uses"] = rec["success"] = rec["fail"] = 0
+    rec["aronui"] = {"when_to_use": "", "output_shape": "", "notes": []}
+    rec["tuatea"] = {"pitfalls": []}
+    rec["tuarua"] = {"procedure": [], "verification": []}
 
     all_attempts: List[dict] = []
     state = {"halted": False}
@@ -201,12 +228,16 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             "\"predicted\": \"<one sentence: what you expect / which error>\"}.")
     else:
         _sys = (
-            "This tool HAS SIDE EFFECTS, so you must NEVER make a real or valid call. Probe ONLY "
-            "with INVALID or INCOMPLETE inputs -- omit required arguments, use empty or wrong-type "
-            "values -- so the tool REJECTS the call with a validation error BEFORE doing anything. "
-            "Learn the argument contract and error messages safely. PREDICT the rejection. Respond "
-            "ONLY with JSON: {\"args\": {<invalid/incomplete args>}, \"predicted_outcome\": \"error\", "
-            "\"predicted\": \"<which validation error you expect>\"}.")
+            "This tool HAS SIDE EFFECTS, so you must NEVER make a valid call (a valid call would "
+            "actually change something). Probe ONLY with INVALID or INCOMPLETE inputs so the tool "
+            "REJECTS the call with a validation error BEFORE doing anything -- this is how you learn "
+            "its argument contract and error messages SAFELY. Make EVERY probe clearly invalid: send "
+            "{} (no args at all), OR set a required field to \"\" / null / a wrong type. Do NOT fill "
+            "in plausible real values, and do NOT guess a working call. PREDICT the rejection. "
+            "Respond ONLY with JSON, e.g. {\"args\": {}, \"predicted_outcome\": \"error\", "
+            "\"predicted\": \"missing required field\"} or "
+            "{\"args\": {\"<a required field>\": \"\"}, \"predicted_outcome\": \"error\", "
+            "\"predicted\": \"empty value rejected\"}.")
 
     def _judge(args: dict, predicted_outcome: str, predicted_text: str, actual: str) -> dict:
         """LLM judge: did the agent's prediction match reality? Transient infra errors pass."""
@@ -260,6 +291,12 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         if predicted_outcome not in ("success", "error"):
             predicted_outcome = "success"
         predicted = _safe(plan.get("predicted") or raw, 200)
+
+        # Error path is for side-effecting tools: GUARANTEE the executed probe is invalid (drop
+        # required fields) so the tool rejects it before acting. This removes the real side effect
+        # AND the spurious halt that fired when the model occasionally proposed a valid call.
+        if mode == "error_path":
+            args = _force_invalid(args, params)
 
         result = _probe(tool_name, args)
         result_s = result if isinstance(result, str) else str(result)
@@ -385,6 +422,10 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         iraw = tool.query_llm(invent_prompt, max_tokens=_MAX_TOKENS, temperature=0.7) or ""
         cargs = (_extract_json(iraw) or {}).get("args")
         cargs = cargs if isinstance(cargs, dict) else {}
+        # Error path: the judge's challenge input must also be forced invalid (no real side effect,
+        # no spurious halt) -- same rule as the learn/validate probes.
+        if mode == "error_path":
+            cargs = _force_invalid(cargs, params)
 
         # 2) The agent predicts the outcome for the judge's fixed input.
         predict_prompt = [
@@ -437,6 +478,51 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             state["halted"] = True
             _emit({"event": "halt", "reason": "challenge input not rejected"})
         return ok
+
+    # --- Phase 0: declaration-only learning for tools that cannot be probed safely ---
+    # An error-path (side-effecting) tool with NO required fields can't be forced invalid, and many
+    # such tools never reject input -- they just mutate state and return a non-error message. Every
+    # probe would therefore be an accepted side effect (-> the safety halt). For these we learn from
+    # the tool's DECLARATION (description + schema) only, with no execution: no side effect, no halt.
+    _required_fields = (params.get("required") if isinstance(params, dict) else None) or []
+    if mode == "error_path" and not _required_fields:
+        _emit({"event": "declare", "tool": tool_name})
+        _distil()  # distils the three baskets from description + schema (all_attempts is empty)
+        learned = _has_knowledge()
+        rec["status"] = "confirmed" if learned else "draft"
+        rec["challenge_passed"] = False
+        rec["learn_mode"] = "declare"
+        rec["confidence"] = 0.0  # not measured -- learned from the declaration, not probed
+        store.save(rec)
+        summary = {"ok": True, "tool": tool_name, "mode": "declare", "declared": True,
+                   "confirmed": learned, "challenge_passed": False, "halted": False,
+                   "rounds": 0, "attempts": 0, "hits": 0, "confidence": 0.0, "status": rec["status"]}
+        _emit({"event": "done", **summary})
+        return summary
+
+    # --- Phase 0b: prerequisites ("plan first") — run the tool's declared setup tools ONCE so
+    #     the precondition is in place before probing. Only for full/none probing (error-path
+    #     probes are forced invalid and rejected, so a precondition wouldn't change anything). ---
+    if mode == "probe" and prereqs:
+        _emit({"event": "prep_start", "prereqs": prereqs})
+        for pname in prereqs:
+            ptool = _all_tools.get(pname)
+            prep_prompt = [
+                {"role": "system", "content": (
+                    "You are preparing a PREREQUISITE so the target tool can then be exercised. Make "
+                    "ONE valid call to the prerequisite tool that establishes the state the target "
+                    "needs (e.g. set a plan). Respond ONLY with JSON: {\"args\": {<args>}}.")},
+                {"role": "user", "content": (
+                    f"Prerequisite tool: {pname}\nDescription: {getattr(ptool, 'description', '') or ''}\n"
+                    f"Parameters: {json.dumps(_tool_params(ptool))[:800]}\n"
+                    f"Target tool to be learned next: {tool_name} -- {description}")},
+            ]
+            praw = tool.query_llm(prep_prompt, max_tokens=_MAX_TOKENS, temperature=0.3) or ""
+            pargs = (_extract_json(praw) or {}).get("args")
+            pargs = pargs if isinstance(pargs, dict) else {}
+            presult = _probe(pname, pargs)
+            _emit({"event": "prep", "tool": pname, "intent": _safe(json.dumps(pargs), 200),
+                   "actual": _safe(presult, 200)})
 
     # --- Phase 1: initial learning (build the tool_knowledge before the final test) ---
     for _ in range(learn_n):

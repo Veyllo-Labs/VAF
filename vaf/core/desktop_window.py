@@ -22,6 +22,8 @@ _window = None   # pywebview Window instance
 _webview = None  # pywebview module (lazy import so it can be optional)
 _state_path: pathlib.Path | None = None  # path to window_state.json
 _save_timer: threading.Timer | None = None  # debounce timer for state saves
+# Renderer crash auto-recovery bookkeeping (see _install_crash_recovery).
+_recovery = {"reloads": 0, "last": 0.0, "hooked": set()}
 
 
 def _load_state(default_w: int, default_h: int) -> tuple[int, int]:
@@ -202,13 +204,65 @@ def _on_resized(width: int, height: int) -> None:
     _save_state(width, height)
 
 
+def _install_crash_recovery() -> None:
+    """Arm auto-recovery for QtWebEngine RENDER-process crashes (the 'QtWebEngineProcess has
+    encountered a fatal error' case). When the renderer dies, `renderProcessTerminated` fires; we
+    reload the view, which respawns the renderer instead of leaving a dead/blank window. A
+    crash-loop guard stops after repeated crashes in a short window so we don't reload forever.
+
+    Idempotent: only hooks each page once (re-fires of `loaded`, incl. our own recovery reload,
+    are ignored)."""
+    try:
+        from webview.platforms.qt import BrowserView
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+    except Exception as e:                       # pragma: no cover - backend/version differences
+        _log.debug("[DesktopWindow] crash recovery unavailable: %s", e)
+        return
+    Status = QWebEnginePage.RenderProcessTerminationStatus
+    for bv in list(getattr(BrowserView, "instances", {}).values()):
+        view = getattr(bv, "webview", None)
+        page = view.page() if view is not None else None
+        if page is None or id(page) in _recovery["hooked"]:
+            continue
+        _recovery["hooked"].add(id(page))
+
+        def _on_terminated(status, exit_code, _view=view):
+            import time as _t
+            name = getattr(status, "name", str(status))
+            _log.error("[DesktopWindow] render process terminated: status=%s exit=%s", name, exit_code)
+            if status == Status.NormalTerminationStatus:
+                return                            # clean shutdown (app closing) -> nothing to recover
+            now = _t.time()
+            if now - _recovery["last"] > 60:
+                _recovery["reloads"] = 0          # crashes are spaced out -> reset the counter
+            _recovery["reloads"] += 1
+            _recovery["last"] = now
+            if _recovery["reloads"] > 5:
+                _log.error("[DesktopWindow] renderer crashed %d× in <60s -- NOT reloading (crash loop); "
+                           "leaving the window for a manual restart", _recovery["reloads"])
+                return
+            _log.warning("[DesktopWindow] respawning the renderer via reload (recovery attempt %d)",
+                         _recovery["reloads"])
+            try:
+                _view.reload()                    # reloads the current URL -> spawns a fresh renderer
+            except Exception as e:                # pragma: no cover
+                _log.error("[DesktopWindow] recovery reload failed: %s", e)
+
+        try:
+            page.renderProcessTerminated.connect(_on_terminated)
+            _log.info("[DesktopWindow] crash recovery armed on renderer")
+        except Exception as e:                    # pragma: no cover
+            _log.debug("[DesktopWindow] could not arm crash recovery: %s", e)
+
+
 def _on_loaded() -> None:
-    """Inject link-interception JS after every page load."""
+    """Inject link-interception JS after every page load, and arm renderer crash recovery."""
     if _window:
         try:
             _window.evaluate_js(_INTERCEPT_JS)
         except Exception as e:
             _log.debug("[DesktopWindow] JS inject failed: %s", e)
+    _install_crash_recovery()
 
 
 def _on_closing() -> bool:
@@ -256,6 +310,7 @@ def _start_mem_logger(interval: float = 2.0) -> None:
 
     log_path = pathlib.Path(__file__).resolve().parents[2] / "logs" / \
         f"leak_diag_{datetime.date.today().isoformat()}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)   # ensure logs/ exists, else open() fails silently
     proc = psutil.Process()
 
     def _loop():
@@ -358,10 +413,12 @@ def start(icon_path: str = None) -> None:
     _state_path = _base / "window_state.json"
     _storage = str(_base)
 
-    # Memory-leak diagnostic logger — DISABLED. The function below is kept intact;
-    # to investigate renderer/GPU RAM again, just uncomment this line, restart, and read
-    # logs/leak_diag_<date>.log (columns: totalRSS / gpu / renderer / jsHeap / domNodes).
-    # _start_mem_logger()
+    # Memory-leak diagnostic logger. Currently ENABLED to investigate the renderer/GPU RAM and the
+    # QtWebEngineProcess crash; it appends to logs/leak_diag_<date>.log (columns: totalRSS / gpu /
+    # renderer / jsHeap / domNodes) every 2s. To turn it off, set VAF_LEAK_DIAG=0.
+    import os as _os
+    if _os.environ.get("VAF_LEAK_DIAG", "1") != "0":
+        _start_mem_logger()
 
     _log.info("[DesktopWindow] Starting GUI loop (main thread), storage=%s", _storage)
     _webview.start(

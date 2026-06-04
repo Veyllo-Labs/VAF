@@ -37,11 +37,15 @@ const STATE_LABEL: Record<string, string> = {
 // gets a new identity on every poll, which would remount its subtree — making the ToolMessage
 // bubble replay its entrance animation (appear/disappear) every 1.5s instead of mounting once.
 function StageCol({ label, sub, footer, children }: { label?: React.ReactNode; sub?: string; footer?: React.ReactNode; children: React.ReactNode }) {
+    // The label is positioned ABSOLUTELY below the visual so it does not add to the column's
+    // height. That way a row of `items-center` aligns the VISUALS (a short avatar box vs the tall
+    // tool card) on one shared centre line, instead of the avatar floating up because its label
+    // made its column taller.
     return (
-        <div className="flex flex-col items-center gap-2">
+        <div className="relative flex flex-col items-center">
             <div className="flex items-center justify-center">{children}</div>
             {(label || sub || footer) && (
-                <div className="text-center">
+                <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-max text-center">
                     {label ? <div className="text-xs font-bold text-gray-800 truncate max-w-[170px]">{label}</div> : null}
                     {sub ? <div className="text-[10px] text-gray-400">{sub}</div> : null}
                     {footer}
@@ -483,11 +487,14 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                             {running && <span className="text-gray-400 normal-case font-normal">· {phaseLabel}</span>}
                             {showJudge && <span className="ml-auto text-gray-400 normal-case font-normal flex items-center gap-1"><Gavel size={11} /> final test — the judge decides pass / fail</span>}
                         </div>
+                        {/* items-center aligns the VISUALS on one centre line. The avatar boxes stay
+                            short (their labels are positioned absolutely in StageCol, so they don't
+                            add height) -> avatar centres line up with the tool card centre + flow. */}
                         <div className="flex items-center justify-center gap-2 md:gap-4">
                             {/* Agent — the learner (living white dot). waiting at rest, talking while it calls tools. */}
                             <StageCol label="Agent" sub={running ? 'calling tool' : 'learning'}>
                                 <div className="h-20 w-20 flex items-center justify-center">
-                                    <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={agentMode} /></div>
+                                    <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={agentMode} lite /></div>
                                 </div>
                             </StageCol>
 
@@ -544,7 +551,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                         }
                                     >
                                         <div className="h-20 w-20 flex items-center justify-center">
-                                            <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={judgeMode} invert /></div>
+                                            <div style={{ transform: 'scale(2.1)' }}><AgentAvatar mode={judgeMode} invert lite /></div>
                                         </div>
                                     </StageCol>
                                 </>

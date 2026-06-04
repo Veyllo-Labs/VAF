@@ -92,6 +92,9 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
             elif etype == "challenge_result":
                 s["challenge"] = {**(s.get("challenge") or {}),
                                   "passed": ev.get("passed"), "total_fails": ev.get("total_fails")}
+            elif etype == "prep_start":
+                s["phase"] = "prep"
+                s["prereqs"] = ev.get("prereqs")
             elif etype == "distil":
                 s["distils"] = (s.get("distils", 0) or 0) + 1
             elif etype == "halt":
@@ -111,6 +114,7 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
                               "confirmed": summary.get("confirmed"), "rounds": summary.get("rounds"),
                               "challenge_passed": summary.get("challenge_passed"),
                               "challenge_fails": summary.get("challenge_fails"),
+                              "declared": summary.get("declared"),
                               "halted": summary.get("halted"),
                               "hits": summary.get("hits", s.get("hits", 0))})
                 else:

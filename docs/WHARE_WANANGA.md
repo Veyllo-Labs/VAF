@@ -133,10 +133,11 @@ ability to self-select easy probes.
 left, the **tool under test** in the middle, and -- during validation/challenge -- the **judge**
 on the right. Both are the living dot (shared `AgentAvatar`) with an **expressive emotion range**
 (squash & stretch character states):
-- *Agent:* `working` (Stage 1 probing, with an orbiting satellite), `thinking` (Stage 2 predicting
-  from the document), `listening` (Stage 3 awaiting the judge's input); a quick `nod` on a correct
-  prediction / `confused` on a wrong one, `idea` when it re-distils the document; `celebrate`
-  (with success rings) when mastered, `sad` on a draft/halt, `idle` at rest.
+- *Agent:* in **Stage 1 (learn)** it shows the `learn` **activity state** (the body+eye model with a
+  progress spinner and knowledge orbs absorbed into the dot), and a quick `success` (jump + check +
+  ring) or `error` (shake + "!") activity beat per probe; in **Stage 2 (validate)** `thinking` and
+  **Stage 3 (challenge)** `listening`, with lighter `nod` / `confused` beats per result; `idea` when
+  it re-distils; `celebrate` when mastered, `sad` on a draft/halt, `idle` at rest.
 - *Judge:* the same avatar **inverted** (dark dot on a light container, dark glow): `thinking`
   while grading, `talking` while posing a challenge, `nod` / `shake` per verdict; below it a `pass`
   (green) / `fail` (red) pill and its one-line reason.
@@ -144,15 +145,27 @@ on the right. Both are the living dot (shared `AgentAvatar`) with an **expressiv
 The tool in the middle is a fixed-size card styled like the chat tool bubble, fed by the latest
 probe's args and response. The links between them animate a **data flow** (grey shapes/digits
 forward; green/red shapes back per result), stopping when the run ends. During plain learning it
-is just agent -> tool; the judge slides in for the final test. (Emotion keyframes live in
-`globals.css`, mirrored from the personal `agent-character-emotions.html` reference.)
+is just agent -> tool; the judge slides in for the final test. Each avatar's dark square also
+reacts subtly per emotion (the `body*` keyframes), the idle dot winks, and state changes use the
+**settle-to-neutral** transition (the agent stays persistent; the running animation is briefly
+dropped so body+eye ease to rest, then the next animation starts from neutral -- see
+`docs/AgentAvatar.md` "Same-position switches") so states flow into one another instead of
+snapping. (Emotion / body / wink keyframes live in `globals.css`,
+mirrored from the `docs/animations/agent_avatar` reference.)
 The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the
 tool being trained plus its connection-class siblings -- e.g. all `whatsapp_*` tools share
 the whatsapp class; non-connection tools are singletons (`preconditions.tool_class`,
 enforced by a guard in the runner). Side-effecting tools are tiered by `side_effect_class`:
-**reversible** tools (e.g. `create_agent_tool`) are learned via the **error/validation path**
--- probed only with invalid/incomplete inputs the tool rejects before acting (no real effect),
-halting if an invalid probe is unexpectedly accepted; **irreversible** tools (e.g. `send_mail`,
+**reversible** tools (e.g. `create_agent_tool`, `update_intent`) are learned via the
+**error/validation path** -- the runner forces every probe invalid (`_force_invalid` drops all
+required fields) so the tool rejects it before acting, learning the argument contract with no real
+effect and regardless of what the model proposes; the safety halt (an invalid probe unexpectedly
+accepted) then only fires for a tool that does not validate its required fields. A reversible tool
+with **no required fields** (e.g. `add_task`, `update_working_memory`: nothing to invalidate, and
+they never reject -- they just mutate session state and return a soft message) is instead learned
+**from its declaration only** (`mode="declare"`): the three baskets are distilled from the
+description + schema with **no execution at all**, so there is no side effect and no halt.
+**irreversible** tools (e.g. `send_mail`,
 payments, deletion) are **not probed at all** (gated), since one accepted probe would be a real
 irreversible effect. A sandboxed/ephemeral **executor** can opt out of the error path by
 declaring `whare_wananga_full_probe = True` (e.g. `python_sandbox`: Docker-isolated, the host

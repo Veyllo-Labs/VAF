@@ -89,6 +89,20 @@
         `width`/`height`, `background`, `clip-path` → each forces a per-frame repaint
    The blob-morph (border-radius) below is therefore allowed ONLY in the active/transient
    modes (thinking/talking/waiting); the always-on idle float is transform-only.
+
+   PAST REGRESSIONS (do not repeat — this is exactly how the rule gets broken):
+   - The idle `wink` once animated `clip-path` (an "eyelid" inset). clip-path repaints every
+     frame, and `wink` runs `infinite` on the idle avatar -> renderer RSS climbed ~15 MB/s to
+     6 GB and QtWebEngineProcess crashed. Fix: wink animates `opacity` only (a blink).
+   - Several `emo*` keyframes animated `box-shadow` (a pulsing glow). box-shadow also repaints;
+     `emoListening` (whole challenge phase) and `emoCelebrate`/`emoSad` (final state) run for a
+     long time -> same leak. Fix: the glow is a STATIC box-shadow on the dot (set inline in
+     AgentAvatar.tsx); the keyframes animate transform only.
+   RULE OF THUMB: if a keyframe can run on the idle/most-recent avatar, or for more than a second,
+   it must be transform/opacity ONLY. Want a glow/shape change? Make it static, or fake it with
+   transform/opacity (e.g. a separate scaled/faded ring element), never by animating the costly
+   property. Re-check with the leak_diag logger (VAF_LEAK_DIAG=1): renderer_MB must stay flat.
+
    AgentAvatar morphing keyframes — defined here so they are always available on first paint */
 @keyframes agentAvatarMorph {
   0%,100% { border-radius:50% 50% 50% 50%/50% 50% 50% 50% }
@@ -125,15 +139,15 @@
 /* ── Agent character emotions (ported 1:1 from the showcase). Applied to the avatar dot to
    give the living dot expressive states in the Whare Wananga training stage. ── */
 @keyframes emoSurprised {
-  0%,100% { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+  0%,100% { transform: translateY(0)   scale(1,1);       }
   6%      { transform: translateY(2px) scale(1.18,0.78); }
-  16%     { transform: translateY(-9px) scale(0.74,1.36); box-shadow: 0 0 18px 6px rgba(255,255,255,.65); }
+  16%     { transform: translateY(-9px) scale(0.74,1.36); }
   24%     { transform: translateY(-8px) scale(1.34,0.84); }
   34%     { transform: translateY(-8px) scale(1.18,1.04); }
   46%     { transform: translateY(-8px) scale(1.24,0.96); }
   60%     { transform: translateY(-2px) scale(0.96,1.06); }
   72%     { transform: translateY(0)   scale(1.05,0.97); }
-  82%     { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+  82%     { transform: translateY(0)   scale(1,1);       }
 }
 @keyframes emoCurious {
   0%,100% { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
@@ -154,13 +168,13 @@
   80%     { transform: rotate(-3deg)  translateX(0);    }
 }
 @keyframes emoIdea {
-  0%   { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
-  35%  { transform: translateY(3px) scale(0.88,0.90); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+  0%   { transform: translateY(2px) scale(0.90,0.92); }
+  35%  { transform: translateY(3px) scale(0.88,0.90); }
   44%  { transform: translateY(1px) scale(0.96,0.98); }
-  50%  { transform: translateY(-6px) scale(1.42,1.42); box-shadow: 0 0 28px 11px rgba(255,255,255,.95); }
-  58%  { transform: translateY(-4px) scale(1.12,1.12); box-shadow: 0 0 16px 6px rgba(255,255,255,.70); }
-  68%  { transform: translateY(0)   scale(1.0,1.0);    box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
-  100% { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+  50%  { transform: translateY(-6px) scale(1.42,1.42); }
+  58%  { transform: translateY(-4px) scale(1.12,1.12); }
+  68%  { transform: translateY(0)   scale(1.0,1.0);    }
+  100% { transform: translateY(2px) scale(0.90,0.92); }
 }
 @keyframes emoHappy {
   0%   { transform: translateY(0)    scale(1,1);     }
@@ -183,12 +197,12 @@
   70% { transform: translate(0,-1px)    scale(1.10,1.10); }
 }
 @keyframes emoSad {
-  0%,100% { transform: translateY(4px) scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
-  50%     { transform: translateY(6px) scale(1.20,0.78); box-shadow: 0 0 4px 1px rgba(255,255,255,.11); }
+  0%,100% { transform: translateY(4px) scale(1.16,0.82); }
+  50%     { transform: translateY(6px) scale(1.20,0.78); }
 }
 @keyframes emoSleepy {
-  0%,100% { transform: translateY(3px) scale(1.08,0.90); box-shadow: 0 0 6px 2px rgba(255,255,255,.16); }
-  50%     { transform: translateY(1px) scale(1.0,1.14);  box-shadow: 0 0 12px 4px rgba(255,255,255,.30); }
+  0%,100% { transform: translateY(3px) scale(1.08,0.90); }
+  50%     { transform: translateY(1px) scale(1.0,1.14);  }
 }
 @keyframes emoNod {
   0%,100% { transform: translateY(0)   scale(1,1);     }
@@ -208,15 +222,15 @@
   82% { transform: translateX(0)    rotate(0deg);  }
 }
 @keyframes emoListening {
-  0%   { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
-  12%  { transform: scale(1.16,1.16); box-shadow: 0 0 14px 4px rgba(255,255,255,.55); }
+  0%   { transform: scale(1.06,1.06); }
+  12%  { transform: scale(1.16,1.16); }
   20%  { transform: scale(1.05,1.05); }
   30%  { transform: scale(1.12,1.12); }
   38%  { transform: scale(1.04,1.04); }
-  55%  { transform: scale(1.20,1.20); box-shadow: 0 0 16px 5px rgba(255,255,255,.60); }
+  55%  { transform: scale(1.20,1.20); }
   65%  { transform: scale(1.05,1.05); }
   80%  { transform: scale(1.10,1.10); }
-  100% { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  100% { transform: scale(1.06,1.06); }
 }
 @keyframes emoSearch {
   0%,100% { transform: translateX(0)    translateY(0)    scale(1,1);     }
@@ -227,13 +241,13 @@
   85% { transform: translateX(8px)  translateY(1px)  scale(1.05,0.96); }
 }
 @keyframes emoCelebrate {
-  0%   { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  0%   { transform: translateY(0)    scale(1,1);     }
   15%  { transform: translateY(2px)  scale(1.16,0.82); }
-  32%  { transform: translateY(-14px) scale(0.84,1.22); box-shadow: 0 0 22px 8px rgba(255,255,255,.85); }
+  32%  { transform: translateY(-14px) scale(0.84,1.22); }
   46%  { transform: translateY(-12px) scale(1.18,0.96); }
   60%  { transform: translateY(0)    scale(1.12,0.90); }
   72%  { transform: translateY(0)    scale(0.98,1.04); }
-  82%  { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  82%  { transform: translateY(0)    scale(1,1);     }
   100% { transform: translateY(0)    scale(1,1);     }
 }
 /* Energy rings fire on the LANDING (60% = dot back at centre) so they sync with the dot. */
@@ -244,10 +258,12 @@
 }
 @keyframes emoOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-/* Subtle idle wink — clip-path only, so it doesn't disturb the dot's transform animation. */
+/* Subtle idle wink — OPACITY only (compositor-only, no repaint). It used to animate `clip-path`,
+   which forces a per-frame REPAINT; running on every idle avatar that leaked in-process-GPU tiles
+   (renderer RSS climbed ~15 MB/s). A quick opacity dip reads as a blink and never repaints. */
 @keyframes wink {
-  0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
-  95%           { clip-path: inset(42% 0% 42% 0%); }
+  0%, 96%, 100% { opacity: 1; }
+  98%           { opacity: 0.15; }
 }
 
 /* Body keyframes (NEW, subtle) — the dark square reacts along with the dot's emotion. */

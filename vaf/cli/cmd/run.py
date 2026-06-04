@@ -16,6 +16,68 @@ from vaf.core.web_server import start_background_server
 from vaf.core.web_interface import get_web_interface
 import threading
 
+
+def _make_cli_agent(verbose: bool = False) -> Agent:
+    """Create the interactive CLI agent and bind it to the local-admin identity.
+
+    Why this exists
+    ---------------
+    The CLI has no authentication: the local user is always the admin. Unlike the
+    Web/Channel path (``vaf.core.gateway.run_agent_step``), the CLI calls
+    ``Agent.chat_step()`` directly and never resolves a ``user_scope_id``. Without
+    binding it here the agent runs under scope ``None`` -> the ``"default"`` bucket,
+    which is a *different* identity from the admin scope the WebUI uses. Because
+    ``last_interaction`` and memory/RAG are both keyed by ``user_scope_id``, this made
+    the CLI show stale/empty context (e.g. "last interaction 10 days ago", "no memories
+    about you") even though the same human was active in the WebUI.
+
+    What it does
+    ------------
+    Applies the exact fallback the gateway uses for local (unauthenticated) calls: binds
+    the agent to ``get_local_admin_scope_id()`` / ``get_local_admin_username()``. This is
+    re-applied on *every* agent (re)creation — initial start and config/session reloads —
+    because ``Agent.__init__`` does not set a scope, so a reload would otherwise drop back
+    to ``"default"``.
+
+    Scope note
+    ----------
+    CLI-only. The Web/Channel paths keep their server-validated JWT scope and are NOT
+    affected; the multi-user separation there is untouched.
+    """
+    a = Agent(verbose=verbose)
+    try:
+        from uuid import UUID
+        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+        # Mirror gateway.run_agent_step's local-admin fallback: store the scope as a UUID
+        # (memory tools expect a UUID). If the configured value is not a valid UUID, leave
+        # the scope unset rather than guessing — identical to the gateway's behaviour.
+        a._current_user_scope_id = UUID(str(get_local_admin_scope_id()))
+        a._current_username = get_local_admin_username()
+    except Exception:
+        # Identity binding must never block the CLI from starting; fall back to defaults.
+        pass
+    return a
+
+
+def _quiet_cli_http_logs() -> None:
+    """Silence per-request httpx/httpcore INFO logs on the CLI console.
+
+    The OpenAI/DeepSeek SDK logs every call as
+    ``INFO:httpx:HTTP Request: POST .../chat/completions "HTTP/1.1 200 OK"``.
+    ``vaf.core.gateway`` calls ``logging.basicConfig(level=INFO)`` on import, which routes
+    those records to the console. We raise the *logger* level (not the root logger) for
+    httpx/httpcore so those INFO records are dropped at the source — this keeps working
+    regardless of what the root logger is set to, and mirrors the existing approach in
+    ``vaf.tools.research_agent``.
+
+    Called only from the interactive CLI commands (``vaf run`` / ``vaf prompt``), never at
+    import time, so the headless/server/tray processes keep their logging untouched.
+    """
+    import logging
+    for _name in ("httpx", "httpcore"):
+        logging.getLogger(_name).setLevel(logging.WARNING)
+
+
 def _heartbeat_loop(interval=5):
     """Background thread to send heartbeats to the persistent server (Tray App)."""
     import uuid
@@ -579,8 +641,11 @@ def run(
     if ctx.invoked_subcommand:
         return
 
+    # CLI-only: drop the noisy "INFO:httpx:HTTP Request ..." lines from the chat console.
+    _quiet_cli_http_logs()
+
     from vaf.core.config import Config
-    
+
     # Determine UI mode from flag (default to modern)
     ui_mode = "classic" if classic else "modern"
     
@@ -612,6 +677,9 @@ def run_prompt(
     from vaf.cli.ui import UI
     from vaf.core.session import SessionManager
 
+    # CLI-only: drop the noisy "INFO:httpx:HTTP Request ..." lines from the console.
+    _quiet_cli_http_logs()
+
     fmt = (output_format or "text").strip().lower()
     if fmt not in ("text", "json", "stream-json"):
         raise typer.BadParameter("output-format must be one of: text, json, stream-json")
@@ -633,7 +701,7 @@ def run_prompt(
         except FileNotFoundError:
             loaded_session = None
 
-    agent = Agent(verbose=False)
+    agent = _make_cli_agent(verbose=False)
     agent.init_chat()
 
     if loaded_session:
@@ -835,7 +903,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         sys.exit(1)
     
     try:
-        agent = Agent(verbose=verbose)
+        agent = _make_cli_agent(verbose=verbose)
         global_agent = agent
         
         # Register Agent with Web Interface for 2-way control
@@ -1552,7 +1620,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 if reload_needed:
                     tui.event("System", "Applying changes, reloading agent...", style="warning")
                     agent.shutdown()
-                    agent = Agent(verbose=verbose)
+                    agent = _make_cli_agent(verbose=verbose)
                     global_agent = agent
                     agent.load_model()
                     agent.init_chat()
@@ -1572,7 +1640,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 
                 tui.event("System", "Applying changes, reloading agent...", style="warning")
                 agent.shutdown()
-                agent = Agent(verbose=verbose)
+                agent = _make_cli_agent(verbose=verbose)
                 global_agent = agent
                 agent.load_model()
                 agent.init_chat()
@@ -1704,7 +1772,7 @@ Tab             - Autocomplete
                     
                     tui.event("System", "Reloading...", style="dim")
                     agent.shutdown()
-                    agent = Agent(verbose=verbose)
+                    agent = _make_cli_agent(verbose=verbose)
                     global_agent = agent
                     agent.load_model()
                     agent.init_chat()
@@ -2347,7 +2415,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
         sys.exit(1)
     
     try:
-        agent = Agent(verbose=verbose)
+        agent = _make_cli_agent(verbose=verbose)
         global_agent = agent
         # Download model first (if needed) - this shows tqdm progress bar
         agent.ensure_model_exists()
@@ -2412,7 +2480,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 UI.logo()
                 UI.event("System", "Reloading Configuration...", style="dim")
                 agent.shutdown()
-                agent = Agent(verbose=verbose) 
+                agent = _make_cli_agent(verbose=verbose) 
                 global_agent = agent
                 agent.load_model()
                 agent.init_chat()
@@ -2425,7 +2493,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 UI.logo()
                 UI.event("System", "Reloading Configuration...", style="dim")
                 agent.shutdown()
-                agent = Agent(verbose=verbose)  
+                agent = _make_cli_agent(verbose=verbose)  
                 global_agent = agent
                 agent.load_model()
                 agent.init_chat()
@@ -2503,7 +2571,7 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
                 
                 UI.event("System", "Reloading...", style="dim")
                 agent.shutdown()
-                agent = Agent(verbose=verbose)
+                agent = _make_cli_agent(verbose=verbose)
                 global_agent = agent 
                 agent.load_model()
                 agent.init_chat()

@@ -92,6 +92,8 @@ When running locally without authentication (CLI or Web UI without JWT), VAF use
 
 Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core.config` instead of reading config directly. This keeps data scoped consistently and avoids a split between "logged-in" and "local" identities.
 
+**Where the binding happens.** For channel and WebSocket clients the gateway (`run_agent_step` in `vaf/core/gateway.py`) applies this fallback. The interactive CLI (`vaf run` and `vaf prompt`) does **not** pass through the gateway — it calls `Agent.chat_step()` directly — so it binds the local-admin scope and username explicitly at agent creation, via `_make_cli_agent()` in `vaf/cli/cmd/run.py`. Without this the CLI would run under scope `None` (the `"default"` bucket) and diverge from the WebUI admin: a stale `last_interaction` and memory/RAG that cannot see the admin's data. The binding is re-applied on every agent (re)creation, because `Agent.__init__` does not set a scope.
+
 ### Hybrid Scoping Strategy (Local Mode Stability)
 
 To bridge the gap between strict multi-tenant isolation and a seamless local UX, VAF uses a **Hybrid Scoping Strategy**. This is especially important for long-lived connections like Email and WhatsApp.

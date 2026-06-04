@@ -130,15 +130,22 @@ round; `CHALLENGE_MAX_FAILS` = 10 total fails end the challenge -- the tool then
 ability to self-select easy probes.
 
 **The training stage.** The dashboard shows a live stage at the bottom: the **agent** on the
-left, the **tool under test** in the middle, and -- only during the validation phase -- the
-**judge** on the right. The agent is the living white dot (shared `AgentAvatar`): it is
-`waiting` (slow morph) at rest and `talking` while it calls the tool. The judge is the same
-avatar **inverted** (a dark dot on a light container -- the negative of the agent): `thinking`
-(focused pulse + glow) while it awaits a call, `talking` while it judges; below it a `pass`
-(green) / `fail` (red) pill and the judge's one-line reason. The tool in the middle is the very
-same tool bubble used in the chat (`ToolMessage`), just smaller, fed by the latest probe's
-args and response. During learning it is just agent -> tool; the judge slides in for the final
-test.
+left, the **tool under test** in the middle, and -- during validation/challenge -- the **judge**
+on the right. Both are the living dot (shared `AgentAvatar`) with an **expressive emotion range**
+(squash & stretch character states):
+- *Agent:* `working` (Stage 1 probing, with an orbiting satellite), `thinking` (Stage 2 predicting
+  from the document), `listening` (Stage 3 awaiting the judge's input); a quick `nod` on a correct
+  prediction / `confused` on a wrong one, `idea` when it re-distils the document; `celebrate`
+  (with success rings) when mastered, `sad` on a draft/halt, `idle` at rest.
+- *Judge:* the same avatar **inverted** (dark dot on a light container, dark glow): `thinking`
+  while grading, `talking` while posing a challenge, `nod` / `shake` per verdict; below it a `pass`
+  (green) / `fail` (red) pill and its one-line reason.
+
+The tool in the middle is a fixed-size card styled like the chat tool bubble, fed by the latest
+probe's args and response. The links between them animate a **data flow** (grey shapes/digits
+forward; green/red shapes back per result), stopping when the run ends. During plain learning it
+is just agent -> tool; the judge slides in for the final test. (Emotion keyframes live in
+`globals.css`, mirrored from the personal `agent-character-emotions.html` reference.)
 The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the
 tool being trained plus its connection-class siblings -- e.g. all `whatsapp_*` tools share
 the whatsapp class; non-connection tools are singletons (`preconditions.tool_class`,

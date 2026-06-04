@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 _lock = threading.Lock()
 _jobs: Dict[str, Dict[str, Any]] = {}  # tool -> status dict
-_MAX_EVENTS = 40
+_MAX_EVENTS = 120  # keep enough live events that the running grid covers a full run (21+9+refine+challenge)
 
 
 def get_status(tool: str) -> Optional[Dict[str, Any]]:
@@ -80,6 +80,11 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
                 s["phase"] = "challenge"
                 s["challenge"] = {"need": ev.get("need"), "max_fails": ev.get("max_fails"),
                                   "round_pass": 0, "round_fail": 0, "total_fails": 0, "passed": False}
+            elif etype == "challenge_progress":
+                s["phase"] = "challenge"
+                s["challenge"] = {**(s.get("challenge") or {}),
+                                  "round_pass": ev.get("round_pass"), "round_fail": ev.get("round_fail"),
+                                  "total_fails": ev.get("total_fails")}
             elif etype == "challenge_round":
                 s["challenge"] = {**(s.get("challenge") or {}),
                                   "round_pass": ev.get("round_pass"), "round_fail": ev.get("round_fail"),
@@ -87,6 +92,8 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
             elif etype == "challenge_result":
                 s["challenge"] = {**(s.get("challenge") or {}),
                                   "passed": ev.get("passed"), "total_fails": ev.get("total_fails")}
+            elif etype == "distil":
+                s["distils"] = (s.get("distils", 0) or 0) + 1
             elif etype == "halt":
                 s["halt_reason"] = ev.get("reason")
 

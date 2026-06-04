@@ -30,8 +30,9 @@ from typing import Any, Callable, Dict, List, Optional
 from vaf.whare_wananga import store
 
 _ERROR_MARKERS = (
-    "[error]", "unknown action", "failed to", "not found", "invalid", "no such",
-    "missing required", "traceback", "exception", "permission denied", "could not",
+    "[error]", "error:", "unknown action", "failed to", "not found", "invalid", "no such",
+    "missing required", "is required", "are required", "traceback", "exception",
+    "permission denied", "could not",
 )
 
 # Phase sizes (Tohunga principle: repeat until predictions are perfect).
@@ -88,8 +89,12 @@ def _extract_json(text: str) -> Optional[dict]:
 
 
 def _classify_actual(result: str) -> str:
-    """Heuristic: did the tool call succeed or error?"""
-    low = (result or "").lower()
+    """Heuristic: did the tool call succeed or error? Tools signal errors in varied ways -- a
+    leading 'Error' / '[ERROR]' / 'Exception' / 'Traceback' (with or without brackets), or a
+    known error phrase anywhere in the response."""
+    low = (result or "").strip().lower()
+    if low.startswith(("error", "[error", "exception", "traceback")):
+        return "error"
     return "error" if any(mk in low for mk in _ERROR_MARKERS) else "success"
 
 
@@ -343,6 +348,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         # Persist mid-run so the dashboard can show the three baskets right after the initial
         # learning phase (before validation) and refresh them after each refinement round.
         store.save(rec)
+        _emit({"event": "distil"})  # the agent just consolidated knowledge -> "idea" beat in the UI
 
     def _has_knowledge() -> bool:
         """Did distillation actually fill any of the three baskets?"""
@@ -499,6 +505,8 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
                 else:
                     round_fail += 1
                     challenge_fails += 1
+                _emit({"event": "challenge_progress", "round_pass": round_pass,
+                       "round_fail": round_fail, "total_fails": challenge_fails})
             if round_pass >= challenge_pass:
                 challenge_passed = True
             elif round_fail >= challenge_round_fails and challenge_fails < challenge_max_fails and not state["halted"]:

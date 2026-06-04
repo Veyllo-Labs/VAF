@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VAF Agent — Charakter &amp; Emotionen</title>
+<style>
+  /* ====================================================================
+     VAF AGENT — der lebende Punkt ALS CHARAKTER
+     --------------------------------------------------------------------
+     Punkt wie in der App (Animationen UNVERAENDERT) — der Punkt ist der Star.
+       Container 36px, bg-gray-900 (#111827), rounded-xl (12px)
+       Punkt 14px, weiss #ffffff
+     NEU: der Koerper (das dunkle Viereck) reagiert jetzt SUBTIL mit
+     (eigene, dezente Animation) — der Punkt laeuft unveraendert daneben.
+
+     Bauprinzip: .scaler reserviert Layout-Platz (36px * --scale);
+     .avatar bleibt nativ 36px und wird per transform skaliert; .body ist
+     das animierbare Viereck, .dot der Punkt (als Geschwister, kein Vermischen).
+     ==================================================================== */
+
+  /* ---------- BASIS-KEYFRAMES (1:1 aus globals.css) ---------- */
+  @keyframes agentAvatarMorph {
+    0%,100% { border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; }
+    20%     { border-radius: 62% 38% 55% 45% / 45% 55% 38% 62%; }
+    45%     { border-radius: 48% 52% 38% 62% / 62% 38% 52% 48%; }
+    70%     { border-radius: 40% 60% 58% 42% / 55% 45% 60% 40%; }
+    85%     { border-radius: 56% 44% 44% 56% / 44% 64% 36% 56%; }
+  }
+  @keyframes agentAvatarBreathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.18); }
+  }
+  @keyframes agentAvatarTalk {
+    0%,100% { transform: scale(1);    border-radius: 50%; }
+    18%     { transform: scale(1.38); border-radius: 62% 38% 55% 45% / 45% 55% 38% 62%; }
+    40%     { transform: scale(0.74); border-radius: 48% 52% 42% 58% / 58% 42% 52% 48%; }
+    62%     { transform: scale(1.30); border-radius: 55% 45% 60% 40% / 40% 60% 45% 55%; }
+    80%     { transform: scale(0.80); border-radius: 44% 56% 38% 62% / 62% 38% 56% 44%; }
+  }
+  @keyframes agentAvatarIdleFloat {
+    0%   { transform: scale(1)    translate(0px,     0px);    }
+    15%  { transform: scale(1.14) translate(0.85px, -0.7px);  }
+    32%  { transform: scale(0.91) translate(-0.6px,  0.85px); }
+    50%  { transform: scale(1.12) translate(-0.85px,-0.5px);  }
+    68%  { transform: scale(0.93) translate(0.7px,   0.85px); }
+    84%  { transform: scale(1.11) translate(0.85px,  0.4px);  }
+    100% { transform: scale(1)    translate(0px,     0px);    }
+  }
+  /* dezentes Zwinkern (nur clip-path -> stoert die transform-Animation nicht) */
+  @keyframes wink {
+    0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
+    95%           { clip-path: inset(42% 0% 42% 0%); }
+  }
+
+  /* ====================================================================
+     PUNKT-KEYFRAMES (UNVERAENDERT) — jeder Loop endet mit einer Ruhe-Beat
+     ==================================================================== */
+
+  /* --- REAKTIONEN --- */
+  @keyframes emoSurprised {
+    0%,100% { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+    6%      { transform: translateY(2px) scale(1.18,0.78); }
+    16%     { transform: translateY(-9px) scale(0.74,1.36); box-shadow: 0 0 18px 6px rgba(255,255,255,.65); }
+    24%     { transform: translateY(-8px) scale(1.34,0.84); }
+    34%     { transform: translateY(-8px) scale(1.18,1.04); }
+    46%     { transform: translateY(-8px) scale(1.24,0.96); }
+    60%     { transform: translateY(-2px) scale(0.96,1.06); }
+    72%     { transform: translateY(0)   scale(1.05,0.97); }
+    82%     { transform: translateY(0)   scale(1,1);       box-shadow: 0 0 8px 2px rgba(255,255,255,.30); }
+  }
+  @keyframes emoCurious {
+    0%,100% { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+    18%     { transform: rotate(-13deg) translateX(-4px) scale(1.03,0.99); }
+    30%     { transform: rotate(-11deg) translateX(-4px) scale(1.05,0.97); }
+    46%     { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+    64%     { transform: rotate(12deg)  translateX(4px)  scale(1.03,0.99); }
+    76%     { transform: rotate(10deg)  translateX(4px)  scale(1.05,0.97); }
+    90%     { transform: rotate(0deg)   translateX(0)    scale(1,1);    }
+  }
+  @keyframes emoConfused {
+    0%,100% { transform: rotate(0deg)   translateX(0);    }
+    12%     { transform: rotate(-9deg)  translateX(-2px); }
+    26%     { transform: rotate(7deg)   translateX(2px);  }
+    40%     { transform: rotate(-6deg)  translateX(-1px); }
+    52%     { transform: rotate(5deg)   translateX(1px);  }
+    62%     { transform: rotate(-3deg)  translateX(0);    }
+    80%     { transform: rotate(-3deg)  translateX(0);    }
+  }
+  @keyframes emoIdea {
+    0%   { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+    35%  { transform: translateY(3px) scale(0.88,0.90); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+    44%  { transform: translateY(1px) scale(0.96,0.98); }
+    50%  { transform: translateY(-6px) scale(1.42,1.42); box-shadow: 0 0 28px 11px rgba(255,255,255,.95); }
+    58%  { transform: translateY(-4px) scale(1.12,1.12); box-shadow: 0 0 16px 6px rgba(255,255,255,.70); }
+    68%  { transform: translateY(0)   scale(1.0,1.0);    box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+    100% { transform: translateY(2px) scale(0.90,0.92); box-shadow: 0 0 4px 1px rgba(255,255,255,.16); }
+  }
+
+  /* --- GEFUEHLE --- */
+  @keyframes emoHappy {
+    0%   { transform: translateY(0)    scale(1,1);     }
+    10%  { transform: translateY(0)    scale(1.12,0.84); }
+    26%  { transform: translateY(-12px) scale(0.86,1.18); }
+    40%  { transform: translateY(0)    scale(1.14,0.82); }
+    52%  { transform: translateY(-9px) scale(0.90,1.12); }
+    64%  { transform: translateY(0)    scale(1.10,0.88); }
+    74%  { transform: translateY(0)    scale(1,1);     }
+    100% { transform: translateY(0)    scale(1,1);     }
+  }
+  @keyframes emoExcited {
+    0%,100% { transform: translate(0,0)     scale(1,1);     }
+    10% { transform: translate(-1px,-1px) scale(1.12,1.12); }
+    20% { transform: translate(1px,1px)   scale(0.92,0.92); }
+    30% { transform: translate(-1px,1px)  scale(1.14,1.14); }
+    40% { transform: translate(1px,-1px)  scale(0.94,0.94); }
+    50% { transform: translate(-1px,0)    scale(1.12,1.12); }
+    60% { transform: translate(1px,0)     scale(0.95,0.95); }
+    70% { transform: translate(0,-1px)    scale(1.10,1.10); }
+  }
+  @keyframes emoSad {
+    0%,100% { transform: translateY(4px) scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
+    50%     { transform: translateY(6px) scale(1.20,0.78); box-shadow: 0 0 4px 1px rgba(255,255,255,.11); }
+  }
+  @keyframes emoSleepy {
+    0%,100% { transform: translateY(3px) scale(1.08,0.90); box-shadow: 0 0 6px 2px rgba(255,255,255,.16); }
+    50%     { transform: translateY(1px) scale(1.0,1.14);  box-shadow: 0 0 12px 4px rgba(255,255,255,.30); }
+  }
+
+  /* --- KOERPERSPRACHE / ANTWORT --- */
+  @keyframes emoNod {
+    0%,100% { transform: translateY(0)   scale(1,1);     }
+    15% { transform: translateY(-3px) scale(0.97,1.04); }
+    30% { transform: translateY(4px)  scale(1.05,0.94); }
+    45% { transform: translateY(-2px) scale(0.98,1.03); }
+    60% { transform: translateY(4px)  scale(1.05,0.94); }
+    75% { transform: translateY(0)    scale(1,1);     }
+  }
+  @keyframes emoShake {
+    0%,100% { transform: translateX(0)    rotate(0deg);  }
+    15% { transform: translateX(-5px) rotate(-6deg); }
+    30% { transform: translateX(5px)  rotate(6deg);  }
+    45% { transform: translateX(-4px) rotate(-5deg); }
+    60% { transform: translateX(4px)  rotate(5deg);  }
+    72% { transform: translateX(-2px) rotate(-2deg); }
+    82% { transform: translateX(0)    rotate(0deg);  }
+  }
+  @keyframes emoListening {
+    0%   { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+    12%  { transform: scale(1.16,1.16); box-shadow: 0 0 14px 4px rgba(255,255,255,.55); }
+    20%  { transform: scale(1.05,1.05); }
+    30%  { transform: scale(1.12,1.12); }
+    38%  { transform: scale(1.04,1.04); }
+    55%  { transform: scale(1.20,1.20); box-shadow: 0 0 16px 5px rgba(255,255,255,.60); }
+    65%  { transform: scale(1.05,1.05); }
+    80%  { transform: scale(1.10,1.10); }
+    100% { transform: scale(1.06,1.06); box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  }
+  @keyframes emoSearch {
+    0%,100% { transform: translateX(0)    translateY(0)    scale(1,1);     }
+    15% { transform: translateX(-8px) translateY(1px)  scale(1.05,0.96); }
+    25% { transform: translateX(-8px) translateY(1px)  scale(1.05,0.96); }
+    50% { transform: translateX(0)    translateY(-2px) scale(1.02,1.02); }
+    75% { transform: translateX(8px)  translateY(1px)  scale(1.05,0.96); }
+    85% { transform: translateX(8px)  translateY(1px)  scale(1.05,0.96); }
+  }
+
+  /* --- HOEHEPUNKTE --- */
+  @keyframes emoCelebrate {
+    0%   { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+    15%  { transform: translateY(2px)  scale(1.16,0.82); }
+    32%  { transform: translateY(-14px) scale(0.84,1.22); box-shadow: 0 0 22px 8px rgba(255,255,255,.85); }
+    46%  { transform: translateY(-12px) scale(1.18,0.96); }
+    60%  { transform: translateY(0)    scale(1.12,0.90); }
+    72%  { transform: translateY(0)    scale(0.98,1.04); }
+    82%  { transform: translateY(0)    scale(1,1);     box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+    100% { transform: translateY(0)    scale(1,1);     }
+  }
+  /* Energie-Ringe: zuenden bei der LANDUNG (60% = Punkt wieder mittig) -> synchron */
+  @keyframes emoRing {
+    0%, 52% { transform: scale(0.30); opacity: 0; }
+    60%     { transform: scale(0.55); opacity: .6; }
+    100%    { transform: scale(2.60); opacity: 0; }
+  }
+  @keyframes emoOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  /* ====================================================================
+     KOERPER-KEYFRAMES (NEU, subtil) — das Viereck reagiert mit
+     ==================================================================== */
+  @keyframes bodySurprised { 0%,100%{transform:translateY(0) scale(1,1);} 6%{transform:translateY(1px) scale(1.04,.96);} 16%{transform:translateY(-3px) scale(.96,1.05);} 34%{transform:translateY(-2px) scale(1.02,.99);} 60%{transform:translateY(0) scale(1,1);} }
+  @keyframes bodyCurious   { 0%,100%{transform:rotate(0);} 22%{transform:rotate(-4deg);} 46%{transform:rotate(0);} 70%{transform:rotate(4deg);} 90%{transform:rotate(0);} }
+  @keyframes bodyConfused  { 0%,100%{transform:rotate(0);} 14%{transform:rotate(-3deg);} 30%{transform:rotate(2deg);} 52%{transform:rotate(2deg);} 72%{transform:rotate(-1deg);} }
+  @keyframes bodyIdea      { 0%,40%{transform:translateY(1px) scale(1.02,.98);} 50%{transform:translateY(-2px) scale(.98,1.04);} 64%{transform:translateY(0) scale(1,1);} 100%{transform:translateY(1px) scale(1.02,.98);} }
+  @keyframes bodyHappy     { 0%,100%{transform:translateY(0) scale(1,1);} 26%{transform:translateY(-3px) scale(.97,1.03);} 40%{transform:translateY(0) scale(1.03,.97);} 52%{transform:translateY(-2px) scale(.98,1.02);} 64%{transform:translateY(0) scale(1.02,.98);} }
+  @keyframes bodyExcited   { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-.7px,.4px);} 45%{transform:translate(.7px,-.4px);} 70%{transform:translate(-.5px,-.3px);} }
+  @keyframes bodySad       { 0%,100%{transform:translateY(1px) scale(1.03,.97);} 50%{transform:translateY(2px) scale(1.05,.95);} }
+  @keyframes bodySleepy    { 0%,100%{transform:scale(1,1);} 50%{transform:translateY(-.5px) scale(1.02,1.03);} }
+  @keyframes bodyNod       { 0%,100%{transform:translateY(0);} 30%{transform:translateY(1.5px);} 60%{transform:translateY(1.5px);} }
+  @keyframes bodyShake     { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-2px);} 30%{transform:translateX(2px);} 45%{transform:translateX(-1.5px);} 60%{transform:translateX(1.5px);} 75%{transform:translateX(0);} }
+  @keyframes bodyListen    { 0%,100%{transform:scale(1,1);} 30%{transform:scale(1.02,1.02);} 60%{transform:scale(1.03,1.03);} }
+  @keyframes bodySearch    { 0%,100%{transform:translateX(0);} 20%{transform:translateX(-2px);} 50%{transform:translateX(0);} 80%{transform:translateX(2px);} }
+  @keyframes bodyCelebrate { 0%,100%{transform:translateY(0) scale(1,1);} 15%{transform:translateY(1px) scale(1.04,.96);} 32%{transform:translateY(-4px) scale(.96,1.05);} 60%{transform:translateY(0) scale(1.04,.94);} 72%{transform:translateY(0) scale(.99,1.02);} 84%{transform:translateY(0) scale(1,1);} }
+  @keyframes bodyWorking   { 0%,100%{transform:scale(1,1);} 50%{transform:scale(1.02,1.02);} }
+
+  /* ====================================================================
+     KOMPONENTE  (scaler reserviert Platz, avatar bleibt nativ 36px)
+     ==================================================================== */
+  .scaler {
+    --scale: 1;
+    position: relative;
+    width:  calc(36px * var(--scale));
+    height: calc(36px * var(--scale));
+    flex: none;
+  }
+  .avatar {
+    position: absolute; top: 0; left: 0;
+    transform: scale(var(--scale));
+    transform-origin: top left;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* der KOERPER (das dunkle Viereck) — jetzt animierbar */
+  .avatar .body {
+    position: absolute; inset: 0; z-index: 0;
+    background: #111827;            /* bg-gray-900 */
+    border-radius: 12px;            /* rounded-xl */
+    transform-origin: center bottom;
+  }
+  .avatar.dim .body { background: #e5e7eb; }
+
+  /* statische Aura — nur im reinen idle */
+  .avatar .aura {
+    position: absolute; z-index: 1; width: 20px; height: 20px;
+    border-radius: 50%; background: #ffffff;
+    opacity: 0; filter: blur(2.5px);
+  }
+  .avatar.idle .aura { opacity: .13; }
+
+  /* der Punkt */
+  .avatar .dot {
+    position: relative; z-index: 2;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #ffffff; transform-origin: center;
+  }
+  .avatar.dim .dot { background: #b0b0b0; }
+
+  /* Erfolgs-Ringe (nur im celebrate sichtbar) */
+  .avatar .ring {
+    position: absolute; z-index: 1; inset: 0; margin: auto;
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.85);
+    opacity: 0; pointer-events: none;
+  }
+  .avatar.celebrate .ring    { animation: emoRing 2.4s ease-out infinite; }
+  .avatar.celebrate .ring.r2 { animation: emoRing 2.4s ease-out infinite .15s; }
+
+  /* Orbit-Satellit (nur im working sichtbar) */
+  .avatar .orbit {
+    position: absolute; z-index: 1; inset: 0; margin: auto;
+    width: 32px; height: 32px; opacity: 0;
+  }
+  .avatar .orbit .satellite {
+    position: absolute; top: -3px; left: 50%; margin-left: -3px;
+    width: 6px; height: 6px; border-radius: 50%; background: #ffffff;
+    box-shadow: 0 0 6px 2px rgba(255,255,255,.5);
+  }
+  .avatar.working .orbit { opacity: 1; animation: emoOrbit 1.6s linear infinite; }
+
+  /* ---------- BASIS-ZUSTAENDE (Punkt wie App) ---------- */
+  .avatar.idle    .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s,
+                                     wink 5.5s ease-in-out infinite; }
+  .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite,
+                                     agentAvatarBreathe 4.0s ease-in-out infinite; }
+  .avatar.thinking .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite,
+                                      agentAvatarBreathe 0.7s ease-in-out infinite; }
+  .avatar.talking  .dot { width: 15px; height: 15px;
+                          animation: agentAvatarTalk 0.75s ease-in-out infinite; }
+  .avatar.waiting .dot, .avatar.thinking .dot, .avatar.talking .dot {
+    box-shadow: 0 0 10px 3px rgba(255,255,255,.35);
+  }
+
+  /* ---------- PUNKT: CHARAKTER-ZUSTAENDE (UNVERAENDERT) ---------- */
+  .avatar.surprised .dot { animation: emoSurprised 2.4s cubic-bezier(.34,1.56,.64,1) infinite; }
+  .avatar.curious   .dot { transform-origin: center bottom;
+                           animation: emoCurious 4.0s ease-in-out infinite;
+                           box-shadow: 0 0 9px 2px rgba(255,255,255,.30); }
+  .avatar.confused  .dot { animation: emoConfused 2.8s ease-in-out infinite,
+                                      agentAvatarMorph 2.2s ease-in-out infinite;
+                           box-shadow: 0 0 8px 2px rgba(255,255,255,.25); }
+  .avatar.idea      .dot { transform-origin: center bottom;
+                           animation: emoIdea 2.8s cubic-bezier(.5,0,.2,1) infinite; }
+
+  .avatar.happy     .dot { transform-origin: center bottom;
+                           animation: emoHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite;
+                           box-shadow: 0 0 12px 4px rgba(255,255,255,.45); }
+  .avatar.excited   .dot { animation: emoExcited 0.9s ease-in-out infinite;
+                           box-shadow: 0 0 14px 4px rgba(255,255,255,.55); }
+  .avatar.sad       .dot { transform-origin: center bottom;
+                           animation: emoSad 4.0s ease-in-out infinite; }
+  .avatar.sleepy    .dot { transform-origin: center bottom;
+                           animation: emoSleepy 4.8s ease-in-out infinite; }
+
+  .avatar.nod       .dot { animation: emoNod 1.7s ease-in-out infinite;
+                           box-shadow: 0 0 10px 3px rgba(255,255,255,.40); }
+  .avatar.shake     .dot { animation: emoShake 1.4s ease-in-out infinite;
+                           box-shadow: 0 0 10px 3px rgba(255,255,255,.35); }
+  .avatar.listening .dot { animation: emoListening 2.2s ease-in-out infinite; }
+  .avatar.search    .dot { animation: emoSearch 3.4s ease-in-out infinite;
+                           box-shadow: 0 0 11px 3px rgba(255,255,255,.45); }
+
+  .avatar.celebrate .dot { transform-origin: center bottom;
+                           animation: emoCelebrate 2.4s cubic-bezier(.3,.7,.3,1) infinite; }
+  .avatar.working   .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite,
+                                      agentAvatarBreathe 0.8s ease-in-out infinite;
+                           box-shadow: 0 0 12px 4px rgba(255,255,255,.45); }
+
+  .avatar.dim .dot { animation: none !important; }
+
+  /* ---------- KOERPER: reagiert subtil mit (NEU) ---------- */
+  .avatar.surprised .body { animation: bodySurprised 2.4s cubic-bezier(.34,1.56,.64,1) infinite; }
+  .avatar.curious   .body { animation: bodyCurious 4.0s ease-in-out infinite; }
+  .avatar.confused  .body { animation: bodyConfused 2.8s ease-in-out infinite; }
+  .avatar.idea      .body { animation: bodyIdea 2.8s cubic-bezier(.5,0,.2,1) infinite; }
+  .avatar.happy     .body { animation: bodyHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite; }
+  .avatar.excited   .body { animation: bodyExcited 0.9s ease-in-out infinite; }
+  .avatar.sad       .body { animation: bodySad 4.0s ease-in-out infinite; }
+  .avatar.sleepy    .body { animation: bodySleepy 4.8s ease-in-out infinite; }
+  .avatar.nod       .body { animation: bodyNod 1.7s ease-in-out infinite; }
+  .avatar.shake     .body { animation: bodyShake 1.4s ease-in-out infinite; }
+  .avatar.listening .body { animation: bodyListen 2.2s ease-in-out infinite; }
+  .avatar.search    .body { animation: bodySearch 3.4s ease-in-out infinite; }
+  .avatar.celebrate .body { animation: bodyCelebrate 2.4s cubic-bezier(.3,.7,.3,1) infinite; }
+  .avatar.working   .body { animation: bodyWorking 1.6s ease-in-out infinite; }
+
+  /* ====================================================================
+     SEITEN-CHROME (nicht Teil des Assets)
+     ==================================================================== */
+  :root {
+    --page-bg: #0a0c12; --panel-bg: #0f131c; --panel-border: #1e2533;
+    --text: #e6e9ef; --text-dim: #8b93a7; --accent: #aab4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page-bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { padding: 40px 32px 24px; border-bottom: 1px solid var(--panel-border); }
+  header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 650; }
+  header p { margin: 0; color: var(--text-dim); font-size: 14px; max-width: 760px; line-height: 1.55; }
+  header .crumbs { margin-top: 14px; font-size: 12px; color: #5b6376; }
+  header .crumbs a { color: var(--accent); text-decoration: none; }
+  main { padding: 32px; display: flex; flex-direction: column; gap: 40px; max-width: 1180px; }
+  section h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-dim); margin: 0 0 4px; font-weight: 600;
+  }
+  section .desc { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; max-width: 760px; line-height: 1.5; }
+  .panel { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 16px; padding: 32px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 30px 24px; }
+  .row { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-end; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .cell .stagebox { display: flex; align-items: center; justify-content: center; min-height: 120px; }
+  .cell .label { font-size: 13px; color: var(--text); text-align: center; font-weight: 550; }
+  .cell .sub { font-size: 11.5px; color: var(--text-dim); text-align: center; max-width: 150px; line-height: 1.35; }
+
+  .group-title { font-size: 12px; color: var(--accent); letter-spacing: .04em;
+    text-transform: uppercase; margin: 4px 0 -8px; font-weight: 600; opacity: .9; }
+
+  .checker {
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(-45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #c9ced8 75%),
+      linear-gradient(-45deg, transparent 75%, #c9ced8 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    border-radius: 16px; padding: 32px;
+  }
+  .checker .label { color: #3a3f4b; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 22px; align-items: center;
+    background: var(--panel-bg); border: 1px solid var(--panel-border);
+    border-radius: 14px; padding: 18px 22px;
+  }
+  .controls label { font-size: 13px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+  .controls select, .controls button { font-size: 13px; padding: 7px 12px; border-radius: 8px;
+    background: #161c29; color: var(--text); border: 1px solid var(--panel-border); cursor: pointer; }
+  .controls button:hover { border-color: var(--accent); }
+  .controls button.active { background: #20284a; border-color: var(--accent); color: #fff; }
+  .controls input[type="range"] { width: 180px; }
+  .stage { margin-top: 22px; display: flex; flex-direction: column; gap: 16px; align-items: center;
+    justify-content: center; min-height: 300px; border-radius: 16px; padding: 24px; }
+  .stage .now { font-size: 12px; color: var(--text-dim); letter-spacing: .05em; }
+  .stage .now b { color: #fff; }
+  .hint { font-size: 12px; color: var(--text-dim); margin-top: 14px; line-height: 1.55; }
+  code { background: #1a2030; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VAF Agent — Charakter &amp; Emotionen</h1>
+  <p>
+    Der lebende weisse <b>Punkt</b> (Animationen unveraendert) — und neu: der <b>Koerper</b>
+    (das dunkle Viereck) reagiert jetzt subtil mit. Jeder Zustand nutzt klassische
+    Animationsprinzipien (Squash&nbsp;&amp; Stretch, Anticipation, Overshoot, Timing), damit
+    der User auf einen Blick <i>fuehlt</i>, was der Agent tut: <b>ueberrascht</b>,
+    <b>neugierig</b>, <b>denkt</b>, <b>hat eine Idee</b>, <b>freut sich</b>, <b>arbeitet</b>,
+    <b>feiert einen Erfolg</b> und mehr. Im Ruhe-Zustand <b>zwinkert</b> er gelegentlich.
+  </p>
+  <p class="crumbs">
+    Familie: <a href="agent-avatar-showcase.html">Basis</a> · <b>Emotionen</b> (diese Datei) ·
+    <a href="agent-away-scenes.html">Away-Szenen</a> ·
+    <a href="agent-activity-states.html">Aktivitaet</a>. Design-Referenz, nicht Teil des gebauten Produkts.
+  </p>
+</header>
+
+<main>
+
+  <!-- 1) BUEHNE -->
+  <section>
+    <h2>Buehne — Zustand waehlen oder die Performance abspielen</h2>
+    <p class="desc">
+      Waehle einen einzelnen Zustand, oder druecke <b>Performance</b> — dann spielt der
+      Agent eine kleine Szene durch und zeigt, wie sich die Zustaende zu einem Charakter
+      verbinden. Groesse und Hintergrund frei einstellbar.
+    </p>
+    <div class="controls">
+      <label>Zustand
+        <select id="ctl-mode"></select>
+      </label>
+      <label>Groesse
+        <input id="ctl-scale" type="range" min="1" max="12" step="0.5" value="6" />
+        <span id="ctl-scale-val">216px</span>
+      </label>
+      <button id="ctl-play">Performance abspielen</button>
+      <button id="ctl-bg">Hintergrund: dunkel</button>
+    </div>
+    <div class="stage" id="stage">
+      <div class="scaler" id="live-scaler" style="--scale:6;">
+        <div class="avatar surprised" id="live">
+          <div class="body"></div>
+          <div class="aura"></div>
+          <div class="ring"></div>
+          <div class="ring r2"></div>
+          <div class="orbit"><div class="satellite"></div></div>
+          <div class="dot"></div>
+        </div>
+      </div>
+      <div class="now">Aktuell: <b id="now-label">ueberrascht</b> <span id="now-sub"></span></div>
+    </div>
+  </section>
+
+  <!-- 2) MODELLBLATT -->
+  <section>
+    <h2>Modellblatt — alle Ausdruecke</h2>
+    <p class="desc">Das komplette "Mienenspiel" des Agenten. Darunter steht jeweils, was der Zustand dem User signalisiert.</p>
+    <div class="panel">
+      <div id="sheet"></div>
+    </div>
+  </section>
+
+  <!-- 3) ECHTE UI-GROESSE -->
+  <section>
+    <h2>Echte UI-Groesse — 36px (wie im Chat)</h2>
+    <p class="desc">So klein lebt die Figur tatsaechlich im Interface — die Persoenlichkeit bleibt lesbar.</p>
+    <div class="panel">
+      <div class="row" id="real"></div>
+    </div>
+  </section>
+
+  <!-- 4) EXPORT -->
+  <section>
+    <h2>Export — transparenter Hintergrund (Schachbrett = transparent)</h2>
+    <div class="checker">
+      <div class="row" id="export"></div>
+    </div>
+    <p class="hint">
+      Fuer PNGs mit echtem Alpha: eine Zelle heranzoomen und per Snip ausschneiden, oder
+      den DOM-Knoten mit <code>html-to-image</code> / Puppeteer-Screenshot
+      (<code>omitBackground:true</code>) exportieren.
+    </p>
+  </section>
+
+</main>
+
+<script>
+  const MODES = [
+    { cls:'idle',      label:'Ruhe',            sub:'praesent, zwinkert ab und zu',    group:'Basis' },
+    { cls:'waiting',   label:'Wartet',          sub:'geduldig, langsam',               group:'Basis' },
+    { cls:'thinking',  label:'Denkt nach',      sub:'fokussiert am Ueberlegen',        group:'Basis' },
+    { cls:'talking',   label:'Spricht',         sub:'antwortet dir',                   group:'Basis' },
+    { cls:'surprised', label:'Ueberrascht',     sub:'etwas Unerwartetes ist passiert', group:'Reaktionen' },
+    { cls:'curious',   label:'Neugierig',       sub:'schaut sich etwas genauer an',    group:'Reaktionen' },
+    { cls:'confused',  label:'Verwirrt',        sub:'versteht etwas (noch) nicht',     group:'Reaktionen' },
+    { cls:'idea',      label:'Geistesblitz',    sub:'hat eine Loesung gefunden',       group:'Reaktionen' },
+    { cls:'happy',     label:'Froehlich',       sub:'freut sich',                      group:'Gefuehle' },
+    { cls:'excited',   label:'Aufgeregt',       sub:'voller Energie, kaum zu bremsen', group:'Gefuehle' },
+    { cls:'sad',       label:'Niedergeschlagen',sub:'etwas ist schiefgelaufen',        group:'Gefuehle' },
+    { cls:'sleepy',    label:'Ruht / Mued',     sub:'entspannt, nichts zu tun',        group:'Gefuehle' },
+    { cls:'nod',       label:'Zustimmung',      sub:'Ja, verstanden',                  group:'Antwort' },
+    { cls:'shake',     label:'Ablehnung',       sub:'Nein, das ging nicht',            group:'Antwort' },
+    { cls:'listening', label:'Hoert zu',        sub:'nimmt deine Eingabe auf',         group:'Antwort' },
+    { cls:'search',    label:'Sucht / Scannt',  sub:'durchsucht etwas',                group:'Antwort' },
+    { cls:'celebrate', label:'Erfolg',          sub:'Aufgabe geschafft',               group:'Hoehepunkte' },
+    { cls:'working',   label:'Arbeitet',        sub:'verarbeitet im Hintergrund',      group:'Hoehepunkte' },
+  ];
+  const byCls = Object.fromEntries(MODES.map(m => [m.cls, m]));
+
+  function makeAvatar(modeCls, scale) {
+    const sc = document.createElement('div');
+    sc.className = 'scaler'; sc.style.setProperty('--scale', scale);
+    const av = document.createElement('div');
+    av.className = 'avatar ' + modeCls;
+    av.innerHTML =
+      '<div class="body"></div>' +
+      '<div class="aura"></div>' +
+      '<div class="ring"></div><div class="ring r2"></div>' +
+      '<div class="orbit"><div class="satellite"></div></div>' +
+      '<div class="dot"></div>';
+    sc.appendChild(av);
+    return sc;
+  }
+  function makeCell(modeCls, scale, label, sub) {
+    const cell = document.createElement('div'); cell.className = 'cell';
+    const box = document.createElement('div'); box.className = 'stagebox';
+    box.appendChild(makeAvatar(modeCls, scale));
+    cell.appendChild(box);
+    if (label) { const l = document.createElement('span'); l.className = 'label'; l.textContent = label; cell.appendChild(l); }
+    if (sub)   { const s = document.createElement('span'); s.className = 'sub';   s.textContent = sub;   cell.appendChild(s); }
+    return cell;
+  }
+
+  const sheet = document.getElementById('sheet');
+  [...new Set(MODES.map(m => m.group))].forEach(g => {
+    const t = document.createElement('div'); t.className = 'group-title'; t.textContent = g; sheet.appendChild(t);
+    const grid = document.createElement('div'); grid.className = 'grid';
+    MODES.filter(m => m.group === g).forEach(m => grid.appendChild(makeCell(m.cls, 3, m.label, m.sub)));
+    sheet.appendChild(grid);
+  });
+
+  const real = document.getElementById('real');
+  MODES.forEach(m => real.appendChild(makeCell(m.cls, 1, m.label, '')));
+
+  const exp = document.getElementById('export');
+  MODES.forEach(m => exp.appendChild(makeCell(m.cls, 5, m.label, '')));
+
+  // --- Live-Buehne ---
+  const live = document.getElementById('live'), liveSc = document.getElementById('live-scaler');
+  const sel = document.getElementById('ctl-mode'), scale = document.getElementById('ctl-scale'), scaleV = document.getElementById('ctl-scale-val');
+  const nowLbl = document.getElementById('now-label'), nowSub = document.getElementById('now-sub');
+
+  let curGroup = null, og;
+  MODES.forEach(m => {
+    if (m.group !== curGroup) { curGroup = m.group; og = document.createElement('optgroup'); og.label = m.group; sel.appendChild(og); }
+    const o = document.createElement('option'); o.value = m.cls; o.textContent = m.label; og.appendChild(o);
+  });
+  sel.value = 'surprised';
+
+  function setState(cls) {
+    live.className = 'avatar ' + cls;
+    sel.value = cls;
+    const m = byCls[cls];
+    nowLbl.textContent = m ? m.label : cls;
+    nowSub.textContent = m && m.sub ? '— ' + m.sub : '';
+  }
+  setState('surprised');
+
+  sel.addEventListener('change', () => { stopShow(); setState(sel.value); });
+  scale.addEventListener('input', () => {
+    liveSc.style.setProperty('--scale', scale.value);
+    scaleV.textContent = Math.round(36 * parseFloat(scale.value)) + 'px';
+  });
+
+  const SHOW = [
+    ['idle',2200],['curious',3600],['surprised',2200],['idea',2600],
+    ['working',3000],['excited',1600],['celebrate',2400],['talking',2400],
+    ['listening',2400],['confused',2800],['nod',1700],['shake',1500],
+    ['sad',3200],['sleepy',3600],
+  ];
+  let showTimer = null, showIdx = 0;
+  const playBtn = document.getElementById('ctl-play');
+  function stepShow() { const [cls, ms] = SHOW[showIdx % SHOW.length]; setState(cls); showIdx++; showTimer = setTimeout(stepShow, ms); }
+  function startShow() { showIdx = 0; stepShow(); playBtn.textContent = 'Performance stoppen'; playBtn.classList.add('active'); }
+  function stopShow() { if (showTimer) { clearTimeout(showTimer); showTimer = null; } playBtn.textContent = 'Performance abspielen'; playBtn.classList.remove('active'); }
+  playBtn.addEventListener('click', () => { showTimer ? stopShow() : startShow(); });
+
+  let dark = true;
+  const bgBtn = document.getElementById('ctl-bg'), stage = document.getElementById('stage');
+  bgBtn.addEventListener('click', () => {
+    dark = !dark;
+    stage.className = dark ? 'stage' : 'stage checker';
+    bgBtn.textContent = 'Hintergrund: ' + (dark ? 'dunkel' : 'transparent');
+  });
+</script>
+</body>
+</html>

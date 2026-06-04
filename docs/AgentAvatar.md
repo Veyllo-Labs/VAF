@@ -69,6 +69,61 @@ Like a facial expression, but abstract.
 - `thinking → talking`: animation switches immediately — the moment thinking becomes speaking is intentionally abrupt
 - `talking/thinking → idle`: active dot shrinks and fades with fast ease-in, idle dot eases back in with float animation
 
+### Universal morph — any state to any state
+
+The transitions above cover `idle <-> active`. Going *directly* between two active modes
+(e.g. `thinking -> celebrate`, `surprised -> happy`) currently swaps the inner animation
+abruptly. To make **every** state flow into **every** other state, use a *collapse-to-neutral,
+then bloom* morph. This is the technique the standalone reference player uses (the
+"Uebergaenge" / transition player in `docs/animations/agent_avatar/agent-all-animations.html`):
+
+1. On a `mode` change, **collapse** the active-dot wrapper toward a small neutral point:
+   `opacity -> 0`, `transform: scale(0.45)`, `filter: blur(4-5px)` over ~0.26 s.
+2. At the neutral point, **swap** the rendered mode so the new emotion's keyframes start fresh.
+3. **Bloom** back: `opacity -> 1`, `scale(1)`, `blur(0)` over ~0.3 s with the spring curve.
+
+Because the morph runs on a *wrapper* (opacity / scale / blur), it is animation-agnostic — it
+works for any pair in either direction, and stays compositor-only (no `border-radius` or
+`box-shadow` repaint), so it respects the idle performance rule above.
+
+**Minimal integration in `web/components/AgentAvatar.tsx`** — render a `shown` mode that lags
+the incoming `mode` prop by one collapse phase, and drive everything (`ANIM`, `size`,
+`ORIGIN_BOTTOM`, rings/satellite) off `shown` instead of `mode`:
+
+```tsx
+const SPRING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+
+const [shown, setShown] = React.useState<AvatarMode>(mode);
+const [collapsed, setCollapsed] = React.useState(false);
+
+React.useEffect(() => {
+  if (mode === shown) return;
+  setCollapsed(true);                 // 1) collapse current to the neutral point
+  const t = setTimeout(() => {
+    setShown(mode);                   // 2) swap mode at the neutral point
+    setCollapsed(false);              // 3) bloom into the new state
+  }, 260);                            // ~ collapse duration
+  return () => clearTimeout(t);
+}, [mode, shown]);
+
+// active-dot wrapper style:
+{
+  opacity: collapsed ? 0 : 1,
+  transform: collapsed ? 'scale(0.45)' : 'scale(1)',
+  filter: collapsed ? 'blur(4px)' : 'blur(0)',
+  transition: `opacity .26s ease, transform .3s ${SPRING}, filter .26s ease`,
+}
+```
+
+Tuning knobs (match the reference player): neutral scale `0.45`, blur `4-5px`, collapse
+`~0.26 s`, bloom `~0.3 s`. Raise the neutral scale or drop the blur for a snappier, less
+"dreamy" morph; a neutral scale of `0` makes the agent disappear fully through the point.
+Debounce rapid `mode` changes so a burst of updates does not stack collapses.
+
+The same morph powers the Whare Wananga training stage, where the avatar cycles through the
+full emotion range — there it is the *primary* feedback, so the universal morph (not the
+abrupt active->active swap) is the better default.
+
 ---
 
 ## Position in Chat
@@ -101,9 +156,13 @@ Older messages: `dim` prop → light gray box, gray static dot.
 
 ## Implementation
 
-**File:** `web/app/page.tsx` — component `AgentAvatar`  
+**File:** `web/components/AgentAvatar.tsx` — component `AgentAvatar` (imported by `web/app/page.tsx`)  
 **Keyframes:** defined in `web/app/globals.css` (always available on first paint — no runtime injection)  
-**Props:** `mode: 'idle' | 'waiting' | 'thinking' | 'talking'` (default: `'idle'`), `dim: boolean` (default: `false`)
+**Props:** `mode` (all 18 modes; default `'idle'`), `dim: boolean` (default `false`), `invert: boolean` (dark dot on light container, for the judge)  
+**Interactive reference:** `docs/animations/agent_avatar/` — standalone single-file HTML showcases of every
+state (base, emotions, away-scenes, activity) plus the transition player. Open
+`animations/agent_avatar/agent-all-animations.html` to see everything in one place; no build step. These
+are design reference / spec, not part of the built product.
 
 **State mapping:**
 - `loading === true` → pre-stream (no token yet) → `waiting`

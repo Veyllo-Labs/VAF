@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VAF Agent — Away-Szenen</title>
+<style>
+  /* ====================================================================
+     VAF AGENT — "USER AWAY"-SZENEN
+     --------------------------------------------------------------------
+     WICHTIG — der Agent besteht aus ZWEI Teilen, die zusammen ER sind:
+       .body  = das dunkle abgerundete Viereck  -> sein KOERPER
+       .eye   = der weisse Punkt                -> sein AUGE / Gesicht
+     Die Requisiten (Zeitung, Fernseher, Tasse, Baelle ...) liegen AUSSERHALB
+     seines Koerpers. Er hantiert damit: der Koerper lehnt/wippt/duckt sich,
+     das Auge schaut/scannt/blinzelt. Nichts spielt im Inneren des Koerpers.
+
+     Bauprinzip: .scene-scaler reserviert Layout-Platz; .scene bleibt nativ
+     200x160 und wird per transform: scale(--s) skaliert -> alle internen
+     Pixel-Bewegungen skalieren proportional mit. Die Buehne ist transparent.
+     ==================================================================== */
+
+  /* ---------------- KOERPER-SPRACHE (body) ---------------- */
+  @keyframes bodyRead {          /* leicht in die Zeitung gelehnt, wiegend */
+    0%,100% { transform: rotate(-1.5deg) translateY(0);  }
+    50%     { transform: rotate(1.5deg)  translateY(1px); }
+  }
+  @keyframes bodyTvWatch {       /* sitzt still, lacht ab und zu kurz */
+    0%,70%,100% { transform: translateY(0)   scale(1,1);     }
+    78% { transform: translateY(-2px) scale(0.95,1.06); }
+    86% { transform: translateY(0)    scale(1.05,0.95); }
+    92% { transform: translateY(-1px) scale(0.98,1.03); }
+  }
+  @keyframes bodyTvLight {       /* Flacker-Licht vom Fernseher (von links) */
+    0%,100% { box-shadow: 0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05), -10px 0 18px -4px rgba(150,190,255,.25); }
+    85%     { box-shadow: 0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05), -14px 0 26px -2px rgba(185,212,255,.50); }
+  }
+  @keyframes bodySip {           /* lehnt sich zur Tasse, sippt, seufzt "ahh" */
+    0%,42%,100% { transform: translate(0,0)      rotate(0deg); }
+    22%         { transform: translate(22px,2px) rotate(8deg); }
+    32%         { transform: translate(22px,2px) rotate(8deg); }
+    42%         { transform: translate(0,0)      rotate(0deg); }
+    50%         { transform: translate(0,-3px)   scale(0.96,1.08); }
+    58%         { transform: translate(0,0); }
+  }
+  @keyframes bodyJuggle { 0%,100% { transform: translateX(-2px); } 50% { transform: translateX(2px); } }
+  @keyframes bodyGroove {        /* wippt im Takt */
+    0%,100% { transform: rotate(-4deg) translateY(0);    }
+    25%     { transform: rotate(-4deg) translateY(-3px); }
+    50%     { transform: rotate(4deg)  translateY(0);    }
+    75%     { transform: rotate(4deg)  translateY(-3px); }
+  }
+  @keyframes bodyBallWatch { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+  @keyframes bodyGaze {          /* lehnt sich zum Sterngucken leicht zurueck */
+    0%,100% { transform: rotate(-4deg); }
+    50%     { transform: rotate(-2deg); }
+  }
+  @keyframes bodyNap {           /* schweres, langsames Atmen + leichtes Absacken */
+    0%,100% { transform: translateY(2px) scale(1.03,0.96); }
+    50%     { transform: translateY(0)   scale(0.99,1.05); }
+  }
+
+  /* ---------------- BLICK / AUGE (eye) ---------------- */
+  @keyframes eyeRead {           /* scannt Zeile fuer Zeile + blinzelt */
+    0%   { transform: translate(-3px,1px) scaleY(1);    }
+    40%  { transform: translate(3px,1px)  scaleY(1);    }
+    45%  { transform: translate(-3px,2px) scaleY(1);    }
+    82%  { transform: translate(3px,2px)  scaleY(1);    }
+    88%  { transform: translate(0,1px)    scaleY(0.15); }
+    92%  { transform: translate(0,1px)    scaleY(1);    }
+    100% { transform: translate(-3px,1px) scaleY(1);    }
+  }
+  @keyframes eyeTv {             /* schaut nach links zum TV, blinzelt */
+    0%,100% { transform: translate(-3px,0) scaleY(1);   }
+    48%     { transform: translate(-3px,0) scaleY(1);   }
+    54%     { transform: translate(-3px,0) scaleY(0.18);}
+    58%     { transform: translate(-3px,0) scaleY(1);   }
+  }
+  @keyframes glowFlickerCool {   /* kaltes Flackern des Auges im TV-Licht */
+    0%,100% { box-shadow: 0 0 8px 2px rgba(150,190,255,.30);  }
+    30%     { box-shadow: 0 0 12px 3px rgba(150,190,255,.50); }
+    55%     { box-shadow: 0 0 7px 2px rgba(150,190,255,.25);  }
+    85%     { box-shadow: 0 0 16px 4px rgba(185,212,255,.60); }
+  }
+  @keyframes eyeSip {            /* blickt zur Tasse runter waehrend des Schlucks */
+    0%,42%,100% { transform: translate(0,0)       scaleY(1);   }
+    12%         { transform: translate(2px,3px)   scaleY(1);   }
+    22%         { transform: translate(3px,4px)   scaleY(0.5); }
+    32%         { transform: translate(3px,4px)   scaleY(0.5); }
+    42%         { transform: translate(0,0)       scaleY(1);   }
+  }
+  @keyframes eyeTrackUp { 0%,100% { transform: translate(-2px,-3px); } 50% { transform: translate(2px,-3px); } }
+  @keyframes eyeGroove  { 0%,100% { transform: translate(-1px,0);    } 50% { transform: translate(1px,0);    } }
+  @keyframes eyeBall    { 0%,100% { transform: translate(3px,-2px);  } 50% { transform: translate(3px,3px);  } }
+  @keyframes eyeGaze    { 0%,100% { transform: translate(-2px,-4px); } 50% { transform: translate(2px,-4px); } }
+  @keyframes eyeNap     { 0%,100% { transform: translateY(1px) scaleY(0.12); } 50% { transform: translateY(1px) scaleY(0.17); } }  /* fast geschlossen */
+
+  /* ---------------- REQUISITEN (prop) ---------------- */
+  @keyframes propPageFlip {
+    0%,82%,100% { transform: scaleX(1);    filter: brightness(1); }
+    88%         { transform: scaleX(0.12); filter: brightness(1.35); }
+  }
+  @keyframes propTvFlicker {
+    0%   { opacity:.92; filter:brightness(1);    background-position:0 0, 0 0;  }
+    20%  { opacity:1;   filter:brightness(1.2);  background-position:0 0, 6px 0; }
+    35%  { opacity:.82; filter:brightness(.85); }
+    55%  { opacity:1;   filter:brightness(1.3);  background-position:0 0, -4px 2px; }
+    70%  { opacity:.9;  filter:brightness(1); }
+    85%  { opacity:1;   filter:brightness(1.55); }
+    100% { opacity:.92; filter:brightness(1);    background-position:0 0, 0 0;  }
+  }
+  @keyframes propSteam {
+    0%   { transform: translateY(0)     scaleX(1);  opacity:0; }
+    25%  { opacity:.55; }
+    100% { transform: translateY(-20px) scaleX(.5); opacity:0; }
+  }
+  @keyframes propShower {        /* kreisendes Jonglier-Muster */
+    0%   { transform: translate(12px, 0);    }
+    30%  { transform: translate(6px, -36px); }
+    50%  { transform: translate(-6px, -40px);}
+    70%  { transform: translate(-12px, -4px);}
+    85%  { transform: translate(0, 2px);     }
+    100% { transform: translate(12px, 0);    }
+  }
+  @keyframes propNote {
+    0%   { transform: translate(0,0)      rotate(-8deg); opacity:0; }
+    20%  { opacity:.85; }
+    100% { transform: translate(16px,-30px) rotate(12deg); opacity:0; }
+  }
+  @keyframes propBounce {        /* Squash & Stretch */
+    0%,100% { transform: translateY(-34px) scaleY(1.12) scaleX(0.9); }
+    45%     { transform: translateY(0)     scaleY(1)    scaleX(1);   }
+    50%     { transform: translateY(2px)   scaleY(0.65) scaleX(1.35);}
+    55%     { transform: translateY(0)     scaleY(1)    scaleX(1);   }
+  }
+  @keyframes propZzz {
+    0%   { transform: translate(0,0)        scale(.6); opacity:0; }
+    18%  { opacity:.85; }
+    100% { transform: translate(14px,-26px) scale(1.2); opacity:0; }
+  }
+  @keyframes propTwinkle { 0%,100% { opacity:.25; transform:scale(.7); } 50% { opacity:1; transform:scale(1.3); } }
+  @keyframes propShoot {
+    0%,74%,100% { opacity:0; transform: translate(0,0)      rotate(25deg); }
+    80%         { opacity:.9; }
+    92%         { opacity:0; transform: translate(82px,40px) rotate(25deg); }
+  }
+
+  /* ====================================================================
+     SZENE + AGENT
+     ==================================================================== */
+  .scene-scaler {
+    --s: 1; position: relative; flex: none;
+    width:  calc(200px * var(--s));
+    height: calc(160px * var(--s));
+  }
+  .scene {
+    /* Theme-Variablen: gelten fuer die externen Requisiten.
+       Standard = Dunkelmodus (helle Props). .light kehrt sie um. */
+    --ink:        #ffffff;                /* Hauptfarbe heller Requisiten */
+    --ink-soft:   rgba(255,255,255,.60);  /* Konturen (Tasse, TV-Rahmen) */
+    --ink-fill:   rgba(255,255,255,.06);  /* Fuellungen (Tasse, Kissen)  */
+    --line:       rgba(255,255,255,.16);  /* Boden, Sitzlinie            */
+    --glow:       rgba(255,255,255,.45);  /* Glow von Baellen            */
+    --paper:      #e9ecf3;                /* Zeitungspapier              */
+    --paper-edge: rgba(255,255,255,0);    /* Papierrand (dunkel: keiner) */
+    position: absolute; top: 0; left: 0;
+    transform: scale(var(--s)); transform-origin: top left;
+    width: 200px; height: 160px; overflow: hidden;   /* Buehne ist transparent */
+  }
+  .scene.light {
+    --ink:        #2a3142;
+    --ink-soft:   rgba(30,36,52,.55);
+    --ink-fill:   rgba(30,36,52,.06);
+    --line:       rgba(30,36,52,.20);
+    --glow:       rgba(30,36,52,.16);
+    --paper:      #fbfcfe;
+    --paper-edge: rgba(30,36,52,.22);     /* heller BG: Papier braucht Rand */
+  }
+  .scene .floor {
+    position: absolute; left: 24px; right: 24px; bottom: 24px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line) 25%, var(--line) 75%, transparent);
+  }
+
+  /* DER AGENT: Koerper (Viereck) + Auge (Punkt) */
+  .scene .agent { position: absolute; width: 48px; height: 48px; }
+  .scene .body {
+    position: absolute; inset: 0; background: #111827; border-radius: 16px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05);
+    transform-origin: center bottom;
+  }
+  .scene .eye {
+    position: absolute; left: 50%; top: 50%; width: 17px; height: 17px;
+    margin: -8.5px 0 0 -8.5px; border-radius: 50%; background: #ffffff;
+    box-shadow: 0 0 9px 2px rgba(255,255,255,.42);
+  }
+
+  /* ---------- ZEITUNG ---------- */
+  .scene.newspaper .agent { left: 64px; top: 48px; }
+  .scene.newspaper .body  { animation: bodyRead 3.6s ease-in-out infinite; }
+  .scene.newspaper .eye   { animation: eyeRead 2.6s ease-in-out infinite; }
+  .scene.newspaper .np {
+    position: absolute; left: 58px; top: 80px; width: 84px; height: 46px; z-index: 3;
+    background:
+      repeating-linear-gradient(0deg, rgba(40,48,66,.55) 0 1.5px, transparent 1.5px 6px),
+      var(--paper);
+    border-radius: 3px; border: 1px solid var(--paper-edge); box-shadow: 0 3px 8px rgba(0,0,0,.35);
+    transform-origin: left center; animation: propPageFlip 5s ease-in-out infinite;
+  }
+  .scene.newspaper .np .mh { position: absolute; top: 4px; left: 6px; right: 6px; height: 5px; background: #2a3142; border-radius: 1px; }
+  .scene.newspaper .np::after { content: ""; position: absolute; top: 14px; bottom: 4px; left: 50%; width: 1px; background: rgba(40,48,66,.4); }
+
+  /* ---------- FERNSEHEN ---------- */
+  .scene.tv .tvset { position: absolute; left: 18px; top: 46px; width: 74px; height: 56px; border: 2px solid var(--ink-soft); border-radius: 8px; background: #05070c; }
+  .scene.tv .tvset .screen {
+    position: absolute; inset: 4px; border-radius: 4px; overflow: hidden;
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.10) 0 2px, transparent 2px 4px),
+      linear-gradient(120deg, #1c3350 0%, #0b1726 55%, #243b5a 100%);
+    animation: propTvFlicker 1.1s ease-in-out infinite;
+  }
+  .scene.tv .tvset .leg { position: absolute; bottom: -6px; width: 2px; height: 6px; background: var(--ink-soft); }
+  .scene.tv .tvset .leg.l { left: 16px; }
+  .scene.tv .tvset .leg.r { right: 16px; }
+  .scene.tv .seat { position: absolute; left: 108px; right: 24px; top: 118px; height: 2px; border-radius: 2px; background: var(--line); }
+  .scene.tv .agent { left: 118px; top: 64px; }
+  .scene.tv .body  { animation: bodyTvWatch 5s ease-in-out infinite, bodyTvLight 1.1s ease-in-out infinite; }
+  .scene.tv .eye   { animation: eyeTv 5s ease-in-out infinite, glowFlickerCool 1.1s ease-in-out infinite; }
+
+  /* ---------- KAFFEEPAUSE ---------- */
+  .scene.coffee .agent { left: 54px; top: 58px; }
+  .scene.coffee .body  { animation: bodySip 4.2s ease-in-out infinite; }
+  .scene.coffee .eye   { animation: eyeSip 4.2s ease-in-out infinite; }
+  .scene.coffee .cup {
+    position: absolute; left: 104px; top: 92px; width: 28px; height: 26px;
+    border: 2px solid var(--ink-soft); border-top: none; border-radius: 0 0 7px 7px; background: var(--ink-fill);
+  }
+  .scene.coffee .cup .handle { position: absolute; left: -9px; top: 5px; width: 9px; height: 12px; border: 2px solid var(--ink-soft); border-right: none; border-radius: 8px 0 0 8px; }
+  .scene.coffee .steam { position: absolute; top: 78px; width: 2px; height: 12px; opacity: 0; background: linear-gradient(transparent, var(--ink-soft), transparent); border-radius: 2px; }
+  .scene.coffee .steam.s1 { left: 110px; animation: propSteam 2.4s ease-in infinite; }
+  .scene.coffee .steam.s2 { left: 116px; animation: propSteam 2.4s ease-in infinite .8s; }
+  .scene.coffee .steam.s3 { left: 122px; animation: propSteam 2.4s ease-in infinite 1.6s; }
+
+  /* ---------- JONGLIEREN ---------- */
+  .scene.juggle .agent { left: 76px; top: 82px; }
+  .scene.juggle .body  { animation: bodyJuggle 1.5s ease-in-out infinite; }
+  .scene.juggle .eye   { animation: eyeTrackUp 1.5s ease-in-out infinite; }
+  .scene.juggle .jb { position: absolute; left: 96px; top: 60px; width: 9px; height: 9px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 5px 1px var(--glow); }
+  .scene.juggle .jb.b1 { animation: propShower 1.5s linear infinite; }
+  .scene.juggle .jb.b2 { animation: propShower 1.5s linear infinite .5s; }
+  .scene.juggle .jb.b3 { animation: propShower 1.5s linear infinite 1s; }
+
+  /* ---------- SUMMEN ---------- */
+  .scene.music .agent { left: 76px; top: 64px; }
+  .scene.music .body  { animation: bodyGroove 1.2s ease-in-out infinite; }
+  .scene.music .eye   { animation: eyeGroove 1.2s ease-in-out infinite; }
+  .scene.music .note { position: absolute; color: var(--ink); opacity: 0; }
+  .scene.music .note.n1 { left: 128px; top: 60px; font-size: 14px; animation: propNote 2.6s ease-out infinite; }
+  .scene.music .note.n2 { left: 122px; top: 58px; font-size: 17px; animation: propNote 2.6s ease-out infinite .9s; }
+  .scene.music .note.n3 { left: 134px; top: 62px; font-size: 11px; animation: propNote 2.6s ease-out infinite 1.8s; }
+
+  /* ---------- BALL ---------- */
+  .scene.ball .agent { left: 46px; top: 64px; }
+  .scene.ball .body  { animation: bodyBallWatch 1.0s ease-in-out infinite; }
+  .scene.ball .eye   { animation: eyeBall 1.0s ease-in-out infinite; }
+  .scene.ball .bball {
+    position: absolute; left: 130px; top: 123px; width: 13px; height: 13px;
+    border-radius: 50%; background: var(--ink); box-shadow: 0 0 6px 2px var(--glow);
+    transform-origin: center bottom; animation: propBounce 1.0s ease-in-out infinite;
+  }
+
+  /* ---------- STERNE ---------- */
+  .scene.stars .agent { left: 78px; top: 84px; }
+  .scene.stars .body  { animation: bodyGaze 5s ease-in-out infinite; }
+  .scene.stars .eye   { animation: eyeGaze 5s ease-in-out infinite; }
+  .scene.stars .star { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: var(--ink); opacity: .3; }
+  .scene.stars .st1 { left: 40px;  top: 22px; animation: propTwinkle 2.4s ease-in-out infinite; }
+  .scene.stars .st2 { left: 78px;  top: 16px; animation: propTwinkle 2.4s ease-in-out infinite .6s; }
+  .scene.stars .st3 { left: 118px; top: 28px; animation: propTwinkle 2.4s ease-in-out infinite 1.2s; }
+  .scene.stars .st4 { left: 150px; top: 20px; animation: propTwinkle 2.4s ease-in-out infinite 1.8s; }
+  .scene.stars .st5 { left: 60px;  top: 40px; animation: propTwinkle 2.4s ease-in-out infinite .9s; }
+  .scene.stars .st6 { left: 140px; top: 44px; animation: propTwinkle 2.4s ease-in-out infinite 1.5s; }
+  .scene.stars .shoot {
+    position: absolute; left: 34px; top: 18px; width: 18px; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--ink)); opacity: 0; animation: propShoot 6s ease-in infinite 2s;
+  }
+
+  /* ---------- NICKERCHEN ---------- */
+  .scene.nap .agent { left: 76px; top: 70px; }
+  .scene.nap .body  { animation: bodyNap 4s ease-in-out infinite; }
+  .scene.nap .eye   { animation: eyeNap 4s ease-in-out infinite; }
+  .scene.nap .pillow { position: absolute; left: 60px; top: 112px; width: 80px; height: 10px; border-radius: 50%; background: var(--ink-fill); }
+  .scene.nap .z { position: absolute; left: 120px; top: 62px; color: var(--ink); font-weight: 700; opacity: 0; font-family: Georgia, serif; }
+  .scene.nap .z1 { font-size: 9px;  animation: propZzz 3.3s ease-out infinite; }
+  .scene.nap .z2 { font-size: 12px; animation: propZzz 3.3s ease-out infinite 1.1s; }
+  .scene.nap .z3 { font-size: 15px; animation: propZzz 3.3s ease-out infinite 2.2s; }
+
+  /* ====================================================================
+     SEITEN-CHROME (nicht Teil des Assets)
+     ==================================================================== */
+  :root {
+    --page-bg: #0a0c12; --panel-bg: #0f131c; --panel-border: #1e2533;
+    --text: #e6e9ef; --text-dim: #8b93a7; --accent: #aab4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page-bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { padding: 40px 32px 24px; border-bottom: 1px solid var(--panel-border); }
+  header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 650; }
+  header p { margin: 0; color: var(--text-dim); font-size: 14px; max-width: 780px; line-height: 1.55; }
+  header .parts { margin-top: 12px; font-size: 13px; color: var(--text); }
+  header .parts b { color: #fff; }
+  header .crumbs { margin-top: 12px; font-size: 12px; color: #5b6376; }
+  header .crumbs a { color: var(--accent); text-decoration: none; }
+  main { padding: 32px; display: flex; flex-direction: column; gap: 40px; max-width: 1180px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin: 0 0 4px; font-weight: 600; }
+  section .desc { color: var(--text-dim); font-size: 13px; margin: 0 0 16px; max-width: 780px; line-height: 1.5; }
+  .panel { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 16px; padding: 32px; }
+  .panel.lite { background: #eef1f6; border-color: #d8dde7; }
+  .panel.lite .label { color: #1a2030; }
+  .panel.lite .sub { color: #5b6376; }
+  .stage.lite { background: #eef1f6; }
+  .stage.lite .now { color: #5b6376; }
+  .stage.lite .now b { color: #11151c; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 30px 24px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .cell .label { font-size: 13px; color: var(--text); text-align: center; font-weight: 550; }
+  .cell .sub { font-size: 11.5px; color: var(--text-dim); text-align: center; line-height: 1.35; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 22px; align-items: center; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 14px; padding: 18px 22px; }
+  .controls label { font-size: 13px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+  .controls select, .controls button { font-size: 13px; padding: 7px 12px; border-radius: 8px; background: #161c29; color: var(--text); border: 1px solid var(--panel-border); cursor: pointer; }
+  .controls button:hover { border-color: var(--accent); }
+  .controls button.active { background: #20284a; border-color: var(--accent); color: #fff; }
+  .controls input[type="range"] { width: 180px; }
+  .stage { margin-top: 22px; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; min-height: 360px; border-radius: 16px; padding: 24px; }
+  .stage .now { font-size: 12px; color: var(--text-dim); letter-spacing: .03em; }
+  .stage .now b { color: #fff; }
+  .hint { font-size: 12px; color: var(--text-dim); margin-top: 14px; line-height: 1.55; }
+  code { background: #1a2030; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+  .checker {
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(-45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #c9ced8 75%),
+      linear-gradient(-45deg, transparent 75%, #c9ced8 75%);
+    background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VAF Agent — Away-Szenen</h1>
+  <p>
+    Was macht der Agent, wenn gerade niemand mit ihm spricht? Er vertreibt sich die Zeit.
+    Diese Leerlauf-Animationen erscheinen, wenn der User einen alten oder archivierten Chat
+    oeffnet — der Agent <b>liest Zeitung</b>, <b>schaut Fernsehen</b>, macht
+    <b>Kaffeepause</b>, <b>jongliert</b> oder <b>traeumt in die Sterne</b>.
+  </p>
+  <p class="parts">
+    Der Agent besteht aus zwei Teilen: dem dunklen abgerundeten Viereck = <b>sein Koerper</b>,
+    und dem weissen Punkt = <b>sein Auge / Gesicht</b>. Die Requisiten liegen <b>ausserhalb</b>
+    seines Koerpers — er hantiert damit (Koerper lehnt &amp; wippt, das Auge schaut, scannt, blinzelt).
+  </p>
+  <p class="crumbs">
+    Schwester-Dateien:
+    <a href="agent-avatar-showcase.html">agent-avatar-showcase.html</a> (Basis) ·
+    <a href="agent-character-emotions.html">agent-character-emotions.html</a> (Emotionen).
+    Design-Referenz, nicht Teil des gebauten Produkts.
+  </p>
+</header>
+
+<main>
+
+  <!-- 1) BUEHNE -->
+  <section>
+    <h2>Buehne — Szene waehlen oder im Leerlauf abspielen</h2>
+    <p class="desc">
+      Waehle eine Szene, oder druecke <b>Leerlauf-Modus</b> — dann wechselt der Agent von
+      selbst durch seine Beschaeftigungen, genau wie es der User im Away-Zustand saehe.
+    </p>
+    <div class="controls">
+      <label>Szene
+        <select id="ctl-scene"></select>
+      </label>
+      <label>Groesse
+        <input id="ctl-scale" type="range" min="1" max="3.5" step="0.25" value="2" />
+        <span id="ctl-scale-val">400px</span>
+      </label>
+      <button id="ctl-cycle">Leerlauf-Modus</button>
+      <button id="ctl-bg">Hintergrund: dunkel</button>
+    </div>
+    <div class="stage" id="stage">
+      <div class="scene-scaler" id="live-scaler" style="--s:2;">
+        <div class="scene newspaper" id="live"></div>
+      </div>
+      <div class="now">Aktuell: <b id="now-label">Liest Zeitung</b> <span id="now-sub"></span></div>
+    </div>
+    <p class="hint">
+      Idee fuer die App: beim Oeffnen eines archivierten Chats zufaellig eine dieser Szenen
+      als Empty-State zeigen — der Agent „wartet" sichtbar auf dich, statt nur still zu sein.
+    </p>
+  </section>
+
+  <!-- 2) GALERIE — DUNKEL -->
+  <section>
+    <h2>Alle Beschaeftigungen — dunkler Hintergrund</h2>
+    <p class="desc">Acht Leerlauf-Szenen. Darunter jeweils, was sie erzaehlen.</p>
+    <div class="panel">
+      <div class="grid" id="gallery"></div>
+    </div>
+  </section>
+
+  <!-- 3) GALERIE — HELL -->
+  <section>
+    <h2>Alle Beschaeftigungen — heller Hintergrund</h2>
+    <p class="desc">
+      Dieselben Szenen im Hellmodus: der Koerper bleibt das dunkle Viereck, das Auge bleibt
+      weiss — aber die externen Requisiten (Zeitung, Dampf, Noten, Baelle, Sterne, „z z z")
+      faerben sich von Weiss auf Tinte um, damit sie auf Hell sichtbar bleiben.
+    </p>
+    <div class="panel lite">
+      <div class="grid" id="gallery-light"></div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // Der Agent ist in jeder Szene: <div class="agent"><div class="body"><div class="eye"></div></div></div>
+  // (Koerper = Viereck, Auge = Punkt). Requisiten sind eigene Geschwister-Elemente daneben.
+  const AGENT = '<div class="agent"><div class="body"><div class="eye"></div></div></div>';
+  const SCENES = [
+    { type:'newspaper', label:'Liest Zeitung',      sub:'haelt die Zeitung vor sich, Auge scannt die Zeilen',
+      html: AGENT + '<div class="np"><span class="mh"></span></div>' },
+    { type:'tv',        label:'Schaut Fernsehen',   sub:'sitzt vor dem Fernseher, vom Flimmern beleuchtet',
+      html: '<div class="tvset"><div class="screen"></div><span class="leg l"></span><span class="leg r"></span></div><div class="seat"></div>' + AGENT },
+    { type:'coffee',    label:'Kaffeepause',        sub:'lehnt sich zur Tasse, nimmt einen Schluck, seufzt "ahh"',
+      html: '<div class="floor"></div>' + AGENT + '<div class="cup"><span class="handle"></span></div><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span>' },
+    { type:'juggle',    label:'Jongliert',          sub:'drei Baelle ueber ihm, Auge verfolgt sie',
+      html: '<div class="floor"></div>' + AGENT + '<span class="jb b1"></span><span class="jb b2"></span><span class="jb b3"></span>' },
+    { type:'music',     label:'Summt vor sich hin', sub:'wippt im Takt, Noten steigen daneben auf',
+      html: AGENT + '<span class="note n1">&#9834;</span><span class="note n2">&#9835;</span><span class="note n3">&#9833;</span>' },
+    { type:'ball',      label:'Spielt mit dem Ball',sub:'Ball huepft vor ihm, Auge folgt auf und ab',
+      html: '<div class="floor"></div>' + AGENT + '<span class="bball"></span>' },
+    { type:'stars',     label:'Schaut in die Sterne',sub:'lehnt sich zurueck, blickt hoch, Sterne funkeln',
+      html: '<span class="star st1"></span><span class="star st2"></span><span class="star st3"></span><span class="star st4"></span><span class="star st5"></span><span class="star st6"></span><span class="shoot"></span>' + AGENT },
+    { type:'nap',       label:'Nickerchen',         sub:'Auge fast zu, atmet schwer, "z z z" steigen auf',
+      html: '<div class="pillow"></div>' + AGENT + '<span class="z z1">z</span><span class="z z2">z</span><span class="z z3">z</span>' },
+  ];
+  const byType = Object.fromEntries(SCENES.map(s => [s.type, s]));
+
+  function makeScene(type, scale, light) {
+    const sc = document.createElement('div');
+    sc.className = 'scene-scaler'; sc.style.setProperty('--s', scale);
+    const s = document.createElement('div');
+    s.className = 'scene ' + type + (light ? ' light' : ''); s.innerHTML = byType[type].html;
+    sc.appendChild(s);
+    return sc;
+  }
+
+  // 2)+3) Galerien (dunkel + hell) aus demselben Katalog
+  function buildGallery(containerId, light) {
+    const c = document.getElementById(containerId);
+    SCENES.forEach(s => {
+      const cell = document.createElement('div'); cell.className = 'cell';
+      cell.appendChild(makeScene(s.type, 1.15, light));
+      const l = document.createElement('span'); l.className = 'label'; l.textContent = s.label;
+      const sub = document.createElement('span'); sub.className = 'sub'; sub.textContent = s.sub;
+      cell.append(l, sub);
+      c.appendChild(cell);
+    });
+  }
+  buildGallery('gallery', false);
+  buildGallery('gallery-light', true);
+
+  // --- Live-Buehne ---
+  const live   = document.getElementById('live');
+  const liveSc = document.getElementById('live-scaler');
+  const sel    = document.getElementById('ctl-scene');
+  const scale  = document.getElementById('ctl-scale');
+  const scaleV = document.getElementById('ctl-scale-val');
+  const nowLbl = document.getElementById('now-label');
+  const nowSub = document.getElementById('now-sub');
+
+  SCENES.forEach(s => { const o = document.createElement('option'); o.value = s.type; o.textContent = s.label; sel.appendChild(o); });
+  sel.value = 'newspaper';
+
+  let liteOn = false;   // Hell/Dunkel-Zustand der Live-Buehne
+
+  function setScene(type) {
+    const s = byType[type];
+    live.className = 'scene ' + type + (liteOn ? ' light' : '');
+    live.innerHTML = s.html;
+    sel.value = type;
+    nowLbl.textContent = s.label;
+    nowSub.textContent = '— ' + s.sub;
+  }
+  setScene('newspaper');
+
+  sel.addEventListener('change', () => { stopCycle(); setScene(sel.value); });
+  scale.addEventListener('input', () => {
+    liveSc.style.setProperty('--s', scale.value);
+    scaleV.textContent = Math.round(200 * parseFloat(scale.value)) + 'px';
+  });
+
+  // --- Leerlauf-Modus (zyklisch) ---
+  let cycleTimer = null, cycleIdx = 0;
+  const cycleBtn = document.getElementById('ctl-cycle');
+  function stepCycle() { setScene(SCENES[cycleIdx % SCENES.length].type); cycleIdx++; cycleTimer = setTimeout(stepCycle, 5500); }
+  function startCycle() { cycleIdx = 0; stepCycle(); cycleBtn.textContent = 'Leerlauf stoppen'; cycleBtn.classList.add('active'); }
+  function stopCycle()  { if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; } cycleBtn.textContent = 'Leerlauf-Modus'; cycleBtn.classList.remove('active'); }
+  cycleBtn.addEventListener('click', () => { cycleTimer ? stopCycle() : startCycle(); });
+
+  // --- Hell/Dunkel-Umschalter (Buehne) ---
+  const bgBtn = document.getElementById('ctl-bg');
+  const stage = document.getElementById('stage');
+  bgBtn.addEventListener('click', () => {
+    liteOn = !liteOn;
+    stage.className = liteOn ? 'stage lite' : 'stage';
+    live.classList.toggle('light', liteOn);   // Szene umfaerben, Animation laeuft weiter
+    bgBtn.textContent = 'Hintergrund: ' + (liteOn ? 'hell' : 'dunkel');
+  });
+</script>
+</body>
+</html>

@@ -229,10 +229,7 @@
   .scene.warning .agent { left:76px; top:62px; }
   .scene.warning .body  { animation: bWarn 2s ease-in-out infinite; }
   .scene.warning .eye   { animation: eWarn 2s ease-in-out infinite; }
-  .scene.warning .tri   { position:absolute; left:50%; top:30px; margin-left:-13px; width:26px; height:26px;
-    border-radius:50%; border:2px solid var(--ink); animation: iPulse 1.4s ease-in-out infinite; }
-  .scene.warning .tri::before { content:""; position:absolute; left:50%; top:5px; transform:translateX(-50%); width:4px; height:9px; background:var(--ink); border-radius:2px; }
-  .scene.warning .tri::after  { content:""; position:absolute; left:50%; top:17px; transform:translateX(-50%); width:4px; height:4px; border-radius:50%; background:var(--ink); }
+  .scene.warning .tri { position:absolute; left:50%; top:30px; margin-left:-13px; width:26px; height:24px; color:var(--ink); overflow:visible; animation: iPulse 1.4s ease-in-out infinite; }
 
   .scene.permission .agent { left:76px; top:60px; }
   .scene.permission .body  { animation: bAsk 2.6s ease-in-out infinite; }
@@ -449,7 +446,7 @@
     // CLUSTER 2
     { c:'2 — Status & Outcome', t:'success',    l:'Success',              s:'task accomplished',              h: AGENT + '<div class="ring"></div><span class="check">&#10003;</span>' },
     { c:'2 — Status & Outcome', t:'error',      l:'Error',              s:'something went wrong',       h: AGENT + '<span class="bang">!</span>' },
-    { c:'2 — Status & Outcome', t:'warning',    l:'Warning',             s:'caution advised',               h: AGENT + '<span class="tri"></span>' },
+    { c:'2 — Status & Outcome', t:'warning',    l:'Warning',             s:'caution advised',               h: AGENT + '<svg class="tri" viewBox="0 0 26 24"><path d="M13 2 L24.5 22 L1.5 22 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><rect x="11.8" y="9" width="2.4" height="6" rx="1.2" fill="currentColor"/><circle cx="13" cy="18.6" r="1.3" fill="currentColor"/></svg>' },
     { c:'2 — Status & Outcome', t:'permission', l:'Needs permission',   s:'asks, waits for your OK', h: AGENT + '<span class="ask">?</span>' },
     { c:'2 — Status & Outcome', t:'blocked',    l:'Blocked',           s:'cannot get through (locked)',  h: AGENT + '<div class="barrier"></div>' },
     // CLUSTER 3

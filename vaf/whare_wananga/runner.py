@@ -181,10 +181,17 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     def _probe(name: str, args: dict) -> str:
         if name not in allowed:
             return f"[Error] training sandbox: '{name}' is outside the class of '{tool_name}'"
+        # Drive execute_tool in training mode so the interactive plan/confirmation gates are skipped
+        # (otherwise a write/confirmation tool returns [CANCELLED] and the probe is meaningless). The
+        # flag is set only for the duration of this call and always restored.
+        prev = getattr(agent, "_ww_training", False)
         try:
+            agent._ww_training = True
             return agent.execute_tool(name, args)
         except Exception as e:
             return f"[Error] {e}"
+        finally:
+            agent._ww_training = prev
 
     rec = store.load(tool_name) or store.new_record(
         tool_name, side_effect_class=sec, tool_schema_hash=schema_hash, source="whare_wananga")
@@ -479,14 +486,25 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             _emit({"event": "halt", "reason": "challenge input not rejected"})
         return ok
 
-    # --- Phase 0: declaration-only learning for tools that cannot be probed safely ---
-    # An error-path (side-effecting) tool with NO required fields can't be forced invalid, and many
-    # such tools never reject input -- they just mutate state and return a non-error message. Every
-    # probe would therefore be an accepted side effect (-> the safety halt). For these we learn from
-    # the tool's DECLARATION (description + schema) only, with no execution: no side effect, no halt.
+    # --- Phase 0: decide whether this side-effecting tool can be PROBED safely at all ---
+    # A reversible tool is normally learned via the error path (forced-invalid probes the tool
+    # rejects). Two cases can't be probed safely and instead learn from the DECLARATION only
+    # (description + schema, no execution -> no side effect, no scary halt):
+    #   (a) NO required fields  -> nothing to invalidate, and such tools rarely reject input.
+    #   (b) CANARY accepted     -> the tool DECLARES required fields but doesn't enforce them (it
+    #       creates with defaults on empty); a single forced-invalid canary that is NOT rejected
+    #       proves probing would just be accepted side effects.
     _required_fields = (params.get("required") if isinstance(params, dict) else None) or []
-    if mode == "error_path" and not _required_fields:
-        _emit({"event": "declare", "tool": tool_name})
+    declare_only = (mode == "error_path" and not _required_fields)
+    canary_note = None
+    if mode == "error_path" and not declare_only:
+        canary = _probe(tool_name, _force_invalid({}, params))
+        if _classify_actual(canary) != "error":
+            declare_only = True
+            canary_note = _safe(canary, 200)   # the tool accepted an invalid call -> can't probe
+
+    if declare_only:
+        _emit({"event": "declare", "tool": tool_name, "canary": canary_note})
         _distil()  # distils the three baskets from description + schema (all_attempts is empty)
         learned = _has_knowledge()
         rec["status"] = "confirmed" if learned else "draft"

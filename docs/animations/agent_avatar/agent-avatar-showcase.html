@@ -47,8 +47,8 @@
   }
   /* dezentes Zwinkern (clip-path -> stoert die Float-Animation nicht) */
   @keyframes wink {
-    0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
-    95%           { clip-path: inset(42% 0% 42% 0%); }
+    0%, 97%, 100% { scale: 1 1; }
+    98.5%         { scale: 1 0.1; }
   }
 
   /* ====================================================================
@@ -91,7 +91,7 @@
 
   /* --- Modus-Animationen (Punkt 1:1 wie App; idle zwinkert) --- */
   .avatar.idle    .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s,
-                                     wink 5.5s ease-in-out infinite; }
+                                     wink 9s ease-in-out infinite; }
   .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite,
                                      agentAvatarBreathe 4.0s ease-in-out infinite; }
   .avatar.thinking .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite,

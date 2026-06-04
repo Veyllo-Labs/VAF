@@ -49,8 +49,8 @@
   }
   /* dezentes Zwinkern (nur clip-path -> stoert die transform-Animation nicht) */
   @keyframes wink {
-    0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
-    95%           { clip-path: inset(42% 0% 42% 0%); }
+    0%, 97%, 100% { scale: 1 1; }
+    98.5%         { scale: 1 0.1; }
   }
 
   /* ====================================================================
@@ -119,8 +119,12 @@
     70% { transform: translate(0,-1px)    scale(1.10,1.10); }
   }
   @keyframes emoSad {
-    0%,100% { transform: translateY(4px) scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
-    50%     { transform: translateY(6px) scale(1.20,0.78); box-shadow: 0 0 4px 1px rgba(255,255,255,.11); }
+    0%      { transform: translateY(7px) translateX(0)    scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
+    14%     { transform: translateY(7px) translateX(-3px) scale(1.15,0.83); box-shadow: 0 0 4px 1px rgba(255,255,255,.12); }
+    30%     { transform: translateY(7px) translateX(3px)  scale(1.15,0.83); box-shadow: 0 0 4px 1px rgba(255,255,255,.12); }
+    44%     { transform: translateY(7px) translateX(0)    scale(1.16,0.82); box-shadow: 0 0 4px 1px rgba(255,255,255,.12); }
+    54%,84% { transform: translateY(1px) translateX(0)    scale(1.04,0.96); box-shadow: 0 0 7px 2px rgba(255,255,255,.22); }
+    100%    { transform: translateY(7px) translateX(0)    scale(1.16,0.82); box-shadow: 0 0 5px 1px rgba(255,255,255,.15); }
   }
   @keyframes emoSleepy {
     0%,100% { transform: translateY(3px) scale(1.08,0.90); box-shadow: 0 0 6px 2px rgba(255,255,255,.16); }
@@ -193,7 +197,7 @@
   @keyframes bodyIdea      { 0%,40%{transform:translateY(1px) scale(1.02,.98);} 50%{transform:translateY(-2px) scale(.98,1.04);} 64%{transform:translateY(0) scale(1,1);} 100%{transform:translateY(1px) scale(1.02,.98);} }
   @keyframes bodyHappy     { 0%,100%{transform:translateY(0) scale(1,1);} 26%{transform:translateY(-3px) scale(.97,1.03);} 40%{transform:translateY(0) scale(1.03,.97);} 52%{transform:translateY(-2px) scale(.98,1.02);} 64%{transform:translateY(0) scale(1.02,.98);} }
   @keyframes bodyExcited   { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-.7px,.4px);} 45%{transform:translate(.7px,-.4px);} 70%{transform:translate(-.5px,-.3px);} }
-  @keyframes bodySad       { 0%,100%{transform:translateY(1px) scale(1.03,.97);} 50%{transform:translateY(2px) scale(1.05,.95);} }
+  @keyframes bodySad       { 0%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} 14%{transform:rotate(-5deg) translateY(2px) scale(1.04,.97);} 30%{transform:rotate(5deg) translateY(2px) scale(1.04,.97);} 44%{transform:rotate(0deg) translateY(3px) scale(1.05,.95);} 54%,84%{transform:rotate(0deg) translateY(-1px) scale(1,1.03);} 100%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} }
   @keyframes bodySleepy    { 0%,100%{transform:scale(1,1);} 50%{transform:translateY(-.5px) scale(1.02,1.03);} }
   @keyframes bodyNod       { 0%,100%{transform:translateY(0);} 30%{transform:translateY(1.5px);} 60%{transform:translateY(1.5px);} }
   @keyframes bodyShake     { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-2px);} 30%{transform:translateX(2px);} 45%{transform:translateX(-1.5px);} 60%{transform:translateX(1.5px);} 75%{transform:translateX(0);} }
@@ -269,7 +273,7 @@
 
   /* ---------- BASIS-ZUSTAENDE (Punkt wie App) ---------- */
   .avatar.idle    .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s,
-                                     wink 5.5s ease-in-out infinite; }
+                                     wink 9s ease-in-out infinite; }
   .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite,
                                      agentAvatarBreathe 4.0s ease-in-out infinite; }
   .avatar.thinking .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite,
@@ -297,7 +301,7 @@
   .avatar.excited   .dot { animation: emoExcited 0.9s ease-in-out infinite;
                            box-shadow: 0 0 14px 4px rgba(255,255,255,.55); }
   .avatar.sad       .dot { transform-origin: center bottom;
-                           animation: emoSad 4.0s ease-in-out infinite; }
+                           animation: emoSad 5.5s ease-in-out infinite; }
   .avatar.sleepy    .dot { transform-origin: center bottom;
                            animation: emoSleepy 4.8s ease-in-out infinite; }
 
@@ -324,7 +328,7 @@
   .avatar.idea      .body { animation: bodyIdea 2.8s cubic-bezier(.5,0,.2,1) infinite; }
   .avatar.happy     .body { animation: bodyHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite; }
   .avatar.excited   .body { animation: bodyExcited 0.9s ease-in-out infinite; }
-  .avatar.sad       .body { animation: bodySad 4.0s ease-in-out infinite; }
+  .avatar.sad       .body { animation: bodySad 5.5s ease-in-out infinite; }
   .avatar.sleepy    .body { animation: bodySleepy 4.8s ease-in-out infinite; }
   .avatar.nod       .body { animation: bodyNod 1.7s ease-in-out infinite; }
   .avatar.shake     .body { animation: bodyShake 1.4s ease-in-out infinite; }

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     X, Activity, Zap, AlertTriangle, CheckCircle2, Clock, Eye, ShieldAlert, ListChecks, Loader2,
-    Gavel, ArrowRight, XCircle,
+    Gavel, XCircle,
 } from 'lucide-react';
 import { AgentAvatar } from '@/components/AgentAvatar';
 
@@ -51,8 +51,22 @@ function StageCol({ label, sub, footer, children }: { label?: React.ReactNode; s
     );
 }
 
-function Connector({ on }: { on: boolean }) {
-    return <ArrowRight size={22} className={`shrink-0 ${on ? 'text-amber-500 animate-pulse' : 'text-gray-300'}`} />;
+// Data-flow link between two actors: small dots stream left -> right while the step is active
+// (the agent feeding input to the tool, the tool feeding its result to the judge); a faint
+// static line when idle. Replaces the old static arrow.
+function FlowLink({ on }: { on: boolean }) {
+    return (
+        <div className="relative h-5 w-16 shrink-0 self-center overflow-hidden" aria-hidden>
+            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-gray-200" />
+            {on && [0, 1, 2].map((i) => (
+                <span
+                    key={i}
+                    className="absolute top-1/2 h-1.5 w-1.5 rounded-full bg-amber-500"
+                    style={{ left: 0, marginTop: -3, animation: `wwFlow 1.15s linear ${i * 0.38}s infinite` }}
+                />
+            ))}
+        </div>
+    );
 }
 
 // Pull the main string argument (the code/query/etc.) out of the probe's args JSON for display.
@@ -358,7 +372,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                 </div>
                             </StageCol>
 
-                            <Connector on={running} />
+                            <FlowLink on={running} />
 
                             {/* Tool under test — a FIXED-size card (styled like the chat tool bubble:
                                 status dot, name, output). Always the same size; only the content
@@ -395,7 +409,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                                 thinking while awaiting, talking while it judges. */}
                             {showJudge && (
                                 <>
-                                    <Connector on={inValidation} />
+                                    <FlowLink on={judgeActive} />
                                     <StageCol
                                         label="Judge"
                                         footer={

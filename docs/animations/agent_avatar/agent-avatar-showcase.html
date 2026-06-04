@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VAF Agent Avatar — Showcase &amp; Export</title>
+<style>
+  /* ====================================================================
+     VAF AGENT AVATAR — der lebende Punkt (Basis-Zustaende)
+     Single-file Referenz fuer Screenshots & Post-Content.
+       web/app/page.tsx     (Komponente AgentAvatar)
+       web/app/globals.css  (Keyframes)
+
+     Modi: idle · idle+dim · waiting · thinking · talking
+     Punkt-Animationen 1:1 wie in der App. Konsistent mit der Emotions-Datei:
+     der Koerper ist ein eigenes .body-Element (animierbar), und im Ruhe-Modus
+     zwinkert der Punkt gelegentlich.
+     ==================================================================== */
+
+  /* ---- echte Keyframes aus globals.css ---- */
+  @keyframes agentAvatarMorph {
+    0%,100% { border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; }
+    20%     { border-radius: 62% 38% 55% 45% / 45% 55% 38% 62%; }
+    45%     { border-radius: 48% 52% 38% 62% / 62% 38% 52% 48%; }
+    70%     { border-radius: 40% 60% 58% 42% / 55% 45% 60% 40%; }
+    85%     { border-radius: 56% 44% 44% 56% / 44% 64% 36% 56%; }
+  }
+  @keyframes agentAvatarBreathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.18); }
+  }
+  @keyframes agentAvatarTalk {
+    0%,100% { transform: scale(1);    border-radius: 50%; }
+    18%     { transform: scale(1.38); border-radius: 62% 38% 55% 45% / 45% 55% 38% 62%; }
+    40%     { transform: scale(0.74); border-radius: 48% 52% 42% 58% / 58% 42% 52% 48%; }
+    62%     { transform: scale(1.30); border-radius: 55% 45% 60% 40% / 40% 60% 45% 55%; }
+    80%     { transform: scale(0.80); border-radius: 44% 56% 38% 62% / 62% 38% 56% 44%; }
+  }
+  @keyframes agentAvatarIdleFloat {
+    0%   { transform: scale(1)    translate(0px,     0px);    }
+    15%  { transform: scale(1.14) translate(0.85px, -0.7px);  }
+    32%  { transform: scale(0.91) translate(-0.6px,  0.85px); }
+    50%  { transform: scale(1.12) translate(-0.85px,-0.5px);  }
+    68%  { transform: scale(0.93) translate(0.7px,   0.85px); }
+    84%  { transform: scale(1.11) translate(0.85px,  0.4px);  }
+    100% { transform: scale(1)    translate(0px,     0px);    }
+  }
+  /* dezentes Zwinkern (clip-path -> stoert die Float-Animation nicht) */
+  @keyframes wink {
+    0%, 91%, 100% { clip-path: inset(0% 0% 0% 0%); }
+    95%           { clip-path: inset(42% 0% 42% 0%); }
+  }
+
+  /* ====================================================================
+     KOMPONENTE  (--scale skaliert das 36px-Modul hoch)
+     ==================================================================== */
+  .scaler {
+    --scale: 1; position: relative; flex: none;
+    width: calc(36px * var(--scale)); height: calc(36px * var(--scale));
+  }
+  .avatar {
+    position: absolute; top: 0; left: 0;
+    transform: scale(var(--scale)); transform-origin: top left;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* der KOERPER (das dunkle Viereck) — eigenes, animierbares Element */
+  .avatar .body {
+    position: absolute; inset: 0; z-index: 0;
+    background: #111827;            /* bg-gray-900 */
+    border-radius: 12px;            /* rounded-xl */
+    transform-origin: center bottom;
+  }
+  .avatar.dim .body { background: #e5e7eb; }   /* bg-gray-200 */
+
+  /* statische Aura — nur im reinen idle */
+  .avatar .aura {
+    position: absolute; z-index: 1; width: 20px; height: 20px;
+    border-radius: 50%; background: #ffffff; opacity: 0; filter: blur(2.5px);
+  }
+  .avatar.idle .aura { opacity: .13; }
+  .avatar.dim  .aura { opacity: 0; }
+
+  /* der Punkt */
+  .avatar .dot {
+    position: relative; z-index: 2;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #ffffff; transform-origin: center;
+  }
+  .avatar.dim .dot { background: #b0b0b0; }
+
+  /* --- Modus-Animationen (Punkt 1:1 wie App; idle zwinkert) --- */
+  .avatar.idle    .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s,
+                                     wink 5.5s ease-in-out infinite; }
+  .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite,
+                                     agentAvatarBreathe 4.0s ease-in-out infinite; }
+  .avatar.thinking .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite,
+                                      agentAvatarBreathe 0.7s ease-in-out infinite; }
+  .avatar.talking  .dot { width: 15px; height: 15px;
+                          animation: agentAvatarTalk 0.75s ease-in-out infinite; }
+  .avatar.waiting .dot, .avatar.thinking .dot, .avatar.talking .dot {
+    box-shadow: 0 0 10px 3px rgba(255,255,255,.35);
+  }
+  .avatar.dim .dot { animation: none !important; }
+
+  /* ====================================================================
+     SEITEN-CHROME (nicht Teil des Assets)
+     ==================================================================== */
+  :root {
+    --page-bg: #0a0c12; --panel-bg: #0f131c; --panel-border: #1e2533;
+    --text: #e6e9ef; --text-dim: #8b93a7; --accent: #aab4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page-bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { padding: 40px 32px 24px; border-bottom: 1px solid var(--panel-border); }
+  header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 650; }
+  header p { margin: 0; color: var(--text-dim); font-size: 14px; max-width: 740px; line-height: 1.55; }
+  header .crumbs { margin-top: 14px; font-size: 12px; color: #5b6376; }
+  header .crumbs a { color: var(--accent); text-decoration: none; }
+  main { padding: 32px; display: flex; flex-direction: column; gap: 40px; max-width: 1100px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin: 0 0 16px; font-weight: 600; }
+  .panel { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 16px; padding: 32px; }
+  .row { display: flex; flex-wrap: wrap; gap: 44px; align-items: flex-end; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .cell .label { font-size: 12px; color: var(--text-dim); text-align: center; }
+  .cell .sub { font-size: 11px; color: #5b6376; text-align: center; }
+  .checker {
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(-45deg, #c9ced8 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #c9ced8 75%),
+      linear-gradient(-45deg, transparent 75%, #c9ced8 75%);
+    background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    border-radius: 16px; padding: 32px;
+  }
+  .checker .label { color: #3a3f4b; }
+  .controls { display: flex; flex-wrap: wrap; gap: 22px; align-items: center;
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 14px; padding: 18px 22px; }
+  .controls label { font-size: 13px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; }
+  .controls select, .controls button { font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    background: #161c29; color: var(--text); border: 1px solid var(--panel-border); cursor: pointer; }
+  .controls input[type="range"] { width: 180px; }
+  .stage { margin-top: 22px; display: flex; gap: 48px; align-items: center; justify-content: center;
+    min-height: 280px; border-radius: 16px; }
+  .hint { font-size: 12px; color: var(--text-dim); margin-top: 12px; line-height: 1.55; }
+  code { background: #1a2030; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VAF Agent Avatar — der lebende Punkt</h1>
+  <p>
+    Zentrale Referenz fuer Screenshots &amp; Post-Content. Fuenf Zustaende:
+    <b>idle</b> (sanftes Schweben + gelegentliches Zwinkern), <b>idle+dim</b> (Archiv, grau, still),
+    <b>waiting</b> (langsames Morphen), <b>thinking</b> (fokussiertes Pulsieren mit Glow),
+    <b>talking</b> (rhythmisches Sprechen). Der Punkt ist <b>weiss</b> auf dunklem,
+    abgerundetem Koerper — exakt wie in der App (36&nbsp;px, <code>bg-gray-900</code>,
+    <code>rounded-xl</code>). Konsistent mit der Emotions-Datei: der Koerper ist ein eigenes
+    Element, der Punkt laeuft 1:1 wie im echten Avatar.
+  </p>
+  <p class="crumbs">
+    Familie: <b>Basis</b> (diese Datei) ·
+    <a href="agent-character-emotions.html">Emotionen</a> ·
+    <a href="agent-away-scenes.html">Away-Szenen</a> ·
+    <a href="agent-activity-states.html">Aktivitaet</a> ·
+    <a href="agent-all-animations.html">Alles auf einen Blick</a>.
+  </p>
+</header>
+
+<main>
+
+  <section>
+    <h2>Live — interaktiv</h2>
+    <div class="controls">
+      <label>Modus
+        <select id="ctl-mode">
+          <option value="idle">idle</option>
+          <option value="idle dim">idle + dim</option>
+          <option value="waiting">waiting</option>
+          <option value="thinking" selected>thinking</option>
+          <option value="talking">talking</option>
+        </select>
+      </label>
+      <label>Groesse
+        <input id="ctl-scale" type="range" min="1" max="14" step="0.5" value="6" />
+        <span id="ctl-scale-val">216px</span>
+      </label>
+      <button id="ctl-bg">Hintergrund: dunkel</button>
+    </div>
+    <div class="stage" id="stage">
+      <div class="scaler" id="live-scaler" style="--scale:6;">
+        <div class="avatar thinking" id="live">
+          <div class="body"></div>
+          <div class="aura"></div>
+          <div class="dot"></div>
+        </div>
+      </div>
+    </div>
+    <p class="hint">
+      Identisch zur App: <code>idle</code> Float + Zwinkern, <code>waiting</code> Morph 5.5s +
+      Breathe 4.0s, <code>thinking</code> Morph 1.0s + Breathe 0.7s + Glow,
+      <code>talking</code> agentAvatarTalk 0.75s. Aura nur im reinen <code>idle</code>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Alle Zustaende — live, grosse Ansicht</h2>
+    <div class="panel"><div class="row" id="states-big"></div></div>
+  </section>
+
+  <section>
+    <h2>Echte UI-Groesse — 36px (wie im Chat)</h2>
+    <div class="panel"><div class="row" id="states-real"></div></div>
+  </section>
+
+  <section>
+    <h2>Groessen-Raster</h2>
+    <div class="panel"><div class="row" id="sizes"></div></div>
+  </section>
+
+  <section>
+    <h2>Export — transparenter Hintergrund (Schachbrett = transparent)</h2>
+    <div class="checker"><div class="row" id="export"></div></div>
+    <p class="hint">
+      Fuer PNGs mit echtem Alpha: eine Zelle heranzoomen und per Snip ausschneiden, oder
+      den DOM-Knoten mit <code>html-to-image</code> / Puppeteer-Screenshot
+      (<code>omitBackground:true</code>) exportieren.
+    </p>
+  </section>
+
+</main>
+
+<script>
+  const MODES = [
+    { cls: 'idle',     label: 'idle',       sub: 'weiss · Float + Zwinkern' },
+    { cls: 'idle dim', label: 'idle + dim', sub: 'grau · statisch' },
+    { cls: 'waiting',  label: 'waiting',    sub: 'Morph 5.5s + Breathe 4.0s' },
+    { cls: 'thinking', label: 'thinking',   sub: 'Morph 1.0s + Breathe 0.7s + Glow' },
+    { cls: 'talking',  label: 'talking',    sub: 'Talk 0.75s' },
+  ];
+
+  function makeAvatar(modeCls, scale) {
+    const sc = document.createElement('div');
+    sc.className = 'scaler'; sc.style.setProperty('--scale', scale);
+    const av = document.createElement('div');
+    av.className = 'avatar ' + modeCls;
+    av.innerHTML = '<div class="body"></div><div class="aura"></div><div class="dot"></div>';
+    sc.appendChild(av);
+    return sc;
+  }
+  function makeCell(modeCls, scale, label, sub) {
+    const cell = document.createElement('div'); cell.className = 'cell';
+    cell.appendChild(makeAvatar(modeCls, scale));
+    if (label) { const l = document.createElement('span'); l.className = 'label'; l.textContent = label; cell.appendChild(l); }
+    if (sub)   { const s = document.createElement('span'); s.className = 'sub';   s.textContent = sub;   cell.appendChild(s); }
+    return cell;
+  }
+
+  const big = document.getElementById('states-big');
+  MODES.forEach(m => big.appendChild(makeCell(m.cls, 4, m.label, m.sub)));
+
+  const real = document.getElementById('states-real');
+  MODES.forEach(m => real.appendChild(makeCell(m.cls, 1, m.label, '')));
+
+  const sizes = document.getElementById('sizes');
+  [1, 2, 3.5, 5, 7, 10].forEach(s => sizes.appendChild(makeCell('thinking', s, Math.round(36*s) + 'px', '')));
+
+  const exp = document.getElementById('export');
+  MODES.forEach(m => exp.appendChild(makeCell(m.cls, 5, m.label, '')));
+
+  const live = document.getElementById('live');
+  const modeSel = document.getElementById('ctl-mode');
+  const scale = document.getElementById('ctl-scale');
+  const scaleVal = document.getElementById('ctl-scale-val');
+  const liveSc = document.getElementById('live-scaler');
+
+  modeSel.addEventListener('change', () => { live.className = 'avatar ' + modeSel.value; });
+  scale.addEventListener('input', () => {
+    liveSc.style.setProperty('--scale', scale.value);
+    scaleVal.textContent = Math.round(36 * parseFloat(scale.value)) + 'px';
+  });
+
+  let dark = true;
+  const bgBtn = document.getElementById('ctl-bg');
+  const stage = document.getElementById('stage');
+  bgBtn.addEventListener('click', () => {
+    dark = !dark;
+    stage.className = dark ? 'stage' : 'stage checker';
+    bgBtn.textContent = 'Hintergrund: ' + (dark ? 'dunkel' : 'transparent');
+  });
+</script>
+</body>
+</html>

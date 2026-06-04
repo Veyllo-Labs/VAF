@@ -861,6 +861,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                // Editor sits above the visualizer — close it first, keeping the flow behind.
+                if (workflowCreator) {
+                    setWorkflowCreator(null);
+                    e.stopPropagation();
+                    return;
+                }
                 if (workflowModal) {
                     setWorkflowModal(null);
                     e.stopPropagation();
@@ -925,7 +931,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
+    }, [isOpen, codeModal, workflowCreator, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
 
     // When automation calendar is opened from Settings, request notes/todos so they are loaded
     useEffect(() => {
@@ -1094,10 +1100,49 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     };
 
-    const handleViewWorkflow = async (id: string) => {
+    // Transform the API/visualizer workflow shape into the WorkflowCreator's initialData shape.
+    const buildWorkflowEditorData = (data: any) => ({
+        name:        data.name        ?? '',
+        description: data.description ?? '',
+        triggers:    data.triggers    ?? [],
+        steps: (data.steps ?? []).map((s: { name: string; type: string; code: string }) => {
+            let input = '';
+            try { input = JSON.parse(s.code).input ?? ''; } catch { /* raw */ }
+            return { input, tool: s.type, description: s.name };
+        }),
+    });
+
+    // Open the editor for the workflow currently shown in the visualizer modal.
+    // The visualizer stays mounted behind the editor (dimmed by the editor's
+    // backdrop) so the user can see the result the moment editing is done.
+    const handleEditWorkflowFromModal = () => {
+        if (!workflowModal) return;
+        setWorkflowCreator({
+            workflowId: workflowModal.id,
+            initialData: buildWorkflowEditorData(workflowModal),
+        });
+    };
+
+    // After an edit saved from the visualizer completes, re-fetch the workflow
+    // so the flow visualization behind the editor reflects the new definition.
+    const prevWorkflowSavingRef = useRef(isWorkflowSaving);
+    const [vizNeedsRefresh, setVizNeedsRefresh] = useState(false);
+    useEffect(() => {
+        const wasSaving = prevWorkflowSavingRef.current;
+        prevWorkflowSavingRef.current = isWorkflowSaving;
+        if (wasSaving && !isWorkflowSaving && vizNeedsRefresh) {
+            setVizNeedsRefresh(false);
+            if (!workflowBackendError && workflowModal?.id) {
+                handleViewWorkflow({ id: workflowModal.id, is_custom: workflowModal.is_custom });
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isWorkflowSaving, vizNeedsRefresh, workflowBackendError]);
+
+    const handleViewWorkflow = async (wf: { id: string; is_custom?: boolean }) => {
         try {
             // Using ID (filename) is safer than name
-            const res = await fetch(`/api/workflows/${encodeURIComponent(id)}`);
+            const res = await fetch(`/api/workflows/${encodeURIComponent(wf.id)}`);
             if (!res.ok) throw new Error(await res.text());
             const data = await res.json();
             
@@ -1136,7 +1181,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             setNodes(newNodes);
             setEdges(newEdges);
-            setWorkflowModal({ ...data, selectedCode: data.steps[0]?.code || "// Select a step to view details" });
+            setWorkflowModal({ ...data, id: data.id ?? wf.id, is_custom: wf.is_custom ?? false, selectedCode: data.steps[0]?.code || "// Select a step to view details" });
         } catch (e) {
             console.error(e);
             alert("Failed to load workflow: " + String(e));
@@ -3318,12 +3363,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             onCreateWorkflow?.(data);
                         } else {
                             onUpdateWorkflow?.(data);
+                            // If the visualizer is open behind the editor, refresh it once the save lands.
+                            if (workflowModal) setVizNeedsRefresh(true);
                         }
                         setWorkflowCreator(null);
                     }}
                     onDelete={(id) => {
                         onDeleteWorkflow?.(id);
                         setWorkflowCreator(null);
+                        setWorkflowModal(null);
                     }}
                 />
             )}
@@ -3536,36 +3584,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     .map((wf, idx) => (
                                         <div
                                             key={idx}
-                                            onClick={async () => {
-                                                if (wf.is_custom && currentUser?.role === 'admin' && onUpdateWorkflow) {
-                                                    // Load full workflow data before opening editor
-                                                    try {
-                                                        const res = await fetch(`/api/workflows/${encodeURIComponent(wf.id)}`);
-                                                        const data = res.ok ? await res.json() : {};
-                                                        setWorkflowCreator({
-                                                            workflowId: wf.id,
-                                                            initialData: {
-                                                                name:        data.name        ?? wf.name,
-                                                                description: data.description ?? wf.description,
-                                                                triggers:    data.triggers    ?? [],
-                                                                steps: (data.steps ?? []).map((s: { name: string; type: string; code: string }) => {
-                                                                    let input = '';
-                                                                    try { input = JSON.parse(s.code).input ?? ''; } catch { /* raw */ }
-                                                                    return { input, tool: s.type, description: s.name };
-                                                                }),
-                                                            },
-                                                        });
-                                                    } catch {
-                                                        // Fallback: open with minimal data from list
-                                                        setWorkflowCreator({
-                                                            workflowId: wf.id,
-                                                            initialData: { name: wf.name, description: wf.description, triggers: [], steps: [] },
-                                                        });
-                                                    }
-                                                } else {
-                                                    handleViewWorkflow(wf.id);
-                                                }
-                                            }}
+                                            onClick={() => handleViewWorkflow(wf)}
                                             className={`group relative aspect-square bg-white rounded-2xl border-2 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer overflow-hidden flex flex-col ${
                                                 wf.is_custom
                                                     ? 'border-purple-200 hover:border-purple-500'
@@ -3606,7 +3625,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
                                                     <span className="font-mono">{wf.is_custom ? 'User workflow' : tModals('workflows.template')}</span>
                                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-purple-600 font-medium">
-                                                        {wf.is_custom && currentUser?.role === 'admin' ? 'Edit' : tModals('workflows.details')} <ChevronRight size={12} />
+                                                        {tModals('workflows.details')} <ChevronRight size={12} />
                                                     </div>
                                                 </div>
                                             </div>
@@ -3850,9 +3869,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-xs text-gray-500">{tModals('workflows.flowVisualization')}</p>
                                 </div>
                             </div>
-                            <button onClick={() => setWorkflowModal(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
-                                <X size={20} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {workflowModal.is_custom && currentUser?.role === 'admin' && onUpdateWorkflow && (
+                                    <button
+                                        onClick={handleEditWorkflowFromModal}
+                                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors text-sm"
+                                    >
+                                        <Edit size={16} />
+                                        {tCommon('edit')}
+                                    </button>
+                                )}
+                                <button onClick={() => setWorkflowModal(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                    <X size={20} />
+                                </button>
+                            </div>
                         </div>
                         
                         {/* Content Split View */}

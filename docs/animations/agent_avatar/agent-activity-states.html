@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VAF Agent — Aktivitaets-Zustaende</title>
+<title>VAF Agent — Activity states</title>
 <style>
   /* ====================================================================
      VAF AGENT — FUNKTIONALE / OPERATIVE ZUSTAENDE
@@ -377,23 +377,23 @@
 <body>
 
 <header>
-  <h1>VAF Agent — Aktivitaets-Zustaende</h1>
+  <h1>VAF Agent — Activity states</h1>
   <p>
-    Die funktionale Ebene: Animationen, die zeigen, <b>was der Agent gerade konkret tut</b> —
-    damit der User in Echtzeit versteht, woran er arbeitet, ohne Logs zu lesen. Vier Cluster:
-    <b>Tool &amp; Aktion</b>, <b>Status &amp; Ergebnis</b>, <b>Lebenszyklus &amp; Verbindung</b>
-    und <b>Multi-Agent &amp; Lernen</b> (VAF-spezifisch).
+    The functional layer: animations that show <b>what the agent is concretely doing</b> —
+    so the user understands in real time what it is working on, without reading logs. Four clusters:
+    <b>Tool &amp; Action</b>, <b>Status &amp; Outcome</b>, <b>Lifecycle &amp; Connection</b>
+    and <b>Multi-Agent &amp; Learning</b> (VAF-specific).
   </p>
   <p class="parts">
-    Gleiche Identitaet wie immer: <b>Koerper</b> = dunkles Viereck, <b>Auge</b> = weisser Punkt.
-    Werkzeuge/Indikatoren liegen ausserhalb des Koerpers und faerben sich auf Hell automatisch um.
+    Same identity as always: <b>body</b> = dark square, <b>eye</b> = white dot.
+    Tools/indicators sit outside the body and recolor automatically on light backgrounds.
   </p>
   <p class="crumbs">
-    Familie:
-    <a href="agent-avatar-showcase.html">Basis</a> ·
-    <a href="agent-character-emotions.html">Emotionen</a> ·
-    <a href="agent-away-scenes.html">Away-Szenen</a> · <b>Aktivitaet</b> (diese Datei).
-    Design-Referenz, nicht Teil des gebauten Produkts.
+    Family:
+    <a href="agent-avatar-showcase.html">Base</a> ·
+    <a href="agent-character-emotions.html">Emotions</a> ·
+    <a href="agent-away-scenes.html">Away scenes</a> · <b>Activity</b> (this file).
+    Design reference, not part of the built product.
   </p>
 </header>
 
@@ -401,13 +401,13 @@
 
   <!-- 1) BUEHNE -->
   <section>
-    <h2>Buehne — Zustand waehlen oder durchlaufen</h2>
-    <p class="desc">Waehle einen Zustand, schalte Hell/Dunkel um, oder druecke <b>Durchlauf</b> fuer eine automatische Tour durch alle 21.</p>
+    <h2>Stage — pick a state or run through</h2>
+    <p class="desc">Pick a state, toggle light/dark, or press <b>Cycle</b> for an automatic tour through all 21.</p>
     <div class="controls">
-      <label>Zustand <select id="ctl-state"></select></label>
-      <label>Groesse <input id="ctl-scale" type="range" min="1" max="3.5" step="0.25" value="2" /><span id="ctl-scale-val">400px</span></label>
-      <button id="ctl-cycle">Durchlauf</button>
-      <button id="ctl-bg">Hintergrund: dunkel</button>
+      <label>State <select id="ctl-state"></select></label>
+      <label>Size <input id="ctl-scale" type="range" min="1" max="3.5" step="0.25" value="2" /><span id="ctl-scale-val">400px</span></label>
+      <button id="ctl-cycle">Cycle</button>
+      <button id="ctl-bg">Background: dark</button>
     </div>
     <div class="stage" id="stage">
       <div class="scene-scaler" id="live-scaler" style="--s:2;">
@@ -415,20 +415,20 @@
       </div>
       <div class="now">Aktuell: <b id="now-label"></b> <span id="now-sub"></span></div>
     </div>
-    <p class="hint">Idee fuer die App: dieselbe Mikro-Animation neben der Nachricht zeigen, an der der Agent gerade arbeitet — der User sieht sofort „sucht", „schreibt", „wartet auf Erlaubnis", „lernt".</p>
+    <p class="hint">Idea for the app: show the same micro-animation next to the message the agent is working on — the user instantly sees "searching", "writing", "waiting for permission", "learning".</p>
   </section>
 
   <!-- 2) GALERIE DUNKEL -->
   <section>
-    <h2>Alle Zustaende — dunkler Hintergrund</h2>
-    <p class="desc">21 funktionale Zustaende, nach Cluster gruppiert. Darunter jeweils, was sie dem User sagen.</p>
+    <h2>All states — dark background</h2>
+    <p class="desc">21 functional states, grouped by cluster. Below each is what it tells the user.</p>
     <div class="panel"><div id="gallery"></div></div>
   </section>
 
   <!-- 3) GALERIE HELL -->
   <section>
-    <h2>Alle Zustaende — heller Hintergrund</h2>
-    <p class="desc">Dieselben Zustaende im Hellmodus (Requisiten faerben sich von Weiss auf Tinte um).</p>
+    <h2>All states — light background</h2>
+    <p class="desc">The same states in light mode (props recolor from white to ink).</p>
     <div class="panel lite"><div id="gallery-light"></div></div>
   </section>
 
@@ -440,30 +440,30 @@
 
   const STATES = [
     // CLUSTER 1
-    { c:'1 — Tool & Aktion', t:'search',     l:'Sucht / durchsucht', s:'Lupe wandert ueber ein Dokument', h: AGENT + '<div class="doc"></div><div class="lens"></div>' },
-    { c:'1 — Tool & Aktion', t:'write',      l:'Schreibt / editiert', s:'tippt, Cursor blinkt',          h: AGENT + '<div class="editor"><span class="tline"><span class="caret"></span></span></div>' },
-    { c:'1 — Tool & Aktion', t:'execute',    l:'Fuehrt Befehl aus',   s:'Terminal laeuft, Spinner dreht', h: AGENT + '<div class="term"><span class="prompt"></span><span class="cur"></span></div><div class="spinner"></div>' },
-    { c:'1 — Tool & Aktion', t:'browse',     l:'Surft im Web',        s:'Globus rotiert',                 h: AGENT + '<div class="globe"></div>' },
-    { c:'1 — Tool & Aktion', t:'download',   l:'Laedt herunter',      s:'Daten stroemen in ihn hinein',   h: AGENT + '<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>' },
-    { c:'1 — Tool & Aktion', t:'upload',     l:'Laedt hoch',          s:'Daten stroemen aus ihm heraus',  h: AGENT + '<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>' },
+    { c:'1 — Tool & Action', t:'search',     l:'Searches', s:'magnifier moves over a document', h: AGENT + '<div class="doc"></div><div class="lens"></div>' },
+    { c:'1 — Tool & Action', t:'write',      l:'Writes / edits', s:'types, cursor blinks',          h: AGENT + '<div class="editor"><span class="tline"><span class="caret"></span></span></div>' },
+    { c:'1 — Tool & Action', t:'execute',    l:'Runs a command',   s:'terminal runs, spinner turns', h: AGENT + '<div class="term"><span class="prompt"></span><span class="cur"></span></div><div class="spinner"></div>' },
+    { c:'1 — Tool & Action', t:'browse',     l:'Browses the web',        s:'globe rotates',                 h: AGENT + '<div class="globe"></div>' },
+    { c:'1 — Tool & Action', t:'download',   l:'Downloads',      s:'data streams into it',   h: AGENT + '<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>' },
+    { c:'1 — Tool & Action', t:'upload',     l:'Uploads',          s:'data streams out of it',  h: AGENT + '<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>' },
     // CLUSTER 2
-    { c:'2 — Status & Ergebnis', t:'success',    l:'Erfolg',              s:'Aufgabe geschafft',              h: AGENT + '<div class="ring"></div><span class="check">&#10003;</span>' },
-    { c:'2 — Status & Ergebnis', t:'error',      l:'Fehler',              s:'etwas ist schiefgelaufen',       h: AGENT + '<span class="bang">!</span>' },
-    { c:'2 — Status & Ergebnis', t:'warning',    l:'Warnung',             s:'Vorsicht geboten',               h: AGENT + '<span class="tri"></span>' },
-    { c:'2 — Status & Ergebnis', t:'permission', l:'Braucht Erlaubnis',   s:'fragt nach, wartet auf dein OK', h: AGENT + '<span class="ask">?</span>' },
-    { c:'2 — Status & Ergebnis', t:'blocked',    l:'Blockiert',           s:'kommt nicht weiter (gesperrt)',  h: AGENT + '<div class="barrier"></div>' },
+    { c:'2 — Status & Outcome', t:'success',    l:'Success',              s:'task accomplished',              h: AGENT + '<div class="ring"></div><span class="check">&#10003;</span>' },
+    { c:'2 — Status & Outcome', t:'error',      l:'Error',              s:'something went wrong',       h: AGENT + '<span class="bang">!</span>' },
+    { c:'2 — Status & Outcome', t:'warning',    l:'Warning',             s:'caution advised',               h: AGENT + '<span class="tri"></span>' },
+    { c:'2 — Status & Outcome', t:'permission', l:'Needs permission',   s:'asks, waits for your OK', h: AGENT + '<span class="ask">?</span>' },
+    { c:'2 — Status & Outcome', t:'blocked',    l:'Blocked',           s:'cannot get through (locked)',  h: AGENT + '<div class="barrier"></div>' },
     // CLUSTER 3
-    { c:'3 — Lebenszyklus & Verbindung', t:'wake',         l:'Erwacht',            s:'startet, Auge oeffnet sich',     h: AGENT + '<div class="ring"></div>' },
-    { c:'3 — Lebenszyklus & Verbindung', t:'connecting',   l:'Verbindet',          s:'baut Verbindung auf',            h: AGENT + '<div class="link"></div><div class="node"></div><div class="ring"></div>' },
-    { c:'3 — Lebenszyklus & Verbindung', t:'offline',      l:'Offline',            s:'Verbindung verloren',            h: AGENT + '<span class="slash"></span>' },
-    { c:'3 — Lebenszyklus & Verbindung', t:'reconnecting', l:'Verbindet erneut',   s:'versucht es wieder',             h: AGENT + '<div class="node"></div><div class="ring r1"></div><div class="ring r2"></div>' },
-    { c:'3 — Lebenszyklus & Verbindung', t:'shutdown',     l:'Faehrt herunter',    s:'schaltet sich ab',               h: AGENT },
+    { c:'3 — Lifecycle & Connection', t:'wake',         l:'Waking',            s:'starts up, eye opens',     h: AGENT + '<div class="ring"></div>' },
+    { c:'3 — Lifecycle & Connection', t:'connecting',   l:'Connecting',          s:'building a connection',            h: AGENT + '<div class="link"></div><div class="node"></div><div class="ring"></div>' },
+    { c:'3 — Lifecycle & Connection', t:'offline',      l:'Offline',            s:'connection lost',            h: AGENT + '<span class="slash"></span>' },
+    { c:'3 — Lifecycle & Connection', t:'reconnecting', l:'Reconnecting',   s:'trying again',             h: AGENT + '<div class="node"></div><div class="ring r1"></div><div class="ring r2"></div>' },
+    { c:'3 — Lifecycle & Connection', t:'shutdown',     l:'Shutting down',    s:'powers off',               h: AGENT },
     // CLUSTER 4
-    { c:'4 — Multi-Agent & Lernen', t:'delegate',    l:'Delegiert',          s:'knospt einen Sub-Agenten ab',    h: AGENT + '<div class="mini">' + MINI + '</div>' },
-    { c:'4 — Multi-Agent & Lernen', t:'handoff',     l:'Uebergabe',          s:'reicht eine Aufgabe weiter',     h: AGENT + '<div class="peer">' + MINI + '</div><span class="token"></span>' },
-    { c:'4 — Multi-Agent & Lernen', t:'learning',    l:'Lernt / trainiert',  s:'nimmt Wissen auf (Whare Wananga)',h: AGENT + '<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>' },
-    { c:'4 — Multi-Agent & Lernen', t:'remembering', l:'Erinnert sich',      s:'greift auf den Speicher zu',     h: AGENT + '<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>' },
-    { c:'4 — Multi-Agent & Lernen', t:'planning',    l:'Plant',              s:'legt die Schritte aus',          h: AGENT + '<span class="step s1"></span><span class="step s2"></span><span class="step s3"></span>' },
+    { c:'4 — Multi-Agent & Learning', t:'delegate',    l:'Delegates',          s:'buds off a sub-agent',    h: AGENT + '<div class="mini">' + MINI + '</div>' },
+    { c:'4 — Multi-Agent & Learning', t:'handoff',     l:'Handoff',          s:'passes a task on',     h: AGENT + '<div class="peer">' + MINI + '</div><span class="token"></span>' },
+    { c:'4 — Multi-Agent & Learning', t:'learning',    l:'Learns / trains',  s:'takes in knowledge (Whare Wananga)',h: AGENT + '<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>' },
+    { c:'4 — Multi-Agent & Learning', t:'remembering', l:'Remembers',      s:'accesses memory',     h: AGENT + '<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>' },
+    { c:'4 — Multi-Agent & Learning', t:'planning',    l:'Plans',              s:'lays out the steps',          h: AGENT + '<span class="step s1"></span><span class="step s2"></span><span class="step s3"></span>' },
   ];
   const byT = Object.fromEntries(STATES.map(s => [s.t, s]));
 
@@ -518,8 +518,8 @@
   let cycleTimer = null, idx = 0;
   const cycleBtn = document.getElementById('ctl-cycle');
   function step() { setState(STATES[idx % STATES.length].t); idx++; cycleTimer = setTimeout(step, 3200); }
-  function startCycle() { idx = 0; step(); cycleBtn.textContent = 'Stopp'; cycleBtn.classList.add('active'); }
-  function stopCycle() { if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; } cycleBtn.textContent = 'Durchlauf'; cycleBtn.classList.remove('active'); }
+  function startCycle() { idx = 0; step(); cycleBtn.textContent = 'Stop'; cycleBtn.classList.add('active'); }
+  function stopCycle() { if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; } cycleBtn.textContent = 'Cycle'; cycleBtn.classList.remove('active'); }
   cycleBtn.addEventListener('click', () => { cycleTimer ? stopCycle() : startCycle(); });
 
   // Hell/Dunkel
@@ -528,7 +528,7 @@
     liteOn = !liteOn;
     stage.className = liteOn ? 'stage lite' : 'stage';
     live.classList.toggle('light', liteOn);
-    bgBtn.textContent = 'Hintergrund: ' + (liteOn ? 'hell' : 'dunkel');
+    bgBtn.textContent = 'Background: ' + (liteOn ? 'light' : 'dark');
   });
 </script>
 </body>

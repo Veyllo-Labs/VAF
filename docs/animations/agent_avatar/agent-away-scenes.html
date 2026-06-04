@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VAF Agent — Away-Szenen</title>
+<title>VAF Agent — Away scenes</title>
 <style>
   /* ====================================================================
      VAF AGENT — "USER AWAY"-SZENEN
@@ -354,23 +354,23 @@
 <body>
 
 <header>
-  <h1>VAF Agent — Away-Szenen</h1>
+  <h1>VAF Agent — Away scenes</h1>
   <p>
-    Was macht der Agent, wenn gerade niemand mit ihm spricht? Er vertreibt sich die Zeit.
-    Diese Leerlauf-Animationen erscheinen, wenn der User einen alten oder archivierten Chat
-    oeffnet — der Agent <b>liest Zeitung</b>, <b>schaut Fernsehen</b>, macht
-    <b>Kaffeepause</b>, <b>jongliert</b> oder <b>traeumt in die Sterne</b>.
+    What does the agent do when nobody is talking to it? It passes the time.
+    These idle animations appear when the user opens an old or archived chat
+    — the agent <b>reads the newspaper</b>, <b>watches TV</b>, takes a
+    <b>coffee break</b>, <b>juggles</b> or <b>stargazes</b>.
   </p>
   <p class="parts">
-    Der Agent besteht aus zwei Teilen: dem dunklen abgerundeten Viereck = <b>sein Koerper</b>,
-    und dem weissen Punkt = <b>sein Auge / Gesicht</b>. Die Requisiten liegen <b>ausserhalb</b>
-    seines Koerpers — er hantiert damit (Koerper lehnt &amp; wippt, das Auge schaut, scannt, blinzelt).
+    The agent consists of two parts: the dark rounded square = <b>its body</b>,
+    and the white dot = <b>its eye / face</b>. The props sit <b>outside</b>
+    its body — it handles them (body leans &amp; bobs, the eye looks, scans, blinks).
   </p>
   <p class="crumbs">
-    Schwester-Dateien:
-    <a href="agent-avatar-showcase.html">agent-avatar-showcase.html</a> (Basis) ·
-    <a href="agent-character-emotions.html">agent-character-emotions.html</a> (Emotionen).
-    Design-Referenz, nicht Teil des gebauten Produkts.
+    Sibling files:
+    <a href="agent-avatar-showcase.html">agent-avatar-showcase.html</a> (Base) ·
+    <a href="agent-character-emotions.html">agent-character-emotions.html</a> (Emotions).
+    Design reference, not part of the built product.
   </p>
 </header>
 
@@ -378,38 +378,38 @@
 
   <!-- 1) BUEHNE -->
   <section>
-    <h2>Buehne — Szene waehlen oder im Leerlauf abspielen</h2>
+    <h2>Stage — pick a scene or play in idle mode</h2>
     <p class="desc">
-      Waehle eine Szene, oder druecke <b>Leerlauf-Modus</b> — dann wechselt der Agent von
-      selbst durch seine Beschaeftigungen, genau wie es der User im Away-Zustand saehe.
+      Pick a scene, or press <b>Idle mode</b> — then the agent switches
+      through its pastimes on its own, exactly as the user would see in the away state.
     </p>
     <div class="controls">
-      <label>Szene
+      <label>Scene
         <select id="ctl-scene"></select>
       </label>
-      <label>Groesse
+      <label>Size
         <input id="ctl-scale" type="range" min="1" max="3.5" step="0.25" value="2" />
         <span id="ctl-scale-val">400px</span>
       </label>
-      <button id="ctl-cycle">Leerlauf-Modus</button>
-      <button id="ctl-bg">Hintergrund: dunkel</button>
+      <button id="ctl-cycle">Idle mode</button>
+      <button id="ctl-bg">Background: dark</button>
     </div>
     <div class="stage" id="stage">
       <div class="scene-scaler" id="live-scaler" style="--s:2;">
         <div class="scene newspaper" id="live"></div>
       </div>
-      <div class="now">Aktuell: <b id="now-label">Liest Zeitung</b> <span id="now-sub"></span></div>
+      <div class="now">Now: <b id="now-label">Reads the newspaper</b> <span id="now-sub"></span></div>
     </div>
     <p class="hint">
-      Idee fuer die App: beim Oeffnen eines archivierten Chats zufaellig eine dieser Szenen
-      als Empty-State zeigen — der Agent „wartet" sichtbar auf dich, statt nur still zu sein.
+      Idea for the app: when opening an archived chat, show one of these scenes at random
+      as an empty state — the agent visibly "waits" for you instead of just sitting still.
     </p>
   </section>
 
   <!-- 2) GALERIE — DUNKEL -->
   <section>
-    <h2>Alle Beschaeftigungen — dunkler Hintergrund</h2>
-    <p class="desc">Acht Leerlauf-Szenen. Darunter jeweils, was sie erzaehlen.</p>
+    <h2>All pastimes — dark background</h2>
+    <p class="desc">Eight idle scenes. Below each is what it tells.</p>
     <div class="panel">
       <div class="grid" id="gallery"></div>
     </div>
@@ -417,11 +417,11 @@
 
   <!-- 3) GALERIE — HELL -->
   <section>
-    <h2>Alle Beschaeftigungen — heller Hintergrund</h2>
+    <h2>All pastimes — light background</h2>
     <p class="desc">
-      Dieselben Szenen im Hellmodus: der Koerper bleibt das dunkle Viereck, das Auge bleibt
-      weiss — aber die externen Requisiten (Zeitung, Dampf, Noten, Baelle, Sterne, „z z z")
-      faerben sich von Weiss auf Tinte um, damit sie auf Hell sichtbar bleiben.
+      The same scenes in light mode: the body stays the dark square, the eye stays
+      white — but the external props (newspaper, steam, notes, balls, stars, "z z z")
+      recolor from white to ink so they stay visible on light.
     </p>
     <div class="panel lite">
       <div class="grid" id="gallery-light"></div>
@@ -435,21 +435,21 @@
   // (Koerper = Viereck, Auge = Punkt). Requisiten sind eigene Geschwister-Elemente daneben.
   const AGENT = '<div class="agent"><div class="body"><div class="eye"></div></div></div>';
   const SCENES = [
-    { type:'newspaper', label:'Liest Zeitung',      sub:'haelt die Zeitung vor sich, Auge scannt die Zeilen',
+    { type:'newspaper', label:'Reads the newspaper',      sub:'holds the paper up, eye scans the lines',
       html: AGENT + '<div class="np"><span class="mh"></span></div>' },
-    { type:'tv',        label:'Schaut Fernsehen',   sub:'sitzt vor dem Fernseher, vom Flimmern beleuchtet',
+    { type:'tv',        label:'Watches TV',   sub:'sits in front of the TV, lit by the flicker',
       html: '<div class="tvset"><div class="screen"></div><span class="leg l"></span><span class="leg r"></span></div><div class="seat"></div>' + AGENT },
-    { type:'coffee',    label:'Kaffeepause',        sub:'lehnt sich zur Tasse, nimmt einen Schluck, seufzt "ahh"',
+    { type:'coffee',    label:'Coffee break',        sub:'leans to the cup, takes a sip, sighs "ahh"',
       html: '<div class="floor"></div>' + AGENT + '<div class="cup"><span class="handle"></span></div><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span>' },
-    { type:'juggle',    label:'Jongliert',          sub:'drei Baelle ueber ihm, Auge verfolgt sie',
+    { type:'juggle',    label:'Juggles',          sub:'three balls above it, eye tracks them',
       html: '<div class="floor"></div>' + AGENT + '<span class="jb b1"></span><span class="jb b2"></span><span class="jb b3"></span>' },
-    { type:'music',     label:'Summt vor sich hin', sub:'wippt im Takt, Noten steigen daneben auf',
+    { type:'music',     label:'Hums to itself', sub:'bobs to the beat, notes rise alongside',
       html: AGENT + '<span class="note n1">&#9834;</span><span class="note n2">&#9835;</span><span class="note n3">&#9833;</span>' },
-    { type:'ball',      label:'Spielt mit dem Ball',sub:'Ball huepft vor ihm, Auge folgt auf und ab',
+    { type:'ball',      label:'Plays with the ball',sub:'ball bounces in front of it, eye follows up and down',
       html: '<div class="floor"></div>' + AGENT + '<span class="bball"></span>' },
-    { type:'stars',     label:'Schaut in die Sterne',sub:'lehnt sich zurueck, blickt hoch, Sterne funkeln',
+    { type:'stars',     label:'Stargazes',sub:'leans back, looks up, stars twinkle',
       html: '<span class="star st1"></span><span class="star st2"></span><span class="star st3"></span><span class="star st4"></span><span class="star st5"></span><span class="star st6"></span><span class="shoot"></span>' + AGENT },
-    { type:'nap',       label:'Nickerchen',         sub:'Auge fast zu, atmet schwer, "z z z" steigen auf',
+    { type:'nap',       label:'Naps',         sub:'eye nearly shut, breathes heavily, "z z z" rise up',
       html: '<div class="pillow"></div>' + AGENT + '<span class="z z1">z</span><span class="z z2">z</span><span class="z z3">z</span>' },
   ];
   const byType = Object.fromEntries(SCENES.map(s => [s.type, s]));
@@ -512,8 +512,8 @@
   let cycleTimer = null, cycleIdx = 0;
   const cycleBtn = document.getElementById('ctl-cycle');
   function stepCycle() { setScene(SCENES[cycleIdx % SCENES.length].type); cycleIdx++; cycleTimer = setTimeout(stepCycle, 5500); }
-  function startCycle() { cycleIdx = 0; stepCycle(); cycleBtn.textContent = 'Leerlauf stoppen'; cycleBtn.classList.add('active'); }
-  function stopCycle()  { if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; } cycleBtn.textContent = 'Leerlauf-Modus'; cycleBtn.classList.remove('active'); }
+  function startCycle() { cycleIdx = 0; stepCycle(); cycleBtn.textContent = 'Stop idle mode'; cycleBtn.classList.add('active'); }
+  function stopCycle()  { if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; } cycleBtn.textContent = 'Idle mode'; cycleBtn.classList.remove('active'); }
   cycleBtn.addEventListener('click', () => { cycleTimer ? stopCycle() : startCycle(); });
 
   // --- Hell/Dunkel-Umschalter (Buehne) ---
@@ -523,7 +523,7 @@
     liteOn = !liteOn;
     stage.className = liteOn ? 'stage lite' : 'stage';
     live.classList.toggle('light', liteOn);   // Szene umfaerben, Animation laeuft weiter
-    bgBtn.textContent = 'Hintergrund: ' + (liteOn ? 'hell' : 'dunkel');
+    bgBtn.textContent = 'Background: ' + (liteOn ? 'light' : 'dark');
   });
 </script>
 </body>

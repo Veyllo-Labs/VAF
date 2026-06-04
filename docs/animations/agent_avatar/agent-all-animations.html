@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VAF Agent — Alle Animationen auf einen Blick</title>
+<title>VAF Agent — All animations at a glance</title>
 <style>
   /* ====================================================================
      VAF AGENT — GESAMTUEBERSICHT (alle Animationen in EINER Datei)
@@ -461,45 +461,45 @@
 <body>
 
 <header>
-  <h1>VAF Agent — Alle Animationen auf einen Blick</h1>
+  <h1>VAF Agent — All animations at a glance</h1>
   <p>
-    Das komplette Animations-System des Agenten in einer Datei. Eine Identitaet, zwei
-    Darstellungs-Ebenen: der <b>Punkt</b> (Basis &amp; Emotionen) und die <b>Figur</b>
-    aus Koerper + Auge (Away-Szenen &amp; Aktivitaet). Jeder Zustand einzeln gelabelt.
+    The agent's complete animation system in one file. One identity, two
+    representation layers: the <b>dot</b> (base &amp; emotions) and the <b>figure</b>
+    made of body + eye (away scenes &amp; activity). Every state labeled individually.
   </p>
   <p class="crumbs">
-    Einzeldateien:
-    <a href="agent-avatar-showcase.html">Basis</a> ·
-    <a href="agent-character-emotions.html">Emotionen</a> ·
-    <a href="agent-away-scenes.html">Away-Szenen</a> ·
-    <a href="agent-activity-states.html">Aktivitaet</a>.
+    Individual files:
+    <a href="agent-avatar-showcase.html">Base</a> ·
+    <a href="agent-character-emotions.html">Emotions</a> ·
+    <a href="agent-away-scenes.html">Away scenes</a> ·
+    <a href="agent-activity-states.html">Activity</a>.
   </p>
 </header>
 
 <div class="bar">
-  <button id="theme">Hintergrund: dunkel</button>
-  <span class="hint">Alle Animationen laufen live. Umschalter faerbt die externen Requisiten der Figur-Szenen um.</span>
+  <button id="theme">Background: dark</button>
+  <span class="hint">All animations run live. The toggle recolors the external props of the figure scenes.</span>
   <span class="sp"></span>
 </div>
 
 <main>
   <section>
-    <h2>0 · Uebergaenge — der Transition-Player</h2>
-    <p class="lead">Geht eine zufaellige Liste ALLER Zustaende durch und blendet animiert von jedem in den naechsten — so sieht man die Uebergaenge. Jeder Zustand kollabiert zu einem weichen Punkt und blueht in den naechsten auf.</p>
+    <h2>0 · Transitions — the transition player</h2>
+    <p class="lead">Runs through a random list of ALL states and animates from each into the next — that's how you see the transitions. Every state collapses to a soft point and blooms into the next.</p>
     <div class="tpanel">
       <div class="tslot" id="tslot"></div>
-      <div class="tmeta"><b id="t-now">—</b> &nbsp;·&nbsp; <span class="nx">als Naechstes: <span id="t-next">—</span></span></div>
+      <div class="tmeta"><b id="t-now">—</b> &nbsp;·&nbsp; <span class="nx">next: <span id="t-next">—</span></span></div>
       <div class="tctrl">
         <button id="t-play">Pause</button>
-        <button id="t-shuffle">Neu mischen</button>
-        <label>Dauer pro Zustand <input id="t-speed" type="range" min="1200" max="5000" step="200" value="2600" /><span id="t-speed-val">2.6s</span></label>
+        <button id="t-shuffle">Reshuffle</button>
+        <label>Duration per state <input id="t-speed" type="range" min="1200" max="5000" step="200" value="2600" /><span id="t-speed-val">2.6s</span></label>
       </div>
     </div>
   </section>
-  <section><h2>1 · Basis</h2><p class="lead">Der lebende Punkt wie im echten App-Avatar (idle zwinkert gelegentlich).</p><div class="panel"><div class="grid sm" id="g-base"></div></div></section>
-  <section><h2>2 · Emotionen</h2><p class="lead">Der Punkt als Charakter; der Koerper reagiert subtil mit.</p><div class="panel"><div id="g-emo"></div></div></section>
-  <section><h2>3 · Away-Szenen</h2><p class="lead">Leerlauf: der Agent (Koerper + Auge) vertreibt sich die Zeit, Requisiten ausserhalb.</p><div class="panel"><div class="grid" id="g-away"></div></div></section>
-  <section><h2>4 · Aktivitaet</h2><p class="lead">Funktionale Zustaende: was der Agent gerade konkret tut.</p><div class="panel"><div id="g-act"></div></div></section>
+  <section><h2>1 · Base</h2><p class="lead">The living dot as in the real app avatar (idle winks occasionally).</p><div class="panel"><div class="grid sm" id="g-base"></div></div></section>
+  <section><h2>2 · Emotions</h2><p class="lead">The dot as a character; the body reacts subtly.</p><div class="panel"><div id="g-emo"></div></div></section>
+  <section><h2>3 · Away scenes</h2><p class="lead">Idle: the agent (body + eye) passes the time, props on the outside.</p><div class="panel"><div class="grid" id="g-away"></div></div></section>
+  <section><h2>4 · Activity</h2><p class="lead">Functional states: what the agent is concretely doing right now.</p><div class="panel"><div id="g-act"></div></div></section>
 </main>
 
 <script>
@@ -510,14 +510,14 @@
     const a = document.createElement('div'); a.className='avatar '+cls; a.innerHTML=AV; sc.appendChild(a); return sc;
   }
   const BASE = [
-    ['idle','idle','Float + Zwinkern'], ['idle dim','idle + dim','grau · statisch'],
-    ['waiting','waiting','geduldig'], ['thinking','thinking','fokussiert + Glow'], ['talking','talking','Sprechrhythmus'],
+    ['idle','idle','float + wink'], ['idle dim','idle + dim','gray · static'],
+    ['waiting','waiting','patient'], ['thinking','thinking','focused + glow'], ['talking','talking','speech rhythm'],
   ];
   const EMO = [
-    ['Reaktionen', [['surprised','Ueberrascht','etwas Unerwartetes'],['curious','Neugierig','schaut genauer hin'],['confused','Verwirrt','versteht es (noch) nicht'],['idea','Geistesblitz','hat die Loesung']]],
-    ['Gefuehle',   [['happy','Froehlich','freut sich'],['excited','Aufgeregt','voller Energie'],['sad','Niedergeschlagen','etwas lief schief'],['sleepy','Ruht / Mued','entspannt']]],
-    ['Antwort',    [['nod','Zustimmung','Ja'],['shake','Ablehnung','Nein'],['listening','Hoert zu','nimmt auf'],['search','Sucht / Scannt','durchsucht']]],
-    ['Hoehepunkte',[['celebrate','Erfolg','geschafft'],['working','Arbeitet','im Hintergrund']]],
+    ['Reactions', [['surprised','Surprised','something unexpected'],['curious','Curious','takes a closer look'],['confused','Confused','does not get it (yet)'],['idea','Idea','found the solution']]],
+    ['Feelings',   [['happy','Happy','is glad'],['excited','Excited','full of energy'],['sad','Dejected','something went wrong'],['sleepy','Resting / Tired','relaxed']]],
+    ['Response',    [['nod','Agreement','Yes'],['shake','Refusal','No'],['listening','Listening','takes it in'],['search','Searching / Scanning','searches']]],
+    ['Highlights',[['celebrate','Success','done'],['working','Working','in the background']]],
   ];
 
   // ---------- KOERPER+AUGE (Away + Aktivitaet) ----------
@@ -528,44 +528,44 @@
     const s = document.createElement('div'); s.className='scene '+(marker?marker+' ':'')+type+(light?' light':''); s.innerHTML=html; sc.appendChild(s); return sc;
   }
   const AWAY = [
-    ['newspaper','Liest Zeitung','scannt die Zeilen', AGENT+'<div class="np"><span class="mh"></span></div>'],
-    ['tv','Schaut Fernsehen','vom Flimmern beleuchtet','<div class="tvset"><div class="screen"></div><span class="leg l"></span><span class="leg r"></span></div><div class="seat"></div>'+AGENT],
-    ['coffee','Kaffeepause','nimmt einen Schluck','<div class="floor"></div>'+AGENT+'<div class="cup"><span class="handle"></span></div><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span>'],
-    ['juggle','Jongliert','Baelle ueber ihm','<div class="floor"></div>'+AGENT+'<span class="jb b1"></span><span class="jb b2"></span><span class="jb b3"></span>'],
-    ['music','Summt','Noten steigen auf',AGENT+'<span class="note n1">&#9834;</span><span class="note n2">&#9835;</span><span class="note n3">&#9833;</span>'],
-    ['ball','Spielt mit dem Ball','huepft auf und ab','<div class="floor"></div>'+AGENT+'<span class="bball"></span>'],
-    ['stars','Schaut in die Sterne','traeumt',  '<span class="star st1"></span><span class="star st2"></span><span class="star st3"></span><span class="star st4"></span><span class="star st5"></span><span class="star st6"></span><span class="shoot"></span>'+AGENT],
-    ['nap','Nickerchen','z z z','<div class="pillow"></div>'+AGENT+'<span class="z z1">z</span><span class="z z2">z</span><span class="z z3">z</span>'],
+    ['newspaper','Reads the newspaper','scans the lines', AGENT+'<div class="np"><span class="mh"></span></div>'],
+    ['tv','Watches TV','lit by the flicker','<div class="tvset"><div class="screen"></div><span class="leg l"></span><span class="leg r"></span></div><div class="seat"></div>'+AGENT],
+    ['coffee','Coffee break','takes a sip','<div class="floor"></div>'+AGENT+'<div class="cup"><span class="handle"></span></div><span class="steam s1"></span><span class="steam s2"></span><span class="steam s3"></span>'],
+    ['juggle','Juggles','balls above it','<div class="floor"></div>'+AGENT+'<span class="jb b1"></span><span class="jb b2"></span><span class="jb b3"></span>'],
+    ['music','Hums','notes rise up',AGENT+'<span class="note n1">&#9834;</span><span class="note n2">&#9835;</span><span class="note n3">&#9833;</span>'],
+    ['ball','Plays with the ball','bounces up and down','<div class="floor"></div>'+AGENT+'<span class="bball"></span>'],
+    ['stars','Stargazes','dreams',  '<span class="star st1"></span><span class="star st2"></span><span class="star st3"></span><span class="star st4"></span><span class="star st5"></span><span class="star st6"></span><span class="shoot"></span>'+AGENT],
+    ['nap','Naps','z z z','<div class="pillow"></div>'+AGENT+'<span class="z z1">z</span><span class="z z2">z</span><span class="z z3">z</span>'],
   ];
   const ACT = [
-    ['Tool & Aktion', [
-      ['search','Sucht / durchsucht','Lupe ueber Dokument', AGENT+'<div class="doc"></div><div class="lens"></div>'],
-      ['write','Schreibt / editiert','tippt, Cursor blinkt', AGENT+'<div class="editor"><span class="tline"><span class="caret"></span></span></div>'],
-      ['execute','Fuehrt Befehl aus','Terminal + Spinner', AGENT+'<div class="term"><span class="prompt"></span><span class="cur"></span></div><div class="spinner"></div>'],
-      ['browse','Surft im Web','Globus rotiert', AGENT+'<div class="globe"></div>'],
-      ['download','Laedt herunter','Daten rein', AGENT+'<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>'],
-      ['upload','Laedt hoch','Daten raus', AGENT+'<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>'],
+    ['Tool & Action', [
+      ['search','Searches','magnifier over document', AGENT+'<div class="doc"></div><div class="lens"></div>'],
+      ['write','Writes / edits','types, cursor blinks', AGENT+'<div class="editor"><span class="tline"><span class="caret"></span></span></div>'],
+      ['execute','Runs a command','terminal + spinner', AGENT+'<div class="term"><span class="prompt"></span><span class="cur"></span></div><div class="spinner"></div>'],
+      ['browse','Browses the web','globe rotates', AGENT+'<div class="globe"></div>'],
+      ['download','Downloads','data in', AGENT+'<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>'],
+      ['upload','Uploads','data out', AGENT+'<span class="arrow"></span><span class="pkt p1"></span><span class="pkt p2"></span><span class="pkt p3"></span>'],
     ]],
-    ['Status & Ergebnis', [
-      ['success','Erfolg','geschafft', AGENT+'<div class="ring"></div><span class="check">&#10003;</span>'],
-      ['error','Fehler','schiefgelaufen', AGENT+'<span class="bang">!</span>'],
-      ['warning','Warnung','Vorsicht', AGENT+'<span class="tri"></span>'],
-      ['permission','Braucht Erlaubnis','wartet auf dein OK', AGENT+'<span class="ask">?</span>'],
-      ['blocked','Blockiert','gesperrt', AGENT+'<div class="barrier"></div>'],
+    ['Status & Outcome', [
+      ['success','Success','done', AGENT+'<div class="ring"></div><span class="check">&#10003;</span>'],
+      ['error','Error','went wrong', AGENT+'<span class="bang">!</span>'],
+      ['warning','Warning','caution', AGENT+'<span class="tri"></span>'],
+      ['permission','Needs permission','waits for your OK', AGENT+'<span class="ask">?</span>'],
+      ['blocked','Blocked','locked', AGENT+'<div class="barrier"></div>'],
     ]],
-    ['Lebenszyklus & Verbindung', [
-      ['wake','Erwacht','Auge oeffnet', AGENT+'<div class="ring"></div>'],
-      ['connecting','Verbindet','baut auf', AGENT+'<div class="link"></div><div class="node"></div><div class="ring"></div>'],
-      ['offline','Offline','Verbindung weg', AGENT+'<span class="slash"></span>'],
-      ['reconnecting','Verbindet erneut','versucht wieder', AGENT+'<div class="node"></div><div class="ring r1"></div><div class="ring r2"></div>'],
-      ['shutdown','Faehrt herunter','schaltet ab', AGENT],
+    ['Lifecycle & Connection', [
+      ['wake','Waking','eye opens', AGENT+'<div class="ring"></div>'],
+      ['connecting','Connecting','building up', AGENT+'<div class="link"></div><div class="node"></div><div class="ring"></div>'],
+      ['offline','Offline','connection gone', AGENT+'<span class="slash"></span>'],
+      ['reconnecting','Reconnecting','tries again', AGENT+'<div class="node"></div><div class="ring r1"></div><div class="ring r2"></div>'],
+      ['shutdown','Shutting down','powers off', AGENT],
     ]],
-    ['Multi-Agent & Lernen', [
-      ['delegate','Delegiert','Sub-Agent', AGENT+'<div class="mini">'+MINI+'</div>'],
-      ['handoff','Uebergabe','reicht weiter', AGENT+'<div class="peer">'+MINI+'</div><span class="token"></span>'],
-      ['learning','Lernt / trainiert','Whare Wananga', AGENT+'<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>'],
-      ['remembering','Erinnert sich','Speicherzugriff', AGENT+'<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>'],
-      ['planning','Plant','legt Schritte aus', AGENT+'<span class="step s1"></span><span class="step s2"></span><span class="step s3"></span>'],
+    ['Multi-Agent & Learning', [
+      ['delegate','Delegates','sub-agent', AGENT+'<div class="mini">'+MINI+'</div>'],
+      ['handoff','Handoff','passes on', AGENT+'<div class="peer">'+MINI+'</div><span class="token"></span>'],
+      ['learning','Learns / trains','Whare Wananga', AGENT+'<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>'],
+      ['remembering','Remembers','memory access', AGENT+'<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>'],
+      ['planning','Plans','lays out steps', AGENT+'<span class="step s1"></span><span class="step s2"></span><span class="step s3"></span>'],
     ]],
   ];
 
@@ -624,7 +624,7 @@
     tTimer=setTimeout(tStep, tHold);
   }
   function tPlay(){ if(tPlaying) return; tPlaying=true; tPlayBtn.textContent='Pause'; tStep(); }
-  function tPause(){ tPlaying=false; tPlayBtn.textContent='Abspielen'; if(tTimer){clearTimeout(tTimer); tTimer=null;} }
+  function tPause(){ tPlaying=false; tPlayBtn.textContent='Play'; if(tTimer){clearTimeout(tTimer); tTimer=null;} }
   tPlayBtn.addEventListener('click', ()=> tPlaying ? tPause() : tPlay());
   tShufBtn.addEventListener('click', ()=>{ order=shuffle(PLAYLIST.slice()); tIdx=0; });
   tSpeed.addEventListener('input', ()=>{ tHold=parseInt(tSpeed.value,10); tSpeedVal.textContent=(tHold/1000).toFixed(1)+'s'; });
@@ -637,7 +637,7 @@
     lite=!lite;
     document.body.classList.toggle('lite',lite);
     document.querySelectorAll('.scene').forEach(s=>s.classList.toggle('light',lite));
-    tb.textContent='Hintergrund: '+(lite?'hell':'dunkel');
+    tb.textContent='Background: '+(lite?'light':'dark');
   });
 </script>
 </body>

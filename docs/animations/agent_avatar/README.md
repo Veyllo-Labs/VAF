@@ -1,37 +1,37 @@
 # VAF Agent Animation
 
-Eigenständige HTML-Dateien, die den **VAF Agent-Avatar** (den lebenden weißen Punkt)
-zeigen — zum Anschauen, für Screenshots und für Post-Content.
+Standalone HTML files that show the **VAF agent avatar** (the living white dot) — for
+viewing, screenshots, and post content.
 
-> Design-Referenz für den Agent-Avatar. Liegt im Repo unter `docs/animations/agent_avatar/`,
-> ist aber nicht Teil des gebauten Produkts (reine Referenz/Spec).
-> Die echte React-Integration steht in `docs/AgentAvatar.md`.
+> Design reference for the agent avatar. Lives in the repo under `docs/animations/agent_avatar/`,
+> but is not part of the built product (pure reference/spec).
+> The actual React integration is documented in `docs/AgentAvatar.md`.
 
-| Datei | Inhalt |
+| File | Contents |
 |---|---|
-| **`agent-all-animations.html`** | **Gesamtübersicht** — alle Animationen aus allen Dateien in einer, jeweils gelabelt, mit globalem Hell/Dunkel-Umschalter. Der beste Startpunkt. |
-| **`agent-avatar-showcase.html`** | Die fünf Basis-Zustände aus der App (idle · waiting · thinking · talking · dim); konsistent mit den anderen (eigenes Körper-Element + Zwinkern im idle) |
-| **`agent-character-emotions.html`** | Der **Punkt als Charakter** (Punkt-Animationen wie in der App, der Körper reagiert subtil mit + Zwinkern) — überrascht, neugierig, Idee, fröhlich, Erfolg … + Performance-Modus |
-| **`agent-away-scenes.html`** | **„User-away"-Szenen** — der Agent vertreibt sich die Zeit (liest Zeitung, schaut Fernsehen, Kaffeepause, jongliert …) + Leerlauf-Modus. Für alte/archivierte Chats |
-| **`agent-activity-states.html`** | **Funktionale Zustände** — zeigt, *was der Agent gerade tut*: 21 Zustände in 4 Clustern (Tool & Aktion · Status & Ergebnis · Lebenszyklus · Multi-Agent & Lernen), dunkel + hell + Durchlauf |
+| **`agent-all-animations.html`** | **Overview** — every animation from every file in one place, each labeled, with a global light/dark toggle. The best starting point. |
+| **`agent-avatar-showcase.html`** | The five base states from the app (idle · waiting · thinking · talking · dim); consistent with the others (own body element + a wink in idle) |
+| **`agent-character-emotions.html`** | The **dot as a character** (dot animations as in the app, the body reacts subtly + a wink) — surprised, curious, idea, happy, success … + performance mode |
+| **`agent-away-scenes.html`** | **"User-away" scenes** — the agent passes the time (reads the newspaper, watches TV, coffee break, juggles …) + idle mode. For old/archived chats |
+| **`agent-activity-states.html`** | **Functional states** — shows *what the agent is doing right now*: 21 states in 4 clusters (Tool & Action · Status & Outcome · Lifecycle · Multi-Agent & Learning), dark + light + cycle |
 
-Beide nutzen **denselben Punkt** und dieselben Basis-Keyframes, 1:1 aus dem echten
-VAF-Code portiert (`web/app/page.tsx` + `web/app/globals.css`).
+They all use the **same dot** and the same base keyframes, ported 1:1 from the real
+VAF code (`web/app/page.tsx` + `web/app/globals.css`).
 
 ---
 
-## Starten / Ansehen
+## Open / view
 
-Beides sind ganz normale HTML-Dateien — **kein Server, keine Installation nötig**.
-Einfach im Browser öffnen (Doppelklick im Dateimanager).
+These are plain HTML files — **no server, no installation needed**. Just open them in a
+browser (double-click in the file manager).
 
-**Per Terminal (Linux):**
+**Via terminal (Linux):**
 ```bash
-xdg-open "agent-all-animations.html"       # ALLES auf einen Blick (Startpunkt)
-xdg-open "agent-activity-states.html"      # die funktionalen Zustände
-xdg-open "agent-away-scenes.html"          # die "User-away"-Szenen
-xdg-open "agent-character-emotions.html"   # die Charakter-Seite
-xdg-open "agent-avatar-showcase.html"      # die Basis-Zustände
+xdg-open "agent-all-animations.html"       # EVERYTHING in one view (start here)
+xdg-open "agent-activity-states.html"      # the functional states
+xdg-open "agent-away-scenes.html"          # the "user-away" scenes
+xdg-open "agent-character-emotions.html"   # the character page
+xdg-open "agent-avatar-showcase.html"      # the base states
 ```
 
 **macOS:** `open agent-all-animations.html`
@@ -39,188 +39,185 @@ xdg-open "agent-avatar-showcase.html"      # die Basis-Zustände
 
 ---
 
-## Was die Seite zeigt
+## What the showcase page shows
 
-| Abschnitt | Inhalt |
+| Section | Contents |
 |---|---|
-| **Live — interaktiv** | Dropdown für jeden Modus, Größen-Regler, Umschalter dunkel/transparent |
-| **Alle Zustände** | `idle` · `idle+dim` · `waiting` · `thinking` · `talking` live & groß |
-| **Echte UI-Größe** | 36 px — exakt wie im Chat |
-| **Größen-Raster** | 36 / 72 / 126 / 180 / 252 / 360 px |
-| **Export** | Avatare auf transparentem Hintergrund (Schachbrett = transparent) |
+| **Live — interactive** | Dropdown for each mode, size slider, dark/transparent toggle |
+| **All states** | `idle` · `idle+dim` · `waiting` · `thinking` · `talking` live & large |
+| **Real UI size** | 36 px — exactly as in the chat |
+| **Size grid** | 36 / 72 / 126 / 180 / 252 / 360 px |
+| **Export** | Avatars on a transparent background (checkerboard = transparent) |
 
-### Die 5 Zustände
+### The 5 states
 
-- **idle** — weißer Punkt + statische Aura, sanftes Schweben (Float 15 s)
-- **idle + dim** — grau, komplett still (ältere Nachrichten / Archiv)
-- **waiting** — langsames Morphen (5.5 s) + Atmen (4.0 s)
-- **thinking** — fokussiertes Pulsieren (Morph 1.0 s + Atmen 0.7 s) + Glow
-- **talking** — rhythmisches Sprechen (Talk 0.75 s)
+- **idle** — white dot + static aura, gentle floating (float 15 s)
+- **idle + dim** — gray, completely still (older messages / archive)
+- **waiting** — slow morph (5.5 s) + breathe (4.0 s)
+- **thinking** — focused pulsing (morph 1.0 s + breathe 0.7 s) + glow
+- **talking** — rhythmic speaking (talk 0.75 s)
 
-Der Punkt ist **weiß** (`#ffffff`) auf dunklem, abgerundetem Container
+The dot is **white** (`#ffffff`) on a dark, rounded container
 (36 px, `bg-gray-900`, `rounded-xl`).
 
 ---
 
-## Die Gesamtübersicht (`agent-all-animations.html`)
+## The overview (`agent-all-animations.html`)
 
-Eine einzige Datei, die **alles** zeigt, was wir haben — jeder Zustand einzeln gelabelt, in
-vier Abschnitten: **Basis**, **Emotionen**, **Away-Szenen**, **Aktivität**. Sie vereint
-beide Darstellungs-Ebenen derselben Identität (der **Punkt** für Basis/Emotionen, die
-**Figur** aus Körper + Auge für Away/Aktivität) und hat oben einen globalen
-**Hell/Dunkel-Umschalter**. Bester Startpunkt für einen schnellen Gesamteindruck.
+A single file that shows **everything** we have — each state labeled individually, in four
+sections: **Base**, **Emotions**, **Away scenes**, **Activity**. It unites both
+representation layers of the same identity (the **dot** for base/emotions, the **figure**
+made of body + eye for away/activity) and has a global **light/dark toggle** at the top.
+The best starting point for a quick overall impression.
 
-Ganz oben sitzt der **Transition-Player** (Abschnitt „0 · Übergänge"): er geht eine
-zufällige Liste **aller** Zustände durch und blendet **animiert** von jedem in den nächsten —
-jeder Zustand kollabiert zu einem weichen Punkt und blüht in den nächsten auf (Cross-Dissolve
-+ Scale + Blur, funktioniert über beide Modelle hinweg). Steuerung: Abspielen/Pause, neu
-mischen, Dauer pro Zustand. So sieht man die **Übergänge** zwischen den Animationen.
+At the very top sits the **transition player** (section "0 · Transitions"): it runs through a
+random list of **all** states and **animates** from each one into the next — every state
+collapses to a soft point and blooms into the next (cross-dissolve + scale + blur, works
+across both models). Controls: play/pause, reshuffle, duration per state. This is how you see
+the **transitions** between the animations.
 
-> **In VAF einbauen:** Diese Übergänge sind im echten App-Code dokumentiert — siehe
-> `docs/AgentAvatar.md`, Abschnitt *„Universal morph — any state to any state"*. Dort steht
-> die konkrete React-Integration (collapse-to-neutral -> swap -> bloom) passend zu
-> `web/components/AgentAvatar.tsx`. Der Transition-Player hier ist die optische Referenz dazu.
+> **Building it into VAF:** these transitions are documented in the real app code — see
+> `docs/AgentAvatar.md`, section *"Universal morph — any state to any state"*. It contains the
+> concrete React integration (collapse-to-neutral -> swap -> bloom) matching
+> `web/components/AgentAvatar.tsx`. The transition player here is the visual reference for it.
 
 ---
 
-## Die Emotionen (`agent-character-emotions.html`)
+## The emotions (`agent-character-emotions.html`)
 
-Der lebende weiße **Punkt** ist der Star — seine Animationen sind **1:1 wie im App-Avatar**.
-Neu: der **Körper** (das dunkle Viereck) reagiert jetzt *subtil* mit (eigene, dezente
-Animation als eigenes Element) — der Punkt läuft unverändert daneben. Klassische
-Animationsprinzipien (Squash & Stretch, Anticipation, Overshoot, Timing); jeder Loop endet
-mit einer kurzen Ruhepause. Im **Ruhe-Zustand zwinkert** der Punkt gelegentlich.
+The living white **dot** is the star — its animations are **1:1 as in the app avatar**.
+New: the **body** (the dark square) now reacts *subtly* (its own, restrained animation as a
+separate element) — the dot runs unchanged alongside it. Classic animation principles
+(squash & stretch, anticipation, overshoot, timing); every loop ends with a short rest beat.
+In the **idle state the dot winks** occasionally.
 
-| Gruppe | Zustand | Was es signalisiert |
+| Group | State | What it signals |
 |---|---|---|
-| **Basis** | Ruhe | präsent, zwinkert ab und zu |
-| | Wartet · Denkt nach · Spricht | wie im echten App-Avatar |
-| **Reaktionen** | Überrascht | etwas Unerwartetes ist passiert |
-| | Neugierig | schaut sich etwas genauer an (lehnt & lugt) |
-| | Verwirrt | versteht etwas (noch) nicht |
-| | Geistesblitz | hat eine Lösung gefunden (Aha-Aufleuchten) |
-| **Gefühle** | Fröhlich · Aufgeregt | freut sich / voller Energie |
-| | Niedergeschlagen · Müde | sackt ab / entspannt |
-| **Antwort** | Zustimmung · Ablehnung | Nicken / Kopfschütteln |
-| | Hört zu · Sucht / Scannt | nimmt auf / durchsucht (Bogen-Sweep) |
-| **Höhepunkte** | Erfolg | Sieges-Sprung; die Energie-Ringe zünden bei der **Landung** (synchron mit dem Punkt) |
-| | Arbeitet | verarbeitet im Hintergrund (Satellit kreist) |
+| **Base** | Idle | present, winks now and then |
+| | Waiting · Thinking · Talking | as in the real app avatar |
+| **Reactions** | Surprised | something unexpected happened |
+| | Curious | takes a closer look (leans & peeks) |
+| | Confused | doesn't understand (yet) |
+| | Idea | found a solution (aha flash) |
+| **Feelings** | Happy · Excited | is glad / full of energy |
+| | Dejected · Tired | slumps / relaxed |
+| **Response** | Agreement · Refusal | nodding / head shake |
+| | Listening · Searching / Scanning | takes it in / searches (arc sweep) |
+| **Highlights** | Success | victory jump; the energy rings fire on **landing** (in sync with the dot) |
+| | Working | processing in the background (orbiting satellite) |
 
-Bühne mit Zustands-Auswahl, Größenregler, Hintergrund-Umschalter und einem
-**Performance-Modus**, der eine kleine Szene durchspielt.
+Stage with state picker, size slider, background toggle and a **performance mode** that
+plays through a small scene.
 
-> Hinweis: Diese Datei nutzt das **Punkt-zentrierte** Modell (Punkt = Star, Körper reagiert
-> subtil). Away & Aktivität nutzen das **Körper+Auge**-Modell (Körper trägt die Bewegung).
-> Beide teilen dieselbe Identität — dunkles Viereck + weißer Punkt.
-
----
-
-## Die Away-Szenen (`agent-away-scenes.html`)
-
-Was macht der Agent, wenn gerade niemand mit ihm spricht? Diese kleinen Leerlauf-Szenen
-sind gedacht für den Moment, in dem der User einen **alten oder archivierten Chat** öffnet:
-der Agent „wartet" sichtbar auf dich, statt nur still zu sein.
-
-Wichtig — der Agent besteht aus **zwei Teilen**: dem dunklen abgerundeten Viereck
-(= sein **Körper**) und dem weißen Punkt (= sein **Auge / Gesicht**). Die Requisiten
-(Zeitung, TV, Tasse …) liegen **außerhalb** seines Körpers; er hantiert damit — der
-Körper lehnt und wippt, das Auge schaut, scannt und blinzelt.
-
-| Szene | Was sie erzählt |
-|---|---|
-| Liest Zeitung | hält die Zeitung vor sich, Auge scannt die Zeilen, blättert um |
-| Schaut Fernsehen | sitzt vor dem Fernseher, vom Flimmern beleuchtet, lacht ab und zu |
-| Kaffeepause | lehnt sich zur Tasse, nimmt einen Schluck, seufzt „ahh" |
-| Jongliert | drei Bälle über ihm im kreisenden Shower-Muster, Auge verfolgt sie |
-| Summt vor sich hin | wippt im Takt, Noten steigen daneben auf |
-| Spielt mit dem Ball | Ball hüpft vor ihm (Squash & Stretch), Auge folgt auf und ab |
-| Schaut in die Sterne | lehnt sich zurück, blickt hoch, Sterne funkeln, Sternschnuppe |
-| Nickerchen | Auge fast zu, atmet schwer, „z z z" steigen auf |
-
-Auf der Bühne gibt es Szenen-Auswahl, Größenregler, einen **Hell/Dunkel-Umschalter** und
-einen **Leerlauf-Modus**, der von selbst durch alle Beschäftigungen wechselt — genau wie es
-der User im Away-Zustand sähe.
-
-**Hell & dunkel:** Die Szenen funktionieren auf beidem. Der Körper bleibt das dunkle Viereck
-und das Auge bleibt weiß; die externen Requisiten (Zeitung, Dampf, Noten, Bälle, Sterne,
-„z z z") färben sich über Theme-Variablen (`--ink` etc.) von Weiß auf Tinte um, damit sie auf
-hellem Hintergrund sichtbar bleiben. Es gibt zwei Galerien — eine auf dunklem, eine auf hellem
-Hintergrund.
+> Note: this file uses the **dot-centric** model (dot = star, body reacts subtly). Away &
+> Activity use the **body+eye** model (the body carries the motion). Both share the same
+> identity — dark square + white dot.
 
 ---
 
-## Die funktionalen Zustände (`agent-activity-states.html`)
+## The away scenes (`agent-away-scenes.html`)
 
-Die operative Ebene: **was der Agent gerade konkret tut** — damit der User in Echtzeit
-versteht, woran er arbeitet, ohne Logs zu lesen. Gleiche Identität (Körper + Auge), die
-Werkzeuge/Indikatoren liegen außerhalb und sind theme-fähig (dunkel + hell). 21 Zustände in
-4 Clustern:
+What does the agent do when nobody is talking to it? These small idle scenes are meant for
+the moment when the user opens an **old or archived chat**: the agent visibly "waits" for
+you instead of just sitting still.
 
-**1 — Tool & Aktion**
+Important — the agent consists of **two parts**: the dark rounded square (= its **body**)
+and the white dot (= its **eye / face**). The props (newspaper, TV, cup …) sit **outside**
+its body; it handles them — the body leans and bobs, the eye looks, scans and blinks.
 
-| Zustand | Was er tut |
+| Scene | What it tells |
 |---|---|
-| Sucht / durchsucht | Lupe wandert über ein Dokument, Auge folgt |
-| Schreibt / editiert | tippt eine Zeile, Cursor blinkt |
-| Führt Befehl aus | Terminal läuft, Spinner dreht, Körper unter Spannung |
-| Surft im Web | Globus rotiert, Auge folgt |
-| Lädt herunter | Datenpakete strömen in ihn hinein |
-| Lädt hoch | Datenpakete strömen aus ihm heraus |
+| Reads the newspaper | holds the paper up, eye scans the lines, turns the page |
+| Watches TV | sits in front of the TV, lit by the flicker, laughs now and then |
+| Coffee break | leans toward the cup, takes a sip, sighs "ahh" |
+| Juggles | three balls above it in a circling shower pattern, eye tracks them |
+| Hums to itself | bobs to the beat, notes rise alongside |
+| Plays with the ball | ball bounces in front of it (squash & stretch), eye follows up and down |
+| Stargazes | leans back, looks up, stars twinkle, a shooting star |
+| Naps | eye nearly shut, breathes heavily, "z z z" rise up |
 
-**2 — Status & Ergebnis**
+The stage has a scene picker, size slider, a **light/dark toggle** and an **idle mode** that
+cycles through all the pastimes on its own — exactly what the user would see in the away state.
 
-| Zustand | Was er sagt |
-|---|---|
-| Erfolg | Aufgabe geschafft (Hüpfer + Häkchen + Ring) |
-| Fehler | etwas ist schiefgelaufen (Ruck + „!") |
-| Warnung | Vorsicht geboten (pulsierendes Alert-Symbol) |
-| Braucht Erlaubnis | fragt nach, lehnt sich vor, wartet auf dein OK („?") |
-| Blockiert | kommt nicht weiter (stößt gegen ein Schloss) |
-
-**3 — Lebenszyklus & Verbindung**
-
-| Zustand | Was er sagt |
-|---|---|
-| Erwacht | materialisiert sich, Auge öffnet sich |
-| Verbindet | baut eine Verbindung zu einem Knoten auf |
-| Offline | Verbindung verloren, Auge flackert aus |
-| Verbindet erneut | Wiederholungs-Pulse, hofft auf Reconnect |
-| Fährt herunter | schaltet sich ab (CRT-Kollaps) |
-
-**4 — Multi-Agent & Lernen** (VAF-spezifisch)
-
-| Zustand | Was er tut |
-|---|---|
-| Delegiert | knospt einen Sub-Agenten ab |
-| Übergabe | reicht eine Aufgabe an einen zweiten Agenten weiter |
-| Lernt / trainiert | nimmt Wissen auf — passt zu Whare Wananga |
-| Erinnert sich | greift auf den Speicher zu (Knoten leuchten in Folge) |
-| Plant | legt die Schritte aus, Auge scannt darüber |
-
-Auf der Bühne: Zustands-Auswahl (gruppiert), Größenregler, Hell/Dunkel-Umschalter und ein
-**Durchlauf**, der alle 21 automatisch abspielt.
+**Light & dark:** the scenes work on both. The body stays the dark square and the eye stays
+white; the external props (newspaper, steam, notes, balls, stars, "z z z") recolor from white
+to ink via theme variables (`--ink` etc.) so they stay visible on a light background. There
+are two galleries — one on dark, one on light.
 
 ---
 
-## Screenshots / transparente Bilder erstellen
+## The functional states (`agent-activity-states.html`)
 
-**Schnell:** Im Abschnitt *Export* die gewünschte Variante heranzoomen und mit dem
-Screenshot-Tool ausschneiden:
-- Linux: meist `Druck`-Taste oder ⇧ + `Druck` für Bereich
-- macOS: ⇧ ⌘ 4
-- Windows: Snipping-Tool (⊞ + ⇧ + S)
+The operational layer: **what the agent is concretely doing right now** — so the user
+understands in real time what it is working on, without reading logs. Same identity (body +
+eye); the tools/indicators sit outside and are theme-aware (dark + light). 21 states in
+4 clusters:
 
-Das Schachbrettmuster markiert die transparenten Flächen.
+**1 — Tool & Action**
 
-**Echtes Alpha-PNG (transparenter Hintergrund, beliebige Größe):**
-Dafür braucht es einen kleinen Render-Schritt mit Headless-Browser. Sag im Chat Bescheid —
-dann lege ich hier ein `render.js` (Puppeteer) dazu, das jeden Zustand in jeder Größe
-automatisch als `transparent.png` exportiert.
+| State | What it does |
+|---|---|
+| Searches | magnifier moves over a document, eye follows |
+| Writes / edits | types a line, cursor blinks |
+| Runs a command | terminal runs, spinner turns, body under tension |
+| Browses the web | globe rotates, eye follows |
+| Downloads | data packets stream into it |
+| Uploads | data packets stream out of it |
+
+**2 — Status & Outcome**
+
+| State | What it says |
+|---|---|
+| Success | task done (hop + checkmark + ring) |
+| Error | something went wrong (jolt + "!") |
+| Warning | caution advised (pulsing alert symbol) |
+| Needs permission | asks, leans forward, waits for your OK ("?") |
+| Blocked | can't get through (bumps against a barrier) |
+
+**3 — Lifecycle & Connection**
+
+| State | What it says |
+|---|---|
+| Waking | materializes, eye opens |
+| Connecting | builds a connection to a node |
+| Offline | connection lost, eye flickers out |
+| Reconnecting | retry pulses, hoping to reconnect |
+| Shutting down | powers off (CRT collapse) |
+
+**4 — Multi-Agent & Learning** (VAF-specific)
+
+| State | What it does |
+|---|---|
+| Delegates | buds off a sub-agent |
+| Handoff | passes a task to a second agent |
+| Learns / trains | takes in knowledge — matches Whare Wananga |
+| Remembers | accesses memory (nodes light up in sequence) |
+| Plans | lays out the steps, eye scans across them |
+
+On the stage: state picker (grouped), size slider, light/dark toggle and a **cycle** that
+plays through all 21 automatically.
 
 ---
 
-## Anpassen
+## Creating screenshots / transparent images
 
-Alle Farben, Größen und Animations-Timings stehen ganz oben in der `<style>`-Sektion
-der HTML-Datei (CSS-Variablen + Keyframes). Sie sind **1:1 aus dem echten VAF-Code**
-portiert (`web/app/page.tsx` + `web/app/globals.css`), also originalgetreu.
+**Quick:** in the *Export* section, zoom into the variant you want and crop it with the
+screenshot tool:
+- Linux: usually the `Print` key, or Shift + `Print` for a region
+- macOS: Shift + Cmd + 4
+- Windows: Snipping Tool (Win + Shift + S)
+
+The checkerboard pattern marks the transparent areas.
+
+**Real alpha PNG (transparent background, any size):**
+That needs a small render step with a headless browser. Say so in chat — then I'll add a
+`render.js` (Puppeteer) here that exports every state at every size as `transparent.png`
+automatically.
+
+---
+
+## Customizing
+
+All colors, sizes and animation timings sit at the very top of the `<style>` section of each
+HTML file (CSS variables + keyframes). They are ported **1:1 from the real VAF code**
+(`web/app/page.tsx` + `web/app/globals.css`), so they are faithful to the original.

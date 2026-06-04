@@ -154,22 +154,22 @@
 <body>
 
 <header>
-  <h1>VAF Agent Avatar — der lebende Punkt</h1>
+  <h1>VAF Agent Avatar — the living dot</h1>
   <p>
-    Zentrale Referenz fuer Screenshots &amp; Post-Content. Fuenf Zustaende:
-    <b>idle</b> (sanftes Schweben + gelegentliches Zwinkern), <b>idle+dim</b> (Archiv, grau, still),
-    <b>waiting</b> (langsames Morphen), <b>thinking</b> (fokussiertes Pulsieren mit Glow),
-    <b>talking</b> (rhythmisches Sprechen). Der Punkt ist <b>weiss</b> auf dunklem,
-    abgerundetem Koerper — exakt wie in der App (36&nbsp;px, <code>bg-gray-900</code>,
-    <code>rounded-xl</code>). Konsistent mit der Emotions-Datei: der Koerper ist ein eigenes
-    Element, der Punkt laeuft 1:1 wie im echten Avatar.
+    Central reference for screenshots &amp; post content. Five states:
+    <b>idle</b> (gentle floating + occasional wink), <b>idle+dim</b> (archive, gray, still),
+    <b>waiting</b> (slow morphing), <b>thinking</b> (focused pulsing with glow),
+    <b>talking</b> (rhythmic speaking). The dot is <b>white</b> on a dark,
+    rounded body — exactly as in the app (36&nbsp;px, <code>bg-gray-900</code>,
+    <code>rounded-xl</code>). Consistent with the emotions file: the body is its own
+    element, the dot runs 1:1 as in the real avatar.
   </p>
   <p class="crumbs">
-    Familie: <b>Basis</b> (diese Datei) ·
-    <a href="agent-character-emotions.html">Emotionen</a> ·
-    <a href="agent-away-scenes.html">Away-Szenen</a> ·
-    <a href="agent-activity-states.html">Aktivitaet</a> ·
-    <a href="agent-all-animations.html">Alles auf einen Blick</a>.
+    Family: <b>Base</b> (this file) ·
+    <a href="agent-character-emotions.html">Emotions</a> ·
+    <a href="agent-away-scenes.html">Away scenes</a> ·
+    <a href="agent-activity-states.html">Activity</a> ·
+    <a href="agent-all-animations.html">All at a glance</a>.
   </p>
 </header>
 
@@ -178,7 +178,7 @@
   <section>
     <h2>Live — interaktiv</h2>
     <div class="controls">
-      <label>Modus
+      <label>Mode
         <select id="ctl-mode">
           <option value="idle">idle</option>
           <option value="idle dim">idle + dim</option>
@@ -187,11 +187,11 @@
           <option value="talking">talking</option>
         </select>
       </label>
-      <label>Groesse
+      <label>Size
         <input id="ctl-scale" type="range" min="1" max="14" step="0.5" value="6" />
         <span id="ctl-scale-val">216px</span>
       </label>
-      <button id="ctl-bg">Hintergrund: dunkel</button>
+      <button id="ctl-bg">Background: dark</button>
     </div>
     <div class="stage" id="stage">
       <div class="scaler" id="live-scaler" style="--scale:6;">
@@ -203,34 +203,34 @@
       </div>
     </div>
     <p class="hint">
-      Identisch zur App: <code>idle</code> Float + Zwinkern, <code>waiting</code> Morph 5.5s +
-      Breathe 4.0s, <code>thinking</code> Morph 1.0s + Breathe 0.7s + Glow,
-      <code>talking</code> agentAvatarTalk 0.75s. Aura nur im reinen <code>idle</code>.
+      Identical to the app: <code>idle</code> float + wink, <code>waiting</code> morph 5.5s +
+      breathe 4.0s, <code>thinking</code> morph 1.0s + breathe 0.7s + glow,
+      <code>talking</code> agentAvatarTalk 0.75s. Aura only in pure <code>idle</code>.
     </p>
   </section>
 
   <section>
-    <h2>Alle Zustaende — live, grosse Ansicht</h2>
+    <h2>All states — live, large view</h2>
     <div class="panel"><div class="row" id="states-big"></div></div>
   </section>
 
   <section>
-    <h2>Echte UI-Groesse — 36px (wie im Chat)</h2>
+    <h2>Real UI size — 36px (as in the chat)</h2>
     <div class="panel"><div class="row" id="states-real"></div></div>
   </section>
 
   <section>
-    <h2>Groessen-Raster</h2>
+    <h2>Size grid</h2>
     <div class="panel"><div class="row" id="sizes"></div></div>
   </section>
 
   <section>
-    <h2>Export — transparenter Hintergrund (Schachbrett = transparent)</h2>
+    <h2>Export — transparent background (checkerboard = transparent)</h2>
     <div class="checker"><div class="row" id="export"></div></div>
     <p class="hint">
-      Fuer PNGs mit echtem Alpha: eine Zelle heranzoomen und per Snip ausschneiden, oder
-      den DOM-Knoten mit <code>html-to-image</code> / Puppeteer-Screenshot
-      (<code>omitBackground:true</code>) exportieren.
+      For PNGs with real alpha: zoom into a cell and crop with a snip, or
+      export the DOM node with <code>html-to-image</code> / a Puppeteer screenshot
+      (<code>omitBackground:true</code>).
     </p>
   </section>
 
@@ -238,8 +238,8 @@
 
 <script>
   const MODES = [
-    { cls: 'idle',     label: 'idle',       sub: 'weiss · Float + Zwinkern' },
-    { cls: 'idle dim', label: 'idle + dim', sub: 'grau · statisch' },
+    { cls: 'idle',     label: 'idle',       sub: 'white · float + wink' },
+    { cls: 'idle dim', label: 'idle + dim', sub: 'gray · static' },
     { cls: 'waiting',  label: 'waiting',    sub: 'Morph 5.5s + Breathe 4.0s' },
     { cls: 'thinking', label: 'thinking',   sub: 'Morph 1.0s + Breathe 0.7s + Glow' },
     { cls: 'talking',  label: 'talking',    sub: 'Talk 0.75s' },
@@ -292,7 +292,7 @@
   bgBtn.addEventListener('click', () => {
     dark = !dark;
     stage.className = dark ? 'stage' : 'stage checker';
-    bgBtn.textContent = 'Hintergrund: ' + (dark ? 'dunkel' : 'transparent');
+    bgBtn.textContent = 'Background: ' + (dark ? 'dark' : 'transparent');
   });
 </script>
 </body>

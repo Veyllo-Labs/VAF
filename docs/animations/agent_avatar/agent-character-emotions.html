@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VAF Agent — Charakter &amp; Emotionen</title>
+<title>VAF Agent — Character &amp; Emotions</title>
 <style>
   /* ====================================================================
      VAF AGENT — der lebende Punkt ALS CHARAKTER
@@ -403,19 +403,19 @@
 <body>
 
 <header>
-  <h1>VAF Agent — Charakter &amp; Emotionen</h1>
+  <h1>VAF Agent — Character &amp; Emotions</h1>
   <p>
-    Der lebende weisse <b>Punkt</b> (Animationen unveraendert) — und neu: der <b>Koerper</b>
-    (das dunkle Viereck) reagiert jetzt subtil mit. Jeder Zustand nutzt klassische
-    Animationsprinzipien (Squash&nbsp;&amp; Stretch, Anticipation, Overshoot, Timing), damit
-    der User auf einen Blick <i>fuehlt</i>, was der Agent tut: <b>ueberrascht</b>,
-    <b>neugierig</b>, <b>denkt</b>, <b>hat eine Idee</b>, <b>freut sich</b>, <b>arbeitet</b>,
-    <b>feiert einen Erfolg</b> und mehr. Im Ruhe-Zustand <b>zwinkert</b> er gelegentlich.
+    The living white <b>dot</b> (animations unchanged) — and new: the <b>body</b>
+    (the dark square) now reacts subtly too. Each state uses classic
+    animation principles (squash&nbsp;&amp; stretch, anticipation, overshoot, timing), so
+    that the user instantly <i>feels</i> what the agent is doing: <b>surprised</b>,
+    <b>curious</b>, <b>thinking</b>, <b>has an idea</b>, <b>happy</b>, <b>working</b>,
+    <b>celebrating a success</b> and more. In the idle state it <b>winks</b> occasionally.
   </p>
   <p class="crumbs">
-    Familie: <a href="agent-avatar-showcase.html">Basis</a> · <b>Emotionen</b> (diese Datei) ·
-    <a href="agent-away-scenes.html">Away-Szenen</a> ·
-    <a href="agent-activity-states.html">Aktivitaet</a>. Design-Referenz, nicht Teil des gebauten Produkts.
+    Family: <a href="agent-avatar-showcase.html">Base</a> · <b>Emotions</b> (this file) ·
+    <a href="agent-away-scenes.html">Away scenes</a> ·
+    <a href="agent-activity-states.html">Activity</a>. Design reference, not part of the built product.
   </p>
 </header>
 
@@ -423,22 +423,22 @@
 
   <!-- 1) BUEHNE -->
   <section>
-    <h2>Buehne — Zustand waehlen oder die Performance abspielen</h2>
+    <h2>Stage — pick a state or play the performance</h2>
     <p class="desc">
-      Waehle einen einzelnen Zustand, oder druecke <b>Performance</b> — dann spielt der
-      Agent eine kleine Szene durch und zeigt, wie sich die Zustaende zu einem Charakter
-      verbinden. Groesse und Hintergrund frei einstellbar.
+      Pick a single state, or press <b>Performance</b> — then the
+      agent plays through a small scene, showing how the states combine into a character.
+      Size and background are freely adjustable.
     </p>
     <div class="controls">
-      <label>Zustand
+      <label>State
         <select id="ctl-mode"></select>
       </label>
-      <label>Groesse
+      <label>Size
         <input id="ctl-scale" type="range" min="1" max="12" step="0.5" value="6" />
         <span id="ctl-scale-val">216px</span>
       </label>
-      <button id="ctl-play">Performance abspielen</button>
-      <button id="ctl-bg">Hintergrund: dunkel</button>
+      <button id="ctl-play">Play performance</button>
+      <button id="ctl-bg">Background: dark</button>
     </div>
     <div class="stage" id="stage">
       <div class="scaler" id="live-scaler" style="--scale:6;">
@@ -451,14 +451,14 @@
           <div class="dot"></div>
         </div>
       </div>
-      <div class="now">Aktuell: <b id="now-label">ueberrascht</b> <span id="now-sub"></span></div>
+      <div class="now">Now: <b id="now-label">surprised</b> <span id="now-sub"></span></div>
     </div>
   </section>
 
   <!-- 2) MODELLBLATT -->
   <section>
-    <h2>Modellblatt — alle Ausdruecke</h2>
-    <p class="desc">Das komplette "Mienenspiel" des Agenten. Darunter steht jeweils, was der Zustand dem User signalisiert.</p>
+    <h2>Model sheet — all expressions</h2>
+    <p class="desc">The agent's complete range of expressions. Below each is what the state signals to the user.</p>
     <div class="panel">
       <div id="sheet"></div>
     </div>
@@ -466,8 +466,8 @@
 
   <!-- 3) ECHTE UI-GROESSE -->
   <section>
-    <h2>Echte UI-Groesse — 36px (wie im Chat)</h2>
-    <p class="desc">So klein lebt die Figur tatsaechlich im Interface — die Persoenlichkeit bleibt lesbar.</p>
+    <h2>Real UI size — 36px (as in the chat)</h2>
+    <p class="desc">This is how small the figure actually lives in the interface — the personality stays readable.</p>
     <div class="panel">
       <div class="row" id="real"></div>
     </div>
@@ -475,14 +475,14 @@
 
   <!-- 4) EXPORT -->
   <section>
-    <h2>Export — transparenter Hintergrund (Schachbrett = transparent)</h2>
+    <h2>Export — transparent background (checkerboard = transparent)</h2>
     <div class="checker">
       <div class="row" id="export"></div>
     </div>
     <p class="hint">
-      Fuer PNGs mit echtem Alpha: eine Zelle heranzoomen und per Snip ausschneiden, oder
-      den DOM-Knoten mit <code>html-to-image</code> / Puppeteer-Screenshot
-      (<code>omitBackground:true</code>) exportieren.
+      For PNGs with real alpha: zoom into a cell and crop with a snip, or
+      export the DOM node with <code>html-to-image</code> / a Puppeteer screenshot
+      (<code>omitBackground:true</code>).
     </p>
   </section>
 
@@ -490,24 +490,24 @@
 
 <script>
   const MODES = [
-    { cls:'idle',      label:'Ruhe',            sub:'praesent, zwinkert ab und zu',    group:'Basis' },
-    { cls:'waiting',   label:'Wartet',          sub:'geduldig, langsam',               group:'Basis' },
-    { cls:'thinking',  label:'Denkt nach',      sub:'fokussiert am Ueberlegen',        group:'Basis' },
-    { cls:'talking',   label:'Spricht',         sub:'antwortet dir',                   group:'Basis' },
-    { cls:'surprised', label:'Ueberrascht',     sub:'etwas Unerwartetes ist passiert', group:'Reaktionen' },
-    { cls:'curious',   label:'Neugierig',       sub:'schaut sich etwas genauer an',    group:'Reaktionen' },
-    { cls:'confused',  label:'Verwirrt',        sub:'versteht etwas (noch) nicht',     group:'Reaktionen' },
-    { cls:'idea',      label:'Geistesblitz',    sub:'hat eine Loesung gefunden',       group:'Reaktionen' },
-    { cls:'happy',     label:'Froehlich',       sub:'freut sich',                      group:'Gefuehle' },
-    { cls:'excited',   label:'Aufgeregt',       sub:'voller Energie, kaum zu bremsen', group:'Gefuehle' },
-    { cls:'sad',       label:'Niedergeschlagen',sub:'etwas ist schiefgelaufen',        group:'Gefuehle' },
-    { cls:'sleepy',    label:'Ruht / Mued',     sub:'entspannt, nichts zu tun',        group:'Gefuehle' },
-    { cls:'nod',       label:'Zustimmung',      sub:'Ja, verstanden',                  group:'Antwort' },
-    { cls:'shake',     label:'Ablehnung',       sub:'Nein, das ging nicht',            group:'Antwort' },
-    { cls:'listening', label:'Hoert zu',        sub:'nimmt deine Eingabe auf',         group:'Antwort' },
-    { cls:'search',    label:'Sucht / Scannt',  sub:'durchsucht etwas',                group:'Antwort' },
-    { cls:'celebrate', label:'Erfolg',          sub:'Aufgabe geschafft',               group:'Hoehepunkte' },
-    { cls:'working',   label:'Arbeitet',        sub:'verarbeitet im Hintergrund',      group:'Hoehepunkte' },
+    { cls:'idle',      label:'Idle',            sub:'present, winks now and then',    group:'Base' },
+    { cls:'waiting',   label:'Waiting',          sub:'patient, slow',               group:'Base' },
+    { cls:'thinking',  label:'Thinking',        sub:'focused, pondering',        group:'Base' },
+    { cls:'talking',   label:'Talking',         sub:'answering you',                   group:'Base' },
+    { cls:'surprised', label:'Surprised',       sub:'something unexpected happened', group:'Reactions' },
+    { cls:'curious',   label:'Curious',         sub:'takes a closer look',    group:'Reactions' },
+    { cls:'confused',  label:'Confused',        sub:'does not understand (yet)',     group:'Reactions' },
+    { cls:'idea',      label:'Idea',            sub:'found a solution',       group:'Reactions' },
+    { cls:'happy',     label:'Happy',           sub:'is glad',                      group:'Feelings' },
+    { cls:'excited',   label:'Excited',         sub:'full of energy, unstoppable', group:'Feelings' },
+    { cls:'sad',       label:'Dejected',        sub:'something went wrong',        group:'Feelings' },
+    { cls:'sleepy',    label:'Resting / Tired', sub:'relaxed, nothing to do',        group:'Feelings' },
+    { cls:'nod',       label:'Agreement',       sub:'yes, understood',                  group:'Response' },
+    { cls:'shake',     label:'Refusal',         sub:'no, that did not work',            group:'Response' },
+    { cls:'listening', label:'Listening',       sub:'taking in your input',         group:'Response' },
+    { cls:'search',    label:'Searching / Scanning', sub:'searching something',                group:'Response' },
+    { cls:'celebrate', label:'Success',         sub:'task accomplished',               group:'Highlights' },
+    { cls:'working',   label:'Working',         sub:'processing in the background',      group:'Highlights' },
   ];
   const byCls = Object.fromEntries(MODES.map(m => [m.cls, m]));
 
@@ -585,8 +585,8 @@
   let showTimer = null, showIdx = 0;
   const playBtn = document.getElementById('ctl-play');
   function stepShow() { const [cls, ms] = SHOW[showIdx % SHOW.length]; setState(cls); showIdx++; showTimer = setTimeout(stepShow, ms); }
-  function startShow() { showIdx = 0; stepShow(); playBtn.textContent = 'Performance stoppen'; playBtn.classList.add('active'); }
-  function stopShow() { if (showTimer) { clearTimeout(showTimer); showTimer = null; } playBtn.textContent = 'Performance abspielen'; playBtn.classList.remove('active'); }
+  function startShow() { showIdx = 0; stepShow(); playBtn.textContent = 'Stop performance'; playBtn.classList.add('active'); }
+  function stopShow() { if (showTimer) { clearTimeout(showTimer); showTimer = null; } playBtn.textContent = 'Play performance'; playBtn.classList.remove('active'); }
   playBtn.addEventListener('click', () => { showTimer ? stopShow() : startShow(); });
 
   let dark = true;
@@ -594,7 +594,7 @@
   bgBtn.addEventListener('click', () => {
     dark = !dark;
     stage.className = dark ? 'stage' : 'stage checker';
-    bgBtn.textContent = 'Hintergrund: ' + (dark ? 'dunkel' : 'transparent');
+    bgBtn.textContent = 'Background: ' + (dark ? 'dark' : 'transparent');
   });
 </script>
 </body>

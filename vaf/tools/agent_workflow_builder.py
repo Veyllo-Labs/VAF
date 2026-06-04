@@ -726,7 +726,9 @@ class AgentWorkflowBuilderTool(BaseTool):
 
         if result.success:
             return f"Temporary workflow '{name}' completed.\n\n{result.final_output}"
-        return f"Temporary workflow '{name}' failed: {result.error}"
+        # Lead with "Error:" so the UI status heuristic flags this as a failure (red),
+        # not a green success — the bubble status keys off the result prefix.
+        return f"Error: Temporary workflow '{name}' failed: {result.error}"
 
     def _collect_tools(self) -> Dict[str, Any]:
         """

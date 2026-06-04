@@ -164,7 +164,20 @@ class WorkflowEngine:
         self._workflow_defaults = {}
 
         start_time = time.time()
-        outputs: Dict[str, Any] = dict(variables or {})
+        # `variables` should be a mapping, but the LLM sometimes emits a JSON string or a
+        # list. `dict(<list>)` raises "dictionary update sequence element #0 has length N;
+        # 2 is required" and aborts the whole workflow — coerce defensively so a malformed
+        # value degrades to "missing variable" (a clear per-step error) instead of a crash.
+        _vars = variables or {}
+        if isinstance(_vars, str):
+            try:
+                import json as _json
+                _vars = _json.loads(_vars)
+            except Exception:
+                _vars = {}
+        if not isinstance(_vars, dict):
+            _vars = {}
+        outputs: Dict[str, Any] = dict(_vars)
         # Merge defaults into outputs if not already present
         for key, value in self._workflow_defaults.items():
             if key not in outputs:
@@ -784,14 +797,22 @@ class WorkflowEngine:
                     continue
 
                 result_str = str(result)
+                # A tool that raised is wrapped by execute_tool as "Tool Error: …"; tools
+                # also surface failures as "Security Error: …". These do NOT start with a
+                # bare "Error:", so without the explicit prefixes below the step was scored
+                # as a success and the workflow continued (and reported "completed") on top
+                # of a failed step.
+                _result_lower = result_str.lower()
                 is_error_result = (
                     result_str.startswith("### ❌") or
                     result_str.startswith("❌") or
                     result_str.startswith("Error:") or
+                    _result_lower.startswith("tool error:") or
+                    _result_lower.startswith("security error:") or
                     "Task Failed" in result_str or
-                    "task failed" in result_str.lower() or
+                    "task failed" in _result_lower or
                     (result_str.startswith("###") and "❌" in result_str[:200]) or
-                    ("error:" in result_str.lower() and result_str.lower().startswith("error"))
+                    ("error:" in _result_lower and _result_lower.startswith("error"))
                 )
 
                 if is_error_result:

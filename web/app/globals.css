@@ -93,7 +93,9 @@
    PAST REGRESSIONS (do not repeat — this is exactly how the rule gets broken):
    - The idle `wink` once animated `clip-path` (an "eyelid" inset). clip-path repaints every
      frame, and `wink` runs `infinite` on the idle avatar -> renderer RSS climbed ~15 MB/s to
-     6 GB and QtWebEngineProcess crashed. Fix: wink animates `opacity` only (a blink).
+     6 GB and QtWebEngineProcess crashed. Fix: wink animates the `scale` property only (a vertical
+     squash that reads as a real eye-close, composes with the dot's transform float; opacity worked
+     too but only dimmed the dot instead of closing it).
    - Several `emo*` keyframes animated `box-shadow` (a pulsing glow). box-shadow also repaints;
      `emoListening` (whole challenge phase) and `emoCelebrate`/`emoSad` (final state) run for a
      long time -> same leak. Fix: the glow is a STATIC box-shadow on the dot (set inline in
@@ -197,8 +199,12 @@
   70% { transform: translate(0,-1px)    scale(1.10,1.10); }
 }
 @keyframes emoSad {
-  0%,100% { transform: translateY(4px) scale(1.16,0.82); }
-  50%     { transform: translateY(6px) scale(1.20,0.78); }
+  0%      { transform: translateY(7px) translateX(0)    scale(1.16,0.82); }
+  14%     { transform: translateY(7px) translateX(-3px) scale(1.15,0.83); }
+  30%     { transform: translateY(7px) translateX(3px)  scale(1.15,0.83); }
+  44%     { transform: translateY(7px) translateX(0)    scale(1.16,0.82); }
+  54%,84% { transform: translateY(1px) translateX(0)    scale(1.04,0.96); }
+  100%    { transform: translateY(7px) translateX(0)    scale(1.16,0.82); }
 }
 @keyframes emoSleepy {
   0%,100% { transform: translateY(3px) scale(1.08,0.90); }
@@ -258,12 +264,15 @@
 }
 @keyframes emoOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
-/* Subtle idle wink — OPACITY only (compositor-only, no repaint). It used to animate `clip-path`,
-   which forces a per-frame REPAINT; running on every idle avatar that leaked in-process-GPU tiles
-   (renderer RSS climbed ~15 MB/s). A quick opacity dip reads as a blink and never repaints. */
+/* Subtle idle wink — the `scale` PROPERTY (vertical squash), so the dot closes like a real eye
+   (a rounded lens, not a flat clip-path bar or an opacity dim). It is compositor-only (no repaint
+   -> leak-safe, unlike clip-path/box-shadow/filter), AND it composes with the dot's `transform`
+   float instead of overriding it. History: clip-path (looked like a blink but repainted every
+   frame and leaked in-process-GPU tiles, RSS ~15 MB/s) -> opacity (safe but only a dim, not a
+   close) -> scale property (safe AND reads as a proper blink). */
 @keyframes wink {
-  0%, 96%, 100% { opacity: 1; }
-  98%           { opacity: 0.15; }
+  0%, 97%, 100% { scale: 1 1; }
+  98.5%         { scale: 1 0.1; }
 }
 
 /* Body keyframes (NEW, subtle) — the dark square reacts along with the dot's emotion. */
@@ -273,7 +282,7 @@
 @keyframes bodyIdea      { 0%,40%{transform:translateY(1px) scale(1.02,.98);} 50%{transform:translateY(-2px) scale(.98,1.04);} 64%{transform:translateY(0) scale(1,1);} 100%{transform:translateY(1px) scale(1.02,.98);} }
 @keyframes bodyHappy     { 0%,100%{transform:translateY(0) scale(1,1);} 26%{transform:translateY(-3px) scale(.97,1.03);} 40%{transform:translateY(0) scale(1.03,.97);} 52%{transform:translateY(-2px) scale(.98,1.02);} 64%{transform:translateY(0) scale(1.02,.98);} }
 @keyframes bodyExcited   { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-.7px,.4px);} 45%{transform:translate(.7px,-.4px);} 70%{transform:translate(-.5px,-.3px);} }
-@keyframes bodySad       { 0%,100%{transform:translateY(1px) scale(1.03,.97);} 50%{transform:translateY(2px) scale(1.05,.95);} }
+@keyframes bodySad       { 0%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} 14%{transform:rotate(-5deg) translateY(2px) scale(1.04,.97);} 30%{transform:rotate(5deg) translateY(2px) scale(1.04,.97);} 44%{transform:rotate(0deg) translateY(3px) scale(1.05,.95);} 54%,84%{transform:rotate(0deg) translateY(-1px) scale(1,1.03);} 100%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} }
 @keyframes bodySleepy    { 0%,100%{transform:scale(1,1);} 50%{transform:translateY(-.5px) scale(1.02,1.03);} }
 @keyframes bodyNod       { 0%,100%{transform:translateY(0);} 30%{transform:translateY(1.5px);} 60%{transform:translateY(1.5px);} }
 @keyframes bodyShake     { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-2px);} 30%{transform:translateX(2px);} 45%{transform:translateX(-1.5px);} 60%{transform:translateX(1.5px);} 75%{transform:translateX(0);} }

@@ -7621,9 +7621,16 @@ class Agent:
             return f"Security Error: {policy_decision.reason}"
 
         # Plan gate (main agent only): require a plan before a state-changing tool runs.
-        gate_msg = self._plan_gate_decision(name, tool_instance)
-        if gate_msg is not None:
-            return gate_msg
+        # Whare Wananga offline training probes the tool directly to learn its contract. The
+        # interactive plan / confirmation gates below are live-chat UX (headless they return
+        # [CANCELLED]/[ERROR], which would corrupt the probe and mislead the learner). The trainer
+        # has its own safety tiering (error-path / declare / gated), so skip these gates while it
+        # drives. Hard security blocks (policy_decision.blocked above) are NOT skipped.
+        _ww = getattr(self, "_ww_training", False)
+        if not _ww:
+            gate_msg = self._plan_gate_decision(name, tool_instance)
+            if gate_msg is not None:
+                return gate_msg
 
         def emit(evt: dict):
             if callable(self._event_sink):
@@ -7709,8 +7716,9 @@ class Agent:
             emit({"type": "tool_end", "tool": name})
             return result
 
-        # Gate risky tools with once/always/cancel (no persistent deny)
-        if policy_decision.requires_confirmation:
+        # Gate risky tools with once/always/cancel (no persistent deny). Skipped during Whare
+        # Wananga training (see _ww_training note above) so probes reach the tool's own validation.
+        if policy_decision.requires_confirmation and not _ww:
             policy = get_tool_policy(name)
             cwd = Path.cwd()
             trusted = is_trusted_dir(cwd)

@@ -159,12 +159,14 @@ enforced by a guard in the runner). Side-effecting tools are tiered by `side_eff
 **reversible** tools (e.g. `create_agent_tool`, `update_intent`) are learned via the
 **error/validation path** -- the runner forces every probe invalid (`_force_invalid` drops all
 required fields) so the tool rejects it before acting, learning the argument contract with no real
-effect and regardless of what the model proposes; the safety halt (an invalid probe unexpectedly
-accepted) then only fires for a tool that does not validate its required fields. A reversible tool
-with **no required fields** (e.g. `add_task`, `update_working_memory`: nothing to invalidate, and
-they never reject -- they just mutate session state and return a soft message) is instead learned
-**from its declaration only** (`mode="declare"`): the three baskets are distilled from the
-description + schema with **no execution at all**, so there is no side effect and no halt.
+effect and regardless of what the model proposes. A reversible tool that **cannot be probed
+safely** is instead learned **from its declaration only** (`mode="declare"`): the three baskets are
+distilled from the description + schema, no probing. Two cases trigger it: (a) **no required
+fields** (e.g. `add_task`, `update_working_memory`: nothing to invalidate, and they never reject --
+they just mutate state and return a soft message); (b) a tool that **declares required fields but
+does not enforce them** (e.g. creates with defaults on empty) -- detected by a single forced-invalid
+**canary** probe: if the tool does not reject it, probing would only ever be accepted side effects,
+so we fall back to declaration learning instead of the safety halt.
 **irreversible** tools (e.g. `send_mail`,
 payments, deletion) are **not probed at all** (gated), since one accepted probe would be a real
 irreversible effect. A sandboxed/ephemeral **executor** can opt out of the error path by
@@ -201,6 +203,27 @@ and injects that tool's know-how before the call), and reactively on a surprisin
 error for everything else. Independently of either path, the agent's actual actions always
 remain in context via the real tool calls and their results.
 
+## CLI
+
+The web dashboard runs training as a background job; the CLI runs the same `train_tool` loop
+**synchronously in the foreground**, so a run (with its live phase/probe trace) can be driven and
+read straight from a shell -- for testing the learner, re-training a single tool, or training every
+tool in one queue. Both `vaf ww <cmd>` and `python -m vaf.whare_wananga.cli <cmd>` work:
+
+```
+vaf ww train create_contact          # train one tool (live trace, final summary)
+vaf ww train memory_search --quick    # small batches -- fast smoke test
+vaf ww train --all                    # queue: every not-yet-learned tool (--force includes learned)
+vaf ww retrain update_intent          # alias for train (a run is a fresh assessment)
+vaf ww list                           # learned tools + state + confidence
+vaf ww show create_contact            # the three baskets
+vaf ww delete create_contact          # drop the stored knowledge
+```
+
+`--all` skips tools whose connection is not configured and (without `--force`) tools already
+learned. Probing runs in training mode (`_ww_training`) so the live plan/confirmation gates are
+bypassed and probes reach the tool's own validation.
+
 ## Files
 
 | Path | Role |
@@ -209,6 +232,8 @@ remain in context via the real tool calls and their results.
 | `vaf/whare_wananga/runner.py` | adaptive predict-then-verify loop + LLM judge (built) |
 | `vaf/whare_wananga/jobs.py` | background training jobs + live status (built) |
 | `vaf/whare_wananga/preconditions.py` | trainability + class sandbox resolver (built) |
+| `vaf/whare_wananga/cli.py` | training CLI (runs the loop synchronously in the foreground) |
+| `vaf/cli/cmd/ww.py` | `vaf ww` Typer wrapper around the CLI |
 | `vaf/whare_wananga/__init__.py` | package exports |
 | `web/components/TrainingDashboard.tsx` | dashboard + live training stage (agent/tool/judge) |
 | `web/components/AgentAvatar.tsx` | shared living-white-dot agent avatar |

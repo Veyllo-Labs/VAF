@@ -44,7 +44,7 @@ const ANIM: Partial<Record<AvatarMode, string>> = {
     idea: 'emoIdea 2.8s cubic-bezier(.5,0,.2,1) infinite',
     happy: 'emoHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite',
     excited: 'emoExcited 0.9s ease-in-out infinite',
-    sad: 'emoSad 4.0s ease-in-out infinite',
+    sad: 'emoSad 5.5s ease-in-out infinite',
     sleepy: 'emoSleepy 4.8s ease-in-out infinite',
     nod: 'emoNod 1.7s ease-in-out infinite',
     shake: 'emoShake 1.4s ease-in-out infinite',
@@ -62,7 +62,7 @@ const BODY_ANIM: Partial<Record<AvatarMode, string>> = {
     idea: 'bodyIdea 2.8s cubic-bezier(.5,0,.2,1) infinite',
     happy: 'bodyHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite',
     excited: 'bodyExcited 0.9s ease-in-out infinite',
-    sad: 'bodySad 4.0s ease-in-out infinite',
+    sad: 'bodySad 5.5s ease-in-out infinite',
     sleepy: 'bodySleepy 4.8s ease-in-out infinite',
     nod: 'bodyNod 1.7s ease-in-out infinite',
     shake: 'bodyShake 1.4s ease-in-out infinite',
@@ -137,7 +137,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
 
     const bodyAnimation = dim ? 'none' : (act ? (B_ACT[shown] ?? 'none') : (BODY_ANIM[shown] ?? 'none'));
     const eyeAnimation = dim ? 'none'
-        : shown === 'idle' ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s, wink 7s ease-in-out infinite'
+        : shown === 'idle' ? 'agentAvatarIdleFloat 15s ease-in-out infinite 0.4s, wink 9s ease-in-out infinite'
             : act ? (E_ACT[shown] ?? 'none')
                 : lite ? (LITE[shown] ?? ANIM[shown] ?? 'none')   // stage: no continuous border-radius repaint
                     : (ANIM[shown] ?? 'none');

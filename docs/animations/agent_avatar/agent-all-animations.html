@@ -38,7 +38,7 @@
     32%{transform:scale(.91) translate(-.6px,.85px);} 50%{transform:scale(1.12) translate(-.85px,-.5px);}
     68%{transform:scale(.93) translate(.7px,.85px);} 84%{transform:scale(1.11) translate(.85px,.4px);} 100%{transform:scale(1) translate(0,0);}
   }
-  @keyframes wink { 0%,91%,100%{clip-path:inset(0 0 0 0);} 95%{clip-path:inset(42% 0 42% 0);} }
+  @keyframes wink { 0%,97%,100%{scale:1 1;} 98.5%{scale:1 .1;} }
 
   @keyframes emoSurprised {
     0%,100%{transform:translateY(0) scale(1,1);box-shadow:0 0 8px 2px rgba(255,255,255,.30);}
@@ -80,8 +80,12 @@
     60%{transform:translate(1px,0) scale(.95,.95);} 70%{transform:translate(0,-1px) scale(1.1,1.1);}
   }
   @keyframes emoSad {
-    0%,100%{transform:translateY(4px) scale(1.16,.82);box-shadow:0 0 5px 1px rgba(255,255,255,.15);}
-    50%{transform:translateY(6px) scale(1.2,.78);box-shadow:0 0 4px 1px rgba(255,255,255,.11);}
+    0%{transform:translateY(7px) translateX(0) scale(1.16,.82);box-shadow:0 0 5px 1px rgba(255,255,255,.15);}
+    14%{transform:translateY(7px) translateX(-3px) scale(1.15,.83);box-shadow:0 0 4px 1px rgba(255,255,255,.12);}
+    30%{transform:translateY(7px) translateX(3px) scale(1.15,.83);box-shadow:0 0 4px 1px rgba(255,255,255,.12);}
+    44%{transform:translateY(7px) translateX(0) scale(1.16,.82);box-shadow:0 0 4px 1px rgba(255,255,255,.12);}
+    54%,84%{transform:translateY(1px) translateX(0) scale(1.04,.96);box-shadow:0 0 7px 2px rgba(255,255,255,.22);}
+    100%{transform:translateY(7px) translateX(0) scale(1.16,.82);box-shadow:0 0 5px 1px rgba(255,255,255,.15);}
   }
   @keyframes emoSleepy {
     0%,100%{transform:translateY(3px) scale(1.08,.9);box-shadow:0 0 6px 2px rgba(255,255,255,.16);}
@@ -124,7 +128,7 @@
   @keyframes bodyIdea     { 0%,40%{transform:translateY(1px) scale(1.02,.98);} 50%{transform:translateY(-2px) scale(.98,1.04);} 64%{transform:translateY(0) scale(1,1);} 100%{transform:translateY(1px) scale(1.02,.98);} }
   @keyframes bodyHappy    { 0%,100%{transform:translateY(0) scale(1,1);} 26%{transform:translateY(-3px) scale(.97,1.03);} 40%{transform:translateY(0) scale(1.03,.97);} 52%{transform:translateY(-2px) scale(.98,1.02);} 64%{transform:translateY(0) scale(1.02,.98);} }
   @keyframes bodyExcited  { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-.7px,.4px);} 45%{transform:translate(.7px,-.4px);} 70%{transform:translate(-.5px,-.3px);} }
-  @keyframes bodySad      { 0%,100%{transform:translateY(1px) scale(1.03,.97);} 50%{transform:translateY(2px) scale(1.05,.95);} }
+  @keyframes bodySad      { 0%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} 14%{transform:rotate(-5deg) translateY(2px) scale(1.04,.97);} 30%{transform:rotate(5deg) translateY(2px) scale(1.04,.97);} 44%{transform:rotate(0deg) translateY(3px) scale(1.05,.95);} 54%,84%{transform:rotate(0deg) translateY(-1px) scale(1,1.03);} 100%{transform:rotate(0deg) translateY(2px) scale(1.04,.97);} }
   @keyframes bodySleepy   { 0%,100%{transform:scale(1,1);} 50%{transform:translateY(-.5px) scale(1.02,1.03);} }
   @keyframes bodyNod      { 0%,100%{transform:translateY(0);} 30%{transform:translateY(1.5px);} 60%{transform:translateY(1.5px);} }
   @keyframes bodyShakeAv  { 0%,100%{transform:translateX(0);} 15%{transform:translateX(-2px);} 30%{transform:translateX(2px);} 45%{transform:translateX(-1.5px);} 60%{transform:translateX(1.5px);} 75%{transform:translateX(0);} }
@@ -151,7 +155,7 @@
   .avatar .orbit .satellite { position:absolute; top:-3px; left:50%; margin-left:-3px; width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 6px 2px rgba(255,255,255,.5); }
   .avatar.working .orbit { opacity:1; animation: emoOrbit 1.6s linear infinite; }
 
-  .avatar.idle .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s, wink 5.5s ease-in-out infinite; }
+  .avatar.idle .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s, wink 9s ease-in-out infinite; }
   .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite, agentAvatarBreathe 4.0s ease-in-out infinite; }
   .avatar.thinking .dot { animation: agentAvatarMorph 1.0s ease-in-out infinite, agentAvatarBreathe 0.7s ease-in-out infinite; }
   .avatar.talking .dot { width:15px; height:15px; animation: agentAvatarTalk 0.75s ease-in-out infinite; }
@@ -162,7 +166,7 @@
   .avatar.idea .dot { transform-origin:center bottom; animation: emoIdea 2.8s cubic-bezier(.5,0,.2,1) infinite; }
   .avatar.happy .dot { transform-origin:center bottom; animation: emoHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite; box-shadow:0 0 12px 4px rgba(255,255,255,.45); }
   .avatar.excited .dot { animation: emoExcited .9s ease-in-out infinite; box-shadow:0 0 14px 4px rgba(255,255,255,.55); }
-  .avatar.sad .dot { transform-origin:center bottom; animation: emoSad 4s ease-in-out infinite; }
+  .avatar.sad .dot { transform-origin:center bottom; animation: emoSad 5.5s ease-in-out infinite; }
   .avatar.sleepy .dot { transform-origin:center bottom; animation: emoSleepy 4.8s ease-in-out infinite; }
   .avatar.nod .dot { animation: emoNod 1.7s ease-in-out infinite; box-shadow:0 0 10px 3px rgba(255,255,255,.4); }
   .avatar.shake .dot { animation: emoShake 1.4s ease-in-out infinite; box-shadow:0 0 10px 3px rgba(255,255,255,.35); }
@@ -177,7 +181,7 @@
   .avatar.idea .body { animation: bodyIdea 2.8s cubic-bezier(.5,0,.2,1) infinite; }
   .avatar.happy .body { animation: bodyHappy 1.9s cubic-bezier(.3,.7,.3,1) infinite; }
   .avatar.excited .body { animation: bodyExcited .9s ease-in-out infinite; }
-  .avatar.sad .body { animation: bodySad 4s ease-in-out infinite; }
+  .avatar.sad .body { animation: bodySad 5.5s ease-in-out infinite; }
   .avatar.sleepy .body { animation: bodySleepy 4.8s ease-in-out infinite; }
   .avatar.nod .body { animation: bodyNod 1.7s ease-in-out infinite; }
   .avatar.shake .body { animation: bodyShakeAv 1.4s ease-in-out infinite; }
@@ -372,9 +376,7 @@
   .scene.error .agent { left:76px; top:58px; } .scene.error .body { animation: bError 2.2s ease-in-out infinite; } .scene.error .eye { animation: eError 2.2s ease-in-out infinite; }
   .scene.error .bang { position:absolute; left:50%; top:30px; margin-left:-9px; font-size:24px; font-weight:800; line-height:1; color:var(--ink); opacity:0; text-shadow:0 0 8px var(--glow); animation: iBang 2.2s ease-in-out infinite; }
   .scene.warning .agent { left:76px; top:62px; } .scene.warning .body { animation: bWarn 2s ease-in-out infinite; } .scene.warning .eye { animation: eWarn 2s ease-in-out infinite; }
-  .scene.warning .tri { position:absolute; left:50%; top:30px; margin-left:-13px; width:26px; height:26px; border-radius:50%; border:2px solid var(--ink); animation: iPulse 1.4s ease-in-out infinite; }
-  .scene.warning .tri::before { content:""; position:absolute; left:50%; top:5px; transform:translateX(-50%); width:4px; height:9px; background:var(--ink); border-radius:2px; }
-  .scene.warning .tri::after { content:""; position:absolute; left:50%; top:17px; transform:translateX(-50%); width:4px; height:4px; border-radius:50%; background:var(--ink); }
+  .scene.warning .tri { position:absolute; left:50%; top:30px; margin-left:-13px; width:26px; height:24px; color:var(--ink); overflow:visible; animation: iPulse 1.4s ease-in-out infinite; }
   .scene.permission .agent { left:76px; top:60px; } .scene.permission .body { animation: bAsk 2.6s ease-in-out infinite; } .scene.permission .eye { animation: eAsk 1.6s ease-in-out infinite; }
   .scene.permission .ask { position:absolute; left:50%; top:26px; margin-left:-7px; font-size:22px; font-weight:800; line-height:1; color:var(--ink); text-shadow:0 0 8px var(--glow); animation: iAskBob 1.6s ease-in-out infinite; }
   .scene.blocked .agent { left:54px; top:58px; } .scene.blocked .body { animation: bBlocked 2.6s ease-in-out infinite; } .scene.blocked .eye { animation: eBlocked 2.6s ease-in-out infinite; }
@@ -559,7 +561,7 @@
     ['Status & Outcome', [
       ['success','Success','done', AGENT+'<div class="ring"></div><span class="check">&#10003;</span>'],
       ['error','Error','went wrong', AGENT+'<span class="bang">!</span>'],
-      ['warning','Warning','caution', AGENT+'<span class="tri"></span>'],
+      ['warning','Warning','caution', AGENT+'<svg class="tri" viewBox="0 0 26 24"><path d="M13 2 L24.5 22 L1.5 22 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><rect x="11.8" y="9" width="2.4" height="6" rx="1.2" fill="currentColor"/><circle cx="13" cy="18.6" r="1.3" fill="currentColor"/></svg>'],
       ['permission','Needs permission','waits for your OK', AGENT+'<span class="ask">?</span>'],
       ['blocked','Blocked','locked', AGENT+'<div class="barrier"></div>'],
     ]],

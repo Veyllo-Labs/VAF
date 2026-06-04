@@ -6775,12 +6775,20 @@ class Agent:
                     try:
                         from vaf.core.web_interface import get_web_interface
                         r_str = str(result) if result else ""
-                        # Same 50-char status convention: only the prefix is the status
+                        # Same 50-char status convention: only the prefix is the status.
+                        # NOTE: match the "<qualifier> Error:" forms too — tools surface
+                        # failures as "Tool Error: …" / "Security Error: …" (not a bare
+                        # "Error: …"), so a leading "error"/"failed" check alone marked
+                        # those results as a green success. Prefix-anchored to avoid false
+                        # positives like "No errors found".
                         _r_status = r_str[:50].lower().strip()
                         is_err = (
                             _r_status.startswith("❌") or
                             _r_status.startswith("error") or
-                            _r_status.startswith("failed")
+                            _r_status.startswith("failed") or
+                            _r_status.startswith("tool error") or
+                            _r_status.startswith("security error") or
+                            _r_status.startswith("exception")
                         )
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:

@@ -32,7 +32,8 @@ from vaf.whare_wananga import store
 _ERROR_MARKERS = (
     "[error]", "error:", "unknown action", "failed to", "not found", "invalid", "no such",
     "missing required", "is required", "are required", "traceback", "exception",
-    "permission denied", "could not",
+    "permission denied", "access denied", "forbidden", "not allowed", "not permitted",
+    "is protected", "could not",
 )
 
 # Phase sizes (Tohunga principle: repeat until predictions are perfect).
@@ -128,6 +129,52 @@ def _force_invalid(args: Any, params: Any) -> dict:
     return a
 
 
+def _seed_context() -> str:
+    """Dynamic, tool-agnostic environment hints for FULL-probe prediction prompts, so the model
+    uses inputs that are actually VALID for THIS live system instead of inventing wrong-OS values
+    (the read_file probe once guessed C:\\Windows paths on Linux and only ever saw 'access denied').
+    Provides a small reusable scratch dir + readable file the model may point any path/file/dir
+    argument at, plus real OS/cwd facts. Generic -- the model maps the real values onto whatever
+    arguments the tool takes, so it works for custom tools too (no per-tool code)."""
+    import os
+    import platform
+    import tempfile
+    try:
+        osname = platform.system() or os.name
+    except Exception:
+        osname = os.name
+    cwd = os.getcwd()
+    seed_file = scratch = None
+    try:
+        scratch = os.path.join(tempfile.gettempdir(), "ww_seed")          # stable -> not accumulated
+        os.makedirs(os.path.join(scratch, "subdir"), exist_ok=True)
+        seed_file = os.path.join(scratch, "seed.txt")
+        with open(seed_file, "w", encoding="utf-8") as fh:
+            fh.write("Whare Wananga seed file.\nline two\nline three\n")
+    except Exception:
+        seed_file = scratch = None
+    real = None
+    for cand in ("README.md", "readme.md", "pyproject.toml", "setup.py"):
+        p = os.path.join(cwd, cand)
+        if os.path.isfile(p):
+            real = p
+            break
+    parts = [
+        "ENVIRONMENT -- this is a REAL live system; use values that actually work HERE (do NOT "
+        "invent wrong-OS paths such as C:\\... on a non-Windows host):",
+        f"- OS: {osname}; current working directory: {cwd}",
+    ]
+    if seed_file:
+        parts.append(f"- A known-readable text file you MAY use: {seed_file}")
+        parts.append(f"- A known directory you MAY use: {scratch} (contains seed.txt and subdir/)")
+    if real:
+        parts.append(f"- A real project file you MAY use: {real}")
+    parts.append("For any argument that takes a path / file / directory (or similar resource), prefer "
+                 "these REAL values so a valid call actually SUCCEEDS -- you must observe the success "
+                 "shape, not only errors. Still include some deliberately invalid/edge inputs too.")
+    return "\n".join(parts)
+
+
 def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]] = None,
                learn_n: int = LEARN_N, validate_n: int = VALIDATE_N, refine_n: int = REFINE_N,
                max_rounds: int = MAX_ROUNDS, challenge_pass: int = CHALLENGE_PASS,
@@ -211,6 +258,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     _emit({"event": "start", "tool": tool_name, "mode": mode, "learn_n": learn_n,
            "validate_n": validate_n, "refine_n": refine_n, "max_rounds": max_rounds})
 
+    _seed_ctx = ""
     if mode == "probe" and full_probe:
         # Sandboxed executor: probe in full but ONLY with harmless, self-contained snippets so
         # nothing permanent happens (Docker-isolated; do not enable any tool/host bridge).
@@ -227,12 +275,13 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             "{\"args\": {\"code\": \"print(1/0)\"}, \"predicted_outcome\": \"error\", "
             "\"predicted\": \"ZeroDivisionError\"}.")
     elif mode == "probe":
+        _seed_ctx = _seed_context()
         _sys = (
             "You are probing a tool to learn how it behaves. Choose ONE concrete call to make "
             "and PREDICT its outcome BEFORE it runs. Vary probes: valid inputs AND deliberately "
             "invalid/edge inputs to learn the tool's error behaviour. Respond ONLY with JSON: "
             "{\"args\": {<tool args>}, \"predicted_outcome\": \"success\" | \"error\", "
-            "\"predicted\": \"<one sentence: what you expect / which error>\"}.")
+            "\"predicted\": \"<one sentence: what you expect / which error>\"}.\n\n" + _seed_ctx)
     else:
         _sys = (
             "This tool HAS SIDE EFFECTS, so you must NEVER make a valid call (a valid call would "
@@ -412,7 +461,8 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             inv_rules = ("Invent ONE INVALID or INCOMPLETE input the tool must reject before acting "
                          "(omit a required field / wrong type); never a valid call that could act.")
         else:
-            inv_rules = "Invent ONE realistic input, favouring an edge case the agent might get wrong."
+            inv_rules = ("Invent ONE realistic input, favouring an edge case the agent might get "
+                         "wrong. " + _seed_ctx)
         invent_prompt = [
             {"role": "system", "content": (
                 "You are the JUDGE running a final challenge to test whether the agent TRULY "
@@ -486,6 +536,26 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             _emit({"event": "halt", "reason": "challenge input not rejected"})
         return ok
 
+    def _declare_and_finish(canary_note=None) -> dict:
+        """Learn from the DECLARATION only (description + schema, no further probing) and return the
+        summary. Used when a tool can't be probed safely: no required fields, a forced-invalid
+        canary was accepted, or a probe was unexpectedly accepted mid-run (the tool validates
+        inconsistently -- rejects {} but accepts a partial call). `_distil` overwrites any halt
+        warning, so the baskets come out clean."""
+        _emit({"event": "declare", "tool": tool_name, "canary": canary_note})
+        _distil()
+        learned = _has_knowledge()
+        rec["status"] = "confirmed" if learned else "draft"
+        rec["challenge_passed"] = False
+        rec["learn_mode"] = "declare"
+        rec["confidence"] = 0.0  # not measured -- learned from the declaration, not probed
+        store.save(rec)
+        summary = {"ok": True, "tool": tool_name, "mode": "declare", "declared": True,
+                   "confirmed": learned, "challenge_passed": False, "halted": False,
+                   "rounds": 0, "attempts": 0, "hits": 0, "confidence": 0.0, "status": rec["status"]}
+        _emit({"event": "done", **summary})
+        return summary
+
     # --- Phase 0: decide whether this side-effecting tool can be PROBED safely at all ---
     # A reversible tool is normally learned via the error path (forced-invalid probes the tool
     # rejects). Two cases can't be probed safely and instead learn from the DECLARATION only
@@ -504,19 +574,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             canary_note = _safe(canary, 200)   # the tool accepted an invalid call -> can't probe
 
     if declare_only:
-        _emit({"event": "declare", "tool": tool_name, "canary": canary_note})
-        _distil()  # distils the three baskets from description + schema (all_attempts is empty)
-        learned = _has_knowledge()
-        rec["status"] = "confirmed" if learned else "draft"
-        rec["challenge_passed"] = False
-        rec["learn_mode"] = "declare"
-        rec["confidence"] = 0.0  # not measured -- learned from the declaration, not probed
-        store.save(rec)
-        summary = {"ok": True, "tool": tool_name, "mode": "declare", "declared": True,
-                   "confirmed": learned, "challenge_passed": False, "halted": False,
-                   "rounds": 0, "attempts": 0, "hits": 0, "confidence": 0.0, "status": rec["status"]}
-        _emit({"event": "done", **summary})
-        return summary
+        return _declare_and_finish(canary_note)
 
     # --- Phase 0b: prerequisites ("plan first") — run the tool's declared setup tools ONCE so
     #     the precondition is in place before probing. Only for full/none probing (error-path
@@ -547,8 +605,12 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         if state["halted"]:
             break
         _one_probe("learn")
-    if not state["halted"]:
-        _distil()
+    if state["halted"]:
+        # A forced-invalid probe was unexpectedly accepted mid-run -> the tool rejected the {} canary
+        # but accepts a partial/edge invalid call (inconsistent validation). It can't be probed
+        # safely, so fall back to declaration learning instead of leaving a halted draft.
+        return _declare_and_finish()
+    _distil()
 
     # GATE: the 21 learning probes exist to PRODUCE the tool_knowledge file. If distillation
     # yielded nothing, there is nothing for the judge to validate against -- stop here and

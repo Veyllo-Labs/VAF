@@ -1,0 +1,186 @@
+{
+  "tool": "create_automation",
+  "schema_version": 1,
+  "tool_schema_hash": "37941e408d8611e5",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool to create scheduled automation tasks for one-time reminders or recurring schedules. It is suitable when you have all required information (name, prompt, frequency, time) and have checked for existing automations first using list_automations.",
+    "output_shape": "The tool returns a string: either a success confirmation (e.g., 'Automation created successfully with ID <id>') or an error message describing the failure.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required field 'prompt': error text seen: 'Error: No prompt provided for automation.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Missing or invalid 'frequency': error text seen: 'Error: frequency '' is not valid. Must be one of: once, hourly, daily, weekly, monthly. Ask the user which frequency they want — NEVER assume daily.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty or invalid 'time' format: error text seen: 'Error: Invalid time format ''. Expected HH:MM format (e.g., '22:46').'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Omitting 'time' entirely may cause silent default (e.g., 06:00) leading to duplicate time conflict: error text seen: 'ERROR: Automation already exists at the same time! ...'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Duplicate automation with same name and time: error text seen: 'ERROR: Automation already exists with same name and time! ...'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "1. Call list_automations first to check if a similar automation already exists.",
+      "2. If a similar automation exists, use read_automation + update_automation instead of creating a new one.",
+      "3. Ask the user for any missing required information (prompt, frequency, time, and task-specific details like city) in the user's language.",
+      "4. Ensure frequency is explicitly chosen: use 'once' for any one-time task (reminders, delayed actions). Only use 'daily'/'weekly'/'monthly'/'hourly' when the user explicitly requests recurrence.",
+      "5. Provide time in exactly HH:MM format (e.g., 09:00). Avoid scheduling within 10 minutes of an existing automation.",
+      "6. In the prompt, include an instruction to send the result to the user via their main_messenger (using the appropriate send_* tool).",
+      "7. Call create_automation with all required fields: name, prompt, frequency, time.",
+      "8. After creation, optionally verify by listing automations or reading the new automation."
+    ],
+    "verification": [
+      "Verify that the automation was created by calling list_automations to see the new entry with the correct name, frequency, and time.",
+      "Alternatively, use read_automation with the automation ID to confirm the details.",
+      "If an error occurs (e.g., duplicate conflict), handle it by choosing a different time or updating the existing automation instead."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required fields: name, prompt, frequency, time",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"test\", \"prompt\": \"do something\"}",
+      "predicted": "error: missing required fields: frequency, time",
+      "actual": "error: Error: frequency '' is not valid. Must be one of: once, hourly, daily, weekly, monthly. Ask the user which frequency they want — NEVER assume daily.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: invalid time format, expected HH:MM",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: invalid time format, expected HH:MM",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"test_automation\"}",
+      "predicted": "error: missing required fields: prompt, frequency, time",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error for missing required fields, and the actual response was an error about missing prompt."
+    },
+    {
+      "intent": "{\"name\": \"test\", \"prompt\": \"test\", \"frequency\": \"once\"}",
+      "predicted": "error: missing required field: time",
+      "actual": "error: ERROR: Automation already exists with same name and time!\n\n❌ **DO NOT RETRY create_automation** - An automation 'test' (896f9bdd) already exists with the same time (06:00) and frequency (once).\n\n**Cur",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted missing time field but actual error was duplicate automation."
+    },
+    {
+      "intent": "{\"name\": \"test\", \"prompt\": \"test\", \"frequency\": \"daily\", \"time\": \"\"}",
+      "predicted": "error: invalid time format or empty time rejected",
+      "actual": "error: Error: Invalid time format ''. Expected HH:MM format (e.g., '22:46').",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error due to invalid/empty time format, which matches the actual error."
+    },
+    {
+      "intent": "{\"name\": \"test_auto\", \"prompt\": \"hello\", \"frequency\": \"once\"}",
+      "predicted": "error: missing required field 'time' or invalid time format",
+      "actual": "error: ERROR: Automation already exists at the same time!\n\n❌ **DO NOT RETRY create_automation** - An active automation 'test' (896f9bdd) already runs at the same time (06:00) with the same frequency (once).\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: invalid time format, expected HH:MM",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"test\", \"prompt\": \"test\", \"frequency\": \"invalid\"}",
+      "predicted": "error: Error: frequency 'invalid' is not valid. Must be one of: once, hourly, daily, weekly, monthly.",
+      "actual": "error: Error: frequency 'invalid' is not valid. Must be one of: once, hourly, daily, weekly, monthly. Ask the user which frequency they want — NEVER assume daily.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the specific error message for invalid frequency."
+    },
+    {
+      "intent": "{\"name\": \"test\", \"prompt\": \"test\", \"frequency\": \"invalid\"}",
+      "predicted": "error: Error: frequency 'invalid' is not valid. Must be one of: once, hourly, daily, weekly, monthly. Ask the user which frequency they want — NEVER assume daily.",
+      "actual": "error: Error: frequency 'invalid' is not valid. Must be one of: once, hourly, daily, weekly, monthly. Ask the user which frequency they want — NEVER assume daily.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message for the invalid frequency argument."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required fields: name, prompt, frequency, time",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing required fields, and the actual error confirms missing prompt."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because no arguments were provided; required fields like name, prompt, frequency, and time are missing.",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing required arguments, and the actual response was indeed an error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call with empty arguments will fail because required fields like 'prompt' and 'frequency' are missing.",
+      "actual": "error: Error: No prompt provided for automation.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing required arguments, and the actual error confirms this.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.93,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:25:55.552771+00:00",
+  "updated_at": "2026-06-04T23:36:44.396808+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

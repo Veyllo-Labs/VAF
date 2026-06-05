@@ -1,0 +1,176 @@
+{
+  "tool": "search_tools",
+  "schema_version": 1,
+  "tool_schema_hash": "9a03c6f12fc86409",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool when you are unsure which tool to call, or when you need a tool that is not currently in context. It searches the available tool catalog by keyword or description.",
+    "output_shape": "Returns tool names and one-line descriptions of matching tools. If the query is empty or whitespace-only, it returns a message asking to provide a non-empty query.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'query' of type string. If query is empty string or whitespace-only, the tool returns: 'Provide a query, e.g. search_tools(query='calendar event').'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If query is provided as a non-string type (e.g. integer), the tool returns: 'Tool Error: 'int' object has no attribute 'strip''",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'query' argument is a non-empty string describing the tool functionality you need (e.g., 'send email', 'read file').",
+      "Call the tool with that query. The tool will search its catalog and return matching tool names and descriptions.",
+      "If no matching tools are found, it may return an empty list or a message (the attempts show even 'nonexistent tool' returned some matches, but generally expect a list)."
+    ],
+    "verification": [
+      "Check that the output contains tool names and descriptions (the beginning of the response will be 'Tools matching ...').",
+      "If the output says 'Provide a query...', the query was empty or whitespace-only; provide a non-empty query.",
+      "If a Tool Error occurs, the query was not a string; ensure the argument is a string."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"query\": \"read file\"}",
+      "predicted": "success: The tool will return a list of tool names and descriptions that match the query 'read file'.",
+      "actual": "success: Tools matching 'read file':\n  read_file: Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).\n  github_get_file: Get the content of a file from a GitHub re",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: Empty query will cause a validation error because a non-empty string is required.",
+      "actual": "success: Provide a query, e.g. search_tools(query='calendar event').",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123}",
+      "predicted": "error: The tool will reject the call because query must be a string but received an integer.",
+      "actual": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"   \"}",
+      "predicted": "success: The query consists only of whitespace, so after stripping it becomes empty; the tool will return the same message as empty query.",
+      "actual": "success: Provide a query, e.g. search_tools(query='calendar event').",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"nonexistent tool\"}",
+      "predicted": "success: The tool will return a message indicating no tools match the query, likely 'No tools found matching ...' or an empty list.",
+      "actual": "success: Tools matching 'nonexistent tool':\n  create_agent_tool: Create or update a Python tool that the agent can use immediately. Use this when you need a capability that no existing ...\n  list_tools: List a",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted no tools would match the query, but the tool returned several matching tools."
+    },
+    {
+      "intent": "{\"query\": \"   \"}",
+      "predicted": "success: The tool will return the message 'Provide a query, e.g. search_tools(query=\\'calendar event\\').' because whitespace-only queries are treated as empty.",
+      "actual": "success: Provide a query, e.g. search_tools(query='calendar event').",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The prediction matched the actual tool response for a whitespace-only query."
+    },
+    {
+      "intent": "{\"query\": \"   \"}",
+      "predicted": "success: The tool will accept the whitespace-only query and return a message asking for a non-empty query, similar to the empty string case.",
+      "actual": "success: Provide a query, e.g. search_tools(query='calendar event').",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool responded with a request for a non-empty query as predicted, confirming understanding of whitespace-only input handling."
+    },
+    {
+      "intent": "{\"query\": \"a\"}",
+      "predicted": "success: The tool will return a list of tool names and descriptions that match the query 'a', likely many results.",
+      "actual": "success: No close matches for 'a'. Showing first 20 of 94 tools:\n  add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of\n  add_automation_tod",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"read file\"}",
+      "predicted": "success: The tool will return a list of tool names and descriptions related to reading files, such as 'read' or 'read_file'.",
+      "actual": "success: Tools matching 'read file':\n  read_file: Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).\n  github_get_file: Get the content of a file from a GitHub re",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123}",
+      "predicted": "error: Tool will raise a Tool Error because query is an integer, not a string, and the tool attempts to use .strip() on it.",
+      "actual": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the tool error due to type mismatch."
+    },
+    {
+      "intent": "{\"query\": \"read file\"}",
+      "predicted": "success: The tool will return a list of tool names and descriptions matching the query 'read file', such as tools for reading file contents.",
+      "actual": "success: Tools matching 'read file':\n  read_file: Reads the content of a file. Supports text, PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx).\n  github_get_file: Get the content of a file from a GitHub re",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool returned a list of matching tools as predicted."
+    },
+    {
+      "intent": "{\"query\": 123}",
+      "predicted": "error: The tool will return an error: 'Tool Error: 'int' object has no attribute 'strip'' because the query argument is an integer instead of a string.",
+      "actual": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent accurately predicted that the tool would error due to an integer query, and the actual error matched exactly."
+    },
+    {
+      "intent": "{\"query\": \"/tmp/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "success: The tool will search for tools matching '/tmp/claude-1000/ww_seed/seed.txt' and return no results because that is a file path, not a tool description keyword.",
+      "actual": "success: No close matches for '/tmp/claude-1000/ww_seed/seed.txt'. Showing first 20 of 94 tools:\n  add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted the tool would return no results, but the tool returned a list of tools after stating 'No close matches'.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"1\"}",
+      "predicted": "success: The query '1' is a non-empty string, so the search will be performed and return matching tools or a message if none found.",
+      "actual": "success: No close matches for '1'. Showing first 20 of 94 tools:\n  add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of\n  add_automation_tod",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The tool executed successfully and returned a message as predicted.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"SEARCH_TOOLS\"}",
+      "predicted": "success: Returns tool names and one-line descriptions matching the query 'SEARCH_TOOLS'.",
+      "actual": "success: Tools matching 'search_tools':\n  search_tools: Search the available tool catalogue by keyword or description of what you need. Returns tool names and one-line descript...",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response matched the prediction, returning the tool name and its one-line description as expected.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.8,
+  "uses": 15,
+  "success": 12,
+  "fail": 3,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:21:58.744568+00:00",
+  "updated_at": "2026-06-05T01:25:35.879816+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

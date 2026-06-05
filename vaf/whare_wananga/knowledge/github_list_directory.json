@@ -1,0 +1,131 @@
+{
+  "tool": "github_list_directory",
+  "schema_version": 1,
+  "tool_schema_hash": "1b430fb3416ffb8c",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to explore the project structure of a GitHub repository. Requires the user's GitHub account to be connected via Settings → Connections → Developer → GitHub. Without connection, the tool always returns a message to connect.",
+    "output_shape": "Returns a list of files and subdirectories in the specified directory tree, as described in the tool documentation. Until GitHub is connected, the actual output is the connection prompt message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required arguments: 'owner' (string) and 'repo' (string) are mandatory per the tool's parameter schema. Optional: 'path' (default root) and 'ref' (default branch).",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "When any required argument is missing, empty, or the wrong type, the tool does not produce a specific argument error because it first returns: 'GitHub is not connected. Connect your GitHub account in ",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The tool is non-functional without an active GitHub connection. All invocations—regardless of argument validity—return the same connectivity prompt. Therefore, argument validation errors cannot be see",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the user's GitHub account is connected via Settings → Connections → Developer → GitHub.",
+      "Provide the required parameters 'owner' (string) and 'repo' (string).",
+      "Optionally specify 'path' (string, default root) and 'ref' (string, default branch).",
+      "Call the tool; it will return a list of files and directories in the specified repository path."
+    ],
+    "verification": [
+      "If GitHub is not connected, the tool outputs the connection prompt. Verify connection and retry.",
+      "For a valid connected account and correct arguments, the tool returns a non-empty list of objects with properties like 'name', 'type', 'path', etc.",
+      "Test with a known public repository (e.g., owner='octocat', repo='Hello-World') to confirm the expected structure is returned."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"\", \"ref\": \"\"}",
+      "predicted": "success: Listing root of a well-known public repository should return a list of files and subdirectories.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"repo\": \"Hello-World\"}",
+      "predicted": "error: Missing required parameter 'owner' will cause a validation error before the API call.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"nonexistent\", \"repo\": \"nonexistent\", \"path\": \"/invalid\", \"ref\": \"main\"}",
+      "predicted": "success: The tool will return the 'GitHub not connected' message regardless of input validity.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"\"}",
+      "predicted": "error: Tool will respond that GitHub is not connected because the user's GitHub account is not linked.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Even with missing required parameters, the tool returns the connection prompt message, not an error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that missing parameters would result in a connection prompt message rather than an error."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"ref\": \"main\"}",
+      "predicted": "success: The tool will return the 'not connected' message because required parameters 'owner' and 'repo' are missing, but the tool handles that by returning the connection prompt rather than an error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return the 'not connected' message due to missing owner and repo parameters, which matches the actual response."
+    },
+    {
+      "intent": "{\"owner\": \"testowner\", \"repo\": \"testrepo\", \"path\": \"nonexistent\", \"ref\": \"main\"}",
+      "predicted": "success: The tool will return the GitHub connection prompt message because GitHub is not connected, regardless of the validity of the arguments.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return the GitHub not connected message, which matches the actual response."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README\", \"ref\": \"main\"}",
+      "predicted": "success: The tool will return a prompt to connect the GitHub account because the GitHub connection is not established.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about the GitHub connection not being established.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"python\", \"repo\": \"cpython\", \"path\": \"\", \"ref\": \"v3.10.0\"}",
+      "predicted": "success: It will return a message to connect GitHub account because the tool is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.78,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:20:43.001931+00:00",
+  "updated_at": "2026-06-05T00:22:55.232796+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

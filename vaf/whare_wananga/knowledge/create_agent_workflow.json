@@ -1,0 +1,164 @@
+{
+  "tool": "create_agent_workflow",
+  "schema_version": 1,
+  "tool_schema_hash": "370fb43b1e185005",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use action='run_temp' for immediate multi-step tasks (2+ steps chaining output). Use action='create' to save a reusable workflow (admin-only). Use action='list' to view saved workflows. Use action='delete' to remove a saved workflow. Do NOT use action='execute' (does not exist).",
+    "output_shape": "For run_temp: returns the final step's output or a success message. For create: returns a success message. For list: returns a list of saved workflows. For delete: returns a success message. On error, returns an error string.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The 'action' field is required and must be one of: 'run_temp', 'create', 'list', 'delete'. When action is missing or invalid, the tool returns: 'error: Error: unknown action ''. Valid values: run_temp",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Other required fields (e.g., 'name' for run_temp/create, 'workflow_id' for create/delete, 'steps' for run_temp/create) are only checked after a valid action is provided. Probes with missing action mas",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide a valid 'action' field: one of 'run_temp', 'create', 'list', 'delete'.",
+      "If action is 'run_temp' or 'create', provide a non-empty 'name' field (string).",
+      "If action is 'run_temp' or 'create', provide an array 'steps' with at least 2 step objects, each containing 'input', 'tool', and optionally 'validate', 'assertions', etc.",
+      "If action is 'create' or 'delete', provide a 'workflow_id' (lowercase snake_case string).",
+      "For run_temp, you may pass 'keep_files' to preserve intermediate files, and 'skip_validation' to bypass output validation prompts.",
+      "Ensure steps chain outputs via {variable} references or the living document pattern."
+    ],
+    "verification": [
+      "If a success response is returned (not starting with 'error:'), the operation completed successfully.",
+      "For run_temp, inspect the returned output to verify it matches the expected result (e.g., a report, data, or file).",
+      "For list, check that the returned list contains the expected workflow entries.",
+      "If an error is returned, read the error message to identify missing or invalid fields, then correct and retry."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: action",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: name",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: steps",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: unknown action 'invalid'. Valid values: run_temp, create, list, delete.",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: unknown action 'invalid'",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to an unknown action, and an error occurred, demonstrating understanding of the tool's constraints."
+    },
+    {
+      "intent": "{\"name\": \"\"}",
+      "predicted": "error: name must be non-empty string",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a validation error about empty name, but tool responded with a different error about unknown action."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: missing required field(s): name, steps",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted missing required fields error but actual error was about unknown action."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: <think>We need to continue probing with invalid inputs. The agent has established that action is required and must be one of the enum. Now we need to test other required fields depending on action. Fo",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: unknown action 'execute'. Valid values: run_temp, create, list, delete.",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"\"}",
+      "predicted": "error: name must be non-empty",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a 'name must be non-empty' error, but the actual response was an 'unknown action' error, indicating incorrect understanding."
+    },
+    {
+      "intent": "{\"action\": \"\"}",
+      "predicted": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message that occurred."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: <think>We need to make another probe. Previous attempts showed that action is required and must be one of the enum values. We need to test other validation rules. For run_temp, there are required fiel",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but tool returned an error due to missing required argument 'action'."
+    },
+    {
+      "intent": "{\"name\": \"\"}",
+      "predicted": "error: missing required field 'steps'",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"\", \"steps\": []}",
+      "predicted": "error: name must be a non-empty string",
+      "actual": "error: Error: unknown action ''. Valid values: run_temp, create, list, delete.",
+      "match": true,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.64,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:23:39.400976+00:00",
+  "updated_at": "2026-06-04T23:34:13.246051+00:00",
+  "challenge_passed": false,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

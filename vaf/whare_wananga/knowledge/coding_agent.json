@@ -1,0 +1,131 @@
+{
+  "tool": "coding_agent",
+  "schema_version": 1,
+  "tool_schema_hash": "2966f7e7c5a9f208",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when the user requests coding tasks such as writing code, fixing bugs, refactoring, creating scripts, or building websites. It generates complete working files in a project directory.",
+    "output_shape": "Creates complete working files in a project directory.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required field 'task' -> error: 'Error: No task provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string for 'task' -> error: 'Error: No task provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Non-string type for 'task' (e.g., object) -> error: 'Error: No task provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'task' parameter is provided as a non-empty string describing the coding task.",
+      "For new projects, omit 'project_path' to let the agent create a directory automatically.",
+      "For editing/fixing an existing project, provide the absolute path to an existing project directory via 'project_path'.",
+      "Do not invent or guess paths; use known paths from session workspace.",
+      "Call the tool directly without planning or describing the task."
+    ],
+    "verification": [
+      "Check that the tool executed without errors and that files were created or modified in the specified project directory.",
+      "If no error message appears, the operation was successful."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'task'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task\": \"\"}",
+      "predicted": "error: empty task rejected",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: expected string",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: expected string for field 'task'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No task provided.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for the missing task input."
+    },
+    {
+      "intent": "{\"task\": null}",
+      "predicted": "error: Error: No task provided.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message that resulted from not providing a task."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No task provided.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message returned by the tool."
+    },
+    {
+      "intent": "{\"project_path\": \"/nonexistent/path\"}",
+      "predicted": "error: The required 'task' parameter is missing, so the tool will return an error: 'Error: No task provided.'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message from the tool due to the missing 'task' parameter.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will fail with error 'Error: No task provided.' because the required 'task' argument is missing.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument, and the actual tool response matched the prediction.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:21:12.168673+00:00",
+  "updated_at": "2026-06-04T23:22:09.791870+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

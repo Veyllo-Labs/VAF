@@ -1,0 +1,162 @@
+{
+  "tool": "set_timer",
+  "schema_version": 1,
+  "tool_schema_hash": "8d9d60a7582e4074",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use for short, one-time timers that fire in the current chat after a relative delay (seconds). Ideal for 'in N seconds/minutes' style requests where you need to deliver a fixed message or have yourself act again on a task. For longer or persistent reminders that must survive restarts, use create_automation with frequency='once'.",
+    "output_shape": "On success: a confirmation string (e.g., 'Timer set'). On error: an error string describing the issue.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing or invalid 'seconds' parameter. 'seconds' is required and must be an integer >=1. Error: \"error: Error: 'seconds' must be an integer number of seconds (>= 1).\"",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide the 'seconds' parameter as an integer >=1 (e.g., 60 for 1 minute).",
+      "Provide exactly one of 'message' (fixed text to send) or 'task' (instruction for the agent when the timer fires); do not provide both or neither.",
+      "Optionally include a 'label' string for identification (shown in list_timers).",
+      "Ensure the JSON object includes at least 'seconds' and one of 'message' or 'task'."
+    ],
+    "verification": [
+      "Check that 'seconds' is present and is an integer >=1; otherwise the tool returns the error about 'seconds'.",
+      "Check that exactly one of 'message' or 'task' is provided; if both or none are provided, the tool will first check 'seconds' validity, then likely error about the message/task exclusivity.",
+      "Confirm the timer is appropriate for short, in-memory use; for longer durations or persistence use create_automation."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"message\": \"test\"}",
+      "predicted": "error: seconds must be >= 1",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"message\": \"hi\", \"task\": \"do something\"}",
+      "predicted": "error: exactly one of message or task must be provided",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a different error regarding message/task, but actual error was about missing/invalid 'seconds' parameter, showing misunderstanding."
+    },
+    {
+      "intent": "{\"message\": \"test\", \"task\": \"other\"}",
+      "predicted": "error: exactly one of message or task must be provided",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a different error (about message/task) than the actual error (about missing 'seconds')."
+    },
+    {
+      "intent": "{\"message\": \"hello\", \"task\": \"do something\"}",
+      "predicted": "error: Error: Provide exactly one of 'message' or 'task'.",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error about 'message' and 'task' exclusivity, but the actual error was about missing or invalid 'seconds' parameter."
+    },
+    {
+      "intent": "{\"message\": \"hello\", \"task\": \"do something\"}",
+      "predicted": "error: exactly one of message or task must be provided",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"message\": \"hello\"}",
+      "predicted": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent accurately predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message, which matches the actual tool response."
+    },
+    {
+      "intent": "{\"message\": \"test\"}",
+      "predicted": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will fail because the required 'seconds' parameter is missing from the empty arguments.",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to the missing 'seconds' parameter, and the actual tool response confirmed the error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call lacks required parameters: 'seconds' is missing and neither 'message' nor 'task' is provided, causing an error.",
+      "actual": "error: Error: 'seconds' must be an integer number of seconds (>= 1).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error from the tool call, which matches the actual error response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.79,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:25:35.884315+00:00",
+  "updated_at": "2026-06-05T01:28:11.655651+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

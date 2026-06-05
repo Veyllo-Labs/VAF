@@ -1,0 +1,692 @@
+{
+  "tool": "memory_search",
+  "schema_version": 1,
+  "tool_schema_hash": "70985f1c279e4dad",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "When user asks about previously saved information about themselves, such as identity, facts, preferences, or past conversations (e.g., 'who am I?', 'what do you know about me?', 'was hast du über mich gespeichert?', 'what have I told you?').",
+    "output_shape": "Returns a list of snippets (text) with relevance scores, or a message indicating no memories found.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'query' must be a non-empty string; empty string or whitespace-only returns exactly: 'Error: query is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Non-string type for 'query' (e.g., boolean, integer) returns: 'Tool Error: '{type}' object has no attribute 'strip''",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The 'k' parameter is optional (default 5) and accepts non-negative integers (including 0); negative values are tolerated but may produce unexpected results.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure 'query' is a non-empty string describing what to search for (e.g., 'user identity', 'facts about user').",
+      "Optionally specify 'k' as a non-negative integer to limit the number of snippets returned (default 5).",
+      "Call the tool with valid JSON parameters."
+    ],
+    "verification": [
+      "Check that 'query' is provided as a string and is not empty or whitespace-only.",
+      "Check that 'k' is an integer (if provided) and is >= 0.",
+      "The tool will either return matching snippets with relevance scores or a message 'No memories found for this query. You can tell the user you don't have stored information and offer to remember things"
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"query\": \"user identity\", \"k\": 3}",
+      "predicted": "success: It should return an empty list or message indicating no stored info yet.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 2] (Relevance: 32%)\n<think>We are asked to extract key facts and knowledge from the provided page, o",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: It should error because empty query is invalid.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": -1}",
+      "predicted": "error: k must be a positive integer, negative value will cause an error.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "predicted": "success: It will return an empty list or no results because the long query has no semantic match, but the tool handles it without error.",
+      "actual": "success: No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 1}",
+      "predicted": "error: The tool expects a string for 'query', but a boolean was provided, so it should return an error.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"dummy\", \"k\": 0}",
+      "predicted": "success: Returns an empty result (0 snippets) because k=0.",
+      "actual": "success: No memories found for this query. You can tell the user you don't have stored information and offer to remember things from now on.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 1}",
+      "predicted": "success: The tool will return an error message saying query is required because the input consists only of whitespace.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: The tool will error because query is expected to be a string, not an integer.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 1}",
+      "predicted": "error: The tool expects query as a string, but boolean true is not a string, so it should raise a type error or validation failure.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": -1}",
+      "predicted": "error: The tool will reject negative k value, likely returning an error.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool will error because required parameter 'query' is missing.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"k\": 5}",
+      "predicted": "success: Tool will return an error message because query is required.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"user identity\", \"k\": 2}",
+      "predicted": "success: The tool will return matching snippets from the database, possibly an empty list if nothing is stored.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 2] (Relevance: 32%)\n<think>We are asked to extract key facts and knowledge from the provided page, o",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"k\": 5}",
+      "predicted": "error: The tool will error because 'query' is required but missing.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": null}",
+      "predicted": "error: Tool will error because query is null, not a string, leading to an attribute error like 'NoneType' object has no attribute 'strip'.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": \"abc\"}",
+      "predicted": "error: The tool will reject a non-integer k value, likely returning an error.",
+      "actual": "error: Tool Error: invalid literal for int() with base 10: 'abc'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": -1}",
+      "predicted": "success: The tool will return an error message because k is negative.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "success: The tool will return no snippets because the query is empty, but it will not error.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 3}",
+      "predicted": "success: The tool will retrieve no snippets because the query string is empty, but the call will succeed as the parameter is provided.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 1}",
+      "predicted": "error: Tool will error because query is empty string, likely similar to missing query.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": 0}",
+      "predicted": "success: The tool will accept k=0 and return an empty result set.",
+      "actual": "error: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Tool Error: '<class 'bool'>' object has no attribute 'strip'",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message from passing a bool for query."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 3}",
+      "predicted": "error: Non-string query type (boolean) will cause a tool error: 'Tool Error: bool object has no attribute strip'",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error caused by passing a boolean for the query parameter."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 3}",
+      "predicted": "error: Tool will error with 'Tool Error: <class 'int'> object has no attribute 'strip'' because query must be a string.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the tool would error due to non-string query, matching the actual error."
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: The tool will return 'Error: query is required.' because the query is whitespace-only.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would return an error for a whitespace-only query, and the actual response matched exactly."
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: Tool will return error because whitespace-only query is treated as empty.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error when using a whitespace-only query, and the actual tool response matched that error."
+    },
+    {
+      "intent": "{\"query\": \"   \"}",
+      "predicted": "error: Tool returns error: 'Error: query is required.' because whitespace-only query is treated as empty.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for a whitespace-only query."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Tool will error with 'Error: query is required.' because empty string is invalid.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that an empty query would cause an error, and the actual tool response matched the prediction."
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": 1}",
+      "predicted": "success: The tool will return a message indicating no stored info found, as the database has no matching snippets for 'test'.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The tool returned a matching source instead of 'no stored info found' as predicted."
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": 2}",
+      "predicted": "success: Tool will return matching snippets or a message indicating no stored info, with no error.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool returned matching snippets as expected, with no error, matching the agent's prediction of success."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: The tool will return a 'Tool Error' because the query is an integer, not a string, e.g., 'int' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 3}",
+      "predicted": "error: Tool will error because query is not a string, e.g., 'int' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Tool will error with 'Tool Error: 'bool' object has no attribute 'strip'' because query is a boolean not a string.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: Tool will error because query is an integer instead of a string (similar to previous boolean case).",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true}",
+      "predicted": "error: Passing a boolean instead of a string should trigger a Tool Error: 'bool' object has no attribute 'strip'",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 3}",
+      "predicted": "error: Empty query string will cause the tool to return an error: 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: The tool will return an error because query is an empty string, which is considered missing (query is required).",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that an empty query string would result in an error, which matches the actual tool response."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Tool will respond with 'Error: query is required.' because query is an empty string.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for an empty query string."
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: Empty or whitespace-only string for 'query' will cause error: 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that an empty whitespace query would cause the exact error 'Error: query is required.'"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": -1}",
+      "predicted": "success: Negative k does not cause error; the tool will run successfully but may return unexpected results.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool executed successfully with negative k, returning results as predicted, so the prediction of success was correct."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 2}",
+      "predicted": "error: Passing an integer instead of a string should cause a Tool Error: 'int' object has no attribute 'strip'",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that passing an integer instead of a string would result in the specific attribute error."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: The integer query will cause an AttributeError because the tool tries to call .strip() on a non-string.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact AttributeError due to a non-string query."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: The tool will raise a Tool Error because query is a boolean, not a string, causing 'bool' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the Tool Error due to invalid argument type."
+    },
+    {
+      "intent": "{\"query\": false, \"k\": 5}",
+      "predicted": "error: Tool Error: 'bool' object has no attribute 'strip'",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The predicted error ('bool' object has no attribute 'strip') does not match the actual error ('query is required')."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Non-string type for 'query' (boolean) will cause error: 'Tool Error: 'bool' object has no attribute 'strip''",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the exact error due to invalid boolean query argument."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Empty string query should cause error: 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 1}",
+      "predicted": "error: Empty string query will cause 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"user identity\", \"k\": 3}",
+      "predicted": "success: Valid string query will not cause a Tool Error; it will search the vector database and return either matching snippets or a 'No memories found' message.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 2] (Relevance: 32%)\n<think>We are asked to extract key facts and knowledge from the provided page, o",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"user name\", \"k\": 3}",
+      "predicted": "success: The tool will return a string of matching snippets or 'No memories found' message.",
+      "actual": "success: [Source 1] (Relevance: 41%)\nUser's name is Alex\n\n---\n\n[Source 2] (Relevance: 38%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 3] (Relevance: 41%)\nUser's name is Alex.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"user identity\", \"k\": 3}",
+      "predicted": "success: Should return either matching snippets or 'No memories found for this query.'",
+      "actual": "success: [Source 1] (Relevance: 31%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 2] (Relevance: 32%)\n<think>We are asked to extract key facts and knowledge from the provided page, o",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: Whitespace-only query will cause 'Error: query is required.' because it is considered empty.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": false, \"k\": 5}",
+      "predicted": "error: Tool Error: 'bool' object has no attribute 'strip'.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a specific attribute error, but the actual error was about a missing query parameter, indicating incorrect understanding."
+    },
+    {
+      "intent": "{\"query\": \"test\", \"k\": 0}",
+      "predicted": "success: Tool will return 'No memories found.' because k=0 requests zero snippets.",
+      "actual": "error: [Source 1] (Relevance: 31%)\nErfolgreicher Test der Automation 'wetter_final_test_2140' um 21:40 am 27.05.2026: Wetterbericht für Berlin gespeichert unter /home/user/Documents/wetter_berlin_27-05-2026.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted no memories would be found with k=0, but the tool actually returned multiple memory entries, indicating a misunderstanding of the parameter."
+    },
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: Error: query is required.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the exact error message that occurred, showing understanding of the tool's requirement."
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: Whitespace-only query will be considered empty and trigger 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for a whitespace-only query."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Empty string query will cause 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error caused by an empty string query."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: Tool Error: 'int' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message from the tool."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: I expect an error because query is an empty string, which violates the non-empty requirement.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to empty query."
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: Tool will return 'Error: query is required.' because whitespace-only is considered empty.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message when providing a whitespace-only query."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 5}",
+      "predicted": "error: Providing an integer instead of string for query will cause a Tool Error: 'int' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool error due to integer input."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: The tool will raise a Tool Error: 'bool' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Tool Error: 'bool' object has no attribute 'strip'",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": [\"test\"], \"k\": 5}",
+      "predicted": "error: Tool Error: 'list' object has no attribute 'strip'",
+      "actual": "success: Tool Error: 'list' object has no attribute 'strip'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"who am I?\"}",
+      "predicted": "success: The tool will search memory and return matching snippets or a message that no memories were found.",
+      "actual": "success: [Source 1] (Relevance: 40%)\nUser's name is Alex\n\n---\n\n[Source 2] (Relevance: 28%)\n<think>We are asked to extract key facts and knowledge from the provided page, outputting only the extracted knowledge",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"user identity\"}",
+      "predicted": "success: The tool will execute successfully, returning either matching memory snippets or a 'No memories found' message.",
+      "actual": "success: [Source 1] (Relevance: 31%)\nUser's name is Alex, working on VAF (an AI/LLM framework)\n\n---\n\n[Source 2] (Relevance: 32%)\n<think>We are asked to extract key facts and knowledge from the provided page, o",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Tool will return 'Error: query is required.' because the query string is empty.",
+      "actual": "success: Error: query is required.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: The tool will return an error because query is required and empty string is not allowed.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error due to empty query, matching the actual error."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: The tool returns error: 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error that the tool would return."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Empty string for query returns 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for an empty query string."
+    },
+    {
+      "intent": "{\"query\": \"\", \"k\": 5}",
+      "predicted": "error: Tool will return 'Error: query is required.' because query is empty.",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to an empty query, and the actual response matched the prediction."
+    },
+    {
+      "intent": "{\"query\": 123, \"k\": 3}",
+      "predicted": "error: Tool will crash or return an error message because 'query' is an integer, not a string.",
+      "actual": "success: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would error due to an integer query, and the actual response was a type error."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Tool will return error because query is a boolean, not a string, causing 'bool' object has no attribute 'strip'.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error caused by passing boolean as query."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: The tool will return 'Tool Error: 'bool' object has no attribute 'strip'' because query is a boolean not a string.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to passing a boolean as the query argument, which matched the actual tool error."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 5}",
+      "predicted": "error: Tool will return an error because query is a boolean, not a string, causing an attribute error.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an attribute error due to boolean query argument."
+    },
+    {
+      "intent": "{\"query\": true, \"k\": 3}",
+      "predicted": "error: Tool will return error because query is boolean, not string.",
+      "actual": "success: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to query being a boolean instead of a string."
+    },
+    {
+      "intent": "{\"query\": \"user preferences\", \"k\": -1}",
+      "predicted": "success: The tool will search for 'user preferences' with k=-1, which is tolerated but may return unexpected results.",
+      "actual": "success: [Source 1] (Relevance: 38%)\n<think>We are asked to extract key facts and knowledge from the provided page, outputting only the extracted knowledge in a concise paragraph or short bullet list. The page",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success and the tool responded with a valid search result, confirming the prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"user preferences\", \"k\": 0}",
+      "predicted": "success: The tool will search for 'user preferences' with k=0, returning an empty list of memories because k=0 requests zero results.",
+      "actual": "success: [Source 1] (Relevance: 38%)\n<think>We are asked to extract key facts and knowledge from the provided page, outputting only the extracted knowledge in a concise paragraph or short bullet list. The page",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an empty list for k=0, but the tool returned a non-empty result, showing misunderstanding of the tool's behavior.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"   \", \"k\": 5}",
+      "predicted": "error: The query is whitespace-only, so the tool will return the error: 'Error: query is required.'",
+      "actual": "success: Error: query is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message for a whitespace-only query.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": [\"user identity\"], \"k\": 3}",
+      "predicted": "error: The query argument is a list instead of a string, causing a 'Tool Error: 'list' object has no attribute 'strip''.",
+      "actual": "success: Tool Error: 'list' object has no attribute 'strip'",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error caused by passing a list instead of a string to the query argument.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.63,
+  "uses": 79,
+  "success": 76,
+  "fail": 3,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T12:06:21.409641+00:00",
+  "updated_at": "2026-06-04T12:17:23.847516+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 4
+}

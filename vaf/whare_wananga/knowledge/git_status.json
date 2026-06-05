@@ -1,0 +1,153 @@
+{
+  "tool": "git_status",
+  "schema_version": 1,
+  "tool_schema_hash": "3d910579a553f45c",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use git_status to check which files are modified, staged, or untracked in the current Git repository.",
+    "output_shape": "A string listing files with their status, e.g., ' M vaf/whare_wananga/cli.py\\n M vaf/whare_wananga/runner.py\\n'.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; the tool accepts any input (including invalid ones) and always returns the current git status without error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with an empty object {} or any other input to obtain the git status.",
+      "The tool returns a string showing modified (M), staged, or untracked files."
+    ],
+    "verification": [
+      "Verify that the output contains file paths with status indicators (e.g., ' M ' for unstaged modifications).",
+      "Check that standard git status formatting is used."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will output the current git status of the repository at /mnt/veyllo1/VAF, showing modified, staged, and untracked files.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, but null was provided.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, so passing a string will cause a validation error.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, but an integer was provided, causing a validation error.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept a boolean argument and output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would output the current git status, which matches the actual response."
+    },
+    {
+      "intent": "{\"invalid_param\": \"test\"}",
+      "predicted": "success: The tool will ignore the invalid argument and output the git status of the current repository.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool ignored the invalid parameter and returned the git status as predicted."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, but a list was provided, so validation fails.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error, but the tool executed successfully with a correct git status output."
+    },
+    {
+      "intent": "{\"extra\": \"value\"}",
+      "predicted": "success: The tool will accept an object with extra properties and still output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept the numeric argument and output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the integer argument and output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The prediction correctly stated that the tool would output current git status, matching the actual response."
+    },
+    {
+      "intent": "{\"input\": \"hello\"}",
+      "predicted": "error: The tool expects an object argument, but a string was provided, so validation fails.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error, but the tool returned a valid git status output, showing the prediction was incorrect."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the null argument and still output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The predicted success matches the actual git status output, and the tool correctly ignored the null argument."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept an integer argument and still output the current git status.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the list argument and output the current git status since it accepts any input.",
+      "actual": "success: Git Status:\n M vaf/whare_wananga/cli.py\n M vaf/whare_wananga/runner.py\n",
+      "match": true,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.64,
+  "uses": 14,
+  "success": 14,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:07:00.267431+00:00",
+  "updated_at": "2026-06-05T00:09:55.451264+00:00",
+  "challenge_passed": false,
+  "learn_mode": "probe",
+  "rounds": 2
+}

@@ -1,0 +1,161 @@
+{
+  "tool": "github_get_tree",
+  "schema_version": 1,
+  "tool_schema_hash": "e5527d02bf2d6512",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to get a bird's eye view of a GitHub repository by obtaining a recursive list of all file paths.",
+    "output_shape": "Returns a tree structure of paths when successfully connected; if GitHub is not connected, returns the string message: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.'",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The tool requires the GitHub connection to be active; without it, all attempts return the same error: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitH",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Required parameters 'owner' and 'repo' must be provided; omitting either (or both) does not produce a parameter-specific error but returns the same GitHub connection error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string values for 'owner' or 'repo' also result in the GitHub connection error message.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure your GitHub account is connected in Settings → Connections → Developer → GitHub.",
+      "Provide the required parameters: owner (repository owner) and repo (repository name).",
+      "Optionally specify ref (branch or commit SHA; defaults to main branch) and recursive (boolean; defaults to true).",
+      "Call the tool with the parameters in JSON format."
+    ],
+    "verification": [
+      "If connected, the tool returns a tree of file paths (list of paths).",
+      "If not connected, the tool returns the string: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and",
+      "Check that the response contains the expected structure (list of paths) or the connection error message."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"langchain-ai\", \"repo\": \"langchain\", \"ref\": \"main\", \"recursive\": true}",
+      "predicted": "success: It will return a recursive tree of file paths for the langchain repository on the main branch.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\"}",
+      "predicted": "error: Missing required parameter 'repo' will cause a validation error before any API call.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"ref\": \"main\", \"recursive\": true}",
+      "predicted": "success: The tool will return a success message indicating GitHub is not connected, not the actual tree.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"ref\": \"main\", \"recursive\": false}",
+      "predicted": "error: The tool will return the GitHub connection error message because the GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"\", \"repo\": \"\"}",
+      "predicted": "success: It will return the 'GitHub is not connected' error message.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message when GitHub is not connected."
+    },
+    {
+      "intent": "{\"owner\": \"\", \"repo\": \"\", \"ref\": \"main\", \"recursive\": true}",
+      "predicted": "success: It will return the same GitHub connection error message because the tool does not validate parameters locally and requires a connected GitHub account.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the tool would fail with a GitHub connection error due to missing account."
+    },
+    {
+      "intent": "{\"owner\": \"\", \"repo\": \"some-repo\", \"ref\": \"main\", \"recursive\": true}",
+      "predicted": "success: The tool will return the same 'GitHub is not connected' message even with an empty owner string.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected."
+    },
+    {
+      "intent": "{\"owner\": \"facebook\", \"repo\": \"react\", \"ref\": \"v18.2.0\", \"recursive\": true}",
+      "predicted": "error: The tool will return an error because the GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error because GitHub is not connected, and the actual response confirmed this.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"torvalds\", \"repo\": \"linux\", \"ref\": \"v6.7\", \"recursive\": true}",
+      "predicted": "success: The tool will return a recursive tree of all files in the Linux kernel repository at tag v6.7, since all required parameters are valid and the GitHub account is assumed connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success but the tool returned an error because GitHub account is not connected.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"torvalds\", \"repo\": \"linux\", \"ref\": \"1da177e4c3f41524e886b7f1b8a0c1fc7321cac2\"}",
+      "predicted": "success: It will return a recursive tree of all files in the Linux repository at the specified commit SHA.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success, but the tool failed due to a missing GitHub connection, which is not a transient error and indicates the agent did not account for setup requirements.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"torvalds\", \"repo\": \"linux\", \"ref\": \"1da177e4c3f41524e886b7f1b8a0c1fc7321cac2\", \"recursive\": true}",
+      "predicted": "error: The tool will fail because GitHub is not connected, returning the message: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub.'",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to GitHub not being connected, and the actual response matched the prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"torvalds\", \"repo\": \"linux\", \"ref\": \"master\", \"recursive\": true}",
+      "predicted": "error: The tool will return an error message: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub.' because the GitHub connection is required and likely not a",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.67,
+  "uses": 12,
+  "success": 12,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:16:55.964557+00:00",
+  "updated_at": "2026-06-05T00:20:43.001204+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

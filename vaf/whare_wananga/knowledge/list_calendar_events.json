@@ -1,0 +1,167 @@
+{
+  "tool": "list_calendar_events",
+  "schema_version": 1,
+  "tool_schema_hash": "b92a56007e896b15",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to list calendar events (Google or Outlook) for a given time range. Typically for questions about schedule, upcoming meetings, appointments.",
+    "output_shape": "Returns a list of calendar events, or an error message if no account is connected.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No arguments are required; all parameters are optional.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If no calendar account is connected, the tool returns the same generic error for any invalid or missing parameter: 'No calendar account connected. Connect Gmail or Outlook in Settings → Connections → ",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid provider (e.g., 'apple') does not trigger the expected enum validation error when no account is connected; the generic error above is returned instead.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid date format for time_min or time_max (e.g., 'not-a-date') and non-integer max_results (e.g., 'abc') also result in the generic error when no account is connected.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure a calendar account (Gmail or Outlook) is connected via Settings → Connections → Email. If not, prompt the user to connect one.",
+      "Optionally specify time_min and time_max as ISO8601 or YYYY-MM-DD strings; defaults are now and 7 days from now.",
+      "Optionally specify provider as 'gmail' or 'microsoft'; otherwise uses first connected account.",
+      "Optionally specify account_id (email), calendar_id (default primary), and max_results (integer, default 50).",
+      "Call the tool; handle the generic error if no account is connected, or process the returned events."
+    ],
+    "verification": [
+      "If a calendar account is connected, verify that the returned events fall within the requested time range and respect the max_results limit.",
+      "If no account is connected, confirm that the tool returns the expected error message: 'No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is us",
+      "Check that invalid optional parameters (e.g., bad provider, bad date) produce appropriate validation errors only when an account is connected (not observed in probes due to missing account)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"provider\": \"apple\"}",
+      "predicted": "error: Provider must be 'gmail' or 'microsoft'.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"provider\": \"gmail\"}",
+      "predicted": "success: Expect a success response with a message indicating no calendar account is connected, since no accounts are connected.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"time_min\": \"not-a-date\"}",
+      "predicted": "error: Invalid date format for time_min.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"max_results\": \"abc\"}",
+      "predicted": "error: Invalid type for max_results, expected integer.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"time_min\": \"2024-01-01\", \"time_max\": \"2024-01-08\", \"provider\": \"gmail\", \"account_id\": \"test@example.com\", \"calendar_id\": \"primary\", \"max_results\": 10}",
+      "predicted": "success: The tool will return the no-calendar-account-connected message since no account is connected, regardless of valid parameters.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would return a no-calendar-account-connected error, and the actual response matched that expectation."
+    },
+    {
+      "intent": "{\"provider\": \"microsoft\"}",
+      "predicted": "success: Expect 'No calendar account connected...' because no Microsoft account is connected.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about no connected calendar account."
+    },
+    {
+      "intent": "{\"time_min\": \"2099-01-01\", \"time_max\": \"2099-01-02\", \"provider\": \"gmail\", \"max_results\": -5}",
+      "predicted": "success: Expect success with the no-calendar-account-connected message because no account is connected, regardless of parameter values.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message about no calendar account connected, matching the actual response."
+    },
+    {
+      "intent": "{\"time_min\": \"2024-06-01T12:00:00\", \"time_max\": \"2024-06-01T10:00:00\", \"max_results\": 10}",
+      "predicted": "error: The tool will return an error because time_min is after time_max, indicating an invalid time range.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error due to invalid time range, but the actual error was due to no connected calendar account.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"time_min\": \"2024-01-01\", \"time_max\": \"2024-01-01\", \"max_results\": 0, \"provider\": \"gmail\", \"account_id\": \"fake@example.com\"}",
+      "predicted": "error: The tool will return an error message stating that no calendar account is connected because the provided account_id 'fake@example.com' is not a valid connected account.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error about no connected calendar account, matching the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"time_min\": \"2026-01-01\", \"provider\": \"outlook\", \"account_id\": \"user@example.com\", \"calendar_id\": \"primary\", \"max_results\": 10}",
+      "predicted": "success: The tool will retrieve up to 10 calendar events from user@example.com's primary calendar starting from 2026-01-01.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but the tool returned an error because the calendar account is not connected, indicating the agent lacked understanding of prerequisites.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"time_min\": \"2024-12-01\", \"time_max\": \"2024-12-31\", \"provider\": \"apple\", \"account_id\": \"test@example.com\", \"calendar_id\": \"primary\", \"max_results\": 5}",
+      "predicted": "error: Generic error: No calendar account connected because provider 'apple' is invalid and no account is connected.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to no connected calendar account, and the actual response matched that error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"time_min\": \"2025-06-01T00:00:00Z\", \"time_max\": \"2025-06-01T01:00:00Z\", \"provider\": \"gmail\", \"calendar_id\": \"primary\", \"max_results\": 100}",
+      "predicted": "error: No calendar account is connected, so the tool returns the generic error message.",
+      "actual": "success: No calendar account connected. Connect Gmail or Outlook in Settings → Connections → Email; the same account is used for calendar.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error about no calendar account being connected, and the actual response matched that expectation.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.58,
+  "uses": 12,
+  "success": 12,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:44:30.383523+00:00",
+  "updated_at": "2026-06-05T00:48:53.413668+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

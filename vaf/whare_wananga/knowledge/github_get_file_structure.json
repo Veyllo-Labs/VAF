@@ -1,0 +1,124 @@
+{
+  "tool": "github_get_file_structure",
+  "schema_version": 1,
+  "tool_schema_hash": "175a78682d5939fd",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "To understand the structure of a code file (classes, functions, methods with line numbers) before reading large files, to know which sections to request with start_line/end_line.",
+    "output_shape": "A list of classes, functions, and methods with their line numbers.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required parameters (owner, repo, path) may cause validation errors, but exact error texts were not observable due to an unmet prerequisite. All attempts returned the same error: 'GitHub is no",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The tool requires a connected GitHub account; otherwise it will only return the connection error regardless of other parameter validity.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure your GitHub account is connected in Settings → Connections → Developer → GitHub.",
+      "Provide the required parameters: owner (repository owner), repo (repository name), path (file path relative to repo root). Optionally provide ref (branch/tag/commit).",
+      "Call github_get_file_structure with the parameters."
+    ],
+    "verification": [
+      "Check that the output is a list of classes, functions, and methods with line numbers, indicating successful parsing.",
+      "If the output contains 'GitHub is not connected', connect your GitHub account and try again."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"flask/app.py\"}",
+      "predicted": "success: The tool will parse the Python file and return a list of classes and functions with their line numbers.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"repo\": \"flask\", \"path\": \"flask/app.py\"}",
+      "predicted": "error: Omitting required parameter 'owner' will result in a validation error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"nonexistent.py\"}",
+      "predicted": "error: The tool will respond with 'GitHub is not connected. Connect your GitHub account...' because the account is not linked, regardless of the input validity.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"nonexistent.py\"}",
+      "predicted": "error: The tool will return the same 'GitHub is not connected' error because the GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"flask/app.py\"}",
+      "predicted": "error: The tool will return an error because GitHub is not connected; it will state that the user must connect their GitHub account in Settings.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to GitHub not being connected, which matches the actual tool response."
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"src/flask/app.py\"}",
+      "predicted": "error: GitHub connection is not established, so the tool will return the connection error regardless of other parameters.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing GitHub connection, and the actual response was exactly that error."
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"flask/app.py\"}",
+      "predicted": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message that the tool returned."
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"flask/app.py\", \"ref\": \"2.0.0\"}",
+      "predicted": "error: The tool will return a connection error because the GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to GitHub not being connected, matching the actual tool response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"pallets\", \"repo\": \"flask\", \"path\": \"flask/app.py\", \"ref\": \"2.0.0\"}",
+      "predicted": "error: The tool will return a connection error because the GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error due to the GitHub account not being connected.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.67,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:14:49.338995+00:00",
+  "updated_at": "2026-06-05T00:16:55.961075+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

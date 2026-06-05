@@ -1,0 +1,126 @@
+{
+  "tool": "replace_editor_text",
+  "schema_version": 1,
+  "tool_schema_hash": "58f040dbe1cafd74",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "When the user asks to rewrite or replace a specific sentence/paragraph in the currently open editor document.",
+    "output_shape": "Returns a success message or an error indicating failure (e.g., no active session or text not found).",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The tool requires an active editor session (Web UI with an active chat session). Without it, even valid parameters produce: 'error: Error: No active session (replace in editor is only available in the",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Missing required fields 'old_text' and 'new_text' trigger a missing-fields error, but due to prerequisite session check, actual error observed in attempts was the session error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure there is an active chat session in the Web UI (editor must be open).",
+      "Provide the exact text snippet to replace as 'old_text' (required).",
+      "Provide the replacement text as 'new_text' (required).",
+      "Optionally specify 'occurrence_index' if the old_text appears multiple times in the document (integer, default 0).",
+      "Call the tool with the correct parameters."
+    ],
+    "verification": [
+      "Check that the specified text in the editor has been replaced with new_text.",
+      "If an error is returned, verify the active session and the exactness of old_text."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required fields: old_text, new_text",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"old_text\": \"\"}",
+      "predicted": "error: missing required field: new_text",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"occurrence_index\": \"first\"}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"old_text\": \"foo\", \"new_text\": \"\"}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"new_text\": \"\"}",
+      "predicted": "error: error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{\"old_text\": \"\", \"new_text\": \"\"}",
+      "predicted": "error: error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error about no active session, matching the actual tool response."
+    },
+    {
+      "intent": "{\"old_text\": \"\", \"new_text\": \"\"}",
+      "predicted": "error: error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message returned by the tool."
+    },
+    {
+      "intent": "{\"occurrence_index\": 0}",
+      "predicted": "error: The tool call is missing required fields 'old_text' and 'new_text', so it will fail with a missing-fields error.",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error, and the tool call did result in an error, so the prediction was correct.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"old_text\": null, \"new_text\": \"replacement\"}",
+      "predicted": "error: The tool will return an error because 'old_text' is required but is null.",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and an error occurred, even though the specific reason differed.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:08:24.125290+00:00",
+  "updated_at": "2026-06-05T01:10:11.635128+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

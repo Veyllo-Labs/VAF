@@ -1,0 +1,159 @@
+{
+  "tool": "list_automation_notes",
+  "schema_version": 1,
+  "tool_schema_hash": "bc5a678446836f0e",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool to retrieve the list of current automation notes with their created_at timestamps, typically shown in the automation calendar Note section.",
+    "output_shape": "The tool returns a string message. Currently, it always returns 'No automation notes yet. Use add_automation_note to add one.' This indicates no notes exist. When notes are added, it will return a list of notes.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No arguments are required; the tool accepts any input without error. Even passing extra properties, strings, or null results in a success message. No error text has been observed for missing, empty, o",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with an empty object {} as the argument.",
+      "The tool will return a string indicating the current automation notes."
+    ],
+    "verification": [
+      "If the tool returns 'No automation notes yet. Use add_automation_note to add one.', it confirms the tool executed successfully and no notes exist.",
+      "If notes exist, the tool will return a list of notes with created_at timestamps."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of current automation notes (possibly empty) with their created_at timestamps.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a response indicating no automation notes exist, as already observed.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"extra\": \"something\"}",
+      "predicted": "error: The tool does not accept any parameters, so passing an unexpected argument will cause an error.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object with optional properties, but received a string instead.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing null instead of an object will cause a runtime error because the tool expects a dictionary object.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error but the tool returned a successful response with a status message."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object, so passing a string will cause a validation error.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error, but the actual call with empty object succeeded."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the invalid input and return the current list of automation notes (likely 'No automation notes yet...').",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted 'No automation notes yet...' and the tool succeeded as expected."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a message indicating no automation notes exist yet.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept any input and return the current automation notes status, ignoring the argument.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the boolean argument and return the same 'No automation notes yet' message as before.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the tool would return a message indicating no automation notes, and the actual response matches that prediction."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return the current list of automation notes (likely 'No automation notes yet. Use add_automation_note to add one.').",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the invalid argument type and return the default message 'No automation notes yet...'.",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted default message about no automation notes."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: It will return 'No automation notes yet. Use add_automation_note to add one.'",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent's prediction exactly matches the actual tool response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"test\": 123}",
+      "predicted": "success: The tool will return 'No automation notes yet. Use add_automation_note to add one.'",
+      "actual": "success: No automation notes yet. Use add_automation_note to add one.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The predicted output matches the actual tool response exactly, indicating the agent correctly understood the tool's behavior.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.71,
+  "uses": 14,
+  "success": 14,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:36:31.124598+00:00",
+  "updated_at": "2026-06-05T00:39:15.117245+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

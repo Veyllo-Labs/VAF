@@ -1,0 +1,118 @@
+{
+  "tool": "delete_automation_todo",
+  "schema_version": 1,
+  "tool_schema_hash": "ba61faa18d7500d5",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Delete an automation to-do after completion or when it becomes obsolete.",
+    "output_shape": "A success message indicating the to-do was deleted (exact format not specified, but typically a confirmation).",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "todo_id is required and must be a non-empty string. Attempts with missing, empty, number, or array all produced: 'error: Error: todo_id is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Obtain the todo_id from list_automation_todos.",
+      "Ensure todo_id is a non-empty string (e.g., not null, undefined, empty string, or non-string type).",
+      "Call delete_automation_todo with the todo_id."
+    ],
+    "verification": [
+      "Call list_automation_todos again and confirm the deleted to-do no longer appears."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'todo_id'",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"todo_id\": \"\"}",
+      "predicted": "error: empty string rejected",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: expected string, got number",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"todo_id\": []}",
+      "predicted": "error: invalid type for todo_id",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"todo_id\": null}",
+      "predicted": "error: error: Error: todo_id is required.",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the specific error message that occurred."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: todo_id is required.",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error that the tool would return when todo_id is missing."
+    },
+    {
+      "intent": "{\"todo_id\": {}}",
+      "predicted": "error: error: Error: todo_id is required.",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent's prediction of the error message exactly matches the actual tool response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The todo_id is missing, so the tool will return an error: 'Error: todo_id is required.'",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing todo_id, and the actual response matched.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because todo_id is missing; it is required and must be a non-empty string.",
+      "actual": "error: Error: todo_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would fail due to the missing required argument todo_id.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:39:00.207994+00:00",
+  "updated_at": "2026-06-04T23:40:16.165817+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

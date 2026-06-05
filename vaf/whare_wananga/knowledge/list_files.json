@@ -1,0 +1,591 @@
+{
+  "tool": "list_files",
+  "schema_version": 1,
+  "tool_schema_hash": "e24b7021e89f5efb",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool to list files in a specified directory, optionally sorted by name/date/size and limited to a certain number of files.",
+    "output_shape": "Returns a formatted table with columns: Type, Date, Size, Name, along with total files count and sort order.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'path' must be provided; missing path leads to error (not observed, but spec requires path).",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If path does not exist, error: '[Errno 2] No such file or directory: '/nonexistent_dir_xyz''",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If path is a file instead of a directory, unexpected behaviour occurs (e.g., may list parent directory with 'Access denied' message).",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid sort_by values (not in enum) are silently accepted; no error is raised.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "limit=0 returns all files (no effective limit), which might be unexpected.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide the absolute path of the directory to list (required).",
+      "Optionally specify 'sort_by' as 'name', 'date', or 'size' (default: 'name').",
+      "Optionally specify 'limit' as a positive integer (default: 100; note limit=0 returns all files).",
+      "Call the tool and capture the output."
+    ],
+    "verification": [
+      "Verify that the path exists and is a directory before calling (to avoid error or unexpected output).",
+      "Check that the output includes the directory path, total file count, and sort order.",
+      "If limit was set, confirm that the number of listed files does not exceed that limit (unless limit=0).",
+      "If specific files are expected, verify they appear in the listing with correct type and size."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"path\": \"/tmp\"}",
+      "predicted": "success: The tool will successfully list files in /tmp.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <DIR>",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: The tool will error because the directory does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "error: The tool will error because the path is a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\"}",
+      "predicted": "error: The tool should error because sort_by must be one of 'name', 'date', 'size', but 'invalid' is not allowed.",
+      "actual": "error: Directory Listing: /tmp (Total files found: 57) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"date\", \"limit\": 5}",
+      "predicted": "success: The tool will list up to 5 files in /tmp sorted by date.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 57) (Sorted by: date)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 22:47   1.2 K",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"limit\": 0}",
+      "predicted": "error: The tool will error because limit must be a positive integer, 0 is invalid.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 55 more)\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"date\", \"limit\": 2}",
+      "predicted": "success: The tool will list at most 2 files from /tmp sorted by modification date.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: date)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 22:46   1.6 K",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": 0}",
+      "predicted": "success: The tool will return an empty list of files because limit is 0.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 55 more)\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"tmp\"}",
+      "predicted": "error: The tool should error because it requires an absolute path, but 'tmp' is relative.",
+      "actual": "error: [Errno 2] No such file or directory: '/home/user/tmp'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/root\"}",
+      "predicted": "error: The tool will error likely due to permission denied for accessing /root directory.",
+      "actual": "error: [Errno 13] Permission denied: '/root'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz123\"}",
+      "predicted": "error: The tool will return an error because the specified path does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz123'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"random\"}",
+      "predicted": "error: The tool will error because 'random' is not a valid enum value for sort_by; must be one of 'name', 'date', 'size'.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: random)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <DI",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\"}",
+      "predicted": "error: The tool will error because sort_by must be one of 'name', 'date', or 'size', but 'invalid' is not allowed.",
+      "actual": "error: Directory Listing: /tmp (Total files found: 55) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\", \"limit\": 5}",
+      "predicted": "error: The tool will error because sort_by is not one of the allowed enum values (name, date, size).",
+      "actual": "error: Directory Listing: /tmp (Total files found: 55) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "error: The tool will error because the path is a file, not a directory, and list_files expects a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \".\", \"sort_by\": \"date\"}",
+      "predicted": "error: Path must be absolute, but '.' is relative.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: date)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 22:45  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"limit\": 1}",
+      "predicted": "success: The tool will return a directory listing of /tmp limited to 1 file, showing type, date, size, and name.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 56) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <DIR>",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_abc123\", \"sort_by\": \"name\", \"limit\": 50}",
+      "predicted": "error: The tool will return an error because the specified directory does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_abc123'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "error: The tool will error because the path points to a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent\"}",
+      "predicted": "error: The path /nonexistent does not exist, so the tool will return an error.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent\"}",
+      "predicted": "error: The tool will error because the directory /nonexistent does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "success: The tool will return a success with 'Access denied: /etc' instead of an error because it tries to list the parent directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the exact error message 'Access denied: /etc', which matches the actual response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because the required parameter 'path' is missing.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error due to missing 'path' parameter, but the tool returned a successful directory listing."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\", \"limit\": 10}",
+      "predicted": "error: The tool will error because sort_by value 'invalid' is not one of the allowed enum values ['name', 'date', 'size'].",
+      "actual": "error: Directory Listing: /tmp (Total files found: 55) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error due to invalid sort_by value, but the tool actually processed the request and returned a valid directory listing."
+    },
+    {
+      "intent": "{\"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will error because the required parameter 'path' is missing.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error due to missing 'path' parameter, but the tool executed successfully with a default path."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": 5}",
+      "predicted": "success: The tool will return a table listing up to 5 files in /tmp sorted by name, showing Type, Date, Size, Name, and a header with directory path, total files found, and sort order.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <DIR>",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual output matches the predicted format and content exactly, showing 5 files sorted by name with the expected columns and header."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\", \"limit\": 5}",
+      "predicted": "error: The tool will return an error because sort_by must be one of 'name', 'date', 'size'.",
+      "actual": "error: Directory Listing: /tmp (Total files found: 55) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error due to invalid 'sort_by', but the tool accepted it and returned a successful listing."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invali\"}",
+      "predicted": "error: The tool will return an error because 'invali' is not a valid enum value for sort_by.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: invali)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <DI",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The tool accepted 'invali' as a valid sort_by and returned a successful listing."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "success: The tool will return a success with a message like 'Access denied: /etc' because the path is a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'Access denied' error when trying to list files on a path that is a file, not a directory."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "success: The tool will succeed but return 'Access denied: /etc' because it attempts to list the parent directory of a file.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'Access denied: /etc' error response."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: Tool will return an error: '[Errno 2] No such file or directory: '/nonexistent_dir_xyz''.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"relative_dir\", \"sort_by\": \"name\", \"limit\": 5}",
+      "predicted": "error: Tool will return an error because path must be an absolute path but a relative path was provided.",
+      "actual": "error: [Errno 2] No such file or directory: '/home/user/relative_dir'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": -5}",
+      "predicted": "error: The tool will return an error because limit is negative, which is invalid.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 60 more)\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": \"not_an_integer\"}",
+      "predicted": "error: The tool will return an error because limit must be an integer, not a string.",
+      "actual": "success: '>=' not supported between instances of 'int' and 'str'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will error due to missing required field 'path'.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": -1}",
+      "predicted": "error: The tool will return an error because limit is negative, which is invalid.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 56 more)\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"limit\": 0}",
+      "predicted": "success: The tool will list all files in /tmp ignoring limit=0, as limit=0 does not restrict output.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 55 more)\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that limit=0 would not restrict output and the tool returned the full file listing as expected."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will return an error because the specified absolute directory does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error for a nonexistent directory, which matches the actual tool response."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: The tool will return an error because the specified directory does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error due to the non-existent directory."
+    },
+    {
+      "intent": "{\"path\": 123, \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will error because path is not a string.",
+      "actual": "error: Invalid path",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error because path is not a string, and the actual response was an error."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: The tool will return an error '[Errno 2] No such file or directory: '/nonexistent_dir_xyz'' because the path does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error when trying to list a non-existent directory."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: The tool will error with '[Errno 2] No such file or directory: '/nonexistent_dir_xyz'' because the path does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for a nonexistent directory."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "success: The tool will treat the file path as a directory and list its parent directory (/etc) with up to 10 files sorted by name.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success, but actual response was an access denied error."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "success: Tool will list files in /etc (the parent directory) instead of erroring because path is a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success with listing parent directory, but actual response was an access denied error."
+    },
+    {
+      "intent": "{\"path\": \"/etc/hosts\"}",
+      "predicted": "success: The tool will list files in the parent directory (/etc) instead of erroring, because it receives a file path rather than a directory path.",
+      "actual": "success: Access denied: /etc",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but tool returned an access denied error."
+    },
+    {
+      "intent": "{\"path\": \"\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will error because an empty string is not a valid absolute path.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"\"}",
+      "predicted": "error: The tool will produce an error because the path is an empty string, which is not a valid absolute directory path.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": -1}",
+      "predicted": "error: The tool will error because limit is a negative integer, which is invalid for a max files count.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 56 more)\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/bin\", \"sort_by\": \"name\", \"limit\": 5}",
+      "predicted": "success: The call will return a table of up to 5 files/directories in /bin sorted by name, concluding with a summary line.",
+      "actual": "success: Directory Listing: /bin (Total files found: 3129) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2024-07-08 17:29   65 ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"sort_by\": \"size\", \"limit\": 5}",
+      "predicted": "error: Tool will return an error because the required parameter 'path' is missing.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: size)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-05-24 05:17  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \".\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will error because '.' is a relative path, not an absolute path as required.",
+      "actual": "success: Directory Listing: /home/user (Total files found: 38) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 03:18  ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\"}",
+      "predicted": "error: The tool will error because the path does not exist: '[Errno 2] No such file or directory: '/nonexistent_dir_xyz''",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the FileNotFoundError, which matched the actual tool response."
+    },
+    {
+      "intent": "{\"path\": \"/non_existent_dir_xyz\"}",
+      "predicted": "error: The tool will error because the path does not exist.",
+      "actual": "error: [Errno 2] No such file or directory: '/non_existent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error because the path does not exist, and the tool responded with the expected error."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: Tool will error because the path is a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and the tool returned an error (access denied), so the prediction is correct."
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent_dir_xyz\", \"sort_by\": \"name\", \"limit\": 5}",
+      "predicted": "error: The tool will error with [Errno 2] No such file or directory: '/nonexistent_dir_xyz'.",
+      "actual": "error: [Errno 2] No such file or directory: '/nonexistent_dir_xyz'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message for a non-existent directory."
+    },
+    {
+      "intent": "{\"path\": \"/etc/hosts\"}",
+      "predicted": "error: The tool will error because the path is a file, not a directory; may return an 'Access denied' message or unexpected listing.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and the tool returned an access denied error, so prediction was correct."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\"}",
+      "predicted": "error: The tool will error because the path points to a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error and the tool returned an error, so the prediction was correct."
+    },
+    {
+      "intent": "{\"path\": \"/etc/passwd\", \"sort_by\": \"name\", \"limit\": 10}",
+      "predicted": "error: The tool will produce an error because the path '/etc/passwd' is a file, not a directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error, and an error occurred; the actual reason differs but the prediction of error is correct."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"name\", \"limit\": 0}",
+      "predicted": "success: Tool will list all files in /tmp sorted by name with no effective limit.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n... (and 55 more)\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The prediction matches the actual output: listing all files sorted by name with no effective limit."
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"invalid\", \"limit\": 5}",
+      "predicted": "success: The tool will accept the invalid sort_by value and list files in /tmp sorted by default (name) because invalid enum values are silently accepted.",
+      "actual": "error: Directory Listing: /tmp (Total files found: 57) (Sorted by: invalid)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-04 12:41   <D",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would accept the invalid 'sort_by' value and return a file listing."
+    },
+    {
+      "intent": "{\"path\": \"/root\"}",
+      "predicted": "success: List files in /root directory, returning a table with Type, Date, Size, and Name columns.",
+      "actual": "error: [Errno 13] Permission denied: '/root'",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but the tool returned a permission denied error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp\", \"sort_by\": \"size\", \"limit\": 1}",
+      "predicted": "success: It will return a formatted table with the single largest file in /tmp, sorted by size, including type, date, size, and name, along with total file count and sort order.",
+      "actual": "success: Directory Listing: /tmp (Total files found: 55) (Sorted by: size)\nType   Date               Size       Name\n------------------------------------------------------------\n[FILE] 2026-06-04 21:50   145.2",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual output matches the predicted formatted table with the largest file, total count, and sort order, albeit with an additional note about remaining files.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/proc\", \"sort_by\": \"date\", \"limit\": 5}",
+      "predicted": "success: It will list up to 5 files in /proc sorted by date, returning a formatted table with Type, Date, Size, Name columns.",
+      "actual": "success: Access denied: /proc",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success, but the tool returned an 'Access denied' error due to permissions, indicating the prediction was incorrect.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/\"}",
+      "predicted": "success: List files in the root directory, returning a formatted table of files and directories.",
+      "actual": "success: Directory Listing: / (Total files found: 20) (Sorted by: name)\nType   Date               Size       Name\n------------------------------------------------------------\n[DIR]  2026-06-03 19:15   <DIR>   ",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a successful listing of root directory files in a formatted table, which matches the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/etc/hosts\"}",
+      "predicted": "error: Path '/etc/hosts' is a file, not a directory, so tool may fail with error or unexpected behavior like listing parent directory.",
+      "actual": "success: Access denied: /etc",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error, and the tool returned an error ('Access denied'), confirming the prediction of failure.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.62,
+  "uses": 65,
+  "success": 41,
+  "fail": 24,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T19:08:05.233533+00:00",
+  "updated_at": "2026-06-04T20:59:42.063291+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 3
+}

@@ -1,0 +1,126 @@
+{
+  "tool": "replace_editor_selection",
+  "schema_version": 1,
+  "tool_schema_hash": "88db6c0fd3cb720b",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use when the user has marked a selection in the Document Editor (e.g., a placeholder or sentence) and requests replacement or editing of that selection.",
+    "output_shape": "The tool replaces the marked selection with the provided new_text. No return value from the tool; changes are reflected in the editor.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Both 'selection_index' (integer) and 'new_text' (string) are required parameters. The only error observed due to missing required fields or type errors was: 'Error: No active session (replace in edito",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The tool is only available in the Web UI with an active chat session; attempting to use it in a different context results in the session error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure you are in a Web UI chat session with an active document editor.",
+      "Confirm that the user has marked a selection in the editor (e.g., highlighted text or a placeholder).",
+      "Identify the selection index (0-based) corresponding to the marked region to be replaced.",
+      "Determine the exact replacement text (new_text) as requested by the user.",
+      "Call the replace_editor_selection tool with selection_index (integer) and new_text (string)."
+    ],
+    "verification": [
+      "After calling the tool, verify that the marked region in the editor has been replaced with the new_text.",
+      "If an error occurs, check the error message. The only observed error is the session error, indicating the tool is not available in the current context."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required fields: selection_index, new_text",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type error: selection_index must be an integer",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type error: selection_index must be an integer",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"selection_index\": \"not_an_int\", \"new_text\": \"\"}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{\"selection_index\": 0}",
+      "predicted": "error: The tool call will fail because the required 'new_text' parameter is missing, causing an error like 'Error: No active session (replace in editor)' due to missing required fields.",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error, even though the specific error message differed, indicating understanding of the tool's requirements.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will fail because both required arguments 'selection_index' and 'new_text' are missing, resulting in a missing parameters error.",
+      "actual": "error: Error: No active session (replace in editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error, and the tool call did indeed produce an error.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:06:41.592901+00:00",
+  "updated_at": "2026-06-05T01:08:24.121887+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

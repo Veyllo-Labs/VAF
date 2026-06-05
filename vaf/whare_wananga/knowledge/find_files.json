@@ -1,0 +1,214 @@
+{
+  "tool": "find_files",
+  "schema_version": 1,
+  "tool_schema_hash": "cfac14a041eb1f5b",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool to recursively search for files matching a glob pattern, e.g., finding all .txt files or a specific file name. It outputs the full paths of matches.",
+    "output_shape": "Success messages: 'Found N files:' followed by newline-separated paths, or 'No files found matching pattern.' Error messages: 'Access denied: VAF program directory is protected' (when default or explicit path points to a protected directory). No other error types observed.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Pattern argument is required but its absence error was not observed in attempts; the tool definition marks it required, so omitting it likely causes an error like 'parameter pattern is required' (not ",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string for path (path='') defaults to current working directory, which may be protected; observed error: 'Access denied: VAF program directory is protected'.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing a file path instead of a directory path does not error but returns 'No files found matching pattern.' – this can mislead users expecting an error or a match.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid glob patterns (e.g., an unclosed bracket like '[') are silently treated as valid and produce 'No files found matching pattern.' – no error feedback.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If no files match the pattern, the tool reports success with 'No files found matching pattern.' – not an error but could be unexpected if pattern is incorrectly typed.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "1. Ensure the `pattern` argument is always provided (e.g., '*.py', 'app.*', '**/test*').",
+      "2. Optionally provide a `path` argument pointing to a directory to search in. If omitted, the current working directory is used (which may be restricted).",
+      "3. If the pattern includes special glob characters (like `*`, `?`, brackets), they are interpreted as glob syntax; literal matches require escaping (though not verified).",
+      "4. Call the tool and check the response. A success with zero files may indicate no matches or an incorrect pattern/path.",
+      "5. If an 'Access denied' error occurs, change `path` to a non-protected directory or provide a different root."
+    ],
+    "verification": [
+      "1. Verify the tool returned a status of 'success' and not an error message.",
+      "2. If 'success' with files listed, confirm the expected files are present in the output.",
+      "3. If 'success' with 'No files found matching pattern.', double-check the pattern syntax and that the path is a directory containing matching files.",
+      "4. If error includes 'Access denied', ensure the path is not a protected area (e.g., /mnt/veyllo1/VAF) and retry with an accessible location."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"*.txt\"}",
+      "predicted": "success: It will return a list containing at least the file seed.txt.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\", \"pattern\": \"*.txt\"}",
+      "predicted": "error: The tool will error because the path argument is a file, not a directory, and it cannot search recursively in a file.",
+      "actual": "error: Access denied: VAF program directory is protected",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"*.log\"}",
+      "predicted": "success: It will succeed and report that 0 files were found, since no .log files exist in that directory.",
+      "actual": "success: No files found matching pattern.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"pattern\": \"*.txt\"}",
+      "predicted": "error: The path parameter specifies a file, not a directory, so the tool will error (e.g., 'Not a directory').",
+      "actual": "success: No files found matching pattern.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"pattern\": \"*.md\"}",
+      "predicted": "error: The tool will return an access denied error because the default path is the current working directory /mnt/veyllo1/VAF, which is a protected directory.",
+      "actual": "error: Access denied: VAF program directory is protected",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The predicted access denied error matches the actual tool response."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"[\"}",
+      "predicted": "error: The tool will return an error because the glob pattern is invalid (unclosed bracket).",
+      "actual": "success: No files found matching pattern.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a tool error due to an invalid pattern, but the actual response was a successful 'no files found'."
+    },
+    {
+      "intent": "{\"path\": \"\", \"pattern\": \"*.txt\"}",
+      "predicted": "error: Tool will error because path is an empty string, which is not a valid directory path.",
+      "actual": "error: Access denied: VAF program directory is protected",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and the tool returned an error."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"seed.txt\"}",
+      "predicted": "success: The tool will find one file (seed.txt) and return a success message with its full path.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"*.txt\"}",
+      "predicted": "success: It will find at least one file (seed.txt) and return a list of file paths.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"seed.txt\"}",
+      "predicted": "success: The tool will find seed.txt in the given directory and return a success message with its full path.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would find the file and return its full path."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"*.txt\"}",
+      "predicted": "success: The tool will return success with a message indicating one file found, since seed.txt exists in that directory.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted success and that exactly one file, seed.txt, would be found."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"*.txt\"}",
+      "predicted": "success: The tool will find one file (seed.txt) and return a success message with its full path.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted finding one file named seed.txt, and the actual response confirms exactly that."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"**/*.txt\"}",
+      "predicted": "success: The tool will find all .txt files recursively in /tmp/claude-1000/ww_seed and return a success message with their paths.",
+      "actual": "success: No files found matching pattern.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted the tool would find .txt files, but the actual response found no matching files.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\", \"pattern\": \"*\"}",
+      "predicted": "success: It will return 'No files found matching pattern.' because the path is a file, not a directory, so no files match inside it.",
+      "actual": "error: Access denied: VAF program directory is protected",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success with a specific output, but actual response was an access denied error, indicating the prediction was incorrect.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/subdir\", \"pattern\": \"seed.txt\"}",
+      "predicted": "success: It will find and list the file 'seed.txt' in the specified subdirectory.",
+      "actual": "success: No files found matching pattern.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success and finding the file, but the tool returned no files found.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"seed.???\"}",
+      "predicted": "success: The tool will recursively search for files matching the glob pattern 'seed.???' in /tmp/claude-1000/ww_seed and return either a list of found paths or a 'No files found' success message.",
+      "actual": "success: Found 1 files:\n/tmp/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted success and the tool returned a list of found files matching the pattern.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"pattern\": \"subdir/seed.txt\"}",
+      "predicted": "success: Assuming the directory is accessible, the tool will successfully search for files matching 'subdir/seed.txt' and either list matching paths or report no matches.",
+      "actual": "success: No files found matching pattern.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would search and possibly report no matches, which matched the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.71,
+  "uses": 17,
+  "success": 13,
+  "fail": 4,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:52:59.721620+00:00",
+  "updated_at": "2026-06-04T23:58:14.253265+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

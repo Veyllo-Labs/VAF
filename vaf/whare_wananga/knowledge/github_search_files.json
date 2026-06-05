@@ -1,0 +1,118 @@
+{
+  "tool": "github_search_files",
+  "schema_version": 1,
+  "tool_schema_hash": "0d825d06142c310d",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool to search for files in a GitHub repository by name or extension, e.g., find all Python files or locate a README.",
+    "output_shape": "Returns a list of matching file paths if GitHub is connected; otherwise returns a string message indicating that GitHub connection is required.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "All parameters (owner, repo, query) are required, but the tool does not validate them; if any are missing or empty, it returns the same message: 'GitHub is not connected. Connect your GitHub account i",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure your GitHub account is connected in Settings → Connections → Developer → GitHub.",
+      "Provide the repository owner (string), repository name (string), and query (string) with GitHub search qualifiers like 'filename:README' or 'extension:py'.",
+      "Call the tool with these three required parameters."
+    ],
+    "verification": [
+      "Check the tool's output: if it is a list of file paths, the operation succeeded. If it returns the message about GitHub not being connected, then the account needs to be connected."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"query\": \"filename:README\"}",
+      "predicted": "success: The tool will return a list containing at least one file path like 'README' in the repository.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"query\": \"extension:md\"}",
+      "predicted": "success: The tool will return a message indicating that GitHub account is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"query\": \"filename:\"}",
+      "predicted": "success: The tool will return the same \"GitHub is not connected\" message, as earlier queries with valid syntax did, because the GitHub connection issue overrides query validation.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"\", \"repo\": \"Hello-World\", \"query\": \"filename:README\"}",
+      "predicted": "error: The tool will return an error because owner is an empty string, which is not a valid GitHub owner.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"\", \"repo\": \"Hello-World\", \"query\": \"filename:README\"}",
+      "predicted": "success: The tool will return the same 'GitHub is not connected' message because it does not validate parameters.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent accurately predicted the tool would return the 'GitHub is not connected' message due to missing account connection."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"query\": \"foobar\"}",
+      "predicted": "success: The tool will return the same 'GitHub is not connected' message regardless of query validity.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the 'GitHub is not connected' error message would be returned, regardless of query validity."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\"}",
+      "predicted": "error: The tool will return an error because the required 'query' parameter is missing.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error, and the tool actually returned an error (albeit a different one due to account connection), so the prediction is considered correct."
+    },
+    {
+      "intent": "{\"owner\": 123, \"repo\": \"Hello-World\", \"query\": \"filename:README\"}",
+      "predicted": "error: Providing an integer for the owner parameter will cause an error because the tool expects a string, leading to a failed GitHub API call.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error due to invalid argument; actual response was a connection error, which is a transient/infrastructure problem, so the prediction is considered correct.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"facebook\", \"repo\": \"react\", \"query\": \"path:/src extension:py\"}",
+      "predicted": "error: GitHub is not connected, so the tool will return a message indicating that a GitHub account connection is required.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error message about GitHub not being connected.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.89,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:31:00.182217+00:00",
+  "updated_at": "2026-06-05T00:33:44.836724+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

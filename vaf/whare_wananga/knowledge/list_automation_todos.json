@@ -1,0 +1,117 @@
+{
+  "tool": "list_automation_todos",
+  "schema_version": 1,
+  "tool_schema_hash": "2755a0704eb31fa6",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "To view the current list of automation to-dos, including their creation date, due date, and completion status.",
+    "output_shape": "Returns a string message indicating either the list of to-dos or that no to-dos exist yet.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required parameters; the tool accepts any argument without error. No error is returned for missing, empty, or wrong-type inputs.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with no arguments or an empty object ({}).",
+      "The tool will return a success message listing to-dos or a note that none exist."
+    ],
+    "verification": [
+      "Check that the returned message indicates successful retrieval (e.g., 'No automation to-dos yet. Use add_automation_todo to add one.')."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool should return a list of automation to-dos with created_at, due_at, and done fields.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"extra_param\": \"test\"}",
+      "predicted": "error: Since the tool defines no parameters, passing an unexpected argument should result in an error.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument but a string was provided, so it should fail.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing a string instead of an object should cause a validation error because the tool expects an object.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept an integer argument and return the same message about no automation to-dos.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success and the tool's actual response matched the expected message about no automation to-dos."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Passing an integer instead of an object will still succeed because the tool ignores arguments.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success and the actual tool response was successful, so the prediction was correct."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool should return a message indicating no automation to-dos exist yet.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return a message indicating no automation to-dos exist yet, which matches the actual response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Returns a message indicating either the list of to-dos or that no to-dos exist yet.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted outcome: a message indicating no to-dos exist yet.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"status\": \"incomplete\"}",
+      "predicted": "success: The tool will return a message listing automation to-dos with status 'incomplete' if any exist, or a note that none exist.",
+      "actual": "success: No automation to-dos yet. Use add_automation_todo to add one.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response matched the agent's prediction of returning a note that no incomplete to-dos exist.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.67,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:39:15.120716+00:00",
+  "updated_at": "2026-06-05T00:40:59.975119+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

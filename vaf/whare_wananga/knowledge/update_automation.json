@@ -1,0 +1,186 @@
+{
+  "tool": "update_automation",
+  "schema_version": 1,
+  "tool_schema_hash": "0de5d59ab10383fb",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when a user wants to modify an existing automation task (e.g., change its time, frequency, prompt, output path, or parameters). Always first retrieve the automation ID using `list_automations` and inspect current values with `read_automation` to avoid accidental overwrites.",
+    "output_shape": "Returns a confirmation message on success or an error string on failure, e.g., 'Automation updated successfully.' or an error message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument `task_id`. If missing or empty, error: 'Error: No task ID provided. Use `list_automations` to see available task IDs.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "task_id must be a string; empty string triggers the same error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Other parameters are optional, but if `frequency` is provided, it must be one of: once, hourly, daily, weekly, monthly. (Error not observed because task_id check fails first.)",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "When changing `time`, the new time must be at least 10 minutes apart from all other automations; otherwise the system will return an error (exact text not observed in probes).",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "1. Call `list_automations` to obtain the current automation tasks and find the correct `task_id` for the one the user wants to update.",
+      "2. Optionally call `read_automation` with that `task_id` to see the current values (recommended to avoid unintended changes).",
+      "3. Call `update_automation` with the `task_id` and the fields to update (name, prompt, frequency, time, weekday, day, output_path, parameters). Only include fields that should change.",
+      "4. If updating `time`, ensure the new time is at least 10 minutes away from all other automations' times, or the call will fail."
+    ],
+    "verification": [
+      "Verify that `task_id` is a non-empty string. If missing or empty, the tool returns 'Error: No task ID provided. Use `list_automations` to see available task IDs.'",
+      "After a successful update, expect a confirmation message. If an error occurs, read the error to diagnose the issue (e.g., time conflict, invalid frequency)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: empty or invalid task_id",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"frequency\": \"invalid\"}",
+      "predicted": "error: invalid frequency value, must be one of: once, hourly, daily, weekly, monthly",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: task not found",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'task_id' must be a string",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error due to missing required parameter task_id; actual error matches the expectation."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Task not found.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error when calling the tool with no arguments."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Task not found. Use `list_automations` to see available task IDs.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted 'Task not found' error, but actual error was 'No task ID provided', showing incorrect understanding of the missing argument."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: task_id must be a string",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error when no task ID was provided."
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message for missing task ID."
+    },
+    {
+      "intent": "{\"task_id\": null}",
+      "predicted": "error: task_id must be a string",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing task_id, and the actual response confirmed that no task ID was provided."
+    },
+    {
+      "intent": "{\"frequency\": \"every minute\"}",
+      "predicted": "error: Error because task_id is missing or empty, triggering 'No task ID provided' error.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error due to missing task_id, matching the actual tool response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"time\": \"25:00\"}",
+      "predicted": "error: The time '25:00' is invalid because hours must be between 00 and 23.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error about invalid time, but actual error was missing task ID, showing misunderstanding of tool requirements.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"frequency\": 5}",
+      "predicted": "error: The tool call will fail because the required 'task_id' argument is missing.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error due to missing 'task_id' argument.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.87,
+  "uses": 15,
+  "success": 0,
+  "fail": 15,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:33:28.613736+00:00",
+  "updated_at": "2026-06-05T01:36:24.673931+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

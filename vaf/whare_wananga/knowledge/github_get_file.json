@@ -1,0 +1,147 @@
+{
+  "tool": "github_get_file",
+  "schema_version": 1,
+  "tool_schema_hash": "17fa024fc03d5b4d",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to retrieve the content of a file from a GitHub repository. Requires GitHub to be connected via Settings → Connections → Developer → GitHub.",
+    "output_shape": "Returns the file content as a string. For files >300 lines without a range, only first 200 lines are returned with a size warning and navigation hint. If GitHub not connected, returns a connection error message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "GitHub must be connected before use; otherwise the tool always returns 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list you",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Required parameters: owner, repo, path. Missing any of these does not produce a separate validation error because the connection check fails first; no explicit error for missing required field was obs",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "For large files (>300 lines), use start_line and end_line to read specific sections; otherwise only the first 200 lines are returned.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The ref parameter is optional; default is the repository's default branch.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure GitHub account is connected in the tool's settings.",
+      "Provide owner (username or org), repo name, and file path (required).",
+      "Optionally specify ref (branch/tag/commit) and line range (start_line, end_line) for large files.",
+      "Call the tool.",
+      "If the response is the connection error, connect GitHub and retry."
+    ],
+    "verification": [
+      "Check if the returned content matches expected file contents (or part of it).",
+      "If an error message about GitHub connection appears, verify that GitHub is connected and re-run.",
+      "If file not found, the tool will likely return 'GitHub is not connected' (as seen in attempts) so ensure connection is valid first."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README.md\"}",
+      "predicted": "success: The file README.md exists in octocat/Hello-World, so the tool should return its content.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"nonexistent.txt\"}",
+      "predicted": "error: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"torvalds\", \"repo\": \"linux\"}",
+      "predicted": "error: Tool will return an error about missing required parameter 'path'.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"repo\": \"Hello-World\", \"path\": \"README.md\"}",
+      "predicted": "error: The tool should return a parameter validation error because 'owner' is required.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README.md\"}",
+      "predicted": "success: Tool will return the 'GitHub is not connected' message because GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return the GitHub not connected message."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README.md\"}",
+      "predicted": "success: The tool will return a connection error message because GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return a connection error message due to GitHub not being connected."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"nonexistent.txt\"}",
+      "predicted": "success: expect the same 'GitHub is not connected' error message as before, regardless of invalid path.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected, matching the actual response."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README.md\", \"start_line\": 1}",
+      "predicted": "success: The tool will return the content of README.md starting from line 1, assuming GitHub is connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success, but the tool failed because GitHub account is not connected, indicating the agent did not understand the prerequisite.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"path\": \"README.md\", \"start_line\": 500}",
+      "predicted": "error: The call provides start_line but no end_line, which is likely invalid; the tool expects both parameters for a range, so it will return an error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error, and the tool returned an error (infrastructure issue), which counts as a correctly predicted error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"twbs\", \"repo\": \"bootstrap\", \"path\": \"dist\"}",
+      "predicted": "error: The path 'dist' is a directory, not a file, so the tool will return an error or fail to retrieve file content.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error, and the tool returned an error (connection issue), so prediction was correct.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.6,
+  "uses": 10,
+  "success": 10,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:11:29.304323+00:00",
+  "updated_at": "2026-06-05T00:14:49.335384+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

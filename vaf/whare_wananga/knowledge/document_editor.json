@@ -1,0 +1,165 @@
+{
+  "tool": "document_editor",
+  "schema_version": 1,
+  "tool_schema_hash": "231fcb77cb200ee7",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool when the user wants to open a document for viewing or editing in the Document Editor panel. It requires an active Web UI session.",
+    "output_shape": "On success, opens the document in the editor and returns a success message (not observed); on failure, returns an error string.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'path' must be provided; missing or empty returns 'Error: path is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If the file does not exist, returns 'Error: File not found: <path>'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If the path is a directory, returns 'Error: Not a file: <path>'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If no active Web UI session exists, returns 'Error: No active session (Document Editor is only available in the Web UI with an active chat session).'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the tool is called only when an active Web UI chat session is present.",
+      "Provide the full absolute path to the file as the 'path' argument.",
+      "Verify the file exists and is a regular file (not a directory).",
+      "Call the tool with the path."
+    ],
+    "verification": [
+      "Check that no error is returned.",
+      "If an error is returned, inspect the error message to determine the issue: missing path, file not found, not a file, or no active session."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "success: The file exists and is readable, so the editor should open with its contents.",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent/path.txt\"}",
+      "predicted": "error: The tool will return an error about no active session, regardless of path validity, because the session check occurs before path validation.",
+      "actual": "error: Error: File not found: /nonexistent/path.txt",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\"}",
+      "predicted": "error: The tool will return an error indicating that the path is a directory or not a valid file.",
+      "actual": "error: Error: Not a file: /tmp/claude-1000/ww_seed",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"README.md\"}",
+      "predicted": "error: The tool requires a full absolute path, so a relative path will likely produce a 'File not found' error.",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\"}",
+      "predicted": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{\"path\": \"\"}",
+      "predicted": "error: The tool will likely return an error indicating the file was not found, e.g., 'File not found: '.",
+      "actual": "error: Error: path is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error for an empty path, and the actual response was an error indicating path is required, matching the prediction."
+    },
+    {
+      "intent": "{\"path\": \"/mnt/veyllo1/VAF/README.md\"}",
+      "predicted": "error: The tool will return an error because there is no active session (Document Editor requires Web UI with active chat session), as seen in the first attempt when a valid file path was provided.",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error due to no active session, which matches the actual response."
+    },
+    {
+      "intent": "{\"path\": \"/dev/null\"}",
+      "predicted": "error: Error: Not a file: /dev/null",
+      "actual": "error: Error: Not a file: /dev/null",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message from the tool.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"C:\\\\Users\\\\Administrator\\\\Documents\\\\report.docx\"}",
+      "predicted": "success: The document at the given path will be opened in the Document Editor panel for viewing and editing.",
+      "actual": "error: Error: File not found: /mnt/veyllo1/VAF/C:\\Users\\Administrator\\Documents\\report.docx",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but the tool failed with a file-not-found error due to an invalid path.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/subdir/../seed.txt\"}",
+      "predicted": "success: The tool will normalize the path to /tmp/claude-1000/ww_seed/seed.txt and open that file in the Document Editor.",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success but the tool failed due to no active session, which is not a transient or infrastructure issue.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt/\"}",
+      "predicted": "error: The path ends with a slash, indicating a directory, so the tool will return 'Error: Not a file: /tmp/claude-1000/ww_seed/seed.txt/'.",
+      "actual": "error: Error: No active session (Document Editor is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and actual response was an error (transient session issue), so prediction is correct.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"~/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "error: The tool will return 'Error: File not found: ~/claude-1000/ww_seed/seed.txt' because the tilde '~' is not expanded, so the file path is invalid.",
+      "actual": "error: Error: File not found: /mnt/veyllo1/VAF/~/claude-1000/ww_seed/seed.txt",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted that the tilde would not be expanded, causing a file not found error, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.75,
+  "uses": 12,
+  "success": 0,
+  "fail": 12,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:44:31.184956+00:00",
+  "updated_at": "2026-06-04T23:48:13.894308+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

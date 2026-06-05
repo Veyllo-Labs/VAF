@@ -1,0 +1,170 @@
+{
+  "tool": "git_log",
+  "schema_version": 1,
+  "tool_schema_hash": "e014f74eeff30729",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "To view recent Git commit history and messages.",
+    "output_shape": "A string containing commit hashes and messages, or an error message, or 'No commits yet.'",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "This tool has no required parameters.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing a non-integer value for 'limit' (e.g., string, float, boolean) results in an error: '❌ Error getting log: Command ... returned non-zero exit status 128.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Passing limit=0 returns 'No commits yet.' which may be misinterpreted as an empty list.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Negative limit values are accepted but may return all commits instead of an error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with no arguments to show the default 10 most recent commits.",
+      "Optionally provide an integer 'limit' parameter to show a custom number of commits.",
+      "Interpret the returned string: it will contain commit history, 'No commits yet.' if no commits, or an error message if invalid input."
+    ],
+    "verification": [
+      "Verify that the output is a string and not a different type.",
+      "If a valid limit was given, confirm that the number of commit lines roughly matches the limit (up to total commits).",
+      "If an error message is returned, check that the limit was an invalid type (non-integer) and that the error text matches the expected pattern."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"limit\": 5}",
+      "predicted": "success: The tool will return the last 5 commits from the Git history in the current directory.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n7b20101 feat(whare_wananga): training CLI + write-tool gate bypass + canary declare\n0c364bc feat(whare_",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": -5}",
+      "predicted": "error: The tool will return an error because limit is negative.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n7b20101 feat(whare_wananga): training CLI + write-tool gate bypass + canary declare\n0c364bc feat(whare_",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": \"abc\"}",
+      "predicted": "error: The tool will return an error because limit is a string instead of an integer.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=abc', '--oneline']' returned non-zero exit status 128.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": 0}",
+      "predicted": "success: The tool will return an empty commit list because limit=0 means show zero commits.",
+      "actual": "success: No commits yet.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": 0}",
+      "predicted": "success: The tool will return 'Recent commits:' followed by no commit lines (empty output) because limit=0 effectively shows zero commits.",
+      "actual": "success: No commits yet.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a specific output 'Recent commits:' with no lines, but actual response was 'No commits yet.' indicating misunderstanding of tool behavior."
+    },
+    {
+      "intent": "{\"limit\": 5.5}",
+      "predicted": "error: The tool will fail because limit is a float, not an integer, causing git to treat it as an invalid max-count value.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=5.5', '--oneline']' returned non-zero exit status 128.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to invalid argument type (float instead of integer), and the actual tool response was indeed an error."
+    },
+    {
+      "intent": "{\"limit\": false}",
+      "predicted": "success: The tool will pass 'false' as --max-count to git log, which is an invalid value, so git will error and the tool will return an error message string.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=False', '--oneline']' returned non-zero exit status 128.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that passing 'false' as the limit would cause an error from git, and the actual response was an error."
+    },
+    {
+      "intent": "{\"limit\": 2.5}",
+      "predicted": "success: The tool will return an error message because '2.5' is not a valid integer for the git log --max-count parameter.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=2.5', '--oneline']' returned non-zero exit status 128.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": 5.5}",
+      "predicted": "error: The tool will return an error because limit is a float instead of an integer, as non-integer types are not accepted.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=5.5', '--oneline']' returned non-zero exit status 128.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": -3}",
+      "predicted": "error: The tool will return an error because git rejects negative values for the limit parameter.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n7b20101 feat(whare_wananga): training CLI + write-tool gate bypass + canary declare\n0c364bc feat(whare_",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error for negative limit, but the tool returned commits successfully, showing incorrect understanding."
+    },
+    {
+      "intent": "{\"limit\": 3}",
+      "predicted": "success: The tool will return the recent commits header and up to 3 commit lines from the git log of the current repository.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n7b20101 feat(whare_wananga): training CLI + write-tool gate bypass + canary declare\n0c364bc feat(whare_",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted output exactly."
+    },
+    {
+      "intent": "{\"limit\": 1}",
+      "predicted": "success: The tool will return the most recent commit in the format 'Recent commits:\\n<short hash> <message>'.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual tool response matches the predicted format and content."
+    },
+    {
+      "intent": "{\"limit\": 3}",
+      "predicted": "success: I expect the tool to return a string with the three most recent commits (if any) in the format 'Recent commits:\\n<hash> <message>\\n...'.",
+      "actual": "success: Recent commits:\n8c57607 fix(cli): bind interactive CLI to local-admin identity; quiet httpx logs\n7b20101 feat(whare_wananga): training CLI + write-tool gate bypass + canary declare\n0c364bc feat(whare_",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"limit\": \"abc\"}",
+      "predicted": "success: The tool will return an error message because 'abc' is not a valid integer for git log's --max-count parameter.",
+      "actual": "success: ❌ Error getting log: Command '['git', 'log', '--max-count=abc', '--oneline']' returned non-zero exit status 128.",
+      "match": true,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.64,
+  "uses": 14,
+  "success": 14,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:02:56.857407+00:00",
+  "updated_at": "2026-06-05T00:07:00.266210+00:00",
+  "challenge_passed": false,
+  "learn_mode": "probe",
+  "rounds": 2
+}

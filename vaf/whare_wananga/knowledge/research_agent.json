@@ -1,0 +1,151 @@
+{
+  "tool": "research_agent",
+  "schema_version": 1,
+  "tool_schema_hash": "f1c6252f226b9641",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Deep research (10+ sources), multi-perspective analysis, detailed reports.",
+    "output_shape": "A detailed report in html, markdown, or html_fragment format, containing multiple sections.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Using for simple lookups (weather, news, facts) instead of web_search.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "No validation errors observed for out-of-range max_results (0,11) or invalid language ('fr'); the tool accepted them silently.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Async nature: output is returned asynchronously via sub-agent, not immediately.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Deprecated parameters min_chars_empty and min_chars_ok are present but may not function as described.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "topic is required from description, but no probe tested missing topic; exact error text unknown.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Identify if the query requires deep research with multiple sources and perspectives.",
+      "Provide the topic as a string (required).",
+      "Optionally specify format (html, markdown, html_fragment), max_results (default 5), deep (default false), language (optional), min_words_target (default 500), min_words_ok_ratio (default 0.8).",
+      "The tool will execute asynchronously and produce a report."
+    ],
+    "verification": [
+      "Check that the output is a report in the specified format.",
+      "Verify that the report contains multiple sections covering the topic.",
+      "Ensure that the depth of analysis matches the 'deep research' intent."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"topic\": \"Recent breakthroughs in quantum computing\", \"format\": \"markdown\", \"max_results\": 5, \"deep\": false, \"language\": \"en\", \"min_words_target\": 300, \"sections\": [\"Current State\", \"Challenges\", \"Fu",
+      "predicted": "success: The call uses valid parameters within allowed ranges and a suitable research topic, so it should execute successfully and return a markdown report.",
+      "actual": "success: [SUBAGENT_ASYNC:61fe808f:research_agent] Sub-Agent running in separate terminal. Topic: Recent breakthroughs in quantum computing...",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"topic\": \"Latest developments in nuclear fusion\", \"format\": \"markdown\", \"max_results\": 5, \"deep\": false, \"language\": \"fr\", \"min_words_target\": 500, \"sections\": [\"Introduction\", \"Key Players\", \"Outloo",
+      "predicted": "error: The language parameter 'fr' is not in the allowed values ['de', 'en'], so the tool should return a validation error.",
+      "actual": "success: [SUBAGENT_ASYNC:a9b2ca6c:research_agent] Sub-Agent running in separate terminal. Topic: Latest developments in nuclear fusion...",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"topic\": \"Climate change impacts\", \"format\": \"markdown\", \"max_results\": 11, \"deep\": false, \"language\": \"en\", \"min_words_target\": 500, \"sections\": [\"Overview\"]}",
+      "predicted": "error: max_results out of allowed range (1-10), should return validation error.",
+      "actual": "success: [SUBAGENT_ASYNC:04003e3c:research_agent] Sub-Agent running in separate terminal. Topic: Climate change impacts...",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"topic\": \"Current global economic outlook\", \"format\": \"markdown\", \"max_results\": 0, \"deep\": false, \"language\": \"en\", \"min_words_target\": 500, \"min_words_ok_ratio\": 0.8, \"min_chars_empty\": 150, \"min_c",
+      "predicted": "error: The max_results value 0 is outside the allowed range 1-10, so the tool will return a validation error.",
+      "actual": "success: [SUBAGENT_ASYNC:18d1617b:research_agent] Sub-Agent running in separate terminal. Topic: Current global economic outlook...",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"format\": \"markdown\", \"max_results\": 3, \"deep\": false, \"language\": \"en\", \"min_words_target\": 500, \"sections\": [\"Introduction\", \"Conclusion\"]}",
+      "predicted": "error: Missing required 'topic' parameter should cause validation error.",
+      "actual": "error: Error: No topic provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a validation error due to missing required 'topic' parameter, which matches the actual error."
+    },
+    {
+      "intent": "{\"topic\": \"Recent AI developments\", \"format\": \"pdf\", \"max_results\": 5, \"deep\": false, \"language\": \"en\", \"min_words_target\": 500, \"sections\": [\"Introduction\", \"Key Developments\", \"Future Outlook\"]}",
+      "predicted": "error: The format 'pdf' is not in the allowed list [html, markdown, html_fragment], so the tool should return a validation error.",
+      "actual": "error: Error: format must be 'html', 'markdown', or 'html_fragment'.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a validation error because 'pdf' is not an allowed format."
+    },
+    {
+      "intent": "{\"format\": \"markdown\"}",
+      "predicted": "error: The tool will return an error because the required parameter 'topic' is missing.",
+      "actual": "error: Error: No topic provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool correctly returned an error for missing required parameter 'topic', matching the agent's prediction."
+    },
+    {
+      "intent": "{\"topic\": \"What is the capital of France?\", \"format\": \"html_fragment\", \"max_results\": 0, \"deep\": true, \"language\": \"de\", \"min_words_target\": 100, \"min_words_ok_ratio\": 0.5, \"min_chars_empty\": 0, \"min_",
+      "predicted": "success: The tool will return a short HTML fragment (likely in German) with a 'Fact check' section, but the report may be empty or trivial because max_results=0 prevents gathering sources for this simple fact ",
+      "actual": "success: [SUBAGENT_ASYNC:87c6a771:research_agent] Sub-Agent running in separate terminal. Topic: What is the capital of France?...",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an HTML fragment but the tool returned a sub-agent async message, not the expected output.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"topic\": \"Global renewable energy statistics 2025\", \"format\": \"html_fragment\", \"max_results\": 0, \"deep\": true, \"language\": \"en\", \"min_words_target\": 1000, \"min_words_ok_ratio\": 1.5, \"sections\": [\"Ove",
+      "predicted": "success: The tool will accept the call and produce an html_fragment report with the specified sections, but since max_results=0, it may have no sources and potentially minimal content.",
+      "actual": "success: [SUBAGENT_ASYNC:9fb418f3:research_agent] Sub-Agent running in separate terminal. Topic: Global renewable energy statistics 2025...",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The prediction of success is correct as the tool accepted the call and is executing asynchronously, matching the expected behavior.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"topic\": \"What is the current weather in London?\", \"format\": \"plaintext\", \"max_results\": 3, \"deep\": false, \"language\": \"en\"}",
+      "predicted": "error: The tool is misused for a simple weather lookup instead of a deep research task, likely resulting in an error or inappropriate output.",
+      "actual": "error: Error: format must be 'html', 'markdown', or 'html_fragment'.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error and the actual response was an error, even if the specific error message differs slightly.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.6,
+  "uses": 10,
+  "success": 6,
+  "fail": 4,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:17:09.361036+00:00",
+  "updated_at": "2026-06-05T01:20:46.927914+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

@@ -1,0 +1,127 @@
+{
+  "tool": "read_automation",
+  "schema_version": 1,
+  "tool_schema_hash": "6691ec5e8d5087e3",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool when the user asks about what an automation does or wants to see the full content of an automation.",
+    "output_shape": "Returns the full content of the automation task including prompt, parameters, schedule, and all details, or an error message if the task is not found or no ID provided.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The 'task_id' argument is required. If not provided or empty, the tool returns: 'Error: No task ID provided. Use `list_automations` to see available task IDs.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If the task_id does not correspond to an existing automation, the tool returns: 'Error: Automation task '{task_id}' not found. Use `list_automations` to see available tasks.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Identify the task ID from the user query or from list_automations.",
+      "Ensure task_id is a string (e.g., '904afb26').",
+      "Call read_automation with the task_id.",
+      "If successful, return the automation details.",
+      "If error, handle: if 'No task ID provided', ask for task_id; if 'not found', inform user that task doesn't exist and suggest listing automations."
+    ],
+    "verification": [
+      "Check that the returned content includes expected fields (prompt, parameters, schedule).",
+      "If error, verify the error message matches expected patterns ('No task ID provided' or 'Automation task ... not found').",
+      "Ensure the task_id matches the one requested."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"task_id\": \"00000000\"}",
+      "predicted": "error: The tool will return an error indicating that the task with ID '00000000' was not found or does not exist.",
+      "actual": "error: Error: Automation task '00000000' not found. Use `list_automations` to see available tasks.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"904afb26\"}",
+      "predicted": "success: The automation task with ID '904afb26' exists and the tool will return its full content including prompt, parameters, schedule, and all details.",
+      "actual": "error: Error: Automation task '904afb26' not found. Use `list_automations` to see available tasks.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": 12345678}",
+      "predicted": "error: The tool will return a validation error because task_id must be a string, not an integer.",
+      "actual": "error: Error: Automation task '12345678' not found. Use `list_automations` to see available tasks.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: The tool will return an error that the automation task with ID '' was not found, because an empty string is not a valid task ID.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: The tool will return an error indicating 'No task ID provided' because the task_id is empty.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing task_id."
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: The tool will return an error indicating no task ID provided because the task_id is an empty string.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error when an empty task_id was provided."
+    },
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: The tool will return 'Error: No task ID provided.' because the task_id is an empty string.",
+      "actual": "error: Error: No task ID provided. Use `list_automations` to see available task IDs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error when no task ID is provided."
+    },
+    {
+      "intent": "{\"task_id\": \" 904afb26\"}",
+      "predicted": "error: The task_id has a leading space, so the tool will likely return an error that the automation ' 904afb26' is not found.",
+      "actual": "error: Error: Automation task ' 904afb26' not found. Use `list_automations` to see available tasks.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to the leading space in the task ID, matching the actual tool response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"task_id\": \"904afb26-0000-0000-0000-000000000000\"}",
+      "predicted": "error: Automation task '904afb26-0000-0000-0000-000000000000' not found.",
+      "actual": "error: Error: Automation task '904afb26-0000-0000-0000-000000000000' not found. Use `list_automations` to see available tasks.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the automation task would not be found, and the actual error message matched the prediction.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.89,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:01:54.353195+00:00",
+  "updated_at": "2026-06-05T01:03:43.254915+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

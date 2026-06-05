@@ -1,0 +1,124 @@
+{
+  "tool": "add_automation_note",
+  "schema_version": 1,
+  "tool_schema_hash": "a632f84d99fe9916",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to remember something for automation planning; it adds a note to the automation calendar's Note section.",
+    "output_shape": "Returns a confirmation message indicating the note was added successfully.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "content is required: missing, empty, or null value results in error: 'error: Error: content is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "content must be a string; other types cause the same error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide the required 'content' parameter as a non-empty string.",
+      "Optionally provide a 'title' parameter as a string.",
+      "Call the add_automation_note tool with these parameters."
+    ],
+    "verification": [
+      "The tool returns a success confirmation if the note was added.",
+      "Alternatively, check the automation calendar's Note section to see the note."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'content'",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"content\": \"\"}",
+      "predicted": "error: empty value rejected",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"content\": null}",
+      "predicted": "error: null value rejected",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: content must be a string",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: content is required.",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: content is required.",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required content."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: content is required.",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The predicted error matches the actual tool response exactly."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because the required 'content' parameter is missing.",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required parameter.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because the required 'content' parameter is missing.",
+      "actual": "error: Error: content is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would error due to missing required 'content' parameter.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:17:12.986236+00:00",
+  "updated_at": "2026-06-04T23:18:18.314960+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

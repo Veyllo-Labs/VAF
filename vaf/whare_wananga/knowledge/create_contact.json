@@ -1,0 +1,129 @@
+{
+  "tool": "create_contact",
+  "schema_version": 1,
+  "tool_schema_hash": "1d0dd646e17c0f40",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to create a new contact in the central contact list.",
+    "output_shape": "Returns a JSON object representing the new contact, including a contact_id for future updates or deletions.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required field 'name': error: name is required for create_contact.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string for 'name': error: name is required for create_contact.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Non-string type for 'name': error: name is required for create_contact.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide a non-empty string for the required parameter 'name'.",
+      "Optionally include any of the optional parameters: email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user.",
+      "Execute the tool call with the prepared parameters."
+    ],
+    "verification": [
+      "Check that the tool returns a JSON object with a 'contact_id' field, indicating successful creation.",
+      "If an error is returned, verify that 'name' is provided and is a non-empty string."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'name'",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"\"}",
+      "predicted": "error: empty name rejected",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: name must be a string",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: name must be a string",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": null}",
+      "predicted": "error: error: name is required for create_contact.",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error that name is required."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: name is required for create_contact.",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message that the tool returned."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: name must be a string",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error due to missing name, and the actual response confirmed that name is required."
+    },
+    {
+      "intent": "{\"allow_as_assistant_user\": \"true\"}",
+      "predicted": "error: Missing required field 'name' will cause an error.",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted that missing required field 'name' would cause an error, and actual response confirmed this.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"email\": 123}",
+      "predicted": "error: Missing required field 'name' will cause an error: name is required for create_contact.",
+      "actual": "error: name is required for create_contact.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the missing 'name' field would cause an error, and the actual response confirmed that error.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T21:27:58.419485+00:00",
+  "updated_at": "2026-06-04T22:14:35.051293+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

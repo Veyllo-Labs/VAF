@@ -1,0 +1,121 @@
+{
+  "tool": "create_agent_tool",
+  "schema_version": 1,
+  "tool_schema_hash": "d0bd8bdebcd0e415",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to create, edit, delete, or list custom Python tools for the agent. It requires admin privileges; regular users cannot access it.",
+    "output_shape": "On success, returns a confirmation message (e.g., 'Tool created successfully') or a list of previously created tools. On failure, returns an error string such as the security error observed.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Tool 'create_agent_tool' requires an admin session. All probe attempts returned the same security error: 'error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not ",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "1. Ensure you have admin privileges; otherwise the tool will not execute.",
+      "2. Set the 'action' parameter to one of: 'create', 'edit', 'delete', 'list'.",
+      "3. For 'create' or 'edit', provide both 'tool_name' (snake_case) and 'code' (full Python source containing a BaseTool subclass).",
+      "4. For 'delete', provide 'tool_name' only.",
+      "5. For 'list', no additional parameters are required.",
+      "6. Call the tool with the constructed parameters."
+    ],
+    "verification": [
+      "Check the tool's response: confirmation for create/edit/delete, or a list for list action. On error, examine the error message to identify the issue (e.g., missing required field, invalid code, or ins"
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Security Error: Tool 'create_agent_tool' requires an admin session",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"tool_name\": \"\"}",
+      "predicted": "error: Security Error: Tool requires admin session",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Security Error: Tool 'create_agent_tool' requires an admin session.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"action\": \"\", \"tool_name\": \"\", \"code\": \"\"}",
+      "predicted": "error: error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{\"action\": \"\"}",
+      "predicted": "error: Security Error: Tool 'create_agent_tool' requires an admin session.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the security error due to missing admin session."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the security error because the tool requires an admin session, matching the actual response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will return a security error because the user lacks admin privileges, as observed in previous attempts.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted a security error due to lacking admin privileges, and the actual response confirmed that exact error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"tool_name\": \"test_tool\"}",
+      "predicted": "error: The tool call will fail because it requires an admin session and lacks the required 'action' parameter.",
+      "actual": "error: Security Error: Tool 'create_agent_tool' requires an admin session. This action is not available for regular user accounts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error, and the actual response was an error.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:22:09.792905+00:00",
+  "updated_at": "2026-06-04T23:23:39.399310+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

@@ -1256,6 +1256,21 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             agent._session_id = current_session.id
                             agent._register_session()
                         
+                        # Timer fired: render the message proactively as the assistant — no LLM turn.
+                        from vaf.core.timers import TIMER_MSG_PREFIX as _TIMER_PREFIX
+                        if str(raw_input).startswith(_TIMER_PREFIX):
+                            timer_msg = str(raw_input)[len(_TIMER_PREFIX):]
+                            tui.message_box(timer_msg, role="assistant")
+                            try:
+                                if current_session is not None:
+                                    current_session.add_message("assistant", timer_msg)
+                                    session_mgr.save(current_session)
+                                if isinstance(getattr(agent, "history", None), list):
+                                    agent.history.append({"role": "assistant", "content": timer_msg})
+                            except Exception:
+                                pass
+                            continue
+
                         # Handle System Commands from Web UI
                         if str(raw_input).startswith("__CMD__"):
                             try:

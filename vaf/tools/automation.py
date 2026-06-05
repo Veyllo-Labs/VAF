@@ -40,9 +40,9 @@ class AutomationTool(BaseTool):
     name = "create_automation"
     permission_level = "write"
     side_effect_class = "reversible"
-    description = """Create a scheduled automation task. Use frequency='once' for one-time timers, reminders, or delayed actions (runs exactly once at the given time, then self-deletes). Use frequency='daily'/'weekly'/'monthly'/'hourly' only for recurring schedules.
-Use this when user wants to schedule recurring tasks or a one-time task:
-- Once (einmalig): single run, automatically deleted after execution. Use for any one-time reminder or delayed task (e.g. 'Remind me tomorrow at 10:00', 'Run this script tonight at 23:00').
+    description = """Create a scheduled automation task that runs a prompt at a specific clock time. Use frequency='once' for a one-time task or reminder at a given clock time (runs exactly once, then self-deletes). Use frequency='daily'/'weekly'/'monthly'/'hourly' only for recurring schedules. For a SHORT relative delay that should fire proactively in the live chat (e.g. 'in 1 minute', 'in 90 seconds'), use the set_timer tool instead — not this one.
+Use this when user wants to schedule recurring tasks or a one-time task at a clock time:
+- Once (einmalig): single run at a clock time, automatically deleted after execution. Use for a one-time task or reminder scheduled to a specific time (e.g. 'Remind me tomorrow at 10:00', 'Run this script tonight at 23:00'). For 'in N seconds/minutes' use set_timer instead.
 - Daily (täglich), weekly (wöchentlich, use weekday e.g. monday), monthly (monatlich, use day 1-31), hourly (stündlich)
 - Daily news/weather reports, periodic backups, scheduled reminders, regular document generation
 
@@ -78,7 +78,7 @@ Use this when user wants to schedule recurring tasks or a one-time task:
 - Inform user: "I'll update the existing automation [name] instead of creating a new one"
 
 3b. **FREQUENCY — CRITICAL: NEVER assume a recurring schedule!**
-   - Set `frequency='once'` for ANY one-time task (reminders, "do this tomorrow", "run this at 10:00", etc.)
+   - Set `frequency='once'` for a one-time task scheduled to a clock time (reminders, "do this tomorrow", "run this at 10:00", etc.). For a short relative delay that fires in the current chat ("in N seconds/minutes"), use set_timer instead.
    - `frequency='once'` means: run **exactly once** and then the automation is automatically deleted. **No repeat.**
    - Only set `frequency` to `daily` / `weekly` / `monthly` / `hourly` when the user has **EXPLICITLY** asked for a recurring schedule (e.g. "every day", "every Monday", "täglich", "wöchentlich").
    - If the user says "remind me tomorrow at 10" → `frequency='once'`, `time='10:00'`. **No delay, no repeat.**
@@ -115,9 +115,9 @@ Use this when user wants to schedule recurring tasks or a one-time task:
                 "enum": ["once", "hourly", "daily", "weekly", "monthly"],
                 "description": (
                     "How often to run. REQUIRED — you MUST ask the user explicitly if not stated.\n"
-                    "- 'once': ONE-TIME timer — runs exactly once at the given time, then automatically deleted. "
-                    "Use for any single reminder, delayed action, or one-off task ('remind me tomorrow at 10', "
-                    "'run this at 22:00 tonight', 'send report next Friday at 09:00 once'). DEFAULT — use unless user explicitly wants repetition.\n"
+                    "- 'once': ONE-TIME scheduled task — runs exactly once at the given clock time, then automatically deleted. "
+                    "Use for a single reminder or task scheduled to a specific time ('remind me tomorrow at 10', "
+                    "'run this at 22:00 tonight', 'send report next Friday at 09:00 once'). For a short relative delay that fires in the live chat ('in N seconds/minutes'), use set_timer instead. DEFAULT — use unless user explicitly wants repetition.\n"
                     "- 'daily': every day at the given time\n"
                     "- 'weekly': every week on weekday (requires weekday param)\n"
                     "- 'monthly': every month on day (requires day param)\n"

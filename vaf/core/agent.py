@@ -5306,7 +5306,7 @@ class Agent:
                 tools_set = set(selected_tools)
                 
                 # Add core tools
-                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity"):
+                for name in ("update_intent", "update_working_memory", "memory_search", "memory_save", "update_user_identity", "set_timer"):
                     if name in self.tools:
                         tools_set.add(name)
                 
@@ -7792,6 +7792,9 @@ class Agent:
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
                 if name in ("update_intent", "update_working_memory"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("set_timer", "list_timers", "cancel_timer"):
+                    # Timer tools read the live session/source/identity off the agent.
+                    tool_args["_agent"] = self
                 if name == "learn_document":
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self

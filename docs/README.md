@@ -25,7 +25,7 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 - **WHATSAPP_INTEGRATION.md**: WhatsApp bridge (Baileys), voice, documents, whitelist, and best practices.
 - **CONNECTIONS.md**: External service connections and authentication.
 - **GITHUB_INTEGRATION.md**: GitHub OAuth, agent tools (list repos, read file, issues/PRs), and troubleshooting.
-- **AUTOMATIONS.md**: Scheduled automations (create_automation), automation calendar, and planner (notes/todos).
+- **AUTOMATIONS.md**: Scheduled automations (create_automation), short in-chat timers (set_timer), automation calendar, and planner (notes/todos).
 - **Thinking-Mode.md**: Background thinking mode when the user is idle (todos, automations, one question via messenger, sessions in chat list).
 - **CALENDAR_INTEGRATION.md**: Google/Microsoft calendar tools and Calendar Dashboard.
 - **API_INTEGRATION.md**: Integration with various LLM providers and APIs.

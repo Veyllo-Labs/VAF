@@ -16,6 +16,23 @@ VAF supports **scheduled automations**: the agent runs a prompt on a schedule (o
 - **Model for execution:** Automations run with `VAF_IN_AUTOMATION=1`, which causes `deepseek-auto` to resolve to the pro model (same as workflows). This ensures tool-heavy automations use the most capable model.
 - **Thinking Workspace bridge (MVP):** automation lifecycle is mirrored into per-user thinking workspace tasks (`source=automation:<id>`). Run status (`success/error`), last/next run, `last_completed_local_date` (when present), and enabled state are synced so Thinking Mode can reason over current automation health. Approved workspace handoffs can optionally trigger `create`/`update` automation actions (approval-gated).
 
+## Short in-chat timers (`set_timer`) vs automations
+
+For a **short, one-off delay that should fire proactively in the current conversation** (e.g. "in 1 minute say test", "in 90 seconds check the deploy"), the agent uses **`set_timer`**, not `create_automation`. The two cover different needs:
+
+| | `set_timer` | `create_automation` (`frequency='once'`) |
+|---|---|---|
+| Timing | **Relative delay in seconds** (second-precise) | **Clock time `HH:MM`**, minute granularity, ≥10 min apart |
+| Delivery | **Proactive message in the live chat** (CLI + WebUI) | Detached run; result delivered to the active web session and `main_messenger` |
+| Persistence | **In-memory, per process — lost on restart** | Persisted to disk; survives restarts |
+| Use for | Short timers/reminders that should appear in *this* chat now | Longer/persistent reminders, specific clock times, recurring schedules |
+
+**Tools:** `set_timer` (provide `seconds` plus exactly one of `message` for a fixed reply, or `task` for an instruction the agent carries out when it fires), `list_timers`, and `cancel_timer`. `set_timer` is part of the agent's always-available core tools.
+
+**Delivery mechanism:** on fire, a timer enqueues an `AgentTask` into the same process's `TaskQueue` — the queue the CLI input loop and the headless worker already consume. A message-only timer carries a `__TIMER__:` marker and is rendered as a proactive assistant message with **no LLM turn**; a `task` timer is processed as a normal turn so the agent acts and replies. `set_timer` is blocked on messaging channels (Telegram/WhatsApp/Discord) — use `create_automation` there.
+
+**Code:** `vaf/core/timers.py` (in-memory store + scheduler), `vaf/tools/timer.py` (the tools); marker handling in `vaf/cli/cmd/run.py` and `vaf/core/headless_runner.py`.
+
 ## Today status, persisted completion, and catch-up runs
 
 - **Task JSON fields:** On each **successful** run, the task file stores `last_run` (ISO timestamp) and **`last_completed_local_date`** (`YYYY-MM-DD` in the **host’s local** calendar). The latter is the source of truth for “already finished today” and **survives tray/VAF restarts** until the local date rolls over (e.g. automation at 06:00 completes → still **Done (today)** after a restart at 11:00; the next day it is no longer “today” and the status follows schedule vs clock again).

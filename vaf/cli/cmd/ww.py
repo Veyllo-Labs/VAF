@@ -86,3 +86,9 @@ def eager(
     if verbose:
         argv.append("--verbose")
     raise typer.Exit(_ww.main(argv))
+
+
+@app.command()
+def teacher(action: str = typer.Argument("status", help="status | on | off")):
+    """Opt-in offline co-learning with a stronger configured API (status | on | off)."""
+    raise typer.Exit(_ww.main(["teacher", action]))

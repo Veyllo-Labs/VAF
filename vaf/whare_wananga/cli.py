@@ -131,6 +131,15 @@ def _train_one(agent, tool: str, *, quick: bool, verbose: bool) -> Dict[str, Any
     _p(f"  -> {_summary_line(s)}  ({time.time() - t0:.0f}s)")
     if s.get("ok"):
         _p(_baskets_brief(tool))
+    # Teacher/Noho: a weak result may co-learn with a stronger API model (opt-in, foreground here).
+    try:
+        from vaf.whare_wananga import teacher
+        if teacher.teach_now(agent, tool, s):
+            r2 = store.load(tool) or {}
+            _p(f"  teacher (Noho) -> status={r2.get('status')} "
+               f"challenge_passed={r2.get('challenge_passed')} confidence={_pct(r2.get('confidence'))}")
+    except Exception:
+        pass
     return s
 
 
@@ -278,6 +287,29 @@ def cmd_eager(args) -> int:
     return 2
 
 
+def cmd_teacher(args) -> int:
+    from vaf.whare_wananga import teacher
+    action = getattr(args, "action", None) or "status"
+    if action == "on":
+        teacher.set_enabled(True)
+        _p("Teacher/Noho enabled (whare_wananga_teacher_enabled=true). After a weak LOCAL training "
+           "run, a stronger configured API model co-learns the tool (opt-in, serialized, rate-limited).")
+        return 0
+    if action == "off":
+        teacher.set_enabled(False)
+        _p("Teacher/Noho disabled.")
+        return 0
+    if action == "status":
+        st = teacher.status()
+        tea = st.get("teacher")
+        _p(f"Teacher enabled : {st.get('enabled')}")
+        _p(f"available       : {teacher.teacher_available()}  (needs a local student + a configured API)")
+        _p(f"teacher model   : {(tea[0] + '/' + tea[1]) if tea else '(none configured)'}")
+        return 0
+    _p(f"Unknown teacher action: {action}")
+    return 2
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="vaf-ww", description="Whare Wananga tool self-learning CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -315,6 +347,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     pe.add_argument("--yes", action="store_true", help="with scan: train even if EAGER is disabled")
     pe.add_argument("-v", "--verbose", action="store_true", help="with scan: print every probe")
     pe.set_defaults(func=cmd_eager)
+
+    ptc = sub.add_parser("teacher", help="opt-in offline co-learning with a stronger API (status|on|off)")
+    ptc.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
+    ptc.set_defaults(func=cmd_teacher)
 
     args = ap.parse_args(argv)
     if getattr(args, "all", False) and getattr(args, "tools", None):

@@ -36,6 +36,32 @@ SCHEMA_VERSION = 1
 VALID_STATUS = ("draft", "confirmed", "stale")
 VALID_SOURCE = ("whare_wananga", "teacher", "runtime")
 
+# A distilled "pitfall" is VACUOUS only when the model APOLOGISED about the training process (no
+# probes, cannot quote the error, could not determine it) instead of giving a real warning. The
+# markers are deliberately NARROW: real error quotes ("[ERROR] No summary provided") and informative
+# negative facts ("no required arguments", "limit is optional", "requires an admin session", "no
+# errors observed for ...") carry value and must be KEPT.
+_VACUOUS_PITFALL_MARKERS = (
+    "no probe attempt", "no probes were", "without any probe",          # "No probe attempts were provided"
+    "cannot quote", "could not quote", "unable to quote", "cannot quote exact",
+    "could not determine the error", "cannot determine the error", "unable to determine the error",
+    "insufficient information", "not enough information", "no information available",
+    "no pitfalls", "cannot provide a pitfall", "no specific pitfall",
+)
+
+
+def is_vacuous_pitfall(pitfall: Any) -> bool:
+    """True if a pitfall is a non-pitfall (empty, or a meta-apology about training) and should be
+    dropped before storing/delivering. Fail-safe: on error, keep the pitfall (return False)."""
+    try:
+        t = (pitfall.get("text") if isinstance(pitfall, dict) else pitfall) or ""
+        t = str(t).strip().lower()
+        if not t:
+            return True
+        return any(m in t for m in _VACUOUS_PITFALL_MARKERS)
+    except Exception:
+        return False
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

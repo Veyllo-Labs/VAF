@@ -630,6 +630,15 @@ async def startup_event():
     loop = asyncio.get_running_loop()
     manager.set_server_loop(loop)
     log("WebServer", "VAF Web Interface: Event loop registered")
+
+    # Whare Wananga EAGER: opt-in background scanner that proactively trains safe, configured,
+    # not-yet-learned tools (off by default; tolerates a not-yet-built agent). Guarded.
+    try:
+        from vaf.whare_wananga import eager
+        eager.start(lambda: getattr(manager, "agent_instance", None))
+        log("WebServer", "Whare Wananga eager scanner started (opt-in)")
+    except Exception as e:
+        log("WebServer", f"Whare Wananga eager scanner not started: {e}")
     
     # Register TTS Callbacks for UI sync
     from vaf.core.speech import SpeechManager

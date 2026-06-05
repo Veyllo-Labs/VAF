@@ -191,3 +191,36 @@ def is_learned(tool: str) -> bool:
 def learned_states(tools) -> Dict[str, str]:
     """Map each tool name to its learned_state (for the UI / trigger decisions)."""
     return {t: learned_state(t) for t in tools}
+
+
+def invalidate_stale(tools) -> List[str]:
+    """Mark stored records whose tool definition CHANGED as ``stale`` (so the know-how is no longer
+    delivered or counted as learned until the tool is re-trained).
+
+    ``tools`` maps tool name -> tool object (the agent's live registry). For each tool that has a
+    stored record with a non-empty ``tool_schema_hash``, the current hash is recomputed and compared;
+    a mismatch flips the record's ``status`` to ``stale``. A removed tool (no longer in ``tools``) or
+    a record without a stored hash is left untouched -- this detects schema *changes*, not absence.
+    Returns the names newly marked stale. Fail-safe (never raises)."""
+    changed: List[str] = []
+    try:
+        for name in list_tools():
+            try:
+                rec = load(name)
+                if not rec:
+                    continue
+                stored = rec.get("tool_schema_hash")
+                if not stored or rec.get("status") == "stale":
+                    continue
+                tool = tools.get(name) if hasattr(tools, "get") else None
+                if tool is None:
+                    continue
+                if compute_tool_hash(tool) != stored:
+                    rec["status"] = "stale"
+                    save(rec)
+                    changed.append(name)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return changed

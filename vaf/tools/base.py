@@ -141,7 +141,8 @@ class BaseTool(ABC):
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def query_llm(self, messages, max_tokens=300, temperature=0.7, timeout: int = None) -> Optional[str]:
+    def query_llm(self, messages, max_tokens=300, temperature=0.7, timeout: int = None,
+                  provider: str = None, model: str = None) -> Optional[str]:
         """
         Unified LLM query method for tools. 
         Supports both API providers and Local mode automatically.
@@ -159,22 +160,32 @@ class BaseTool(ABC):
         import json
         
         config = Config.load()
-        provider = config.get("provider", "local")
-        # FIX: Use correct model ID for the selected provider
-        # (Previously it used 'model' which is the LOCAL model ID, causing 400 errors with APIs)
-        if provider != "local":
-            model = config.get(f"api_model_{provider}", "")
-            # Fallback to generic model setting if provider-specific is empty
-            if not model:
-               model = config.get("model", "")
-            # Hybrid mode: VAF_TOOL_MODEL overrides the model for tools/sub-agents during workflow runs
-            import os as _os
-            _tool_model = _os.environ.get("VAF_TOOL_MODEL", "").strip()
-            if _tool_model:
-                model = _tool_model
+        # Explicit provider/model override (e.g. the Whare Wananga teacher): force this exact
+        # provider+model, bypassing the configured main model. No global Config mutation.
+        _provider_override, _model_override = provider, model
+        if _provider_override:
+            provider = _provider_override
+            if provider != "local":
+                model = _model_override or config.get(f"api_model_{provider}", "") or config.get("model", "")
+            else:
+                model = _model_override or config.get("model", "")
         else:
-            # Local provider uses the main model setting
-            model = config.get("model", "")
+            provider = config.get("provider", "local")
+            # FIX: Use correct model ID for the selected provider
+            # (Previously it used 'model' which is the LOCAL model ID, causing 400 errors with APIs)
+            if provider != "local":
+                model = config.get(f"api_model_{provider}", "")
+                # Fallback to generic model setting if provider-specific is empty
+                if not model:
+                   model = config.get("model", "")
+                # Hybrid mode: VAF_TOOL_MODEL overrides the model for tools/sub-agents during workflow runs
+                import os as _os
+                _tool_model = _os.environ.get("VAF_TOOL_MODEL", "").strip()
+                if _tool_model:
+                    model = _tool_model
+            else:
+                # Local provider uses the main model setting
+                model = config.get("model", "")
         
         # 0. Validate Model
         if not model:

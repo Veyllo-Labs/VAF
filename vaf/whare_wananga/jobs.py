@@ -29,8 +29,11 @@ def is_running(tool: str) -> bool:
         return bool(s and s.get("state") == "running")
 
 
-def start_training(agent, tool: str) -> Dict[str, Any]:
-    """Start a background training pass. Returns the initial status (or already-running)."""
+def start_training(agent, tool: str, **train_kwargs) -> Dict[str, Any]:
+    """Start a background training pass. Returns the initial status (or already-running).
+
+    Extra kwargs are forwarded to runner.train_tool -- the Teacher/Noho session passes
+    teacher_llm / seed_record / source / max_rounds."""
     with _lock:
         cur = _jobs.get(tool)
         if cur and cur.get("state") == "running":
@@ -103,7 +106,7 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
     def _run() -> None:
         from vaf.whare_wananga import runner
         try:
-            summary = runner.train_tool(agent, tool, progress=_progress)
+            summary = runner.train_tool(agent, tool, progress=_progress, **train_kwargs)
             with _lock:
                 s = _jobs.get(tool) or {}
                 if summary.get("skipped"):
@@ -120,6 +123,14 @@ def start_training(agent, tool: str) -> Dict[str, Any]:
                 else:
                     s.update({"state": "error", "error": summary.get("error", "failed")})
                 s["ended_at"] = time.time()
+            # Teacher/Noho: a weak STUDENT run may escalate to a stronger teacher. The teacher's own
+            # run passes teacher_llm -> guarded here so it never re-escalates (no recursion).
+            if "teacher_llm" not in train_kwargs:
+                try:
+                    from vaf.whare_wananga import teacher
+                    teacher.maybe_teach(agent, tool, summary)
+                except Exception:
+                    pass
         except Exception as e:
             with _lock:
                 s = _jobs.get(tool) or {}

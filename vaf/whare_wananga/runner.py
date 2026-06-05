@@ -179,8 +179,15 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
                learn_n: int = LEARN_N, validate_n: int = VALIDATE_N, refine_n: int = REFINE_N,
                max_rounds: int = MAX_ROUNDS, challenge_pass: int = CHALLENGE_PASS,
                challenge_round_fails: int = CHALLENGE_ROUND_FAILS,
-               challenge_max_fails: int = CHALLENGE_MAX_FAILS) -> Dict[str, Any]:
-    """Run the phased predict-then-verify learning loop for one tool. Returns a summary."""
+               challenge_max_fails: int = CHALLENGE_MAX_FAILS,
+               teacher_llm: Optional[Callable] = None, seed_record: Optional[dict] = None,
+               source: str = "whare_wananga") -> Dict[str, Any]:
+    """Run the phased predict-then-verify learning loop for one tool. Returns a summary.
+
+    Teacher/Noho co-learning: when `teacher_llm` is given (a stronger model), the STUDENT keeps
+    PREDICTING via `tool.query_llm` while the teacher takes over the JUDGE, DISTIL and challenge-INVENT
+    calls; `seed_record` preloads the three baskets with the teacher's demonstration so the student
+    predicts from it. Defaults reproduce the normal (student-only) run exactly."""
     def _emit(ev: dict) -> None:
         if progress:
             try:
@@ -217,6 +224,10 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     params = _tool_params(tool)
     schema_hash = store.compute_tool_hash(tool)
 
+    # Teacher/Noho: the JUDGE, DISTIL and challenge-INVENT calls run on the teacher model when given;
+    # the STUDENT predict calls always stay on tool.query_llm.
+    _judge_llm = teacher_llm or tool.query_llm
+
     # Training sandbox: only the trained tool + its connection-class siblings may be executed,
     # PLUS this tool's declared prerequisites (the "plan first" tools), so a tool that needs setup
     # can have it run before probing.
@@ -252,6 +263,25 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     rec["aronui"] = {"when_to_use": "", "output_shape": "", "notes": []}
     rec["tuatea"] = {"pitfalls": []}
     rec["tuarua"] = {"procedure": [], "verification": []}
+
+    # Teacher demonstration: preload the baskets so the student predicts FROM the teacher's draft.
+    if isinstance(seed_record, dict):
+        try:
+            if isinstance(seed_record.get("aronui"), dict):
+                rec["aronui"].update({k: v for k, v in seed_record["aronui"].items()
+                                      if k in ("when_to_use", "output_shape") and v})
+            _sp = (seed_record.get("tuatea") or {}).get("pitfalls")
+            if isinstance(_sp, list) and _sp:
+                rec["tuatea"]["pitfalls"] = [
+                    p if isinstance(p, dict) else {"text": _safe(p, 200), "source": "teacher", "seen": 1}
+                    for p in _sp[:10]]
+            _st = seed_record.get("tuarua") or {}
+            if isinstance(_st.get("procedure"), list):
+                rec["tuarua"]["procedure"] = [_safe(s, 200) for s in _st["procedure"][:12]]
+            if isinstance(_st.get("verification"), list):
+                rec["tuarua"]["verification"] = [_safe(s, 200) for s in _st["verification"][:12]]
+        except Exception:
+            pass
 
     all_attempts: List[dict] = []
     state = {"halted": False}
@@ -311,7 +341,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
                 f"Agent predicted: {predicted_outcome} -- {predicted_text}\n"
                 f"Actual tool response: {_safe(actual, 600)}")},
         ]
-        raw = tool.query_llm(judge_prompt, max_tokens=_MAX_TOKENS, temperature=0.0) or ""
+        raw = _judge_llm(judge_prompt, max_tokens=_MAX_TOKENS, temperature=0.0) or ""
         jd = _extract_json(raw) or {}
         verdict = str(jd.get("verdict") or "").lower()
         if verdict not in ("pass", "fail"):  # fall back to the heuristic if the judge misbehaves
@@ -416,7 +446,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
                 f"Parameters: {json.dumps(params)[:1000]}\n"
                 f"Attempts:\n{json.dumps(all_attempts, indent=2)[:3000]}")},
         ]
-        draw = tool.query_llm(distil_prompt, max_tokens=_MAX_TOKENS, temperature=0.3) or ""
+        draw = _judge_llm(distil_prompt, max_tokens=_MAX_TOKENS, temperature=0.3) or ""
         d = _extract_json(draw) or {}
         # Diagnostic: if the distillation didn't parse, keep a snippet of the raw reply on the
         # record so the failure (truncation / malformed JSON) is visible; clear it on success.
@@ -476,7 +506,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
                 f"pitfalls={json.dumps([p.get('text') for p in rec.get('tuatea', {}).get('pitfalls', [])])[:400]}\n"
                 f"Already-tried inputs (avoid repeats): {json.dumps([a.get('intent') for a in all_attempts[-8:]])[:600]}")},
         ]
-        iraw = tool.query_llm(invent_prompt, max_tokens=_MAX_TOKENS, temperature=0.7) or ""
+        iraw = _judge_llm(invent_prompt, max_tokens=_MAX_TOKENS, temperature=0.7) or ""
         cargs = (_extract_json(iraw) or {}).get("args")
         cargs = cargs if isinstance(cargs, dict) else {}
         # Error path: the judge's challenge input must also be forced invalid (no real side effect,
@@ -548,6 +578,7 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
         rec["status"] = "confirmed" if learned else "draft"
         rec["challenge_passed"] = False
         rec["learn_mode"] = "declare"
+        rec["source"] = source
         rec["confidence"] = 0.0  # not measured -- learned from the declaration, not probed
         store.save(rec)
         summary = {"ok": True, "tool": tool_name, "mode": "declare", "declared": True,
@@ -687,8 +718,8 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
     rec["confidence"] = round((hits_total / done) if done else 0.0, 2)
     rec["status"] = "confirmed" if confirmed else "draft"
     rec["challenge_passed"] = challenge_passed
-    rec["source"] = "whare_wananga"
-    rec["learn_mode"] = mode
+    rec["source"] = source
+    rec["learn_mode"] = "teacher" if teacher_llm else mode
     rec["rounds"] = rounds
     store.save(rec)
 

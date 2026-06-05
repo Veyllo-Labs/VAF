@@ -622,6 +622,59 @@ class APIBackendManager:
         return models.get(provider, [])
 
     @staticmethod
+    def list_models(provider: str) -> List[str]:
+        """Live-fetch the available chat model IDs for `provider` from its API, or [] on any error.
+        Sync + hard fail-safe; the API key is read from Config. Used by Whare Wananga's teacher
+        selection to consider the strongest AVAILABLE model, not only the configured one."""
+        import requests
+        from vaf.core.config import Config
+        try:
+            key = Config.get_api_key(provider)
+        except Exception:
+            key = ""
+        if not key:
+            return []
+        try:
+            if provider == "openai":
+                r = requests.get("https://api.openai.com/v1/models",
+                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                if r.status_code == 200:
+                    return sorted(m["id"] for m in r.json().get("data", [])
+                                  if any(x in m["id"] for x in ("gpt", "o1", "o3", "o4")))
+            elif provider == "anthropic":
+                r = requests.get("https://api.anthropic.com/v1/models",
+                                 headers={"X-Api-Key": key, "anthropic-version": "2023-06-01"}, timeout=10)
+                if r.status_code == 200:
+                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
+            elif provider == "deepseek":
+                r = requests.get("https://api.deepseek.com/models",
+                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                if r.status_code == 200:
+                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
+            elif provider == "google":
+                r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
+                                 params={"key": key, "pageSize": 1000}, timeout=10)
+                if r.status_code == 200:
+                    out = []
+                    for m in r.json().get("models", []):
+                        if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                            continue
+                        mid = m.get("baseModelId") or m.get("name", "")
+                        if mid.startswith("models/"):
+                            mid = mid.split("/", 1)[1]
+                        if mid and mid not in out:
+                            out.append(mid)
+                    return sorted(out)
+            elif provider == "openrouter":
+                r = requests.get("https://openrouter.ai/api/v1/models",
+                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                if r.status_code == 200:
+                    return [m["id"] for m in r.json().get("data", []) if m.get("id")][:50]
+        except Exception:
+            return []
+        return []
+
+    @staticmethod
     def test_connection(provider: str) -> bool:
         """Test API connectivity."""
         try:

@@ -272,6 +272,7 @@ class Agent:
 
         # Initialize Tools (Dynamic Loading)
         self.tools = {}
+        self._ww_stale_checked = False  # Whare Wananga: one-time schema-hash invalidation (see TOOLS)
         self._load_tools()
         # Update Prompt Manager with loaded tools
         self.prompt_manager.tools = list(self.tools.values())
@@ -5453,7 +5454,8 @@ class Agent:
         SOFT_LIMIT_TOOL_TURNS = 50   # Inject goal-reminder, agent continues
         MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
         _hard_stop_injected = False   # True after hard-stop user message was injected once
-        
+        _ww_reactive_injected = set()  # tools whose learned know-how was already re-fed on error this turn
+
         while empty_retry_count < MAX_EMPTY_RETRIES:
             # Stop check at the top of every loop iteration — catches stop clicks
             # that happen between tool execution and the next LLM call
@@ -6607,27 +6609,25 @@ class Agent:
             except Exception:
                 pass
 
-            # ── Action-Tag PARSER (first step: debug only) ─────────────────────────
-            # Read the agent's committed <Action> intent and fuzzy-match it against the
-            # currently loaded tool list; print the match(es) + score to the terminal.
-            # No know-how injection yet. See docs/ACTION_TAG.md "Action-Tag parser".
+            # ── Action-Tag parser ──────────────────────────────────────────────────
+            # Read the agent's committed <Action> intent and fuzzy-match it against the loaded
+            # tools, logging quietly (no terminal spam). This is the declared-vs-actual seed for
+            # runtime learning; it does NOT drive know-how injection (that is router-driven; see
+            # docs/ACTION_TAG.md + WHARE_WANANGA.md "Delivery").
             try:
                 _act = _extract_action_text(full_response)
                 if _act:
                     _avail = list(self._active_tools) if self._active_tools else list(self.tools.keys())
                     _matches = _match_action_to_tools(_act, _avail)
-                    print(f"[ACTION-MATCH] action=\"{_act[:80]}\" (candidates={len(_avail)})")
-                    if _matches:
-                        for _name, _score in _matches[:3]:
-                            print(f"[ACTION-MATCH] match: {_name} (score: {int(round(_score * 100))}%)")
-                    else:
-                        print("[ACTION-MATCH] no tool match")
                     try:
-                        append_domain_log("backend", f"[ACTION-MATCH] action={_act[:120]!r} top={_matches[:3]}")
+                        append_domain_log(
+                            "backend",
+                            f"[ACTION-MATCH] action={_act[:120]!r} candidates={len(_avail)} top={_matches[:3]}",
+                        )
                     except Exception:
                         pass
-            except Exception as _e:
-                print(f"[ACTION-MATCH] parser error: {_e}")
+            except Exception:
+                pass
             # ───────────────────────────────────────────────────────────────────────
 
             if tool_calls_detected:
@@ -6867,6 +6867,45 @@ class Agent:
                                 "content": processed_result
                             })
                     
+                    # ── Whare Wananga reactive delivery (B-track): on a tool ERROR, re-feed the
+                    #    failed tool's learned know-how so the loop's natural retry is informed.
+                    #    Re-check the error locally from the RAW result (not the compressed history
+                    #    copy, not the emit-try is_err). Once per (tool, turn); gated; hard
+                    #    fail-safe -- must never break the tool loop. ──
+                    try:
+                        _rs = (result_str or "").strip().lower()
+                        if _rs.startswith(("error", "failed", "tool error", "security error", "exception", "❌")) \
+                                and function_name not in _ww_reactive_injected:
+                            from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
+                            _known = known_pitfall_hit(function_name, result_str)
+                            _kh = tool_knowhow(function_name, procedure_first=_known)
+                            if _kh:
+                                _ww_reactive_injected.add(function_name)
+                                if _known:
+                                    _lead = (f"[TOOL KNOW-HOW] '{function_name}' just failed on a known pitfall. "
+                                             "Follow the learned procedure and retry with corrected arguments.")
+                                else:
+                                    _lead = (f"[TOOL KNOW-HOW] '{function_name}' returned an unexpected error. "
+                                             "Use the learned guidance below and retry if appropriate.")
+                                    try:
+                                        append_domain_log("backend", f"[WW-SURPRISE] {function_name}: novel error not in learned pitfalls: {result_str[:160]!r}")
+                                    except Exception:
+                                        pass
+                                    # LAZY-corrective: learn the new pitfall from this real surprise
+                                    # (background, rate-limited, fail-safe -- never blocks the turn).
+                                    try:
+                                        from vaf.whare_wananga.runtime import maybe_relearn
+                                        maybe_relearn(self, function_name, arguments, result_str)
+                                    except Exception:
+                                        pass
+                                _post_tc_messages.append({"role": "system", "content": _lead + " " + _kh})
+                                try:
+                                    append_domain_log("backend", f"[WW-REACTIVE] {function_name}: re-fed know-how (known={_known})")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
                     # Check if this was an async sub-agent task
                     if result and self._handle_async_subagent_marker(result_str):
                         # Extract task_id from marker for display
@@ -8679,6 +8718,18 @@ class Agent:
     @property
     def TOOLS(self):
         """Dynamic Tool Schema Generation with Context-Aware Optimization"""
+        # Whare Wananga: once per agent, invalidate learned know-how whose tool definition changed
+        # (schema-hash mismatch) -> mark it 'stale'. The delivery gate requires status=confirmed, so
+        # a stale record is then never injected (A) or re-fed (B) until the tool is re-trained.
+        if not getattr(self, "_ww_stale_checked", False):
+            self._ww_stale_checked = True
+            try:
+                from vaf.whare_wananga import store as _ww_store
+                _stale = _ww_store.invalidate_stale(self.tools)
+                if _stale:
+                    append_domain_log("backend", f"[WW-STALE] tool definition changed -> marked stale: {_stale}")
+            except Exception:
+                pass
         schema = []
         n_ctx = self.config.get("n_ctx", 8192)
         # With 100+ tools, even 32K contexts are "small" — truncate descriptions
@@ -8708,6 +8759,28 @@ class Agent:
                 budget = 300 if (getattr(tool, "input_examples", None)) else 150
                 if len(description) > budget:
                     description = description[:budget - 3] + "..."
+
+            # Whare Wananga delivery: append the tool's LEARNED pitfalls (tuatea) to its description
+            # so the model sees them inline before forming the call. Only when the router has scoped
+            # the tool set (_active_tools is not None) -- the all-tools fallback (100+) would blow the
+            # token budget. Hard-guarded: this is the critical path of every LLM call, so a failure
+            # here must never break tool-calling.
+            if self._active_tools is not None:
+                try:
+                    from vaf.whare_wananga.delivery import tool_pitfalls
+                    _pf = tool_pitfalls(
+                        name,
+                        max_pitfalls=(1 if is_small_context else 3),
+                        max_chars=(80 if is_small_context else 320),
+                    )
+                    if _pf:
+                        description = (description or "") + "\n" + _pf
+                        try:
+                            append_domain_log("backend", f"[WW-INJECT] {name}: +{len(_pf)} chars pitfalls")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             schema.append({
                 "type": "function",

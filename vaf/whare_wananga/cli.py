@@ -235,6 +235,49 @@ def cmd_delete(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_eager(args) -> int:
+    from vaf.whare_wananga import eager
+    action = getattr(args, "action", None) or "status"
+    if action == "on":
+        eager.set_enabled(True)
+        _p("EAGER enabled (whare_wananga_eager_enabled=true). The app trains safe, configured, "
+           "not-yet-learned tools in the background, one at a time.")
+        return 0
+    if action == "off":
+        eager.set_enabled(False)
+        _p("EAGER disabled.")
+        return 0
+    if action == "status":
+        learned = sum(1 for n in store.list_tools() if store.is_learned(n))
+        _p(f"EAGER enabled : {eager.is_enabled()}")
+        _p(f"learned tools : {learned}")
+        _p("scope         : SAFE tools only (never send/communication or irreversible tools)")
+        _p("note          : the periodic scanner runs inside the app; 'eager scan' below trains "
+           "eligible tools here in the foreground.")
+        return 0
+    if action == "scan":
+        from vaf.whare_wananga import eager
+        agent = _build_agent()
+        names = eager.eligible_tools(agent)
+        _p(f"\nEligible (safe, configured, not yet attempted): {len(names)}")
+        for n in names:
+            _p(f"  - {n}")
+        if not names:
+            return 0
+        if not eager.is_enabled() and not args.yes:
+            _p("\nEAGER is disabled. Run 'vaf ww eager on' first, or pass --yes to train anyway.")
+            return 2
+        results = [_train_one(agent, n, quick=args.quick, verbose=args.verbose) for n in names]
+        _p("\n" + "=" * 60)
+        _p(f"{'TOOL':<28} RESULT")
+        _p("-" * 60)
+        for r in results:
+            _p(f"{r.get('tool', '?'):<28} {_summary_line(r)}")
+        return 0
+    _p(f"Unknown eager action: {action}")
+    return 2
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="vaf-ww", description="Whare Wananga tool self-learning CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -265,6 +308,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     pd = sub.add_parser("delete", help="delete a tool's stored knowledge")
     pd.add_argument("tool")
     pd.set_defaults(func=cmd_delete)
+
+    pe = sub.add_parser("eager", help="opt-in proactive training of safe tools (status|on|off|scan)")
+    pe.add_argument("action", nargs="?", choices=["status", "on", "off", "scan"], default="status")
+    pe.add_argument("--quick", action="store_true", help="with scan: small batches (fast)")
+    pe.add_argument("--yes", action="store_true", help="with scan: train even if EAGER is disabled")
+    pe.add_argument("-v", "--verbose", action="store_true", help="with scan: print every probe")
+    pe.set_defaults(func=cmd_eager)
 
     args = ap.parse_args(argv)
     if getattr(args, "all", False) and getattr(args, "tools", None):

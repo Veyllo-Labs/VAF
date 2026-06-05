@@ -68,3 +68,21 @@ def show(tool: str = typer.Argument(..., help="tool name")):
 def delete(tool: str = typer.Argument(..., help="tool name")):
     """Delete a tool's stored knowledge."""
     raise typer.Exit(_ww.main(["delete", tool]))
+
+
+@app.command()
+def eager(
+    action: str = typer.Argument("status", help="status | on | off | scan"),
+    quick: bool = typer.Option(False, "--quick", help="with scan: small batches"),
+    yes: bool = typer.Option(False, "--yes", help="with scan: train even if EAGER is disabled"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="with scan: print every probe"),
+):
+    """Opt-in proactive training of SAFE tools (status | on | off | scan)."""
+    argv = ["eager", action]
+    if quick:
+        argv.append("--quick")
+    if yes:
+        argv.append("--yes")
+    if verbose:
+        argv.append("--verbose")
+    raise typer.Exit(_ww.main(argv))

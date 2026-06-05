@@ -20,11 +20,12 @@ It is distinct from two neighbouring concepts:
   **reactive** delivery (re-feed a failed tool's know-how on error, with a known-vs-novel surprise
   signal); **runtime re-learning** (a novel runtime error is distilled into a new pitfall from the
   real observation); **eager training** (opt-in background scanner + serialized queue that
-  auto-trains safe, configured, unlearned tools); and schema-hash invalidation (a changed tool
+  auto-trains safe, configured, unlearned tools); schema-hash invalidation (a changed tool
   definition flips its record to `stale`, so outdated know-how is no longer delivered until
-  re-trained).
-- **Planned:** declared-vs-actual via the Action tag; auto-training agent-created tools; the
-  teacher/Noho online co-learning stage.
+  re-trained); and **Teacher/Noho co-learning** (opt-in: after a weak local run, a stronger
+  configured API model co-learns the tool over the same loop).
+- **Planned:** declared-vs-actual via the Action tag; auto-training agent-created tools; teacher
+  continuity (per-tool session memory).
 
 Sections below are marked accordingly.
 
@@ -203,8 +204,10 @@ How a record gets filled:
   triggered, *expected* validation errors.
 - **Triggers:** manual (dashboard / `vaf ww`); an opt-in **eager** background scanner that
   auto-trains safe, configured, not-yet-attempted tools one at a time (`whare_wananga_eager_enabled`,
-  default off; never send/irreversible tools); and **runtime re-learning** when an already-learned
-  tool hits a *surprising* runtime error (a new pitfall is distilled from the real observation).
+  default off; never send/irreversible tools); **runtime re-learning** when an already-learned
+  tool hits a *surprising* runtime error (a new pitfall is distilled from the real observation); and
+  opt-in **Teacher/Noho co-learning** (`whare_wananga_teacher_enabled`, default off) after a weak
+  local run -- see "Teacher/Noho" below.
 
 ## Delivery (how know-how reaches the agent)
 
@@ -240,6 +243,33 @@ The **Action tag** is NOT the injection trigger; its role stays transparency / v
 (declared-vs-actual) / learn-signal (see [ACTION_TAG.md](ACTION_TAG.md)). Independently of any path,
 the agent's actual actions always remain in context via the real tool calls and their results.
 
+## Teacher/Noho co-learning (opt-in)
+
+When a LOCAL (student) run leaves a tool below the delivery bar -- `challenge_passed` is not True OR
+`confidence < 0.5` -- a STRONGER configured API model can co-learn the tool with the student over the
+SAME predict-then-verify loop. It is **off by default** (`whare_wananga_teacher_enabled`) and only
+activates when the main `provider` is `local` AND an API is configured (otherwise there is no stronger
+teacher). It is automatic, **serialized** (one session at a time), and **rate-limited** (24h per tool).
+
+The loop is reused, not re-implemented (`vaf/whare_wananga/teacher.py` + the `teacher_llm` /
+`seed_record` / `source` parameters on `runner.train_tool`):
+
+1. **Demonstrate** -- the teacher writes an initial three-basket draft from the tool schema and the
+   student's failing attempts; it preloads the baskets so the student predicts *from* it.
+2. **Co-learn** -- the STUDENT keeps PREDICTING (`tool.query_llm`); the teacher takes over the JUDGE,
+   DISTIL and challenge-INVENT calls. The existing validate -> refine -> challenge rounds are the
+   co-learning rounds (capped at 3).
+3. **Gate** -- the result is saved only if it passes the same challenge gate, as a normal record with
+   `source="teacher"`, `learn_mode="teacher"` -- delivered (A + B) like any other learned tool.
+
+The teacher model is the **strongest available** model: each configured provider's models are
+**live-discovered** from its API (`APIBackendManager.list_models`, cached ~12h) and ranked by a small
+static capability tier, so a stronger model the provider offers is used even if the configured main
+model is weaker. Offline it falls back to the configured model; an explicit `whare_wananga_teacher_model`
+= `provider:model` override is the escape hatch. **Safety is unchanged:**
+the session runs the same safe runner path, so irreversible tools are gated (never escalated) and
+reversible tools stay on the error path -- nothing send/irreversible is ever really executed.
+
 ## CLI
 
 The web dashboard runs training as a background job; the CLI runs the same `train_tool` loop
@@ -258,6 +288,8 @@ vaf ww delete create_contact          # drop the stored knowledge
 vaf ww eager status                   # eager on/off + learned count
 vaf ww eager on | off                 # toggle opt-in proactive training (whare_wananga_eager_enabled)
 vaf ww eager scan                     # train all eligible SAFE tools now (foreground)
+vaf ww teacher status                 # teacher on/off + which API model would teach
+vaf ww teacher on | off               # toggle opt-in co-learning (whare_wananga_teacher_enabled)
 ```
 
 `--all` skips tools whose connection is not configured and (without `--force`) tools already
@@ -276,6 +308,7 @@ bypassed and probes reach the tool's own validation.
 | `vaf/whare_wananga/delivery.py` | delivery read-path: gated lookups for runtime injection -- `tool_pitfalls` (proactive), `tool_knowhow` + `known_pitfall_hit` (reactive) |
 | `vaf/whare_wananga/runtime.py` | LAZY-corrective: distil a new pitfall from a novel runtime error (`maybe_relearn`) |
 | `vaf/whare_wananga/eager.py` | opt-in eager scanner + serialized training queue (`scan`, `enqueue`, `start`) |
+| `vaf/whare_wananga/teacher.py` | opt-in Teacher/Noho co-learning: trigger, gating, serial worker, teacher-model selection (`maybe_teach`) |
 | `vaf/cli/cmd/ww.py` | `vaf ww` Typer wrapper around the CLI |
 | `vaf/whare_wananga/__init__.py` | package exports |
 | `web/components/TrainingDashboard.tsx` | dashboard + live training stage (agent/tool/judge) |

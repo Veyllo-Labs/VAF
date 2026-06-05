@@ -397,5 +397,9 @@ Two adjacent systems build on the tool layer described here:
   The Declarative Tool Contract's `side_effect_class` (Section 9) is also the basis for
   Whare Wananga's safety gating (probe-safe read-only tools vs side-effecting ones, which
   may only be learned via the error/validation path).
+
+  After the router scopes the turn's tools (`_active_tools`), Whare Wananga's **delivery** appends
+  each selected tool's learned pitfalls to its schema description (proactive), and re-feeds a failed
+  tool's know-how on error (reactive) — see [WHARE_WANANGA.md](WHARE_WANANGA.md) "Delivery".
 - **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) — the agent declares the tool it is about
   to use; a backend parser matches that intent against the loaded tool list.

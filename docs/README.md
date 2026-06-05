@@ -5,13 +5,13 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 ## Contents
 
 ### Core Systems
-- **SELF_LEARNING.md**: Overview of how VAF learns from usage (current: RAG/memory; template for future self-learning extensions).
+- **SELF_LEARNING.md**: Overview of how VAF learns from usage — the five lanes (long-term memory/RAG, user profile, document learning, attachment-scoped retrieval, and tool know-how / Whare Wananga) and a template for new ones.
 - **MEMORY_SYSTEM.md**: Self-learning RAG memory (improves with use via session compaction and memory_save), encryption, vector search, and graph visualization.
 - **SOUL_SYSTEM.md**: Agent personality and rules (Soul, identity.json). Distinct from the human user profile.
 - **USER_IDENTITY.md**: Current user profile (user_identity.json), update_user_identity tool, and Settings UI.
 - **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
 - **ACTION_TAG.md**: The `<Action>` tag — agent declares the tool it is about to use; separate collapsible Action panel in the Web UI, persistence, and LLM-context behavior.
-- **WHARE_WANANGA.md**: Tool self-learning subsystem — learns per-tool `tool_knowledge` (Aronui/Tuatea/Tuarua facets); the built store/schema and the planned learning loop.
+- **WHARE_WANANGA.md**: Tool self-learning subsystem — learns per-tool `tool_knowledge` (Aronui/Tuatea/Tuarua facets) via a predict-then-verify loop, delivers it at runtime (proactive schema injection + reactive retry), and refreshes it (runtime re-learning, opt-in eager training, opt-in Teacher/Noho co-learning).
 - **GATEWAY.md**: Persistent gateway server and multi-channel access.
 - **WEB_UI.md**: Browser-based dashboard and WebSocket API.
 - **DOCUMENT_EDITOR_NATIVE_DOCX.md**: Native DOCX editor architecture, import/export model, editor split, and Gotenberg's role.

@@ -78,10 +78,11 @@ Distinct from the lanes above (which learn about the *user*), this lane learns h
 | **Reactive delivery** | When a tool call fails, the failed tool's fuller know-how is re-fed into the loop so the natural retry is informed; the error is classified known-vs-novel. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Delivery) |
 | **Runtime re-learning** | A novel, learnable runtime error (environmental/transient ones are filtered out) is distilled into a new learned pitfall from the real observation -- closing the learn-from-use loop, so the proactive/reactive lanes then carry it. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Delivery) |
 | **Eager training (opt-in)** | A background scanner can proactively train safe, configured, not-yet-learned tools one at a time -- off by default (`whare_wananga_eager_enabled`), and never send/communication or irreversible tools. | [WHARE_WANANGA.md](WHARE_WANANGA.md) |
+| **Teacher/Noho co-learning (opt-in)** | After a weak LOCAL run, a stronger configured API model co-learns the tool with the student over the same loop -- off by default (`whare_wananga_teacher_enabled`), only when the student is local + an API is configured. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Teacher/Noho) |
 
 **Effect over time:** the agent makes fewer malformed tool calls (the learned pitfalls sit in front of it both before a call and after a failure); a changed tool definition invalidates its now-stale know-how until the tool is re-trained.
 
-**Implementation:** `vaf/whare_wananga/` (`store.py`, `runner.py`, `jobs.py`, `delivery.py`, `runtime.py`, `cli.py`), the `Agent.TOOLS` schema hook + tool-loop error nudge / re-learn trigger in `vaf/core/agent.py`, and `web/components/TrainingDashboard.tsx`. Records live globally at `~/.vaf/whare_wananga/<tool>.json`.
+**Implementation:** `vaf/whare_wananga/` (`store.py`, `runner.py`, `jobs.py`, `delivery.py`, `runtime.py`, `eager.py`, `teacher.py`, `cli.py`), the `Agent.TOOLS` schema hook + tool-loop error nudge / re-learn trigger in `vaf/core/agent.py`, the `query_llm` provider/model override in `vaf/tools/base.py`, and `web/components/TrainingDashboard.tsx`. Records live globally at `~/.vaf/whare_wananga/<tool>.json`.
 
 ---
 

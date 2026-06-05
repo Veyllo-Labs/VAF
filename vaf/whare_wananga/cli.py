@@ -157,8 +157,11 @@ def cmd_train(args) -> int:
     results: List[Dict[str, Any]] = []
     queued = []
     for n in names:
-        if args.all and not args.force and store.is_learned(n):
-            results.append({"tool": n, "ok": True, "skipped": True, "reason": "already learned"})
+        # In --all (sweep) mode, attempt each tool ONCE: skip any tool that already has a stored
+        # record (learned, draft or declare) so chunks focus on NEW tools and don't re-run a hard
+        # tool that never confirms. Use --force to re-train everything.
+        if args.all and not args.force and store.load(n) is not None:
+            results.append({"tool": n, "ok": True, "skipped": True, "reason": "already attempted"})
             continue
         if tool_precondition is not None:
             try:

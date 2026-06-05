@@ -241,6 +241,10 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 - Handle errors gracefully
 - Log important actions
 - Respect system resources
+
+## Short timers vs automations
+- For a SHORT, one-off delay that should fire proactively in THIS chat (e.g. "in 1 minute say test", "in 90 seconds remind me", "wait 30s then check"), use set_timer. Provide 'message' for a fixed reply, or 'task' for something you should do when it fires. Manage with list_timers / cancel_timer.
+- For longer or persistent reminders (must survive a restart), specific clock times, or recurring schedules, use create_automation (frequency='once' for one-time) instead.
 """,
             
             "subagent": """

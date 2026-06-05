@@ -1,0 +1,119 @@
+{
+  "tool": "delete_automation",
+  "schema_version": 1,
+  "tool_schema_hash": "7fc6b0ea0063f6d7",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use when the user wants to delete an automation task but may want to restore it later, as it is moved to trash.",
+    "output_shape": "Confirmation message indicating successful deletion, e.g., 'Automation deleted.'",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "task_id is required. If missing, empty, or null, the tool returns: 'error: Error: No task ID provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "1. Ensure the 'task_id' parameter is included in the request.",
+      "2. The 'task_id' must be a non-empty string.",
+      "3. Provide the exact ID of the automation task to delete."
+    ],
+    "verification": [
+      "1. Confirm that the tool returns a success message indicating the automation was deleted.",
+      "2. Check that the automation task no longer appears in the active list (only in trash)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"task_id\": \"\"}",
+      "predicted": "error: empty value rejected",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: task_id",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Invalid type for task_id: expected string, got number",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": null}",
+      "predicted": "error: Error: No task ID provided.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task_id\": []}",
+      "predicted": "error: Error: No task ID provided.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message when no task ID was provided."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: No task ID provided.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message: 'No task ID provided.'"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: No task ID provided.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error and the actual response matched."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error: 'Error: No task ID provided.' because the required task_id parameter is missing.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error due to missing required task_id parameter, and the actual error matches.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No task ID provided because task_id is required but not provided.",
+      "actual": "error: Error: No task ID provided.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required task_id argument.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:36:44.397781+00:00",
+  "updated_at": "2026-06-04T23:37:59.092061+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

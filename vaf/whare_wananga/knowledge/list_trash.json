@@ -1,0 +1,129 @@
+{
+  "tool": "list_trash",
+  "schema_version": 1,
+  "tool_schema_hash": "d9513991ed7a7c0d",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "List all automation tasks that are deleted but recoverable (in trash).",
+    "output_shape": "Formatted string listing each deleted automation task with its name, ID, schedule, and instructions to restore.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; empty object {} works without error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Extra parameters like {'invalid_param': 'test'} are ignored (no error).",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Passing null or a string instead of object also succeeds (tool is lenient, no error thrown).",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with an empty object {} (or any value, as the tool ignores input).",
+      "The tool returns a formatted list of deleted automations if any exist."
+    ],
+    "verification": [
+      "Check that the output begins with '🗑️ Deleted Automations (in Trash):'",
+      "Verify each listed item includes name, ID, schedule, and restore instructions.",
+      "If no automations are in trash, output should indicate empty list (though not observed, assume)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool should return a list of deleted automation tasks (or an empty list if none exist).",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"invalid_param\": \"test\"}",
+      "predicted": "error: Passing an unrecognized parameter 'invalid_param' will cause a validation error because the tool expects no arguments.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing null as the argument will cause a validation error because the tool expects an object.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing a string instead of an object will cause a validation error because the tool expects an object with no required properties.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Passing null as argument should be accepted and return the list of deleted automations (tool is lenient).",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool returned the list of deleted automations as predicted."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will ignore the integer input and return the list of deleted automations (or empty list) as before.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the tool would return a list of deleted automations, and the actual response contains exactly that."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept a boolean (false) as input and return the list of deleted automations without error.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success and the tool returned a list of deleted automations as expected; the minor detail about a boolean argument is not critical and the outcome matches."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a formatted list of deleted automations in trash (or an empty list indicator) because the empty object argument is valid and no errors are triggered.",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that calling list_trash with empty args would return a list of deleted automations, which matches the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: It will return a formatted list of deleted automations (or indicate empty if none).",
+      "actual": "success: **🗑️ Deleted Automations (in Trash):**\n\n• **test_wetter_5min** (6035d8ba)\n  Schedule: daily at 21:06\n  Use `restore_automation` with ID '6035d8ba' to restore\n\n• **wetter_test_28.05** (d2db2d12)\n  Sche",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a success with a formatted list of deleted automations, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.67,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:53:09.976707+00:00",
+  "updated_at": "2026-06-05T00:54:58.019067+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

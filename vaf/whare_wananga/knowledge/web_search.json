@@ -1,0 +1,173 @@
+{
+  "tool": "web_search",
+  "schema_version": 1,
+  "tool_schema_hash": "4c2a0d724b3f75a2",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use for simple web lookups such as weather, news, facts, definitions, person information, and current status queries. Not for complex research tasks.",
+    "output_shape": "Returns a string containing search results or an error message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing or empty 'query' argument results in error: 'Error: No query provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Identify the information need (e.g., weather, news, fact).",
+      "Construct a clear, specific query string.",
+      "Optionally set max_results (positive integer), deep, open_in_browser, trusted_sources_only as needed.",
+      "Call web_search with the query.",
+      "If multiple queries are needed, call the tool multiple times."
+    ],
+    "verification": [
+      "Ensure the query argument is a non-empty string.",
+      "After calling, check that the tool returns a string (not an error) and contains expected information or a 'No results found' message.",
+      "If query is not a string, the tool may return empty results without error, so verify the query type."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: Empty query string will cause an error because query is required and must be non-empty.",
+      "actual": "error: Error: No query provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"weather in London today\", \"max_results\": 2}",
+      "predicted": "success: The tool should return a list of search results with snippets and URLs for weather in London.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"test\", \"max_results\": 0}",
+      "predicted": "error: max_results=0 is invalid; tool likely requires a positive integer for max_results.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"hello\", \"max_results\": -1}",
+      "predicted": "error: max_results=-1 is invalid; the tool likely requires a positive integer for max_results and will throw an error.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": 123, \"max_results\": 2}",
+      "predicted": "error: query expects a string type, so passing a number will cause a type validation error (e.g., 'query must be a string').",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a type validation error, but the tool returned empty results without error, so the prediction was incorrect."
+    },
+    {
+      "intent": "{\"query\": 123}",
+      "predicted": "error: The tool expects query to be a string, so providing an integer will cause a validation error.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error, but the tool returned 'No results found' instead, indicating the prediction was incorrect."
+    },
+    {
+      "intent": "{\"query\": 42}",
+      "predicted": "error: The tool expects query to be a string; passing a number will cause a JSON schema validation error.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error, but the tool returned search results without error."
+    },
+    {
+      "intent": "{\"query\": \"news\", \"max_results\": 1, \"open_in_browser\": true}",
+      "predicted": "error: Opening browser in CLI environment will fail, causing an error.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"Who is Claude AI?\", \"max_results\": 2, \"deep\": false}",
+      "predicted": "success: The tool should return up to two search results with title, snippet, and URL for the query 'Who is Claude AI?'",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: Empty query string will cause an error: 'Error: No query provided.'",
+      "actual": "error: Error: No query provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Predicted error matches actual error message exactly."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No query provided.",
+      "actual": "error: Error: No query provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error caused by missing query, and the actual response matched exactly."
+    },
+    {
+      "intent": "{\"query\": \"\"}",
+      "predicted": "error: The tool will return an error because the query argument is an empty string.",
+      "actual": "error: Error: No query provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to an empty query, and the actual response was an error."
+    },
+    {
+      "intent": "{\"query\": \"Is meditation effective for anxiety?\", \"max_results\": 3, \"deep\": true, \"trusted_sources_only\": true}",
+      "predicted": "success: The tool will return search results summarizing whether meditation is effective for anxiety, from trusted sources.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response indicates a possible rate limit or network issue, which is a transient infrastructure problem not the agent's fault.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"latest AI news\", \"max_results\": 0, \"deep\": true}",
+      "predicted": "error: The tool call will fail because max_results=0 is not a positive integer; it expects a positive integer or default.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error due to invalid argument, but the tool returned a valid (empty) result, not an error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"query\": \"latest celebrity gossip\", \"max_results\": 3, \"trusted_sources_only\": true}",
+      "predicted": "success: Returns search results for latest celebrity gossip from trusted sources, or a 'No results found' message if none.",
+      "actual": "success: No results found. (All search APIs returned empty — possible rate limit or network issue)",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent's prediction included the possibility of a 'No results found' message, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.53,
+  "uses": 15,
+  "success": 11,
+  "fail": 4,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:41:27.136703+00:00",
+  "updated_at": "2026-06-05T01:47:51.579333+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

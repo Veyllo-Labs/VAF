@@ -1,0 +1,163 @@
+{
+  "tool": "list_workflows",
+  "schema_version": 1,
+  "tool_schema_hash": "0e6760f6d8a061c2",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use this tool to see what multi-step workflows are available, especially when the user's request might benefit from a workflow or you want to suggest workflow options.",
+    "output_shape": "A formatted list of workflows with names and descriptions, e.g., 'Available Workflows (12 total):\\n\\n**Research Workflows:**\\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\\n  ...'",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No arguments are required; providing an empty object `{}` works.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing any unexpected key (e.g., `{\"fake_param\": \"test\"}`) causes error: 'Tool Error: ListWorkflowsTool.run() got an unexpected keyword argument 'fake_param''",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with no parameters, i.e., an empty JSON object `{}`.",
+      "Do not include any additional keys in the parameters object."
+    ],
+    "verification": [
+      "Check that the response starts with 'Available Workflows' and lists workflows with descriptions, indicating success."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool should return a list of available workflows with descriptions.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"fake_param\": \"test\"}",
+      "predicted": "success: The tool should ignore extraneous parameters and return the list of workflows.",
+      "actual": "error: Tool Error: ListWorkflowsTool.run() got an unexpected keyword argument 'fake_param'",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool will error because null is not a valid object; it expects a dict with no properties.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool will error because null is not a valid object; the schema requires an object.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing a list instead of an object will cause a type error or unexpected argument error.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error but the tool returned a successful list of workflows with no error."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing a string instead of an object will cause a type error because the tool expects an object (dict) as parameters.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a type error, but the tool returned a successful list of workflows."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object as parameter, but an array was passed, likely resulting in a type error",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a type error, but the tool executed successfully without any arguments."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object (dict) but received a list, so it will raise a type or argument error.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of 12 workflows (including deep_research, legal_contract_research, etc.) with descriptions.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"invalid\": true}",
+      "predicted": "error: The tool will error because it received an unexpected keyword argument 'invalid'.",
+      "actual": "error: Tool Error: ListWorkflowsTool.run() got an unexpected keyword argument 'invalid'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to an unexpected keyword argument."
+    },
+    {
+      "intent": "{\"foo\": \"bar\"}",
+      "predicted": "error: Passing an unexpected key will cause a Tool Error because the tool does not accept any arguments.",
+      "actual": "error: Tool Error: ListWorkflowsTool.run() got an unexpected keyword argument 'foo'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a Tool Error due to an unexpected argument, which matched the actual error."
+    },
+    {
+      "intent": "{\"fake_param\": \"test\"}",
+      "predicted": "error: Tool will raise an error because it receives an unexpected keyword argument 'fake_param'.",
+      "actual": "error: Tool Error: ListWorkflowsTool.run() got an unexpected keyword argument 'fake_param'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would error due to an unexpected keyword argument, and the actual error matched."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of available multi-step workflows with their descriptions.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response correctly returns a list of available workflows with descriptions, matching the agent's prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: It will return a formatted list of available multi-step workflows with names and descriptions.",
+      "actual": "success: 📋 **Available Workflows** (12 total):\n\n**Research Workflows:**\n  • **deep_research**: Comprehensive 10-source research with multi-perspective analysis\n  • **legal_contract_research**: Research legal r",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted formatted list of workflows with names and descriptions.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.5,
+  "uses": 14,
+  "success": 10,
+  "fail": 4,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:59:11.300300+00:00",
+  "updated_at": "2026-06-05T01:01:54.352123+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

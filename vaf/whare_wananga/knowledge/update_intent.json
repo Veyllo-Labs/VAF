@@ -1,0 +1,312 @@
+{
+  "tool": "update_intent",
+  "schema_version": 1,
+  "tool_schema_hash": "6ad7fd5d9f3f562c",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool to update the user's primary current objective or session goal. It should not be used for preferences or general memory items; use memory_save for those.",
+    "output_shape": "Returns a confirmation message or error.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required field 'intent' causes error: 'Error: Intent content is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing an empty object or empty string for 'intent' results in error: 'Error: Intent content is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The 'intent' parameter must be a string; non-string values are rejected with the same error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'intent' parameter is provided as a non-empty string describing the user's current goal.",
+      "Call update_intent with the 'intent' parameter.",
+      "Check the response for errors."
+    ],
+    "verification": [
+      "Verify that the response does not contain an error message.",
+      "Optionally, retrieve the current intent to confirm it has been updated."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: intent must be a string",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: empty value rejected",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: empty value rejected",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: null value rejected",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: empty intent content rejected",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: null value rejected, expected string",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: expected string for intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: expected string for intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'intent'",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: empty string rejected, intent content required",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: intent",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the specific error message that occurred."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message that the tool returned."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message when no arguments were provided."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message that the tool returned."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted the error correctly."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error from the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: Intent content is required.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message returned by the tool."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The required field 'intent' is missing, causing an error: 'Error: Intent content is required.'",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error for missing 'intent' field, matching the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because the required 'intent' parameter is missing from the arguments, resulting in an 'Error: Intent content is required.' message.",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required parameter, and the actual response matched the prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Calling update_intent without 'intent' parameter will result in an error: 'Error: Intent content is required.'",
+      "actual": "error: Error: Intent content is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error when calling update_intent without the required 'intent' parameter.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 33,
+  "success": 0,
+  "fail": 33,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T16:14:23.347451+00:00",
+  "updated_at": "2026-06-04T18:57:47.990979+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

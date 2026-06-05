@@ -1,0 +1,158 @@
+{
+  "tool": "list_tools",
+  "schema_version": 1,
+  "tool_schema_hash": "956ea20695775576",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "When unsure which tool can handle a task, or when no suitable tool exists and you need to see all available tools.",
+    "output_shape": "A list of tool names with a brief description of each tool.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; tool expects an empty object `{}`. Extra parameters like `{\"invalid_param\": \"test\"}` are ignored and do not cause errors.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "No errors observed for missing, empty, or wrong type arguments because the tool requires none.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with an empty JSON object `{}` as the arguments.",
+      "No other arguments are needed or accepted."
+    ],
+    "verification": [
+      "The tool returns a success message starting with 'Available tools:' followed by a list of tool names and descriptions.",
+      "If the response contains this structure, the operation succeeded."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The call will succeed and return a list of all available tools.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The call will succeed and return a list of all available tools.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The call will succeed and return a list of all available tools.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The call will return a list of all available tools, similar to earlier successful calls.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The call will succeed and return a list of all available tools.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The prediction matched the actual successful response of listing all available tools."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object as arguments, but a string was provided; the call will fail with a validation error.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a validation error due to string arguments, but the tool call with an empty object succeeded and returned the tool list."
+    },
+    {
+      "intent": "{\"invalid_param\": \"test\"}",
+      "predicted": "error: The tool will reject unexpected parameters and return an error indicating that the parameter is not allowed.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error for an invalid parameter, but the tool returned a successful list of tools instead."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because the parameters are expected to be an object but a string was passed.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will error because the tool expects an object but received a string.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because the tool expects an object as arguments, but a string was provided.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted failure due to argument type mismatch, but the tool succeeded with empty object arguments."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, but an integer was provided; it will fail with a schema validation error.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a schema validation error due to integer argument, but the actual call with an empty object succeeded."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object as arguments, but a string was provided; the call will fail with a validation error.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error but the tool successfully returned the list of tools."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object as arguments (even if empty), so passing a string should result in an error.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will error because args is an integer but the schema specifies args must be an object.",
+      "actual": "success: Available tools:\n- add_automation_note: Add a note for the automation calendar (for later/planning). The user sees it in the Note section of the automation c...\n- add_automation_todo: Add a to-do for ",
+      "match": false,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.36,
+  "uses": 14,
+  "success": 14,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:50:37.669733+00:00",
+  "updated_at": "2026-06-05T00:53:09.974251+00:00",
+  "challenge_passed": false,
+  "learn_mode": "probe",
+  "rounds": 2
+}

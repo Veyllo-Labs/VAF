@@ -1,0 +1,320 @@
+{
+  "tool": "github_list_repos",
+  "schema_version": 1,
+  "tool_schema_hash": "bccfc2142c4c6845",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use when the user asks about their GitHub repositories, projects, or to list repos they have access to.",
+    "output_shape": "If GitHub is connected: a list of repository objects (each with name, description, url, etc.). If not connected: a string error message prompting to connect GitHub in Settings.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; all parameters are optional. However, the tool only works if GitHub is connected. If not connected, any call returns: 'GitHub is not connected. Connect your GitHub account in Se",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The 'per_page' parameter must be between 1 and 100 (default 30). Invalid values (e.g., 200, -1) are silently ignored when GitHub is not connected; the tool does not return a specific error for them un",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure GitHub is connected via Settings → Connections → Developer → GitHub.",
+      "Optionally specify 'visibility' (all, public, private), 'sort' (created, updated, pushed, full_name), and 'per_page' (1-100).",
+      "Call the tool with the desired parameters (or empty object for defaults).",
+      "If connected, the tool returns a list of repositories."
+    ],
+    "verification": [
+      "Test connectivity by calling the tool with no arguments; expect either a list of repos or the specific connection error message.",
+      "If the connection error appears, guide the user to connect GitHub.",
+      "Once connected, verify that the returned data is a JSON array of repository objects with expected fields (name, html_url, description, etc.).",
+      "Test boundary conditions: e.g., setting per_page=1 should return at most one repo."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"per_page\": 200}",
+      "predicted": "error: The tool will return an error indicating per_page must be between 1 and 100.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": 0}",
+      "predicted": "error: The tool will return an error indicating per_page must be between 1 and 100.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"allpublic\"}",
+      "predicted": "success: The tool will return a message prompting to connect GitHub since GitHub is not connected, ignoring the invalid visibility parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"invalid_param\": \"test\"}",
+      "predicted": "success: The tool will return a message prompting to connect GitHub, ignoring the unknown parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a message stating GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a message stating that GitHub is not connected and to connect it in Settings.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": -1}",
+      "predicted": "success: The tool will return a message indicating GitHub is not connected, ignoring the invalid per_page parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"public\"}",
+      "predicted": "success: The tool will return a success message stating GitHub is not connected, as seen in previous attempts.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": 0}",
+      "predicted": "success: The tool will return a message prompting to connect GitHub, ignoring the invalid per_page value.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"public\", \"sort\": \"updated\", \"per_page\": 5}",
+      "predicted": "success: The tool will return a message stating GitHub is not connected, ignoring the provided parameters.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"invalid\"}",
+      "predicted": "success: The tool will return the 'GitHub is not connected' message ignoring the invalid visibility parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": 200, \"sort\": \"invalid\"}",
+      "predicted": "success: The tool will return the same GitHub not connected message as before, ignoring the invalid parameters.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": \"abc\"}",
+      "predicted": "error: The tool will return an error because per_page expects an integer but received a string, failing parameter validation.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"invalid\"}",
+      "predicted": "success: The tool will return a success message stating GitHub is not connected, ignoring the invalid visibility value.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"public\", \"sort\": \"created\", \"per_page\": 150}",
+      "predicted": "success: The tool will return the 'GitHub not connected' message because the connection is not established, and the invalid per_page value (150, exceeding max 100) will be ignored.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"foo\": \"bar\"}",
+      "predicted": "success: The tool will return the same GitHub not connected message, ignoring the unknown parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return the same 'GitHub not connected' message as before, since no GitHub account is connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": 0}",
+      "predicted": "success: The tool will return the same GitHub not connected message, ignoring the out-of-range per_page parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return the message that GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": \"abc\"}",
+      "predicted": "success: The tool will return a success message stating GitHub is not connected, ignoring the invalid per_page value.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"visibility\": \"secret\"}",
+      "predicted": "error: The tool will return an error because 'secret' is not a valid visibility option (must be all, public, or private).",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"per_page\": 200}",
+      "predicted": "success: The tool will return the same GitHub not connected message, ignoring the out-of-range per_page parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the tool would return the GitHub not connected message regardless of the per_page parameter."
+    },
+    {
+      "intent": "{\"per_page\": 200}",
+      "predicted": "success: The tool will return the same 'GitHub not connected' message, ignoring the out-of-range per_page parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'GitHub not connected' error message, which matches the actual response."
+    },
+    {
+      "intent": "{\"visibility\": \"nonexistent\"}",
+      "predicted": "success: The tool will return the same 'GitHub is not connected' message, ignoring the invalid visibility value.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual tool response matched the agent's prediction exactly, returning the 'GitHub is not connected' message as expected."
+    },
+    {
+      "intent": "{\"visibility\": \"nonexistent\", \"per_page\": 200}",
+      "predicted": "success: The tool will return the message that GitHub is not connected, ignoring the invalid parameters.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would return the 'GitHub is not connected' message, matching the actual response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a success message stating GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return a success message indicating GitHub is not connected."
+    },
+    {
+      "intent": "{\"visibility\": \"public\"}",
+      "predicted": "success: The tool will return the 'GitHub is not connected' message again because GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the 'GitHub not connected' error."
+    },
+    {
+      "intent": "{\"sort\": \"stars\"}",
+      "predicted": "success: The tool will return the 'GitHub not connected' message, ignoring the invalid sort parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'GitHub not connected' error message, matching the actual response."
+    },
+    {
+      "intent": "{\"visibility\": \"public\", \"sort\": \"updated\", \"per_page\": 10}",
+      "predicted": "success: The tool will return the 'GitHub is not connected' message because GitHub is not connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'GitHub is not connected' error message, matching the actual response."
+    },
+    {
+      "intent": "{\"sort\": \"invalid_sort_value\"}",
+      "predicted": "success: The tool will return the 'GitHub is not connected' message, ignoring the invalid sort parameter.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return the 'GitHub is not connected' message despite the invalid sort parameter."
+    },
+    {
+      "intent": "{\"visibility\": \"private\", \"sort\": \"pushed\", \"per_page\": 5}",
+      "predicted": "error: GitHub is not connected, so the tool will return an error prompting to connect GitHub in Settings.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error message about GitHub not being connected.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"visibility\": \"public\", \"per_page\": 0}",
+      "predicted": "error: The tool call will fail because per_page=0 is an invalid value (must be between 1 and 100), and even if GitHub is not connected, the connection error will occur first.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error and the actual response was an error (GitHub not connected), so the prediction was correct.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"visibility\": \"private\", \"sort\": \"pushed\", \"per_page\": 100}",
+      "predicted": "success: The tool will successfully return a list of up to 100 private repositories sorted by last pushed date, assuming GitHub is connected.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted success, but the tool failed because GitHub is not connected, which is not a transient error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"visibility\": \"public\", \"per_page\": 200}",
+      "predicted": "error: The per_page parameter is set to 200, which is outside the allowed range (1-100), so the tool will likely return an error (or if GitHub is not connected, it will return the connection error regardless",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Actual response is a connection error (GitHub not connected), which is a network/infrastructure issue.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.85,
+  "uses": 34,
+  "success": 34,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T21:28:47.117394+00:00",
+  "updated_at": "2026-06-04T21:34:12.319154+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

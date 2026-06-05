@@ -1,0 +1,117 @@
+{
+  "tool": "list_contacts",
+  "schema_version": 1,
+  "tool_schema_hash": "4a3502691a9a0804",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to retrieve all contacts from the central contact list to see their names and available channels (WhatsApp, Telegram, email). Useful for discovering contacts before using get_contact for details.",
+    "output_shape": "Returns a list of contacts, each with 'name' and 'channels' (list of strings), or a message 'No contacts yet. Add contacts in Settings → Connections → Contacts.' if no contacts exist.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; the tool accepts any input (including unexpected keys, null, string) without error, always returning the same success response.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call list_contacts with an empty object {} or any arguments (they are ignored).",
+      "Receive the list of contacts or the 'No contacts yet' message."
+    ],
+    "verification": [
+      "Check that the output is either a list with contact objects containing 'name' and 'channels', or a string indicating no contacts."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of contacts with their names and available channels (WhatsApp, Telegram, email).",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"unexpected\": \"value\"}",
+      "predicted": "error: The tool expects no arguments, so providing an unexpected key will cause a validation error.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object for args, but null is not an object, so it will error.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object argument, but a string was provided, so it will fail validation.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept null as arguments and still return the contact list (or 'No contacts yet').",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted a successful call returning a 'No contacts yet' message, which matched the actual tool response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool ignores the array argument and returns the same 'No contacts yet.' message.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the tool would return 'No contacts yet.' and the actual response matches that, indicating correct understanding."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will accept the array and return the same success response (No contacts yet) since it ignores the argument.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted success message 'No contacts yet'."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Returns the list of all contacts or a message indicating no contacts yet.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent's prediction of returning a message indicating no contacts matches the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: It will return either a list of contacts with names and channels, or a 'No contacts yet.' message.",
+      "actual": "success: No contacts yet. Add contacts in Settings → Connections → Contacts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a success resulting in a 'No contacts yet.' message, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.67,
+  "uses": 9,
+  "success": 9,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:48:53.415370+00:00",
+  "updated_at": "2026-06-05T00:50:37.668971+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

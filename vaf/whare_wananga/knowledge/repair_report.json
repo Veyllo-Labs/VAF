@@ -1,0 +1,110 @@
+{
+  "tool": "repair_report",
+  "schema_version": 1,
+  "tool_schema_hash": "0daeac3d479bcebd",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "When you have an HTML report that may contain empty or too-short sections and you want to automatically regenerate them to meet length requirements.",
+    "output_shape": "String containing the repaired HTML content.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required 'content' parameter results in empty output 'success: ' with no error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing non-HTML content (e.g., a file path or plain text) returns that content unchanged without any error or repair.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid language values (e.g., 'es') are silently accepted; the tool proceeds without error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide the required 'content' parameter with a valid HTML string.",
+      "Optionally provide 'topic' to override the inferred topic (inferred from <h1> if missing).",
+      "Optionally set 'language' to 'de' or 'en' for language-specific regeneration (validation is not strict).",
+      "The tool scans each section of the HTML report; if a section is empty or has fewer words than min_words_target * min_words_ok_ratio, it is regenerated.",
+      "The output is a repaired HTML string (or unchanged if no repair was needed)."
+    ],
+    "verification": [
+      "Ensure the output is a string; if content was provided, it should be non-empty (unless content was empty).",
+      "If the input had empty or too-short sections, verify that those sections have been expanded in the output.",
+      "If content is missing, the output will be an empty string (no error).",
+      "If content is valid HTML, the output should be structurally valid HTML."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"content\": \"<html><body><h1>Test Topic</h1><p>This is a sample paragraph that contains enough words to demonstrate the repair functionality. The tool will check if any sections are empty or too short",
+      "predicted": "success: The tool will parse the HTML, infer the topic from the h1, evaluate the body section, and since the paragraph has sufficient length, return a repaired version (likely unchanged or with minor fixes).",
+      "actual": "success: <html><body><h1>Test Topic</h1><p>This is a sample paragraph that contains enough words to demonstrate the repair functionality. The tool will check if any sections are empty or too short and regenera",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"content\": \"<html><body><h1>Test</h1><p>Sample text.</p></body></html>\", \"language\": \"es\"}",
+      "predicted": "error: The tool will return an error because the language parameter expects one of 'de' or 'en', but 'es' is provided.",
+      "actual": "success: <html><body><h1>Test</h1><p>Sample text.</p></body></html>",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"content\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"language\": \"en\"}",
+      "predicted": "error: The tool expects HTML content; providing a file path (not containing HTML tags) will likely cause a parsing failure or error.",
+      "actual": "success: /tmp/claude-1000/ww_seed/seed.txt",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"content\": \"This is a seed file.\\nIt has some text.\\nMore text.\"}",
+      "predicted": "error: The tool will error because the content is not valid HTML (no tags).",
+      "actual": "success: This is a seed file.\nIt has some text.\nMore text.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"topic\": \"test\"}",
+      "predicted": "error: The tool will raise an error because the required parameter 'content' is missing.",
+      "actual": "success: ",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an error due to missing parameter, but actual response was empty, indicating no error occurred."
+    },
+    {
+      "intent": "{\"content\": \"...\", \"topic\": \"Test\", \"language\": \"en\"}",
+      "predicted": "success: The tool will return the repaired HTML (likely unchanged since content has enough words).",
+      "actual": "success: ...",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success and the tool returned a valid response (ellipsis likely indicates successful output)."
+    },
+    {
+      "intent": "{\"topic\": \"Test\", \"language\": \"en\", \"min_words_target\": 500, \"min_words_ok_ratio\": 0.8, \"min_chars_empty\": 150, \"min_chars_ok\": 500}",
+      "predicted": "error: Missing required parameter 'content' will cause a validation error or TypeError.",
+      "actual": "success: ",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted a missing 'content' parameter error, and the tool returned that same validation error."
+    }
+  ],
+  "status": "learning",
+  "confidence": 0.0,
+  "uses": 7,
+  "success": 7,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:03:43.258254+00:00",
+  "updated_at": "2026-06-05T01:06:06.864289+00:00"
+}

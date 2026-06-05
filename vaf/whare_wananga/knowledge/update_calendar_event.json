@@ -1,0 +1,169 @@
+{
+  "tool": "update_calendar_event",
+  "schema_version": 1,
+  "tool_schema_hash": "f21d99cfc2db8a47",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to modify an existing calendar event's summary, start/end time, or description, given its event_id obtained from list_calendar_events.",
+    "output_shape": "Returns a JSON object indicating success (e.g., {'status': 'ok'}) or an error message string.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "event_id is required; missing, empty, or null yields error: 'error: event_id is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "provider must be one of 'gmail' or 'microsoft' if provided; invalid value may cause an error after event_id is validated.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Obtain event_id from list_calendar_events.",
+      "Provide event_id as a non-empty string in the request.",
+      "Optionally provide summary, start, end, description, provider, account_id, calendar_id as needed.",
+      "Ensure start and end are in ISO8601 format if provided.",
+      "Ensure provider is either 'gmail' or 'microsoft' if provided.",
+      "Call update_calendar_event with the constructed payload."
+    ],
+    "verification": [
+      "Check the response for a success status (e.g., JSON with 'status': 'ok').",
+      "If an error is returned, handle it appropriately (e.g., retry with corrected input).",
+      "Optionally use list_calendar_events to confirm the event details have been updated."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: event_id",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"event_id\": \"\"}",
+      "predicted": "error: event_id cannot be empty",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: event_id must be a string",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: event_id must be a string",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"event_id\": null}",
+      "predicted": "error: error: event_id is required.",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error because event_id was null, and the actual response matches the prediction."
+    },
+    {
+      "intent": "{\"provider\": \"outlook\"}",
+      "predicted": "error: error: invalid provider, must be gmail or microsoft.",
+      "actual": "error: event_id is required.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error about invalid provider, but the actual error was about missing event_id, indicating incorrect understanding."
+    },
+    {
+      "intent": "{\"provider\": \"invalid_provider\"}",
+      "predicted": "error: error: provider must be one of gmail, microsoft.",
+      "actual": "error: event_id is required.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a specific validation error about provider, but tool required event_id instead."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: event_id must be a string",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"event_id\": \"\"}",
+      "predicted": "error: error: event_id is required.",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"event_id\": \"\"}",
+      "predicted": "error: error: event_id is required.",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The predicted error matches the actual error response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: event_id is required.",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent accurately predicted the error about missing event_id, matching the actual tool response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: event_id must be a string",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing event_id; the actual error message aligns with the expected failure."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because event_id is required but not provided, returning 'error: event_id is required.'",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because event_id is required but not provided.",
+      "actual": "error: event_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument 'event_id'.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.86,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:36:24.676126+00:00",
+  "updated_at": "2026-06-05T01:38:32.069272+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

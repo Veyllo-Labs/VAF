@@ -1,0 +1,119 @@
+{
+  "tool": "add_automation_todo",
+  "schema_version": 1,
+  "tool_schema_hash": "804349ed09639b0e",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool to add a task to the automation calendar to-do list, typically when a task needs to be tracked by the user.",
+    "output_shape": "Returns a success confirmation or an error message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'text' (string). When missing, empty, or not provided, the tool returns error: 'Error: text is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'text' parameter is a non-empty string describing the task.",
+      "Optionally include 'due_at' as an ISO8601 or YYYY-MM-DD date string.",
+      "Invoke the tool with these parameters."
+    ],
+    "verification": [
+      "Check that the tool does not return an error.",
+      "Verify the task appears in the automation calendar's to-do list."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"text\": \"\"}",
+      "predicted": "error: empty text rejected",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: text must be a string",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"due_at\": \"not-a-date\"}",
+      "predicted": "error: invalid due_at format",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: text is required.",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the exact error message that the tool returned, demonstrating correct understanding."
+    },
+    {
+      "intent": "{\"text\": null}",
+      "predicted": "error: Error: text is required.",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error because the required 'text' argument was missing."
+    },
+    {
+      "intent": "{\"text\": null}",
+      "predicted": "error: Error: text is required.",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted the exact error 'text is required' and the tool returned that same error."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because the required 'text' argument is missing.",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing required argument, and the actual response was the expected error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The required argument 'text' is missing, so the tool will return an error: 'Error: text is required.'",
+      "actual": "error: Error: text is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument, and the actual response matched.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:18:18.315607+00:00",
+  "updated_at": "2026-06-04T23:19:39.174973+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

@@ -1,0 +1,118 @@
+{
+  "tool": "cancel_timer",
+  "schema_version": 1,
+  "tool_schema_hash": "1ccce85bee33c463",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to cancel a pending one-shot timer that is no longer needed or was set incorrectly.",
+    "output_shape": "Returns a confirmation message on success, or an error message on failure.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'timer_id' (string) must be provided and non-empty. If missing or empty, tool returns: 'Error: 'timer_id' is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Obtain the timer id from the output of 'set_timer' or 'list_timers' (excluding the '#' character).",
+      "Call 'cancel_timer' with the parameter 'timer_id' set to that id as a string."
+    ],
+    "verification": [
+      "Call 'list_timers' to confirm the timer is no longer present.",
+      "Alternatively, the tool returns a success message upon successful cancellation."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: timer_id",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"timer_id\": \"\"}",
+      "predicted": "error: empty string rejected",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: expected string, got number",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: expected string, got number",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"timer_id\": null}",
+      "predicted": "error: Error: 'timer_id' is required.",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error that occurred due to missing timer_id."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'timer_id' must be a string.",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error when calling cancel_timer without arguments, though the exact error message differed."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: 'timer_id' is required.",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message that would occur due to missing required argument."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will error because the required argument 'timer_id' is missing.",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the call would error due to missing required argument 'timer_id', which matches the actual error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will return an error because the required argument 'timer_id' is missing from the empty args.",
+      "actual": "error: Error: 'timer_id' is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:55:20.048472+00:00",
+  "updated_at": "2026-06-05T00:56:44.523821+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

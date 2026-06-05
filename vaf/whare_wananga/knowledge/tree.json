@@ -1,0 +1,178 @@
+{
+  "tool": "tree",
+  "schema_version": 1,
+  "tool_schema_hash": "1f377ba3174ae228",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "When you need to visualize the directory structure in an ASCII tree format for quick inspection of file hierarchy.",
+    "output_shape": "A string starting with the directory name followed by a newline, then indented entries with tree connector characters (├──, └──) for files and subdirectories.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Path must point to a directory, not a file. Error when file given: 'Error: Path is not a directory.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Path must exist. Error for nonexistent path: 'Error: Path not found.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Access to certain directories may be restricted. On attempt with '.' in a protected context, error: 'Access denied: VAF program directory is protected'.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Depth parameter can be any integer (including negative or zero) – negative or zero depth shows only the root directory, which may be unexpected if a deeper view is intended.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Set the 'path' parameter to a valid directory path (string). If omitted, the current working directory is used.",
+      "Set the 'depth' parameter to the desired maximum depth (integer). If omitted, default is 2. Negative or zero values display only the root directory.",
+      "Ensure the path is accessible; avoid protected or system directories.",
+      "Call the tool to generate the ASCII tree output."
+    ],
+    "verification": [
+      "Check that the output begins with the directory name followed by a newline.",
+      "Verify that the tree structure uses standard ASCII characters (├──, └──) for indentation.",
+      "Ensure all expected files and subdirectories within the specified depth are listed.",
+      "If depth is 0 or negative, confirm only the root directory name is shown."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": -1}",
+      "predicted": "error: Tool will reject negative depth value, likely returning an error message.",
+      "actual": "success: ww_seed/\n",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"depth\": 1}",
+      "predicted": "error: The tool expects a directory path, but the provided path points to a file, so it will return an error.",
+      "actual": "error: Error: Path is not a directory.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": 0}",
+      "predicted": "success: The tree will show only the root directory name with no contents, as depth=0 limits to the starting directory.",
+      "actual": "success: ww_seed/\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/nonexistent\", \"depth\": 1}",
+      "predicted": "error: The tool will report an error because the specified path does not exist.",
+      "actual": "error: Error: Path not found.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \".\", \"depth\": 3}",
+      "predicted": "success: Will show ASCII tree of current working directory up to depth 3, starting with the directory name.",
+      "actual": "error: Access denied: VAF program directory is protected",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success but tool returned an access denied error."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": 1}",
+      "predicted": "success: The tree will show the directory ww_seed/ with its immediate children (seed.txt and subdir/) indented one level.",
+      "actual": "success: ww_seed/\n├── subdir/\n├── seed.txt\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual output matches the predicted directory listing and structure exactly."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": 1}",
+      "predicted": "success: The tool will succeed and return an ASCII tree showing the directory and its immediate children up to depth 1.",
+      "actual": "success: ww_seed/\n├── subdir/\n├── seed.txt\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted success and the actual tree output matches the expected structure."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": -1}",
+      "predicted": "success: Negative depth will show only the root directory name.",
+      "actual": "success: ww_seed/\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"depth\": 2}",
+      "predicted": "error: The tool will return an error because the specified path is a file, not a directory.",
+      "actual": "error: Error: Path is not a directory.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"depth\": 2}",
+      "predicted": "error: Path points to a file, not a directory, so the tool will return an error.",
+      "actual": "error: Error: Path is not a directory.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error because the path is a file, and the tool returned an error for that reason."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": 0}",
+      "predicted": "success: Will show only the root directory name (ww_seed/) with no children because depth is 0.",
+      "actual": "success: ww_seed/\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that with depth 0, tree would output only the root directory name, which matches the actual response."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\", \"depth\": 1}",
+      "predicted": "error: Error: Path is not a directory.",
+      "actual": "error: Error: Path is not a directory.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error that the path is not a directory, matching the actual tool response."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/subdir\", \"depth\": 1}",
+      "predicted": "success: Will output an ASCII tree of the contents of '/tmp/claude-1000/ww_seed/subdir' showing its immediate files and subdirectories up to depth 1.",
+      "actual": "success: subdir/\n",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual tool output 'subdir/' matches the predicted ASCII tree for depth 1, indicating a successful and correct prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\", \"depth\": 3}",
+      "predicted": "success: The tool will generate an ASCII tree view of the directory structure at /tmp/claude-1000/ww_seed up to depth 3.",
+      "actual": "success: ww_seed/\n├── subdir/\n├── seed.txt\n",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual output is an ASCII tree directory structure as predicted, with no errors.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.86,
+  "uses": 14,
+  "success": 8,
+  "fail": 6,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:29:36.635822+00:00",
+  "updated_at": "2026-06-05T01:33:28.612775+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

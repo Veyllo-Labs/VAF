@@ -1,0 +1,135 @@
+{
+  "tool": "document_viewer",
+  "schema_version": 1,
+  "tool_schema_hash": "fb2f2595dae76427",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use when the user asks to attach, add to chat, or show content of a file in the document list. Requires a valid existing file path.",
+    "output_shape": "Displays the file content in the Document Viewer (Anhänge list) panel on the right.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Argument 'path' is REQUIRED. Missing or empty path returns error: 'error: Error: path is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing a non-existent file path returns error: 'error: Error: File not found: <path>'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing a directory instead of a file returns error: 'error: Error: Not a file: <path>'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Tool only works in the Web UI with an active chat session; otherwise returns 'error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure you are in the Web UI with an active chat session.",
+      "Provide the full file path (e.g., C:\\Users\\...\\file.pdf) as the 'path' parameter.",
+      "Confirm the path points to an existing file (not a directory).",
+      "Call the tool; the file content appears in the right panel Document Viewer."
+    ],
+    "verification": [
+      "Check that the tool did not return an error.",
+      "Confirm the file content is displayed in the Document Viewer (Anhänge list) panel."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "success: The tool opens the seed.txt file in the Document Viewer and displays its content.",
+      "actual": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/nonexistent/file.txt\"}",
+      "predicted": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "actual": "error: Error: File not found: /nonexistent/file.txt",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed\"}",
+      "predicted": "error: Error: File not found: /tmp/claude-1000/ww_seed (tool expects a file, not a directory)",
+      "actual": "error: Error: Not a file: /tmp/claude-1000/ww_seed",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"\"}",
+      "predicted": "error: Error: File not found:  (empty path treated as nonexistent file)",
+      "actual": "error: Error: path is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "error: The tool will return an 'Error: No active session' error because there is no active chat session in the current environment, even though the file path is valid.",
+      "actual": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the 'No active session' error, matching the actual response."
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed/seed.txt\"}",
+      "predicted": "error: The tool will return 'error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).' because there is no active Web UI session.",
+      "actual": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the specific error about no active session, and the actual tool response matched exactly."
+    },
+    {
+      "intent": "{\"path\": \"\"}",
+      "predicted": "error: Tool will return error: path is required.",
+      "actual": "error: Error: path is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the exact error message from the tool."
+    },
+    {
+      "intent": "{\"path\": \"README.md\"}",
+      "predicted": "error: The tool will return an error because the path 'README.md' is not a full file path, likely resulting in 'File not found: README.md'.",
+      "actual": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error, even though the actual error differed, demonstrating understanding of the tool's failure mode.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"path\": \"/tmp/claude-1000/ww_seed//seed.txt\"}",
+      "predicted": "error: The provided path '/tmp/claude-1000/ww_seed//seed.txt' is likely invalid (file does not exist or double slash causes issues), resulting in an error: 'Error: File not found: /tmp/claude-1000/ww_seed//s",
+      "actual": "error: Error: No active session (Document Viewer is only available in the Web UI with an active chat session).",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error, and an error occurred; the specific error differs but the prediction of failure was correct.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.89,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:48:13.897926+00:00",
+  "updated_at": "2026-06-04T23:50:12.427947+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

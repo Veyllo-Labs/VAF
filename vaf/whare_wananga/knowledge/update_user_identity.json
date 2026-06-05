@@ -1,0 +1,67 @@
+{
+  "tool": "update_user_identity",
+  "schema_version": 1,
+  "tool_schema_hash": "4fc11c6f758da84a",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use when the user shares personal information (name, language, location, preferences) or specifies a channel for proactive messages (e.g., Telegram).",
+    "output_shape": "Updates the user identity block in the system prompt, affecting subsequent interactions like greeting and adherence to preferences.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "All parameters are optional; no required fields, but an empty string for a string parameter (e.g., name='') may cause error: '[ERROR] Empty value for name is not allowed.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "main_messenger must be one of the allowed enums; providing an invalid value (e.g., 'sms') triggers: '[ERROR] Invalid main_messenger value. Allowed: telegram, discord, slack, whatsapp, email.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "language expects a valid ISO 639-1 code (e.g., 'de', 'en'); invalid code (e.g., 'german') produces: '[ERROR] Unsupported language code.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "add_preference must be an array of strings; passing a single string (e.g., 'concise') yields: '[ERROR] add_preference must be an array of strings.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "remove_preference must be a single string; passing an array (e.g., ['don't use emojis']) causes: '[ERROR] remove_preference must be a string, not array.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure at least one parameter is provided; otherwise, the tool may have no effect.",
+      "Validate that string parameters (name, language, city, country, main_messenger, timezone, date_format, time_format) are non-empty if provided.",
+      "Check main_messenger against the allowed enum list; lower-case the value if necessary.",
+      "For language, use ISO 639-1 two-letter codes; convert to lowercase.",
+      "For add_preference, provide an array of strings; for remove_preference, provide a single string matching an existing preference exactly.",
+      "Consider using timezone, date_format, time_format together with location for context-aware responses."
+    ],
+    "verification": [
+      "After a successful call, the system prompt's user identity block should reflect the new values (e.g., name, language).",
+      "If the user greets you, verify the greeting uses the correct name (e.g., 'Hey Alex').",
+      "Check that subsequent responses adhere to preferences (e.g., no emojis if specified).",
+      "For proactive messages, confirm the messenger channel is updated by asking the user if desired."
+    ]
+  },
+  "predict_records": [],
+  "status": "confirmed",
+  "confidence": 0.0,
+  "uses": 0,
+  "success": 0,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:41:07.444091+00:00",
+  "updated_at": "2026-06-05T01:41:27.135957+00:00",
+  "challenge_passed": false,
+  "learn_mode": "declare"
+}

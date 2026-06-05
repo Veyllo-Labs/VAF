@@ -1,0 +1,118 @@
+{
+  "tool": "delete_automation_note",
+  "schema_version": 1,
+  "tool_schema_hash": "00ad242b7ed9b2ec",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool to delete an automation note that is no longer needed, using its note_id obtained from list_automation_notes.",
+    "output_shape": "On success: a confirmation string (e.g., 'Note deleted'). On failure: an error message.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "note_id is required; missing, empty, or wrong type all yield: 'error: Error: note_id is required.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Retrieve the note_id of the note to delete from the output of list_automation_notes.",
+      "Call delete_automation_note with the note_id parameter set to that ID.",
+      "Observe the response for success or error."
+    ],
+    "verification": [
+      "Call list_automation_notes again and ensure the deleted note's ID no longer appears in the list."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'note_id'",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"note_id\": \"\"}",
+      "predicted": "error: empty string rejected",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: note_id must be a string",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type mismatch: note_id must be a string",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"note_id\": null}",
+      "predicted": "error: error: Error: note_id is required.",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that providing null note_id would result in an error requiring note_id."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: note_id is required.",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message for missing required argument."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: Error: note_id is required.",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error that the note_id argument is required, and the actual response matched exactly."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool will return an error because note_id is required but not provided.",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required argument note_id.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will fail because note_id is required but was not provided, resulting in an error message: 'Error: note_id is required.'",
+      "actual": "error: Error: note_id is required.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing required note_id, which matches the actual response.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:37:59.093493+00:00",
+  "updated_at": "2026-06-04T23:39:00.204167+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

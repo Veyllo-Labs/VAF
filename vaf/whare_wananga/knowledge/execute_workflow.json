@@ -1,0 +1,177 @@
+{
+  "tool": "execute_workflow",
+  "schema_version": 1,
+  "tool_schema_hash": "4adf5a98c059f982",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you've been informed that workflows are available but none matched automatically, or you determine that a specific workflow would handle the request best, or the user's request clearly fits a workflow but wasn't auto-detected.",
+    "output_shape": "Returns the result of the workflow execution (typically a string or execution status).",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required 'workflow_id' causes error: 'ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id''",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string 'workflow_id' causes error: '❌ Workflow '' not found.' followed by list of available workflows.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Null workflow_id causes error: '❌ Workflow 'None' not found.' followed by list of available workflows.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid type for 'variables' (e.g., string instead of object) is not caught because the required 'workflow_id' missing error occurs first.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Identify the appropriate workflow ID from the conversation context or list of available workflows.",
+      "Ensure the 'workflow_id' argument is a non-empty string.",
+      "Optionally provide a 'variables' object with required inputs for the workflow.",
+      "Call execute_workflow with the 'workflow_id' and optionally 'variables'."
+    ],
+    "verification": [
+      "Check if the tool returns a successful result without error.",
+      "If an error occurs, match the message to known pitfalls: missing workflow_id, empty/null workflow_id, or workflow not found.",
+      "For empty workflow_id, the error includes the list of available workflows, confirming the tool is functional but the ID is invalid."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'workflow_id'",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"workflow_id\": \"\"}",
+      "predicted": "error: empty workflow_id rejected",
+      "actual": "error: ❌ Workflow '' not found.\n\nAvailable workflows:\n- analyze_website: Fetch a website and analyze/summarize its content\n- code_review: Read a file, review it, and save improvements\n- create_document: Gene",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type error: workflow_id must be a string",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: TypeError: expected string for workflow_id",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: validation error: workflow_id must be a string",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error, and the actual response was indeed an error (missing required argument)."
+    },
+    {
+      "intent": "{\"variables\": \"invalid\"}",
+      "predicted": "error: variables must be an object",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Predicted error about variables but actual error was missing required argument workflow_id, showing incorrect understanding."
+    },
+    {
+      "intent": "{\"workflow_id\": null}",
+      "predicted": "error: null not allowed for workflow_id",
+      "actual": "error: ❌ Workflow 'None' not found.\n\nAvailable workflows:\n- analyze_website: Fetch a website and analyze/summarize its content\n- code_review: Read a file, review it, and save improvements\n- create_document: ",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted an error from null workflow_id, and the actual response was an error indicating workflow 'None' not found."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: TypeError or validation error: expected string for workflow_id",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: workflow_id must be a string",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"workflow_id\": \"\"}",
+      "predicted": "error: Workflow '' not found.",
+      "actual": "error: ❌ Workflow '' not found.\n\nAvailable workflows:\n- analyze_website: Fetch a website and analyze/summarize its content\n- code_review: Read a file, review it, and save improvements\n- create_document: Gene",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error that the empty workflow ID was not found."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: workflow_id must be a string",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing workflow_id, and the actual error confirms the same issue."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: missing required positional argument 'workflow_id'",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error about the missing mandatory argument 'workflow_id'."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Missing required 'workflow_id' causes an error: 'ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id''",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error due to missing required argument.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Missing required 'workflow_id' causes error: 'ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id''",
+      "actual": "error: Tool Error: ExecuteWorkflowTool.run() missing 1 required positional argument: 'workflow_id'",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that missing the required 'workflow_id' argument would cause a specific error, and the actual error matched exactly.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.93,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:50:41.426003+00:00",
+  "updated_at": "2026-06-04T23:52:59.716968+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

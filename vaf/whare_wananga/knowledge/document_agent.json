@@ -1,0 +1,169 @@
+{
+  "tool": "document_agent",
+  "schema_version": 1,
+  "tool_schema_hash": "bd9ce42b6bb1c671",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use this tool when you need to create large, structured documents such as contracts, reports, letters, or templates, with support for multi-format output (Word, PDF, Markdown, Text).",
+    "output_shape": "The tool returns a document file in the specified format (e.g., .docx, .pdf, .md, .txt).",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing required field 'task': 'Error: No task provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Empty string for 'task': 'Error: No task provided.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Null value for 'task': 'Tool Error: 'NoneType' object has no attribute 'strip''",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "List value for 'task': 'Tool Error: 'list' object has no attribute 'strip''",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide a non-empty string for the required 'task' parameter, describing the document creation task.",
+      "Optionally specify the desired output format if the tool supports it (documentation may be needed).",
+      "Invoke the tool with the prepared arguments."
+    ],
+    "verification": [
+      "Confirm that the tool did not return an error message (e.g., 'No task provided' or attribute errors).",
+      "Check that the returned document is generated correctly with the expected content and format."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'task'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task\": \"\"}",
+      "predicted": "error: empty task rejected",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type error: task must be a string",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task\": null}",
+      "predicted": "error: type error: task must be a string",
+      "actual": "error: Tool Error: 'NoneType' object has no attribute 'strip'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task\": []}",
+      "predicted": "error: AttributeError: 'list' object has no attribute 'strip'",
+      "actual": "error: Tool Error: 'list' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the AttributeError that occurred when calling the tool with invalid arguments."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: AttributeError: 'int' object has no attribute 'strip'",
+      "actual": "error: Error: No task provided.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted an AttributeError about 'int' object, but actual error was 'No task provided', indicating incorrect understanding."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted an error and the tool returned an error, indicating understanding that the call would fail."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "actual": "error: Error: No task provided.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The predicted error (attribute error on 'strip') does not match the actual error (missing task argument)."
+    },
+    {
+      "intent": "{\"task\": \"\"}",
+      "predicted": "error: empty task rejected",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error for an empty task, matching the actual error response."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No task provided.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error that occurred when no task was provided."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Error: No task provided.",
+      "actual": "error: Error: No task provided.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"task\": null}",
+      "predicted": "error: Tool Error: 'NoneType' object has no attribute 'strip'",
+      "actual": "error: Tool Error: 'NoneType' object has no attribute 'strip'",
+      "match": true,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.86,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T19:59:23.581625+00:00",
+  "updated_at": "2026-06-04T23:42:26.754835+00:00",
+  "challenge_passed": false,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

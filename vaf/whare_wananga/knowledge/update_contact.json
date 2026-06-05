@@ -1,0 +1,163 @@
+{
+  "tool": "update_contact",
+  "schema_version": 1,
+  "tool_schema_hash": "27589292c55fddc3",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use to modify details of an existing contact when you have the contact_id from list_contacts or get_contact. Requires at least the contact_id; all other fields are optional.",
+    "output_shape": "Returns a success message or updated contact data.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "contact_id is mandatory; if missing, empty, or null, the error is: 'error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure you have a valid contact_id from list_contacts or get_contact.",
+      "If multiple contacts have the same name, ask the user to confirm which one before updating.",
+      "Provide contact_id as a non-empty string.",
+      "Optionally provide any other fields to update: name, email, whatsapp_phone, telegram_username, preferred_language, how_to_address, birthday, notes, allow_as_assistant_user.",
+      "Call update_contact with the parameters."
+    ],
+    "verification": [
+      "Verify that contact_id is a non-empty string before calling the tool.",
+      "Ensure optional fields have correct types: allow_as_assistant_user must be a boolean; other fields should be strings.",
+      "After update, confirm the changes by calling get_contact with the same contact_id."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field: contact_id",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"contact_id\": \"\"}",
+      "predicted": "error: empty contact_id rejected",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": 123}",
+      "predicted": "error: name must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: contact_id must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: <think>We need to produce a probe that is invalid. The tool requires contact_id. We have already tried {} and empty string. We can try a wrong type, e.g., contact_id: 123 (number). But note the schema",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted success for update_contact with no arguments, but the tool requires contact_id and returned an error."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: contact_id must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error about missing contact_id, and the actual response was an error confirming that."
+    },
+    {
+      "intent": "{\"allow_as_assistant_user\": \"yes\"}",
+      "predicted": "error: allow_as_assistant_user must be a boolean",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a specific error about allow_as_assistant_user being a boolean, but the actual error was a missing required parameter (contact_id), showing incorrect understanding of the tool's re"
+    },
+    {
+      "intent": "{\"contact_id\": null}",
+      "predicted": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: contact_id must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: contact_id must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing contact_id, even though the exact error message differed."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: contact_id must be a string",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error due to missing contact_id, even though the exact error message differed."
+    },
+    {
+      "intent": "{\"contact_id\": \"\"}",
+      "predicted": "error: error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error when contact_id was missing."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The contact_id is missing (empty args), so the tool will return an error: 'error: contact_id is required for update_contact.'",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error due to missing contact_id, which matches the actual error response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"name\": \"John Doe\"}",
+      "predicted": "error: The call will fail because contact_id is required but was not provided; only name was given.",
+      "actual": "error: contact_id is required for update_contact. Use list_contacts or get_contact to get contact_id.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted that the tool would return an error due to missing required parameter contact_id.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.86,
+  "uses": 14,
+  "success": 0,
+  "fail": 14,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:38:57.156968+00:00",
+  "updated_at": "2026-06-05T01:41:07.443346+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 2
+}

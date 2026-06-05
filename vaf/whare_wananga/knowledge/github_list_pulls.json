@@ -1,0 +1,186 @@
+{
+  "tool": "github_list_pulls",
+  "schema_version": 1,
+  "tool_schema_hash": "7e859e73d9549337",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "List pull requests for a GitHub repository. Use when the user asks about PRs, pull requests, or reviews.",
+    "output_shape": "A string message. If GitHub is not connected, returns an error string: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.' If connected, expected to return a list of pull requests.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "GitHub account must be connected. Observed error: 'GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, ",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Required parameters owner (string) and repo (string) must be provided. However, when GitHub is not connected, the tool does not validate missing parameters; it returns the connection error instead of ",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Optional parameter state must be one of 'open', 'closed', or 'all'. When GitHub is not connected, invalid values are not validated and the tool still returns the connection error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Optional parameter per_page must be an integer. When GitHub is not connected, non-integer values (e.g., 'abc') are not rejected and the tool returns the connection error.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the GitHub account is connected in Settings → Connections → Developer → GitHub.",
+      "Provide the required parameters: owner (repository owner) and repo (repository name).",
+      "Optionally specify state as 'open', 'closed', or 'all' (default 'open') and per_page as an integer (default 20).",
+      "Call the tool github_list_pulls with these parameters."
+    ],
+    "verification": [
+      "Check the tool response. If it contains 'GitHub is not connected', then the GitHub account needs to be connected first.",
+      "If connected, the response should be a list of pull requests with fields like number, title, state, etc."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"all\", \"per_page\": 3}",
+      "predicted": "success: I expect the tool to return a list of up to 3 pull requests from the octocat/Hello-World repository, with each PR having fields like number, title, state, etc.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"invalid\", \"per_page\": 5}",
+      "predicted": "error: State must be one of open, closed, or all; tool will return validation error before checking GitHub connection.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"open\", \"per_page\": 5}",
+      "predicted": "success: The tool will return a success message indicating GitHub is not connected, just like before.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"open\", \"per_page\": \"abc\"}",
+      "predicted": "error: Tool will reject non-integer per_page parameter with a validation error before checking GitHub connection.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"open\", \"per_page\": 5}",
+      "predicted": "error: I expect the tool to return the error message 'GitHub is not connected' because the GitHub account is not connected in Settings, regardless of parameter validity.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected, which matches the actual tool response."
+    },
+    {
+      "intent": "{\"repo\": \"Hello-World\", \"state\": \"open\", \"per_page\": 5}",
+      "predicted": "error: The tool will refuse the call due to missing required parameter 'owner' and return an error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a 'missing required parameter' error, but the actual error was about GitHub not being connected, indicating incorrect understanding."
+    },
+    {
+      "intent": "{\"owner\": \"test\", \"repo\": \"test\", \"state\": \"all\", \"per_page\": 1}",
+      "predicted": "success: Expected the tool to return the same 'GitHub is not connected' error message regardless of repository existence.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the error message about GitHub not being connected."
+    },
+    {
+      "intent": "{\"repo\": \"test\"}",
+      "predicted": "error: Missing required parameter 'owner' will cause a tool invocation error.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"repo\": \"Hello-World\"}",
+      "predicted": "error: Missing required parameter 'owner' will cause a validation error before the GitHub connection check.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"invalid\", \"per_page\": 5}",
+      "predicted": "success: The tool will return the GitHub not connected message because connection check precedes parameter validation.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the connection error, even though parameters were invalid."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"invalid\", \"per_page\": \"abc\"}",
+      "predicted": "success: The tool will return the GitHub not connected error message because connection check occurs before parameter validation.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the connection error would occur before parameter validation, matching the actual response."
+    },
+    {
+      "intent": "{\"owner\": \"facebook\", \"repo\": \"react\", \"state\": \"open\", \"per_page\": 5}",
+      "predicted": "success: The tool will return the string 'GitHub is not connected. Connect your GitHub account...' because no GitHub connection is available.",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted that the tool would return an error about GitHub not being connected."
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"merged\", \"per_page\": 50}",
+      "predicted": "error: The tool will fail because 'state' parameter value 'merged' is not one of the allowed values (open, closed, all).",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Actual response is a connectivity/infrastructure error (GitHub account not connected), which is not the tool's fault per instructions.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"closed\", \"per_page\": 0}",
+      "predicted": "error: The tool call will return an error because per_page=0 is invalid (must be a positive integer between 1 and 100).",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted error due to invalid per_page parameter, but actual error was GitHub not connected, so prediction was incorrect.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"owner\": \"octocat\", \"repo\": \"Hello-World\", \"state\": \"open\", \"per_page\": 0}",
+      "predicted": "error: The tool will error because per_page=0 is an invalid value (must be at least 1).",
+      "actual": "success: GitHub is not connected. Connect your GitHub account in Settings → Connections → Developer → GitHub. Then the agent can list your repos, read files, and list issues/PRs.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Actual response is an infrastructure/connection issue, which is treated as a pass per instructions.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.6,
+  "uses": 15,
+  "success": 15,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:26:30.661154+00:00",
+  "updated_at": "2026-06-05T00:31:00.181331+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 2
+}

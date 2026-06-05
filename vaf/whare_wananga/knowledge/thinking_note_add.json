@@ -1,0 +1,129 @@
+{
+  "tool": "thinking_note_add",
+  "schema_version": 1,
+  "tool_schema_hash": "adc5ba7ef5e41b90",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "When you need to persist a note that will be shown at the start of every future thinking pass for up to 30 days. Useful for remembering user decisions, context, or things to avoid asking again.",
+    "output_shape": "The tool likely returns a confirmation message indicating the note was saved. No specific output shape is defined; it probably returns a success status.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The 'note' parameter is required and must be a non-empty string. Error: 'error: Error: note must not be empty.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing null or an empty string for 'note' results in the same error.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The optional 'user_scope_id' parameter is injected by the framework and should be left blank in the call.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'note' parameter is provided as a non-empty string with a maximum of 500 characters.",
+      "Leave the 'user_scope_id' parameter blank (it will be injected automatically).",
+      "Pass the JSON object with the note key and the note content."
+    ],
+    "verification": [
+      "Check that the tool does not return an error. If successful, the note is saved.",
+      "Verify that the note appears in the next thinking run start (if within 30 days)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "error: missing required field 'note'",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"note\": null}",
+      "predicted": "error: null value rejected for required field 'note'",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"note\": \"\"}",
+      "predicted": "error: empty string rejected for required field 'note'",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: note must be a string",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: note must be a string",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would return an error, even though the specific error message differed."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: error: note must be a string",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error would occur, and the actual response was an error, albeit with a different message."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: type error: note must be a string",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error and an error occurred, correctly anticipating failure even though the exact message differed."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool call will fail because the required 'note' parameter is missing/empty, returning error: 'note must not be empty'.",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the missing 'note' parameter would cause an error, and the actual error matched.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The call will fail because the required 'note' parameter is missing or empty.",
+      "actual": "error: Error: note must not be empty.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the error due to missing 'note' parameter.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 0,
+  "fail": 9,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:28:36.463495+00:00",
+  "updated_at": "2026-06-05T01:29:36.635081+00:00",
+  "challenge_passed": true,
+  "learn_mode": "error_path",
+  "rounds": 1
+}

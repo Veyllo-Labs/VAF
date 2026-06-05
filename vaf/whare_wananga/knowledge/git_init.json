@@ -1,0 +1,39 @@
+{
+  "tool": "git_init",
+  "schema_version": 1,
+  "tool_schema_hash": "a36ec06c9020fcd6",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Initialize a Git repository in the current project directory, creating .git and .gitignore.",
+    "output_shape": "string (success message) or None",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No required arguments; no errors from missing/empty/wrong type arguments.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Invoke git_init without any arguments."
+    ],
+    "verification": [
+      "Check that a .git directory and .gitignore file exist in the project directory."
+    ]
+  },
+  "predict_records": [],
+  "status": "confirmed",
+  "confidence": 0.0,
+  "uses": 0,
+  "success": 0,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:02:48.100044+00:00",
+  "updated_at": "2026-06-05T00:02:56.855158+00:00",
+  "challenge_passed": false,
+  "learn_mode": "declare"
+}

@@ -1,0 +1,319 @@
+{
+  "tool": "python_sandbox",
+  "schema_version": 1,
+  "tool_schema_hash": "ca0f86faa2bd4ad9",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Execute Python code safely in an isolated Docker sandbox for calculations, data processing, algorithms, or running untrusted code.",
+    "output_shape": "Returns the final print output of the executed Python code as a string. On error, returns a string with '[ERROR] Sandbox execution failed (exit=1):' followed by traceback.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Required argument 'code' (string) must be provided. No test data for missing/empty/wrong type was present in the provided attempts; the tool's schema lists 'required': ['code'].",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Execution errors (e.g., ZeroDivisionError, NameError, IndexError, AttributeError, SyntaxError, TypeError) are returned as '[ERROR] Sandbox execution failed (exit=1):\\nTraceback...'.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "The code must include a print() statement to produce output; otherwise the result may be empty.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Docker must be installed and running on the host machine.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Provide the Python code as the 'code' parameter (string) with print() to output results.",
+      "Optionally set 'timeout' (integer, default 30), 'packages' (array of strings for pip install), and 'with_vaf_tools' (boolean, default false) as needed.",
+      "Ensure Docker is installed and running before calling the tool.",
+      "Execute the tool; the response will contain either the printed output or an error message with traceback."
+    ],
+    "verification": [
+      "Check that the output matches the expected result from the code's print statements.",
+      "If the output starts with '[ERROR]', the code encountered an execution error; verify the traceback for cause.",
+      "Test with simple correct code (e.g., 'print(1+1)') to confirm the sandbox is working."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"code\": \"print(1+1)\"}",
+      "predicted": "success: prints 2",
+      "actual": "success: 2",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(10/0)\"}",
+      "predicted": "error: ZeroDivisionError",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nZeroDivisionError: division by zero\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(undefined_var)\"}",
+      "predicted": "error: NameError: name 'undefined_var' is not defined",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nNameError: name 'undefined_var' is not defined\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print('hello ' + 'world')\"}",
+      "predicted": "success: prints 'hello world'",
+      "actual": "success: hello world",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print([1,2,3][10])\"}",
+      "predicted": "error: IndexError: list index out of range",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nIndexError: list index out of range\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print('123'.append(4))\"}",
+      "predicted": "error: AttributeError: 'str' object has no attribute 'append'",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nAttributeError: 'str' object has no attribute 'append'\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(2 +\"}",
+      "predicted": "error: SyntaxError: invalid syntax",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\n  File \"<stdin>\", line 1\n    print(2 +\n         ^\nSyntaxError: '(' was never closed\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(2+2\"}",
+      "predicted": "error: SyntaxError: unexpected EOF while parsing",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\n  File \"<stdin>\", line 1\n    print(2+2\n         ^\nSyntaxError: '(' was never closed\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(\\\"2\\\" + 2)\"}",
+      "predicted": "error: TypeError: can only concatenate str (not \"int\") to str",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nTypeError: can only concatenate str (not \"int\") to str\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(2 ** 8)\"}",
+      "predicted": "success: prints 256",
+      "actual": "success: 256",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print('hello')\"}",
+      "predicted": "success: prints hello",
+      "actual": "success: hello",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(2 ** 8)\"}",
+      "predicted": "success: prints 256",
+      "actual": "error: [ERROR] Failed to create workspace: Execution timed out after 5s.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print([x**2 for x in range(5)])\"}",
+      "predicted": "success: prints [0, 1, 4, 9, 16]",
+      "actual": "success: [0, 1, 4, 9, 16]",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(undefined_var)\"}",
+      "predicted": "error: NameError: name 'undefined_var' is not defined",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nNameError: name 'undefined_var' is not defined\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print((lambda x: x*2)(5))\"}",
+      "predicted": "success: prints 10",
+      "actual": "success: 10",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(7 * 6)\"}",
+      "predicted": "success: prints 42",
+      "actual": "success: 42",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print('hello' + ' world')\"}",
+      "predicted": "success: prints hello world",
+      "actual": "success: hello world",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(1 + 'a')\"}",
+      "predicted": "error: TypeError",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nTypeError: unsupported operand type(s) for +: 'int' and 'str'\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print('Number: ' + 5)\"}",
+      "predicted": "error: TypeError: can only concatenate str (not 'int') to str",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nTypeError: can only concatenate str (not \"int\") to str\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: <think>We are continuing to probe the sandbox. Since it's a sandboxed Python execution, we can test various aspects: sys calls, imports, etc. But we must keep it harmless and not read/write files, not",
+      "actual": "error: [ERROR] python_sandbox: No code provided.",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(1/0)\"}",
+      "predicted": "error: ZeroDivisionError",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nZeroDivisionError: division by zero\n",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"code\": \"print(x)\"}",
+      "predicted": "error: NameError: name 'x' is not defined",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nNameError: name 'x' is not defined\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted a NameError, matching the actual tool response."
+    },
+    {
+      "intent": "{\"code\": \"print(sum(range(10)))\"}",
+      "predicted": "success: prints 45",
+      "actual": "success: 45",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted success with output 45, and the actual response was exactly 45."
+    },
+    {
+      "intent": "{\"code\": \"print('hello world')\"}",
+      "predicted": "success: prints 'hello world'",
+      "actual": "success: hello world",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted that the tool would print 'hello world'."
+    },
+    {
+      "intent": "{\"code\": \"print([i**2 for i in range(5)])\"}",
+      "predicted": "success: prints [0, 1, 4, 9, 16]",
+      "actual": "success: [0, 1, 4, 9, 16]",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Prediction matches the actual output."
+    },
+    {
+      "intent": "{\"code\": \"print(2+2)\"}",
+      "predicted": "success: prints 4",
+      "actual": "success: 4",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The tool's actual output '4' matches the agent's prediction of printing 4."
+    },
+    {
+      "intent": "{\"code\": \"print('2' + 2)\"}",
+      "predicted": "error: TypeError: can only concatenate str (not 'int') to str",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nTypeError: can only concatenate str (not \"int\") to str\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The prediction correctly identified the TypeError when concatenating a string with an integer."
+    },
+    {
+      "intent": "{\"code\": \"print(1/0)\"}",
+      "predicted": "error: ZeroDivisionError",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nZeroDivisionError: division by zero\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted a ZeroDivisionError."
+    },
+    {
+      "intent": "{\"code\": \"print(undefined_variable)\"}",
+      "predicted": "error: NameError: name 'undefined_variable' is not defined",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=1):\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nNameError: name 'undefined_variable' is not defined\n",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the NameError that occurred when executing the code."
+    },
+    {
+      "intent": "{\"code\": \"print([x for x in range(10) if x%2==0])\"}",
+      "predicted": "success: prints [0, 2, 4, 6, 8]",
+      "actual": "success: [0, 2, 4, 6, 8]",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent's prediction of the output matches the actual tool response exactly."
+    },
+    {
+      "intent": "{\"code\": \"print(len([0] * 10**8))\", \"timeout\": 10}",
+      "predicted": "error: The list creation of 100 million elements will exceed the 512MB RAM limit, causing an out-of-memory error.",
+      "actual": "error: [ERROR] Sandbox execution failed (exit=137):\nKilled\n",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an out-of-memory error, and the actual sandbox execution was killed due to memory limit, matching the prediction.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"code\": \"import platform; print(platform.python_version())\"}",
+      "predicted": "success: The code will successfully import the platform module and print the Python version string.",
+      "actual": "success: 3.11.15",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The actual output matches the predicted output of the Python version string.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"code\": \"print('first')\\nprint('second')\"}",
+      "predicted": "success: The code will print 'first' and 'second' on separate lines, returning the string 'first\\nsecond'.",
+      "actual": "success: first\nsecond",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the output of the code.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.94,
+  "uses": 33,
+  "success": 15,
+  "fail": 18,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T12:38:36.098417+00:00",
+  "updated_at": "2026-06-04T12:47:13.224676+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

@@ -1,0 +1,161 @@
+{
+  "tool": "webfetch",
+  "schema_version": 1,
+  "tool_schema_hash": "e635cb676cd01551",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use to retrieve content from a URL and convert to readable Markdown. For long pages or tracking sites, provide 'search_terms' to extract relevant sections and move them to the top, preventing important info from being cut off by system truncation.",
+    "output_shape": "Returns markdown text; if search_terms provided, output includes a '## Key Matches:' section with matching content moved to the top, followed by the full page content.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "Missing or empty 'url' (required): returns error 'Error: No URL provided'.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Invalid URL (non-resolvable): returns HTTP connection error (e.g., NameResolutionError).",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Timeout value of 0 does not cause failure; the tool still succeeds with default behavior.",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'url' parameter is provided and is a non-empty string.",
+      "Optionally set 'search_terms' (array of strings) to highlight relevant sections for long pages.",
+      "Optionally adjust 'timeout', 'use_cache', 'cache_ttl', 'max_length', 'extract_main', or 'user_agent' as needed.",
+      "Call the tool with the constructed parameters."
+    ],
+    "verification": [
+      "Check that the tool does not return an error message containing 'No URL provided' (meaning url was empty or missing).",
+      "Verify that the returned content starts with a heading (e.g., '# Example Domain') and optionally includes '## Key Matches:' if search_terms were used.",
+      "If an error occurs, ensure the error message is expected (e.g., invalid URL resolution)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"url\": \"https://example.com\"}",
+      "predicted": "success: The tool will return the markdown content of example.com.",
+      "actual": "success: # Example Domain\nSource: https://example.com\n\n# Example Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n[Learn more](https://iana.org/dom",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"url\": \"invalid-url\"}",
+      "predicted": "error: The tool will return an error because 'invalid-url' is not a valid URL or cannot be resolved.",
+      "actual": "error: Error fetching https://invalid-url: HTTPSConnectionPool(host='invalid-url', port=443): Max retries exceeded with url: / (Caused by NameResolutionError(\"HTTPSConnection(host='invalid-url', port=443): F",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"url\": \"https://example.com\", \"timeout\": 0}",
+      "predicted": "error: Expected timeout error because timeout of 0 seconds will cause an immediate failure.",
+      "actual": "success: # Example Domain\nSource: https://example.com\n\n# Example Domain\n\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n[Learn more](https://iana.org/dom",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"url\": \"https://example.com\", \"search_terms\": [\"Example\"]}",
+      "predicted": "success: The tool will return the markdown content of example.com with the section containing 'Example' moved to the top.",
+      "actual": "success: # Example Domain\nSource: https://example.com\n\n## Key Matches:\n**MATCH: # Example Domain**\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n---\n\n# ",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"url\": \"https://example.com\", \"search_terms\": [\"Example\"]}",
+      "predicted": "success: The tool will return the page content with a 'Key Matches' section highlighting the term 'Example' at the top.",
+      "actual": "success: # Example Domain\nSource: https://example.com\n\n## Key Matches:\n**MATCH: # Example Domain**\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n\n---\n\n# ",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the predicted success and includes the expected Key Matches section highlighting 'Example'."
+    },
+    {
+      "intent": "{\"url\": \"\"}",
+      "predicted": "error: The tool will return an error because an empty string is not a valid URL.",
+      "actual": "error: Error: No URL provided",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted an error for an empty URL, and the tool returned an error."
+    },
+    {
+      "intent": "{\"url\": \"https://example.com\", \"search_terms\": [\"Example\", \"Domain\"]}",
+      "predicted": "success: The tool will return the Markdown of example.com with a 'Key Matches' section at the top containing the matching lines.",
+      "actual": "success: # Example Domain\nSource: https://example.com\n\n## Key Matches:\n**MATCH: # Example Domain**\nThis domain is for use in documentation examples without needing permission. Avoid use in operations.\n---\n**MA",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The actual response matches the agent's prediction: it returns the Markdown with a 'Key Matches' section at the top."
+    },
+    {
+      "intent": "{\"url\": \"https://en.wikipedia.org/wiki/Artificial_intelligence\", \"search_terms\": [\"Deep learning\", \"History\"], \"max_length\": 1000, \"extract_main\": true}",
+      "predicted": "success: The tool will successfully retrieve the Wikipedia page, extract the main content, and highlight search terms 'Deep learning' and 'History' in a Key Matches section, within the 1000-character limit.",
+      "actual": "success: # Artificial intelligence - Wikipedia\nSource: https://en.wikipedia.org/wiki/Artificial_intelligence\n\n## Key Matches:\nApproaches\n**MATCH:   * [Machine learning](/wiki/Machine_learning \"Machine learning",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The tool successfully retrieved the page, extracted main content, and highlighted the search terms as predicted; the response shows expected behavior.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"url\": \"https://httpbin.org/get\", \"search_terms\": [\"url\"]}",
+      "predicted": "success: The tool will successfully fetch the page and return Markdown content with a 'Key Matches' section highlighting occurrences of 'url'.",
+      "actual": "success: JSON from https://httpbin.org/get:\n\n{\n  \"args\": {}, \n  \"headers\": {\n    \"Accept\": \"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\", \n    \"Accept-Encoding\": \"gzip, deflate\", \n    \"Host",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted Markdown with 'Key Matches' but tool returned raw JSON, indicating misunderstanding of tool output format.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"url\": \"https://httpbin.org/html\", \"search_terms\": [\"Herman\"], \"max_length\": 1}",
+      "predicted": "success: The tool will successfully fetch the page, find key matches for 'Herman', but truncate the output to only 1 character due to max_length=1.",
+      "actual": "success: Source: https://httpbin.org/html\n\n## Key Matches:\n**MATCH: # Herman Melville - Moby-Dick**\nAvailing himself of the mild, summer-cool weather that now reigned in these latitudes, and in preparation for",
+      "match": false,
+      "phase": "challenge",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted output would be truncated to 1 character, but the actual response contains a full excerpt with many characters.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"url\": \"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf\", \"use_cache\": false}",
+      "predicted": "error: The tool will fail to convert the PDF to Markdown and return an error because the URL points to a binary PDF file, not an HTML page.",
+      "actual": "error: Error: Site returned status 403",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would return an error, which matches the actual 403 status error.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"url\": \"https://www.ietf.org/rfc/rfc1149.txt\", \"extract_main\": false, \"timeout\": 10, \"use_cache\": false, \"max_length\": 1000, \"search_terms\": [\"Avian\", \"Carrier\"]}",
+      "predicted": "success: The tool will successfully fetch the RFC 1149 text and return markdown with a '## Key Matches:' section containing relevant content for 'Avian' and 'Carrier' moved to the top before the full page (tru",
+      "actual": "success: Source: https://www.ietf.org/rfc/rfc1149.txt\n\n## Key Matches:\n**MATCH: Network Working Group D. Waitzman Request for Comments: 1149 BBN STC 1 April 1990 A Standard for the Transmission of IP Datagrams",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would fetch the RFC text and return a '## Key Matches:' section with the relevant terms.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 0.75,
+  "uses": 12,
+  "success": 9,
+  "fail": 3,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T01:47:51.583255+00:00",
+  "updated_at": "2026-06-05T01:52:48.472900+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

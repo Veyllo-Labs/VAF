@@ -1,0 +1,136 @@
+{
+  "tool": "get_contact",
+  "schema_version": 1,
+  "tool_schema_hash": "03720749a50916ab",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "Use get_contact when you need to retrieve a contact's communication channels (WhatsApp phone, Telegram user ID, email) and personal information (preferred language, how to address, birthday, notes) by their name, for example to check if a specific contact has messaged you.",
+    "output_shape": "A dictionary containing the contact's channel IDs and personal file: {'whatsapp_phone': str, 'telegram_user_id': str, 'email': str, 'preferred_language': str, 'how_to_address': str, 'birthday': str, 'notes': str}. If no contact is found, a string message is returned instead.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "The 'name' parameter is REQUIRED and must be a non-empty string.",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If 'name' is an empty string, the tool returns: 'name is required (e.g. get_contact(name='Max')).'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "If 'name' is not a string (e.g., integer or boolean), the tool returns a Tool Error: '{type} object has no attribute 'strip'' (e.g., 'int' object has no attribute 'strip').",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Even with a valid string 'name', the contact may not exist; the tool returns 'No contact found with name '{name}'. Use list_contacts to see existing contacts.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Ensure the 'name' parameter is provided and is a non-empty string (e.g., 'Max').",
+      "Call get_contact with the name.",
+      "Check the result: if it is a dictionary containing channel IDs and personal file, the contact exists; if it is a string indicating no contact found, handle accordingly (e.g., use list_contacts to find",
+      "If the tool returns an error, verify the type and non-emptiness of the name parameter."
+    ],
+    "verification": [
+      "After calling get_contact, verify that the returned value is a dictionary with the expected keys: whatsapp_phone, telegram_user_id, email, preferred_language, how_to_address, birthday, notes.",
+      "If the result is a string, confirm it matches the 'No contact found' message and take appropriate action (e.g., create contact or search with a different name).",
+      "If a Tool Error occurs, check that the name parameter was a string and not empty, then retry."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{\"name\": 123}",
+      "predicted": "error: The tool will return an error because name is required to be a string, not an integer.",
+      "actual": "error: Tool Error: 'int' object has no attribute 'strip'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"\"}",
+      "predicted": "error: The tool will return an error because an empty string name is not a valid contact name.",
+      "actual": "error: name is required (e.g. get_contact(name='Max')).",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": \"Max\"}",
+      "predicted": "success: The tool will return the contact details for 'Max', including channel IDs and personal file.",
+      "actual": "success: No contact found with name 'Max'. Use list_contacts to see existing contacts.",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": true}",
+      "predicted": "error: The tool will return an error because boolean is not a string, causing an attribute error when trying to call .strip().",
+      "actual": "error: Tool Error: 'bool' object has no attribute 'strip'",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"name\": null}",
+      "predicted": "error: Tool Error: 'NoneType' object has no attribute 'strip'",
+      "actual": "error: name is required (e.g. get_contact(name='Max')).",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent predicted an error due to null name, and an error occurred, showing correct understanding."
+    },
+    {
+      "intent": "{\"name\": [1, 2, 3]}",
+      "predicted": "error: The tool will raise a Tool Error because a list does not have a .strip() method, similar to the int and bool cases.",
+      "actual": "error: Tool Error: 'list' object has no attribute 'strip'",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "Agent correctly predicted the Tool Error from passing a list without a .strip() method."
+    },
+    {
+      "intent": "{\"name\": \"123\"}",
+      "predicted": "success: The tool will accept '123' as a valid string name and return either contact details or a 'No contact found' message, since it is a valid non-empty string.",
+      "actual": "success: No contact found with name '123'. Use list_contacts to see existing contacts.",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the tool would return a 'No contact found' message for the input '123'."
+    },
+    {
+      "intent": "{\"name\": \"Bob\"}",
+      "predicted": "success: The tool will return a dictionary with Bob's contact channels and personal file if he exists, otherwise a string message indicating no contact found.",
+      "actual": "success: No contact found with name 'Bob'. Use list_contacts to see existing contacts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted the fallback behavior when the contact does not exist, matching the actual response.",
+      "scenario_by": "judge"
+    },
+    {
+      "intent": "{\"name\": \"max\"}",
+      "predicted": "success: It will attempt to retrieve the contact named 'max' and return a dictionary of contact details if found, or a string message if not found.",
+      "actual": "success: No contact found with name 'max'. Use list_contacts to see existing contacts.",
+      "match": true,
+      "phase": "challenge",
+      "verdict": "pass",
+      "judge_reason": "Agent predicted the tool would return a string if not found, which matches the actual 'not found' message.",
+      "scenario_by": "judge"
+    }
+  ],
+  "status": "confirmed",
+  "confidence": 1.0,
+  "uses": 9,
+  "success": 4,
+  "fail": 5,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T23:59:22.675790+00:00",
+  "updated_at": "2026-06-05T00:02:48.097393+00:00",
+  "challenge_passed": true,
+  "learn_mode": "probe",
+  "rounds": 1
+}

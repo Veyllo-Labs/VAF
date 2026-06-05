@@ -1,0 +1,54 @@
+{
+  "tool": "update_working_memory",
+  "schema_version": 1,
+  "tool_schema_hash": "2e0cbec7dfea7cc5",
+  "side_effect_class": "reversible",
+  "aronui": {
+    "when_to_use": "Use to update persistent working memory: set or append notes, update the plan, or manage task lists with trackable steps.",
+    "output_shape": "Confirmation message indicating the working memory has been updated.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "If 'tasks' is provided, each task object must have a 'text' field; missing it returns '[ERROR] Each task must have a non-empty \"text\" field.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing 'notes', 'plan', 'add_notes', or 'add_plan' as a non-array returns '[ERROR] Expected an array for <parameter>.'",
+        "source": "whare_wananga",
+        "seen": 1
+      },
+      {
+        "text": "Providing 'tasks' as a non-array returns '[ERROR] tasks must be an array of objects.'",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Decide which working memory component to update: notes, plan, add_notes, add_plan, or tasks.",
+      "For notes/plan, provide an array of strings to replace existing content; omit to keep current.",
+      "For add_notes/add_plan, provide an array of strings to append to existing content.",
+      "For tasks, provide an array of objects; each object must have a 'text' string (required) and may include 'status' (pending/done) and 'ts' (ISO timestamp).",
+      "Call the tool with the constructed parameters."
+    ],
+    "verification": [
+      "After calling, inspect the updated <working_memory> to confirm the changes are reflected.",
+      "For tasks, verify new tasks appear with status 'pending' (if not specified) and existing tasks retain correct statuses."
+    ]
+  },
+  "predict_records": [],
+  "status": "confirmed",
+  "confidence": 0.0,
+  "uses": 0,
+  "success": 0,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-04T21:26:42.495141+00:00",
+  "updated_at": "2026-06-04T21:27:01.553250+00:00",
+  "challenge_passed": false,
+  "learn_mode": "declare"
+}

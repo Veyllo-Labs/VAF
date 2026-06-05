@@ -1,0 +1,153 @@
+{
+  "tool": "list_automations",
+  "schema_version": 1,
+  "tool_schema_hash": "cbfa5f13c642882f",
+  "side_effect_class": "none",
+  "aronui": {
+    "when_to_use": "List all scheduled automation tasks with their today status (Done, Scheduled, Due, In progress) and parameters.",
+    "output_shape": "A formatted text list of automations, each with name, ID, active status, schedule, next run time, today status, and prompt.",
+    "notes": []
+  },
+  "tuatea": {
+    "pitfalls": [
+      {
+        "text": "No arguments are required; the tool accepts an empty object or any JSON object (extra keys are ignored). No errors were observed for missing, empty, or wrong-type arguments. The tool always returns su",
+        "source": "whare_wananga",
+        "seen": 1
+      }
+    ]
+  },
+  "tuarua": {
+    "procedure": [
+      "Call the tool with an empty object {} (or any object, as extra keys are ignored).",
+      "The tool returns a formatted list of scheduled automations with their details and today status."
+    ],
+    "verification": [
+      "Confirm that the output starts with '📋 Scheduled Automations:' and contains entries with name, ID, schedule, and status.",
+      "Check that no error message is returned (tool always succeeds)."
+    ]
+  },
+  "predict_records": [
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of scheduled automation tasks with their statuses.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will return a list of scheduled automation tasks with their statuses.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{\"unexpected\": true}",
+      "predicted": "error: The tool will return an error because it expects no parameters, but an unexpected key was provided.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object with no required properties, but an array was provided, which should cause a validation error.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing an array instead of an object will cause a validation error because the parameter schema expects an object.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "Agent predicted a validation error due to passing an array, but the tool received an empty object and returned a successful list of automations."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects a JSON object parameter but received a string, so it will likely fail with a schema validation error.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error but the tool executed successfully, returning the list of automations."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing JSON null will cause an error because the tool expects an object.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error but the tool returned a successful list of automations."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing an array instead of an object will cause a validation error because the tool expects an object.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing a string instead of an object will cause a validation error because the tool expects an object type.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: The tool expects an object, but a number was provided, which should cause a validation error.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted a validation error, but the tool returned a successful response instead."
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing null as the parameter will fail because the tool expects an object, and null does not match the 'type': 'object' requirement.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "validate",
+      "verdict": "fail",
+      "judge_reason": "The agent predicted an error due to null parameter, but the tool executed successfully and returned a list of automations."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: The tool will likely accept any JSON and return the list of automations.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": true,
+      "phase": "validate",
+      "verdict": "pass",
+      "judge_reason": "The agent correctly predicted success and that the tool would return a list of automations."
+    },
+    {
+      "intent": "{}",
+      "predicted": "success: Passing a boolean instead of an object will still succeed because the tool ignores the argument type.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": true,
+      "phase": "learn"
+    },
+    {
+      "intent": "{}",
+      "predicted": "error: Passing null as the argument will cause a validation error because the tool expects an object.",
+      "actual": "success: **📋 Scheduled Automations:**\n\n• **test** (896f9bdd) - ✅ Active\n  Schedule: once at 06:00\n  Next: 2026-06-05 06:00\n  Today (local): **Next: 2026-06-05 06:00**\n  Status: ✅ Active\n  **Prompt:** do someth",
+      "match": false,
+      "phase": "learn"
+    }
+  ],
+  "status": "draft",
+  "confidence": 0.29,
+  "uses": 14,
+  "success": 14,
+  "fail": 0,
+  "source": "whare_wananga",
+  "created_at": "2026-06-05T00:40:59.975773+00:00",
+  "updated_at": "2026-06-05T00:44:05.326343+00:00",
+  "challenge_passed": false,
+  "learn_mode": "probe",
+  "rounds": 2
+}

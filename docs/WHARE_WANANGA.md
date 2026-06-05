@@ -221,7 +221,10 @@ reliable knowledge: gated on `status=confirmed` + `challenge_passed` + a probed 
 all-tools fallback is skipped to bound tokens), and the hook is hard fail-safe (never breaks
 tool-calling). The lookup lives in `vaf/whare_wananga/delivery.py` (`tool_pitfalls`, cached per
 tool + file mtime). Defaults (gate fields, max pitfalls/chars, optional confidence floor) are
-calibratable there.
+calibratable there. **Vacuous "pitfalls"** -- the model apologising about the training process
+("no probe attempts were provided", "cannot quote the error") rather than giving a real warning --
+are dropped both at distillation and at delivery (`store.is_vacuous_pitfall`); informative negative
+facts ("no required arguments", "requires an admin session", "limit is optional") are kept.
 
 **Reactive (built).** When a tool call fails at runtime, the agent loop re-feeds the failed tool's
 *fuller* know-how -- pitfalls + procedure + verification (`delivery.tool_knowhow`) -- as a deferred

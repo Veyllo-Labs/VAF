@@ -458,10 +458,12 @@ def train_tool(agent, tool_name: str, progress: Optional[Callable[[dict], None]]
             rec["aronui"]["when_to_use"] = _safe(a.get("when_to_use"), 400) or rec["aronui"].get("when_to_use", "")
             rec["aronui"]["output_shape"] = _safe(a.get("output_shape"), 400) or rec["aronui"].get("output_shape", "")
         if isinstance(d.get("tuatea"), dict) and isinstance(d["tuatea"].get("pitfalls"), list):
-            # overwrite distilled pitfalls (re-distil replaces, no duplicates)
+            # overwrite distilled pitfalls (re-distil replaces, no duplicates); drop vacuous
+            # non-pitfalls (the model apologising about the training process, e.g. "No probe
+            # attempts were provided; cannot quote exact errors").
             rec["tuatea"]["pitfalls"] = [
                 {"text": _safe(p, 200), "source": "whare_wananga", "seen": 1}
-                for p in d["tuatea"]["pitfalls"][:10]]
+                for p in d["tuatea"]["pitfalls"][:10] if not store.is_vacuous_pitfall(p)]
         if isinstance(d.get("tuarua"), dict):
             t = d["tuarua"]
             if isinstance(t.get("procedure"), list):

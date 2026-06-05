@@ -98,7 +98,9 @@ def tool_pitfalls(name: str, *, max_pitfalls: int = _DEFAULT_MAX_PITFALLS,
         rec = _gated(name)
         if not rec:
             return None
-        pits = _texts((rec.get("tuatea") or {}).get("pitfalls"), max_pitfalls)
+        raw = [p for p in ((rec.get("tuatea") or {}).get("pitfalls") or [])
+               if not store.is_vacuous_pitfall(p)]
+        pits = _texts(raw, max_pitfalls)
         if not pits:
             return None
         return _cap("Learned pitfalls (from practice): " + " ; ".join(pits), max_chars)
@@ -119,7 +121,9 @@ def tool_knowhow(name: str, *, procedure_first: bool = False,
         rec = _gated(name)
         if not rec:
             return None
-        pits = _texts((rec.get("tuatea") or {}).get("pitfalls"), 3)
+        raw = [p for p in ((rec.get("tuatea") or {}).get("pitfalls") or [])
+               if not store.is_vacuous_pitfall(p)]
+        pits = _texts(raw, 3)
         tuarua = rec.get("tuarua") or {}
         proc = _texts(tuarua.get("procedure"), 4)
         checks = _texts(tuarua.get("verification"), 2)

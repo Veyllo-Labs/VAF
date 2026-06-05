@@ -4,9 +4,9 @@ This document describes how VAF learns from usage and improves over time. It is 
 
 ## What “self-learning” means here
 
-**Self-learning** in VAF means: the system gets better with use without manual configuration. User interaction (chat, tools, automations) produces durable state that is reused in later runs, so the agent’s behavior becomes more personalized and consistent.
+**Self-learning** in VAF means: the system gets better with use without manual configuration. Most lanes learn about the **user** (so the agent becomes more personalized and consistent); one lane learns about the agent's own **tools** (so it calls them more reliably). The durable state each produces is reused in later runs.
 
-- **Current scope:** (1) Long-term memory (RAG): facts, preferences, and context from conversation. (2) User profile: name, language, location, do’s/don’ts, and preferences—the model updates this from what the user says so it knows the user better over time. (3) Attachment-scoped retrieval lane (ephemeral, session + user scoped) with optional transfer to long-term memory.
+- **Current scope:** (1) Long-term memory (RAG): facts, preferences, and context from conversation. (2) User profile / identity: name, language, location, do's/don'ts, preferences. (3) Document learning (`learn_document`). (4) Attachment-scoped retrieval lane (ephemeral, session + user scoped, with optional transfer to long-term memory). (5) Tool know-how (Whare Wananga): the agent learns to use its own tools correctly and feeds that know-how back at runtime.
 - **Future scope:** Additional subsystems (e.g. workflow patterns, feedback loops) can be documented in this file as they are added.
 
 ---
@@ -64,6 +64,24 @@ For active Web UI work with attached documents, VAF uses a **separate ephemeral 
 **Effect over time:** During active sessions, large attachments are handled via snippet retrieval (not full prepend), reducing token pressure. Important knowledge can be promoted intentionally into durable memory as `knowledge` nodes.
 
 **Implementation:** `vaf/memory/attachment_rag.py`, `vaf/core/web_server.py`, `vaf/core/headless_runner.py`, `vaf/tools/learn_attached_knowledge.py`, `vaf/memory/rag.py` (lane separation), memory graph type mapping in `vaf/memory/graph.py` and `web/components/memory/MemoryGraph.tsx`.
+
+---
+
+### 5. Tool know-how (Whare Wananga)
+
+Distinct from the lanes above (which learn about the *user*), this lane learns how the agent should *use its own tools* correctly, and feeds that know-how back at runtime.
+
+| Mechanism | What it does | Where it's documented |
+|-----------|--------------|------------------------|
+| **Predict-then-verify training** | Offline, sandboxed practice per tool: the agent predicts a call's outcome, runs it, an LLM judge grades pass/fail, then a final challenge. The result is a `tool_knowledge` record with three baskets (when-to-use, pitfalls, procedure). Side-effecting tools are safety-tiered (full-probe / error-path / declare / gated). | [WHARE_WANANGA.md](WHARE_WANANGA.md) |
+| **Proactive delivery** | After the tool router scopes a turn, each selected tool's learned pitfalls (`tuatea`) are appended to its tool-schema description, so the model sees them before it forms the call. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Delivery) |
+| **Reactive delivery** | When a tool call fails, the failed tool's fuller know-how is re-fed into the loop so the natural retry is informed; the error is classified known-vs-novel. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Delivery) |
+| **Runtime re-learning** | A novel, learnable runtime error (environmental/transient ones are filtered out) is distilled into a new learned pitfall from the real observation -- closing the learn-from-use loop, so the proactive/reactive lanes then carry it. | [WHARE_WANANGA.md](WHARE_WANANGA.md) (Delivery) |
+| **Eager training (opt-in)** | A background scanner can proactively train safe, configured, not-yet-learned tools one at a time -- off by default (`whare_wananga_eager_enabled`), and never send/communication or irreversible tools. | [WHARE_WANANGA.md](WHARE_WANANGA.md) |
+
+**Effect over time:** the agent makes fewer malformed tool calls (the learned pitfalls sit in front of it both before a call and after a failure); a changed tool definition invalidates its now-stale know-how until the tool is re-trained.
+
+**Implementation:** `vaf/whare_wananga/` (`store.py`, `runner.py`, `jobs.py`, `delivery.py`, `runtime.py`, `cli.py`), the `Agent.TOOLS` schema hook + tool-loop error nudge / re-learn trigger in `vaf/core/agent.py`, and `web/components/TrainingDashboard.tsx`. Records live globally at `~/.vaf/whare_wananga/<tool>.json`.
 
 ---
 

@@ -5,8 +5,12 @@ declare, in natural language, **which tool it is about to use and why** — righ
 before it makes the tool call. The declaration is surfaced in the Web UI as its
 own collapsible panel, separate from the reasoning (`<think>`) panel.
 
-It is intentionally a thin layer: a prompt instruction plus Web UI parsing. No
-routing, scoring, or learning is involved.
+**Role.** Today it provides **transparency** (the user sees the agent's stated intent), and it is
+the hook for a planned **declared-vs-actual** check and **runtime learning** (does what the agent
+said it would do match the tool it actually called?). It is **not** the path by which learned tool
+know-how reaches the model — that is router-driven and documented in
+[WHARE_WANANGA.md](WHARE_WANANGA.md) ("Delivery"). The layer stays thin: a prompt instruction, Web
+UI parsing for display, and a cheap backend matcher that is currently debug-only.
 
 ---
 
@@ -35,13 +39,15 @@ Using web_search to find the current Berlin weather.
 
 The instruction lives in `vaf/core/system_prompt.py` and is injected on both
 prompt-construction paths (the base instruction block and the Soul/persona path
-in `build_prompt()`), under the heading **Action Declaration (MANDATORY before
-every tool call)**. It tells the model to emit one `<Action>` block per tool call.
+in `build_prompt()`), under the heading **Action Declaration (when you use a
+tool)**. It asks the model to emit one short `<Action>` block when it uses a tool.
 
-Note on reliability: emission depends on the model following the instruction.
-In practice it is not yet guaranteed on every tool call of a multi-step run.
-Tightening per-tool-call compliance is a separate, ongoing concern and is not
-part of this feature's core contract.
+It is phrased as a soft request, not a hard mandate: the tag is for transparency
+and a future declared-vs-actual signal, and learned know-how reaches the model by
+a separate, Action-independent path (router-driven injection, see
+[WHARE_WANANGA.md](WHARE_WANANGA.md) "Delivery"). Nothing breaks when the tag is
+omitted. Emission therefore depends on the model following the instruction and is
+not guaranteed on every tool call of a multi-step run.
 
 ---
 
@@ -87,8 +93,10 @@ renders when it has content.
 
 This is a **separate** parser from the Web UI one above. `parseContent` (frontend) only
 extracts the tag text to render it. The backend parser reads the agent's committed
-`<Action>` intent from its own output and matches it against the live tool list. It is the
-entry point for later know-how injection on the intended tool.
+`<Action>` intent from its own output and matches it against the live tool list. Its purpose is the
+**declared-vs-actual** signal — comparing the tool the agent *said* it would use against the tool it
+*actually* called — which seeds runtime learning. It does **not** drive know-how injection (that is
+router-driven; see [WHARE_WANANGA.md](WHARE_WANANGA.md) "Delivery").
 
 Location: `vaf/core/agent.py` — helpers `_extract_action_text()` and
 `_match_action_to_tools()`, invoked inside the generation loop right after a generation
@@ -109,7 +117,7 @@ The parser does **not** inject anything yet. On each generation that contains an
 block it prints a terminal debug line (and writes the same to `logs/backend_*.log`):
 
 ```
-[ACTION-MATCH] action="Using browser_agent to search Perplexity for ..." (candidates=9)
+[ACTION-MATCH] action="Using browser_agent to search Youtube for ..." (candidates=9)
 [ACTION-MATCH] match: browser_agent (score: 100%)
 [ACTION-MATCH] match: web_search (score: 50%)
 [ACTION-MATCH] match: memory_search (score: 50%)
@@ -130,13 +138,16 @@ effectively a "did the agent name the tool literally" detector:
 - Secondary matches around 50% are usually shared-token noise (e.g. `web_search`,
   `memory_search`, `search_tools` all contain "search").
 
-This is acceptable for the debug step (the goal was to observe, per call, what matches and
-what does not). Before the matcher can drive know-how injection it must recognise intent
-*without* the literal name — e.g. also match against the tool **description**/keywords,
-handle synonyms / other languages, or move to a semantic match. Logging the actually
-called tool next to the match (ground truth) is the planned next debug improvement.
+This is acceptable for the parser's purpose. For **declared-vs-actual** verification, literal-name
+matching is usually enough — the agent typically names the tool it then calls — so the
+natural-language false-negatives matter less now that injection no longer depends on this matcher.
+Logging the actually-called tool next to the declared one (ground truth) is the next step toward the
+runtime-learning signal.
 
-Injecting the matched tool's know-how is a planned later step and is not implemented yet.
+Know-how injection is **implemented but decoupled from this matcher**: it runs at tool-schema build
+time for the router-selected tools (`Agent.TOOLS` appends each tool's learned pitfalls via
+`vaf/whare_wananga/delivery.py`), independent of whether an `<Action>` was emitted. See
+[WHARE_WANANGA.md](WHARE_WANANGA.md) "Delivery".
 
 ---
 
@@ -205,4 +216,4 @@ always "remembers" what it did, regardless of how the tags are handled.
 
 ---
 
-*Last updated: 2026-06-03*
+*Last updated: 2026-06-05*

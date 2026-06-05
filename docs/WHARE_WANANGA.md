@@ -13,9 +13,18 @@ It is distinct from two neighbouring concepts:
 
 ## Status
 
-- **Built:** the `tool_knowledge` store (persistence + schema).
-- **Design (not yet implemented):** the learning loop (predict-then-verify sandbox
-  practice), the producers, safety gating, triggers, and know-how injection.
+- **Built:** the `tool_knowledge` store; the predict-then-verify learning loop (LLM-judged
+  validation + a final challenge); its safety tiering (full-probe / error-path / declare / gated);
+  the producers (training dashboard + the `vaf ww` CLI, plus a one-pass sweep over all tools); the
+  **proactive** delivery (router-driven pitfalls injection into the tool schema); the
+  **reactive** delivery (re-feed a failed tool's know-how on error, with a known-vs-novel surprise
+  signal); **runtime re-learning** (a novel runtime error is distilled into a new pitfall from the
+  real observation); **eager training** (opt-in background scanner + serialized queue that
+  auto-trains safe, configured, unlearned tools); and schema-hash invalidation (a changed tool
+  definition flips its record to `stale`, so outdated know-how is no longer delivered until
+  re-trained).
+- **Planned:** declared-vs-actual via the Action tag; auto-training agent-created tools; the
+  teacher/Noho online co-learning stage.
 
 Sections below are marked accordingly.
 
@@ -73,8 +82,8 @@ That button opens a **training dashboard** (`web/components/TrainingDashboard.ts
 large panel that reads `GET /api/whare_wananga/tool_knowledge/{name}` and shows the tool's
 status, error rate, predictions, and the three baskets (Aronui / Tuatea / Tuarua). While a
 training job runs, the metric cards and the predict-then-verify grid update live from the
-job's streamed events (confidence, error rate, correct/total) rather than only at the end;
-duration remains a placeholder.
+job's streamed events (confidence, error rate, correct/total, run duration) rather than only at
+the end.
 
 **Preconditions.** A tool is only trainable once its dependency is configured.
 `vaf/whare_wananga/preconditions.py` (`tool_precondition`) maps connection tools to the
@@ -192,16 +201,44 @@ How a record gets filled:
   idempotent tools are practised freely; side-effecting tools are never exercised through
   their effect path -- their interface is learned via read/validate calls and deliberately
   triggered, *expected* validation errors.
-- **Triggers:** eager when a tool is first connected (a background pass), plus a short
-  corrective re-probe when an already-learned tool hits a *surprising* runtime error.
+- **Triggers:** manual (dashboard / `vaf ww`); an opt-in **eager** background scanner that
+  auto-trains safe, configured, not-yet-attempted tools one at a time (`whare_wananga_eager_enabled`,
+  default off; never send/irreversible tools); and **runtime re-learning** when an already-learned
+  tool hits a *surprising* runtime error (a new pitfall is distilled from the real observation).
 
 ## Delivery (how know-how reaches the agent)
 
-Detailed in [ACTION_TAG.md](ACTION_TAG.md). In short: proactively for side-effecting /
-known-quirky tools (the Action-Tag parser matches the agent's committed intent to a tool
-and injects that tool's know-how before the call), and reactively on a surprising tool
-error for everything else. Independently of either path, the agent's actual actions always
-remain in context via the real tool calls and their results.
+**Proactive (built).** Router-driven: after the tool router scopes the turn's tool set
+(`Agent._active_tools`), the learned **pitfalls** (`tuatea`) of each selected tool are appended to
+that tool's description in the LLM tool schema (`Agent.TOOLS`), so the model sees them inline
+*before* it forms the call -- no extra generation, independent of the Action tag. Only `tuatea` is
+delivered (`aronui` overlaps the static description; `tuarua` is a later phase), and only for
+reliable knowledge: gated on `status=confirmed` + `challenge_passed` + a probed `learn_mode`
+(declare-mode/draft excluded). Injection happens only when the router has scoped the set (the
+all-tools fallback is skipped to bound tokens), and the hook is hard fail-safe (never breaks
+tool-calling). The lookup lives in `vaf/whare_wananga/delivery.py` (`tool_pitfalls`, cached per
+tool + file mtime). Defaults (gate fields, max pitfalls/chars, optional confidence floor) are
+calibratable there.
+
+**Reactive (built).** When a tool call fails at runtime, the agent loop re-feeds the failed tool's
+*fuller* know-how -- pitfalls + procedure + verification (`delivery.tool_knowhow`) -- as a deferred
+system nudge (the same `_post_tc_messages` channel used for other tool-error nudges), so the loop's
+natural re-generation retries informed. Once per tool per turn (to avoid an inject->fail->inject
+loop), same quality gate, hard fail-safe. The error is re-checked from the raw result, and a cheap
+`delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
+and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
+
+**Runtime re-learning (built).** A novel, *learnable* runtime error (environmental/transient errors
+like DNS/timeout/5xx are filtered out) is turned into a new learned pitfall from the real
+observation (the call args + the error) via a single background LLM distil -- no tool re-execution
+(`vaf/whare_wananga/runtime.py`, `maybe_relearn`). It only ever *appends* a deduped, capped pitfall
+to a `confirmed` record, is rate-limited per tool and serialized, and is fire-and-forget (never
+blocks the turn). The new pitfall then flows back into proactive (A) and reactive (B) delivery on
+the next turn, closing the learn-from-use loop.
+
+The **Action tag** is NOT the injection trigger; its role stays transparency / verify
+(declared-vs-actual) / learn-signal (see [ACTION_TAG.md](ACTION_TAG.md)). Independently of any path,
+the agent's actual actions always remain in context via the real tool calls and their results.
 
 ## CLI
 
@@ -218,6 +255,9 @@ vaf ww retrain update_intent          # alias for train (a run is a fresh assess
 vaf ww list                           # learned tools + state + confidence
 vaf ww show create_contact            # the three baskets
 vaf ww delete create_contact          # drop the stored knowledge
+vaf ww eager status                   # eager on/off + learned count
+vaf ww eager on | off                 # toggle opt-in proactive training (whare_wananga_eager_enabled)
+vaf ww eager scan                     # train all eligible SAFE tools now (foreground)
 ```
 
 `--all` skips tools whose connection is not configured and (without `--force`) tools already
@@ -233,6 +273,9 @@ bypassed and probes reach the tool's own validation.
 | `vaf/whare_wananga/jobs.py` | background training jobs + live status (built) |
 | `vaf/whare_wananga/preconditions.py` | trainability + class sandbox resolver (built) |
 | `vaf/whare_wananga/cli.py` | training CLI (runs the loop synchronously in the foreground) |
+| `vaf/whare_wananga/delivery.py` | delivery read-path: gated lookups for runtime injection -- `tool_pitfalls` (proactive), `tool_knowhow` + `known_pitfall_hit` (reactive) |
+| `vaf/whare_wananga/runtime.py` | LAZY-corrective: distil a new pitfall from a novel runtime error (`maybe_relearn`) |
+| `vaf/whare_wananga/eager.py` | opt-in eager scanner + serialized training queue (`scan`, `enqueue`, `start`) |
 | `vaf/cli/cmd/ww.py` | `vaf ww` Typer wrapper around the CLI |
 | `vaf/whare_wananga/__init__.py` | package exports |
 | `web/components/TrainingDashboard.tsx` | dashboard + live training stage (agent/tool/judge) |
@@ -244,8 +287,9 @@ bypassed and probes reach the tool's own validation.
 - [ACTION_TAG.md](ACTION_TAG.md) -- the `<Action>` tag, backend parser, and delivery
 - [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) -- tool routing, the
   Declarative Tool Contract, and `side_effect_class`
-- [SELF_LEARNING.md](SELF_LEARNING.md) -- VAF's self-learning index. Whare Wananga will be
-  registered there once the learning loop is implemented and genuinely learns from use.
+- [SELF_LEARNING.md](SELF_LEARNING.md) -- VAF's self-learning index. Whare Wananga's learning loop
+  is built (it learns tool know-how from sandbox practice); learning from real runtime use is the
+  planned next stage.
 
 ---
 

@@ -6,7 +6,12 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { cn } from '@/lib/utils';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Load the pdf.js worker from the app's OWN origin (a copy of the bundled pdfjs 5.x worker in
+// public/), not a CDN. The CDN ("//unpkg.com/...") fails in the desktop app: it needs the network,
+// and the protocol-relative "//" resolves to mixed content (http://unpkg) from the http://127.0.0.1
+// origin -- so the worker never loads and every PDF shows "PDF konnte nicht geladen werden".
+// NOTE: keep public/pdf.worker.min.mjs in sync with the installed pdfjs-dist version on upgrades.
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 const HIGHLIGHT_COLORS = [
     { bg: '#1f2937', text: '#ffffff' },
@@ -290,6 +295,8 @@ const PdfWithHighlightsInner = function PdfWithHighlights({
             <Document
                 file={actualFile}
                 onLoadSuccess={onDocumentLoadSuccess}
+                onLoadError={(err) => console.error('[PDF] document load error:', err)}
+                onSourceError={(err) => console.error('[PDF] document source error:', err)}
                 loading={
                     <div className="flex items-center justify-center py-12 text-gray-500 text-sm">PDF wird geladen…</div>
                 }

@@ -122,12 +122,17 @@ def _train_one(agent, tool: str, *, quick: bool, verbose: bool) -> Dict[str, Any
     from vaf.whare_wananga import runner
     _p(f"\n=== {tool} ===")
     kw = dict(_QUICK) if quick else {}
+    from vaf.whare_wananga import jobs
+    import uuid as _uuid
+    run_id = _uuid.uuid4().hex[:8]
     t0 = time.time()
+    jobs.train_started(tool, run_id)
     try:
         s = runner.train_tool(agent, tool, progress=_make_progress(verbose), **kw)
     except Exception as e:
         s = {"ok": False, "tool": tool, "error": f"{type(e).__name__}: {e}"}
     s.setdefault("tool", tool)
+    jobs.train_ended(tool, run_id, s, time.time() - t0)
     _p(f"  -> {_summary_line(s)}  ({time.time() - t0:.0f}s)")
     if s.get("ok"):
         _p(_baskets_brief(tool))

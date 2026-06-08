@@ -264,7 +264,8 @@ def log_timeline_event(event_type: str, **kwargs) -> None:
     Each event carries a SHA-256 hash chain: prev_hash → hash — enables tamper detection.
 
     event_type: 'tool_start' | 'tool_end' | 'subagent_start' | 'subagent_end' | 'thinking_run'
-    kwargs: tool, call_id, session, scope, args, status, duration_s, result, task_id, agent_type, ...
+                | 'ww_train_start' | 'ww_train_end' (Whare Wananga tool-training runs, paired by run_id)
+    kwargs: tool, call_id, session, scope, args, status, duration_s, result, task_id, agent_type, run_id, ...
             Pass _ts='2026-...' to override the event timestamp (e.g. for historical thinking runs).
     """
     if not is_debug_logging_enabled():

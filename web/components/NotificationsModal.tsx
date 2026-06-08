@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import {
   X, RefreshCw, ChevronDown, ChevronRight, Activity, Search,
   GitBranch, ShieldCheck, ShieldAlert, Clock, CheckCircle2,
-  XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info,
+  XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info, GraduationCap,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -54,7 +54,7 @@ type LogFile = {
 
 type TimelineEvent = {
   ts: string;
-  type: 'tool_start' | 'tool_end' | 'subagent_start' | 'thinking_run';
+  type: 'tool_start' | 'tool_end' | 'subagent_start' | 'thinking_run' | 'ww_train_start';
   tool?: string;
   call_id?: string;
   session?: string;
@@ -63,6 +63,11 @@ type TimelineEvent = {
   status?: 'ok' | 'error' | 'running';
   duration_s?: number;
   result?: string;
+  mode?: string;
+  source?: string;
+  confirmed?: boolean;
+  challenge_passed?: boolean;
+  confidence?: number;
   task_id?: string;
   agent_type?: string;
   run_id?: string;
@@ -131,15 +136,17 @@ const TL_LANES = [
   { key: 'code',   label: 'Code / Bash',  color: '#f97316' },
   { key: 'comms',  label: 'Messages',     color: '#ec4899' },
   { key: 'agent',  label: 'Sub-Agents',   color: '#6366f1' },
+  { key: 'learn',  label: 'Tool Learning', color: '#14b8a6' },
   { key: 'other',  label: 'Other',        color: '#9ca3af' },
 ] as const;
 
 function tlCategory(ev: TimelineEvent): string {
+  if (ev.type === 'ww_train_start') return 'learn';
   if (ev.type === 'subagent_start' || ev.type === 'thinking_run') return 'agent';
   const t = (ev.tool ?? '').toLowerCase();
   if (/search|web|fetch|browse|http|url/.test(t)) return 'web';
   if (/read|write|edit|file|glob|grep|path|notebook/.test(t)) return 'file';
-  if (/memory|remember|recall|rag|embed|chunk/.test(t)) return 'memory';
+  if (/memory|remember|recall|rag|embed|chunk|learn/.test(t)) return 'memory';
   if (/bash|exec|run|code|python|script/.test(t)) return 'code';
   if (/calendar|email|mail|slack|telegram|discord|whatsapp/.test(t)) return 'comms';
   return 'other';
@@ -1518,6 +1525,7 @@ export default function NotificationsModal({
                       {[...timelineEvents].reverse().map((ev, i) => {
                         const isSubagent    = ev.type === 'subagent_start';
                         const isThinkingRun = ev.type === 'thinking_run';
+                        const isWwTrain     = ev.type === 'ww_train_start';
                         const colors     = toolColor(ev.tool ?? '');
                         const callKey    = ev.call_id ?? ev.task_id ?? ev.run_id ?? `tl-${i}`;
                         const isExpanded = expandedCallId === callKey;
@@ -1532,6 +1540,12 @@ export default function NotificationsModal({
                               ) : isThinkingRun ? (
                                 <div className="w-9 h-9 rounded-full bg-violet-100 border-2 border-violet-300 flex items-center justify-center">
                                   <Sparkles size={14} className="text-violet-600" />
+                                </div>
+                              ) : isWwTrain ? (
+                                <div className="w-9 h-9 rounded-full bg-teal-100 border-2 border-teal-300 flex items-center justify-center">
+                                  {ev.status === 'running'
+                                    ? <Loader2 size={14} className="text-teal-600 animate-spin" />
+                                    : <GraduationCap size={14} className="text-teal-600" />}
                                 </div>
                               ) : (
                                 <div className={cn('w-9 h-9 rounded-full border-2 flex items-center justify-center',
@@ -1550,6 +1564,7 @@ export default function NotificationsModal({
                                 className={cn('rounded-xl border px-3 py-2 cursor-pointer hover:shadow-sm transition-shadow',
                                   isSubagent    ? 'bg-indigo-50/70 border-indigo-200' :
                                   isThinkingRun ? 'bg-violet-50/70 border-violet-200' :
+                                  isWwTrain     ? 'bg-teal-50/70 border-teal-200' :
                                   'bg-white border-gray-200',
                                   isFlashing && 'flash-new')}
                                 onClick={() => setExpandedCallId(isExpanded ? null : callKey)}
@@ -1558,9 +1573,18 @@ export default function NotificationsModal({
                                   <span className={cn('text-xs font-semibold px-2 py-0.5 rounded-full shrink-0',
                                     isSubagent    ? 'bg-indigo-200 text-indigo-800' :
                                     isThinkingRun ? 'bg-violet-200 text-violet-800' :
+                                    isWwTrain     ? 'bg-teal-200 text-teal-800' :
                                     `${colors.bg} ${colors.text}`)}>
-                                    {isSubagent ? t('subagentLabel') : isThinkingRun ? 'thinking' : ev.tool ?? '?'}
+                                    {isSubagent ? t('subagentLabel') : isThinkingRun ? 'thinking' : isWwTrain ? `learn: ${ev.tool ?? '?'}` : ev.tool ?? '?'}
                                   </span>
+                                  {isWwTrain && ev.status !== 'running' && ev.result && (
+                                    <span className={cn('text-[10px] font-medium shrink-0',
+                                      ev.result === 'confirmed' ? 'text-green-600' : 'text-amber-600')}>
+                                      {ev.result}
+                                      {typeof ev.confidence === 'number' ? ` · ${Math.round(ev.confidence * 100)}%` : ''}
+                                      {ev.mode ? ` · ${ev.mode}` : ''}
+                                    </span>
+                                  )}
                                   {isSubagent && ev.agent_type && (
                                     <span className="text-xs text-indigo-600 font-mono truncate">{ev.agent_type}</span>
                                   )}

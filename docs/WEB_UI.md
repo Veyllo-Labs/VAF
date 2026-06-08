@@ -149,7 +149,7 @@ The Timeline is a **horizontal scrubber** modelled after video-editing software.
 
 **Bottom row — timeline bars** (left-to-right = time, lanes = tool category):
 - Each bar represents one completed tool call; width = duration.
-- Colour = category: blue (web/search), green (files), purple (memory), orange (code/bash), pink (messaging), indigo (sub-agents).
+- Colour = category: blue (web/search), green (files), purple (memory), orange (code/bash), pink (messaging), indigo (sub-agents), teal (tool learning — Whare Wananga training runs).
 - **Ruler** at the top of the bar area shows time ticks; a **red "now" line** marks the live position (today only).
 - **Mouse wheel** scrolls horizontally. **Ctrl + scroll** zooms in/out. `+`/`−` buttons in the top-right corner also zoom.
 - Timeline is anchored to the bottom; lanes grow upward as more categories appear.

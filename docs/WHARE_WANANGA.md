@@ -162,6 +162,13 @@ dropped so body+eye ease to rest, then the next animation starts from neutral --
 `docs/AgentAvatar.md` "Same-position switches") so states flow into one another instead of
 snapping. (Emotion / body / wink keyframes live in `globals.css`,
 mirrored from the `docs/animations/agent_avatar` reference.)
+
+Beyond the dashboard, each training run is also surfaced in the Web UI's visual **Timeline** log
+(Notifications -> Timeline) as a *Tool Learning* lane entry -- start, tool, mode, and the
+confirmed/challenge outcome -- and as `[WHARE-WANANGA] training started/done` lines in
+`backend_*.log`. Both require Debug Logs enabled (Settings -> Advanced -> Debug Logs);
+`jobs.train_started` / `jobs.train_ended` emit a `ww_train_start` + `ww_train_end` pair (merged by
+`run_id`) via `log_timeline_event`.
 The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the
 tool being trained plus its connection-class siblings -- e.g. all `whatsapp_*` tools share
 the whatsapp class; non-connection tools are singletons (`preconditions.tool_class`,

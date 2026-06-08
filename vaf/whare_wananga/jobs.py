@@ -17,6 +17,48 @@ _jobs: Dict[str, Dict[str, Any]] = {}  # tool -> status dict
 _MAX_EVENTS = 120  # keep enough live events that the running grid covers a full run (21+9+refine+challenge)
 
 
+def _train_outcome(summary: Dict[str, Any]) -> str:
+    """One-word result for a finished train_tool summary (for the timeline + backend log)."""
+    s = summary or {}
+    if s.get("skipped"):
+        return "skipped"
+    if not s.get("ok"):
+        return "error"
+    if s.get("declared"):
+        return "declared"
+    if s.get("halted"):
+        return "halted"
+    return "confirmed" if (s.get("confirmed") and s.get("challenge_passed")) else "not confirmed"
+
+
+def train_started(tool: str, run_id: str, source: str = "whare_wananga") -> None:
+    """Log a WW training START to the visual timeline + the backend log (both debug-gated)."""
+    try:
+        from vaf.core.log_helper import log_timeline_event, append_domain_log
+        log_timeline_event("ww_train_start", tool=tool, run_id=run_id, source=source,
+                           session="whare_wananga")
+        append_domain_log("backend", f"[WHARE-WANANGA] training started: {tool} (source={source})")
+    except Exception:
+        pass
+
+
+def train_ended(tool: str, run_id: str, summary: Dict[str, Any], elapsed_s: float) -> None:
+    """Log a WW training END (outcome) to the visual timeline + the backend log (both debug-gated)."""
+    try:
+        s = summary or {}
+        result = _train_outcome(s)
+        from vaf.core.log_helper import log_timeline_event, append_domain_log
+        log_timeline_event("ww_train_end", run_id=run_id, tool=tool, status=s.get("status"),
+                           confirmed=s.get("confirmed"), challenge_passed=s.get("challenge_passed"),
+                           confidence=s.get("confidence"), mode=s.get("mode"),
+                           duration_s=round(float(elapsed_s), 1), result=result)
+        append_domain_log("backend", f"[WHARE-WANANGA] training done: {tool} -> result={result} "
+                          f"status={s.get('status')} challenge_passed={s.get('challenge_passed')} "
+                          f"confidence={s.get('confidence')} ({elapsed_s:.0f}s)")
+    except Exception:
+        pass
+
+
 def get_status(tool: str) -> Optional[Dict[str, Any]]:
     with _lock:
         s = _jobs.get(tool)
@@ -105,8 +147,13 @@ def start_training(agent, tool: str, **train_kwargs) -> Dict[str, Any]:
 
     def _run() -> None:
         from vaf.whare_wananga import runner
+        import uuid as _uuid
+        run_id = _uuid.uuid4().hex[:8]
+        t0 = time.time()
+        train_started(tool, run_id, source=str(train_kwargs.get("source", "whare_wananga")))
         try:
             summary = runner.train_tool(agent, tool, progress=_progress, **train_kwargs)
+            train_ended(tool, run_id, summary, time.time() - t0)
             with _lock:
                 s = _jobs.get(tool) or {}
                 if summary.get("skipped"):
@@ -132,6 +179,7 @@ def start_training(agent, tool: str, **train_kwargs) -> Dict[str, Any]:
                 except Exception:
                     pass
         except Exception as e:
+            train_ended(tool, run_id, {"ok": False, "error": str(e)}, time.time() - t0)
             with _lock:
                 s = _jobs.get(tool) or {}
                 s.update({"state": "error", "error": str(e), "ended_at": time.time()})

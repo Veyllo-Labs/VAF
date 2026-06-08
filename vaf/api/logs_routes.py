@@ -107,6 +107,7 @@ def _merge_timeline(raw_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     tool_starts: Dict[str, Dict[str, Any]] = {}
     subagent_starts: Dict[str, Dict[str, Any]] = {}
+    ww_starts: Dict[str, Dict[str, Any]] = {}
     merged: List[Dict[str, Any]] = []
     for ev in raw_events:
         etype = ev.get("type")
@@ -124,6 +125,16 @@ def _merge_timeline(raw_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if start:
                 merged.append({**start, "status": ev.get("status"), "duration_s": ev.get("duration_s"), "ended_at": ev.get("ts")})
             # orphan end → discard
+        elif etype == "ww_train_start":
+            ww_starts[ev.get("run_id", "")] = ev
+        elif etype == "ww_train_end":
+            start = ww_starts.pop(ev.get("run_id", ""), None)
+            if start:
+                merged.append({**start, "status": ev.get("status"), "duration_s": ev.get("duration_s"),
+                               "result": ev.get("result"), "confirmed": ev.get("confirmed"),
+                               "challenge_passed": ev.get("challenge_passed"), "confidence": ev.get("confidence"),
+                               "mode": ev.get("mode"), "ended_at": ev.get("ts")})
+            # orphan end → discard
         else:
             # thinking_run, unknown — pass through
             merged.append(ev)
@@ -131,6 +142,8 @@ def _merge_timeline(raw_events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for ev in tool_starts.values():
         merged.append({**ev, "status": "running"})
     for ev in subagent_starts.values():
+        merged.append({**ev, "status": "running"})
+    for ev in ww_starts.values():
         merged.append({**ev, "status": "running"})
     # Re-sort by timestamp
     merged.sort(key=lambda e: e.get("ts", ""))

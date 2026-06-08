@@ -40,7 +40,7 @@ own SDK provider classes.
 | **All API** | a stale local GGUF `model` value falls back to `api_model_<provider>`; context defaults to 128K when `provider != local` | `api_backend.py`, `agent.py` (~248, 2374) | [API_INTEGRATION.md](API_INTEGRATION.md) |
 
 Available models per provider are fetched live — see [DYNAMIC_MODEL_SELECTION.md](DYNAMIC_MODEL_SELECTION.md).
-Switching provider (Local ↔ API) and its memory handling — see [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md).
+Switching provider (Local ↔ API) and its memory handling — see [MODEL_AND_PROVIDER_SWITCHING.md](MODEL_AND_PROVIDER_SWITCHING.md).
 
 ---
 
@@ -81,4 +81,4 @@ are unaffected.
 - [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md) — backend selection, local model/server facts, DeepSeek reasoning round-trip
 - [API_INTEGRATION.md](API_INTEGRATION.md) — API keys, providers, the mixed local/API guardrail
 - [DYNAMIC_MODEL_SELECTION.md](DYNAMIC_MODEL_SELECTION.md) — live model discovery per API provider
-- [MODELL_UND_PROVIDER_WECHSEL.md](MODELL_UND_PROVIDER_WECHSEL.md) — switching Local ↔ API at runtime
+- [MODEL_AND_PROVIDER_SWITCHING.md](MODEL_AND_PROVIDER_SWITCHING.md) — switching Local ↔ API at runtime

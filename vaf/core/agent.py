@@ -2584,7 +2584,9 @@ class Agent:
         # sometimes emit <think><think>...), remove complete blocks, then drop any stray unpaired tag.
         t = re.sub(r'<think>(?:\s*<think>)+', '<think>', t, flags=re.IGNORECASE)
         t = re.sub(r'</think>(?:\s*</think>)+', '</think>', t, flags=re.IGNORECASE)
-        t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
+        # Greedy: first <think> .. LAST </think>. Weak models sometimes quote a </think> mid-reasoning
+        # (e.g. quoting an earlier reply), so a non-greedy strip would stop early and leak the rest.
+        t = re.sub(r'<think>[\s\S]*</think>', '', t)
         t = re.sub(r'</?think>', '', t)  # drop any stray unpaired <think> / </think>
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
         
@@ -7294,7 +7296,12 @@ class Agent:
                 append_domain_log("backend", f"empty_check has_final={has_final_answer} tools={len(tool_calls_detected)} content_len={len(full_content)} clean_len={len(temp_final)}")
             except Exception:
                 pass
-            if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):
+            # Local empty/thinking-only retry is OFF by default (config empty_response_retry_enabled):
+            # it was noisy and often a false positive -- a messy <think> makes the answer-detector think
+            # the reply is empty -- and it fired repeatedly in background thinking runs. The API
+            # empty-handling (delayed retries) below is preserved (api_backend keeps it on).
+            _empty_retry_on = bool(self.api_backend) or Config.get("empty_response_retry_enabled", False)
+            if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False) and _empty_retry_on:
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
                 try:
                     append_domain_log("backend", f"empty_response_retry full_content_preview={full_content[:100] if full_content else 'NONE'}")

@@ -268,9 +268,17 @@ const parseThinkBlocks = (content: string): { thought: string | null; answer: st
     // In that case we must NOT pull it into the Thinking panel; leave it in the answer.
     const leadsMessage = openIndex !== -1 && merged.substring(0, openIndex).trim() === "";
     if (openIndex !== -1 && leadsMessage) {
-        // First close AFTER the open (NOT lastIndexOf): a later <think> the agent mentions
-        // inside its answer must not swallow everything in between into the Thinking panel.
-        const closeIndex = merged.indexOf(closeTag, openIndex + openTag.length);
+        // Normally use the FIRST close after the open, so a later <think>...</think> the agent
+        // mentions inside its answer is not swallowed into the Thinking panel. But weak models
+        // sometimes quote a </think> mid-reasoning (e.g. quoting an earlier reply): then a STRAY
+        // </think> (no matching open) remains in the answer region -> use the LAST </think> instead.
+        let closeIndex = merged.indexOf(closeTag, openIndex + openTag.length);
+        if (closeIndex !== -1) {
+            const after = merged.substring(closeIndex + closeTag.length);
+            const opens = (after.match(/<think>/gi) || []).length;
+            const closes = (after.match(/<\/think>/gi) || []).length;
+            if (closes > opens) closeIndex = merged.lastIndexOf(closeTag);  // stray close -> real close is the last
+        }
         if (closeIndex !== -1) {
             // Complete leading thinking block
             const thought = merged.substring(openIndex + openTag.length, closeIndex).trim();

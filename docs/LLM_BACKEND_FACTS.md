@@ -12,6 +12,23 @@ Exactly one of these three paths is always active. Which one is logged in **`log
 
 ---
 
+## Default local model (`model: "auto"`)
+
+The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves — VRAM-aware — to the original Gemma GGUF (Q8_0) from the llama.cpp org (`ggml-org`):
+
+- **> 10 GB VRAM** → `ggml-org/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q8_0.gguf`
+- **otherwise (≤ 10 GB or CPU-only)** → `ggml-org/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q8_0.gguf`
+
+An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model and skips the VRAM logic; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
+
+---
+
+## CUDA auto-install (NVIDIA GPU without CUDA)
+
+When the primary GPU is NVIDIA but CUDA is not available, VAF **auto-installs** CUDA-enabled `llama-cpp-python` at model load. There is **no terminal `[Y/n]` prompt** — the Web UI / headless worker shares the terminal's stdin, so a prompt there would freeze the chat request. Controlled by **`auto_install_gpu`** (default `true`; set `false` to stay on CPU). The reinstalled package is used on the **next VAF restart**; until then the current process runs on CPU. Manual path: `vaf install-gpu`.
+
+---
+
 ## When is Server (8080) vs. Library used?
 
 In `load_model()` (see `vaf/core/agent.py`):

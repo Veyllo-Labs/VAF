@@ -2,8 +2,8 @@
 VAF Garbage Collector – periodic cleanup of temporary files, logs, and cache.
 
 Runs as a daemon thread every gc_interval_hours (default 12).
-- Log files: use dated names (basename_YYYY-MM-DD.log / .txt). GC deletes any such file
-  whose date in the filename is older than gc_max_age_hours (default 48).
+- Log files: use dated names (basename_YYYY-MM-DD.{log,txt,jsonl} -- jsonl covers the timeline).
+  GC deletes any such file whose date in the filename is older than gc_max_age_hours (default 48).
 - Temp files: deletes by mtime (older than gc_max_age_hours).
 - Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
 - Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
@@ -25,9 +25,9 @@ from typing import Dict
 
 logger = logging.getLogger("vaf.gc")
 
-# Pattern for dated log files: basename_YYYY-MM-DD.log or basename_YYYY-MM-DD.txt
+# Pattern for dated log files: basename_YYYY-MM-DD.{log,txt,jsonl} (jsonl covers timeline_*.jsonl).
 # GC deletes files whose date in the name is older than gc_max_age_hours.
-DATED_LOG_PATTERN = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})\.(log|txt)$", re.IGNORECASE)
+DATED_LOG_PATTERN = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})\.(log|txt|jsonl)$", re.IGNORECASE)
 
 # Temp-file prefixes used by VAF (see tempfile calls across the codebase).
 VAF_TEMP_PREFIXES = ("vaf_",)

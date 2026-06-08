@@ -642,6 +642,21 @@ Final Answer:"""
                     # Small delay between opens to avoid overwhelming the browser
                     time.sleep(0.3)
 
+            # Nudge toward the follow-up step: snippets/synthesis often lack the concrete value
+            # (live weather, a price, a date, specific page details), which lives on the page itself.
+            # Remind the model it can read a full page via webfetch -- small models otherwise stop at
+            # the snippets instead of chaining web_search -> webfetch on their own.
+            if links:
+                _ex = links[0]
+                summary += (
+                    "\n\n---\n"
+                    "_Reminder: the results above are short search snippets / a synthesis, not full pages. "
+                    "If they do not already contain the concrete answer (e.g. the actual weather values, "
+                    f"a price, a date, or specific details), call `webfetch(\"{_ex}\")` on one of the source "
+                    "links above to read the full page, then answer from its content -- do not just hand the "
+                    "user the links._\n"
+                )
+
             return summary.strip()
         except Exception as e:
             return f"Error: {e}"

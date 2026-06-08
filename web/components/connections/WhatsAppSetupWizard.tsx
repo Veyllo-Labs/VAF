@@ -124,10 +124,15 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
     }, [isOpen]);
 
     useEffect(() => {
-        if (step !== 'qr') return;
+        // Only poll while the wizard is actually open. The wizard is always mounted
+        // inside SettingsModal (hidden via `if (!isOpen) return null`), and `step`
+        // defaults to 'qr', so without the isOpen guard the hidden component would
+        // poll /api/whatsapp/qr every ~1.5s for the whole time Settings is open —
+        // even when the user never opened WhatsApp setup.
+        if (!isOpen || step !== 'qr') return;
         const t = setInterval(pollQr, qrData ? 2500 : 1500);
         return () => clearInterval(t);
-    }, [step, qrData, pollQr]);
+    }, [isOpen, step, qrData, pollQr]);
 
     const handleAddWhitelist = async () => {
         const phone = phoneNumber.trim().replace(/\s/g, '');

@@ -1018,7 +1018,7 @@ async def _search_session_async(
                     "attachment_name": str(meta.get("attachment_name") or meta.get("title") or "Attachment"),
                 }
             )
-        if bool(Config.get("debug_logs_enabled", False)):
+        if bool(Config.get("debug_logs_enabled", True)):
             top_scored = sorted(lexical_scored, reverse=True)[:5]
             top_scored_str = ",".join(f"{s:.3f}" for s in top_scored) if top_scored else "none"
             append_domain_log(
@@ -1195,7 +1195,7 @@ async def _search_session_async(
                 .limit(scan_limit)
             )
             rows = (await db.execute(stmt)).scalars().all()
-            lexical_debug_enabled = bool(Config.get("debug_logs_enabled", False))
+            lexical_debug_enabled = bool(Config.get("debug_logs_enabled", True))
             if lexical_debug_enabled:
                 append_domain_log(
                     "rag",

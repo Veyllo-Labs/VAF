@@ -466,7 +466,7 @@ class RagPipeline:
             .limit(lexical_scan)
         )
         lex_rows = (await self.db.execute(lex_stmt)).all()
-        lexical_debug_enabled = bool(Config.get("debug_logs_enabled", False))
+        lexical_debug_enabled = bool(Config.get("debug_logs_enabled", True))
         if lexical_debug_enabled:
             append_domain_log(
                 "rag",

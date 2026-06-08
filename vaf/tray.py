@@ -91,7 +91,7 @@ import logging
 # Configure Logging (only write tray_debug_YYYY-MM-DD.log when Debug Logs is enabled)
 logger = logging.getLogger("VAF_Tray")
 logger.setLevel(logging.DEBUG)
-if Config.get("debug_logs_enabled", False):
+if Config.get("debug_logs_enabled", True):
     try:
         log_file = str(get_dated_log_path("tray_debug", "log"))
         fh = logging.FileHandler(log_file)

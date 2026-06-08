@@ -194,7 +194,7 @@ class Config:
         "web_ui_enabled": True,                # Start Web UI automatically
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
-        "debug_logs_enabled": False,           # Write domain logs and queue.log when enabled; off by default to reduce I/O
+        "debug_logs_enabled": True,            # Write domain logs, timeline and queue.log; ON by default (the log GC bounds disk use). User opt-out via Settings -> Advanced.
         "parallel_main_workers": 1,            # Main headless workers (1=legacy serialized, 2=weighted-fair parallel)
         "queue_policy": "legacy",              # legacy | weighted_fair
         "queue_weight_interactive": 5,         # Used when queue_policy=weighted_fair

@@ -17,10 +17,10 @@ ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "a
 
 
 def is_debug_logging_enabled() -> bool:
-    """True if domain logs and queue.log should be written (Advanced → Debug Logs)."""
+    """True if domain logs and queue.log should be written. ON by default (Advanced -> Debug Logs to opt out)."""
     try:
         from vaf.core.config import Config
-        return bool(Config.get("debug_logs_enabled", False))
+        return bool(Config.get("debug_logs_enabled", True))
     except Exception:
         return True
 

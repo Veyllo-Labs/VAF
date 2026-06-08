@@ -1308,6 +1308,9 @@ function VAFDashboardContent() {
     const documentViewerState = currentSessionId
         ? (sessionViewerState[currentSessionId] ?? defaultViewerState)
         : defaultViewerState;
+    // Attachment indexing status per session (for the Document Viewer header indicator).
+    const [attachmentIndexStatus, setAttachmentIndexStatus] = useState<Record<string, 'indexing' | 'ready' | 'error'>>({});
+    const activeAttachmentIndexStatus = currentSessionId ? attachmentIndexStatus[currentSessionId] : undefined;
     const setDocumentViewerState = useCallback((
         valueOrUpdater: { isOpen: boolean; documents: DocumentViewerDoc[] } | ((prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => { isOpen: boolean; documents: DocumentViewerDoc[] })
     ) => {
@@ -2039,6 +2042,27 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'rag_results') {
                     setRagResults(data);
+                }
+                else if (data.type === 'attachment_indexing' || data.type === 'attachment_indexed' || data.type === 'attachment_index_error') {
+                    // Attachment lane indexing status -> Document Viewer header indicator.
+                    const sid: string | undefined = data.sessionId;
+                    if (sid) {
+                        const status: 'indexing' | 'ready' | 'error' =
+                            data.type === 'attachment_indexing' ? 'indexing'
+                                : data.type === 'attachment_indexed' ? 'ready' : 'error';
+                        setAttachmentIndexStatus(prev => ({ ...prev, [sid]: status }));
+                        // Auto-clear the transient 'ready'/'error' so the header returns to neutral.
+                        if (status !== 'indexing') {
+                            setTimeout(() => {
+                                setAttachmentIndexStatus(prev => {
+                                    if (prev[sid] !== status) return prev;
+                                    const next = { ...prev };
+                                    delete next[sid];
+                                    return next;
+                                });
+                            }, status === 'ready' ? 4000 : 8000);
+                        }
+                    }
                 }
                 else if (data.type === 'agent_message_update') {
                     // CRITICAL: Only update if this message belongs to the current session!
@@ -5267,6 +5291,7 @@ function VAFDashboardContent() {
                                     onInsertSelection={(text, range) => setInsertedSelections(prev => [...prev, { text, ...range }])}
                                     insertedSelectionsCount={insertedSelections.length}
                                     insertedSelections={insertedSelections}
+                                    indexStatus={activeAttachmentIndexStatus}
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor

@@ -3238,6 +3238,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log_attachment("SAVE_OK", session=session_id, docs=len(_slim),
                                 names=[d.get("name","?") for d in _slim])
                             if bool(Config.get("attachment_rag_enabled", False)):
+                                await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
                                 try:
                                     from vaf.memory.attachment_rag import index_session_attachments_async
                                     await index_session_attachments_async(
@@ -3245,8 +3246,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         user_scope_id=user_scope_id,
                                         documents=contents,
                                     )
+                                    await _notify_attachment_index(manager, session_id, "attachment_indexed", count=len(contents))
                                 except Exception as e:
                                     log("WebServer", f"attachment index failed: {e}")
+                                    await _notify_attachment_index(manager, session_id, "attachment_index_error")
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": contents,
@@ -3268,6 +3271,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     log("WebServer", f"attachment clear failed (new session): {e}")
                         else:
                             if bool(Config.get("attachment_rag_enabled", False)):
+                                await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
                                 try:
                                     from vaf.memory.attachment_rag import index_session_attachments_async
                                     await index_session_attachments_async(
@@ -3275,8 +3279,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         user_scope_id=user_scope_id,
                                         documents=contents,
                                     )
+                                    await _notify_attachment_index(manager, session_id, "attachment_indexed", count=len(contents))
                                 except Exception as e:
                                     log("WebServer", f"attachment index failed (new session): {e}")
+                                    await _notify_attachment_index(manager, session_id, "attachment_index_error")
                         await websocket.send_json({
                             "type": "sidebar_documents_set",
                             "contents": contents,
@@ -4852,6 +4858,15 @@ def _is_temp_like_filename(name: str) -> bool:
         return False
     import re
     return bool(re.match(r"^vaf_[a-zA-Z0-9_]+\.[a-zA-Z0-9]+$", name))
+
+
+async def _notify_attachment_index(manager, session_id: str, kind: str, **extra) -> None:
+    """Fail-safe WS broadcast for the attachment indexing-status indicator in the Web UI.
+    kind: 'attachment_indexing' (start) | 'attachment_indexed' (done) | 'attachment_index_error'."""
+    try:
+        await manager.broadcast_to_session(session_id, {"type": kind, "sessionId": session_id, **extra})
+    except Exception:
+        pass
 
 
 async def process_files_to_sidebar_list(files: list) -> list:

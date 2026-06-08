@@ -1138,7 +1138,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     append_domain_log("rag", f"ATTACH_SEARCH failed: {e}")
 
                             if not snippet_lines:
-                                # Fallback: keep context minimal and deterministic if index is not ready yet.
+                                # Fallback: keep context minimal and deterministic if the index is not
+                                # ready yet OR indexing failed.
                                 fallback_chars = int(Config.get("attachment_rag_snippet_chars", 900) or 900)
                                 for idx, doc in enumerate(sidebar_docs[:2], 1):
                                     d_name = str((doc or {}).get("name") or f"Attachment {idx}")
@@ -1148,6 +1149,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     if len(d_content) > fallback_chars:
                                         d_content = d_content[:fallback_chars].rstrip() + "\n... [fallback truncated]"
                                     snippet_lines.append(f"[Attachment Fallback {idx}] {d_name}\n{d_content}")
+                                if snippet_lines:
+                                    # Tell the agent why it only sees a fallback excerpt, and how to read more.
+                                    snippet_lines.append(
+                                        "[Note] The attachment search index returned no results (it may still be "
+                                        "indexing, or indexing failed). The excerpt above may be truncated — if you "
+                                        "need the full document and a local file path is available, read it directly "
+                                        "with list_files / read_file."
+                                    )
 
                             sidebar_block = "\n\n".join([context_header, "\n\n".join(snippet_lines)])
                             sidebar_block += (

@@ -279,6 +279,8 @@ See also: [DOCUMENT_EDITOR_NATIVE_DOCX.md](DOCUMENT_EDITOR_NATIVE_DOCX.md)
 For Document Viewer attachments (paperclip), the backend uses a **session-scoped attachment retrieval lane** (scoped by `session_id` + `user_scope_id`, TTL-based) and injects a "document context active" block plus **top-k relevant snippets** into each turn. This keeps context stable for large documents and avoids prepending full attachment text every message.  
 If you want durable long-term memory from current attachments, use `learn_attached_knowledge` (requires explicit confirmation).
 
+**Indexing-status indicator:** while an attachment is being indexed into the retrieval lane, the Document Viewer header status reflects it — an amber pulsing dot with "Indexiere…" during indexing, green "Bereit" when ready, red "Fehler" on error (driven by `attachment_indexing` / `attachment_indexed` / `attachment_index_error` WebSocket events). When `learn_attached_knowledge` learns a document, the viewer slowly walks through all pages (~2s per page) until learning finishes, so the long-running operation is visibly in progress.
+
 **Workflow behaviour:** If the message contains the editor document block (`CURRENT DOCUMENT (Editor)`), workflow matching is skipped so the agent uses tools (e.g. `replace_editor_selection`) instead of starting a workflow.
 
 **DOCX behaviour:** The native DOCX editor loads `.docx` through dedicated backend endpoints and saves back to `.docx` from the same native model. This avoids the old lossy `DOCX -> HTML -> DOCX` save path for DOCX editing.

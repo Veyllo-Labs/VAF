@@ -3,7 +3,7 @@ VAF System Prompt Manager
 Handles dynamic system prompt building based on context and active modules.
 
 The SystemPromptManager provides:
-- Core identity prompt (VQ-1 or Generic based on filename)
+- Core identity prompt (model-specific or generic, based on filename)
 - Modular prompt sections that activate based on user intent
 - Tool documentation injection
 - Dynamic context adjustment per conversation turn
@@ -27,7 +27,7 @@ class SystemPromptManager:
     Dynamically adjusts active modules based on conversation context.
     """
     
-    def __init__(self, tools: List[Any] = None, model_name: str = "VQ-1", agent_instance: Any = None, username: str = "admin", max_tokens: int = 8192):
+    def __init__(self, tools: List[Any] = None, model_name: str = "Local", agent_instance: Any = None, username: str = "admin", max_tokens: int = 8192):
         """
         Initialize the prompt manager with available tools and model name.
         
@@ -496,7 +496,13 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
     ) -> str:
         """Build the complete system prompt."""
         parts = []
-        
+        # The <Action> declaration is a SOFT, optional transparency convention (docs/agents/ACTION_TAG.md):
+        # the tool call is meant to follow it, and nothing breaks when it is omitted. gemma-4 uses native
+        # function-calling and tends to emit the <Action> block and then stop, treating the declaration as
+        # the action itself. So drop the (optional) <Action> instruction for gemma-4 -- it then calls tools
+        # natively. <think> and the rest of the prompt stay.
+        _gemma4 = (getattr(self.agent, "model_mode", None) == "gemma4")
+
         # 0. MISSION STATUS (Orchestrator feedback)
         if "orchestrator" in self.active_modules:
             plan_exists = False
@@ -560,10 +566,11 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             persona_parts.append("### Thinking Format")
             persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
             persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
-            persona_parts.append("\n### Action Declaration (when you use a tool)")
-            persona_parts.append("When you use a tool, briefly declare it first: emit one short `<Action>` block right after `</think>` and immediately before the tool call. For example:\n"
-                "```\n<think>\n...your reasoning...\n</think>\n<Action>\nUsing web_search to find the current Berlin weather.\n</Action>\n```\n"
-                "Then make the tool call. The `<Action>` block is ONE short sentence naming the tool and the goal; it is shown separately in the UI. Omit it when you reply without using a tool.")
+            if not _gemma4:
+                persona_parts.append("\n### Action Declaration (when you use a tool)")
+                persona_parts.append("When you use a tool, briefly declare it first: emit one short `<Action>` block right after `</think>` and immediately before the tool call. For example:\n"
+                    "```\n<think>\n...your reasoning...\n</think>\n<Action>\nUsing web_search to find the current Berlin weather.\n</Action>\n```\n"
+                    "Then make the tool call. The `<Action>` block is ONE short sentence naming the tool and the goal; it is shown separately in the UI. Omit it when you reply without using a tool.")
             persona_parts.append("\n### Action Verification")
             persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
@@ -585,8 +592,14 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         if not persona_loaded:
             _log_soul("Using fallback identity (soul.md not found)")
             # Use generic fallback that does NOT reveal what model/system this is
-            # The model should not know it's "AI", "VAF", "VQ-1" etc. - only soul.md defines identity
-            parts.append("<identity>\n" + self.fallback_identity + "\n</identity>")
+            # The model should not know it's "AI", "VAF", a specific model, etc. - only soul.md defines identity
+            _identity = self.fallback_identity
+            if _gemma4:
+                import re as _re
+                _identity = _re.sub(
+                    r'\n## Action Declaration \(when you use a tool\)[\s\S]*?Omit it when you reply without using a tool\.',
+                    '', _identity)
+            parts.append("<identity>\n" + _identity + "\n</identity>")
 
         # Memory Recall instructions
         parts.append("""

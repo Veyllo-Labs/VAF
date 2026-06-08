@@ -642,20 +642,19 @@ Final Answer:"""
                     # Small delay between opens to avoid overwhelming the browser
                     time.sleep(0.3)
 
-            # Nudge toward the follow-up step: snippets/synthesis often lack the concrete value
-            # (live weather, a price, a date, specific page details), which lives on the page itself.
-            # Remind the model it can read a full page via webfetch -- small models otherwise stop at
-            # the snippets instead of chaining web_search -> webfetch on their own.
+            # Lead with the follow-up nudge so a weak model sees it FIRST (a trailing note gets ignored):
+            # snippets/synthesis lack the concrete value (live weather, prices, dates) -- that lives on the
+            # page, reachable via webfetch. Prepend it ABOVE the results.
             if links:
                 _ex = links[0]
-                summary += (
-                    "\n\n---\n"
-                    "_Reminder: the results above are short search snippets / a synthesis, not full pages. "
-                    "If they do not already contain the concrete answer (e.g. the actual weather values, "
-                    f"a price, a date, or specific details), call `webfetch(\"{_ex}\")` on one of the source "
-                    "links above to read the full page, then answer from its content -- do not just hand the "
-                    "user the links._\n"
+                lead = (
+                    "**NEXT STEP (read this first):** the results below are short search snippets, NOT full "
+                    "pages. If they do not already contain the concrete answer the user asked for (e.g. the "
+                    f"actual weather values, a price, a date, specific details), call `webfetch(\"{_ex}\")` on "
+                    "one of the source links to read the full page, then answer from its content. Do NOT just "
+                    "hand the user the links.\n\n---\n\n"
                 )
+                summary = lead + summary
 
             return summary.strip()
         except Exception as e:

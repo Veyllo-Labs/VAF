@@ -38,7 +38,7 @@ def _emit_to_web_ui() -> bool:
 def _extract_action_text(text: str):
     """Return the inner text of the first <Action>...</Action> block, or None.
 
-    Part of the Action-Tag parser (see docs/ACTION_TAG.md). This reads the agent's
+    Part of the Action-Tag parser (see docs/agents/ACTION_TAG.md). This reads the agent's
     committed intent from its own output; it is unrelated to the Web UI display parser.
     """
     import re
@@ -46,6 +46,31 @@ def _extract_action_text(text: str):
         return None
     m = re.search(r'<action>([\s\S]*?)</action>', text, re.IGNORECASE)
     return m.group(1).strip() if m else None
+
+
+def _parse_gemma4_tool_calls(text: str, valid_names=None):
+    """Parse Gemma-4 native tool calls from raw model output -> list of (name, args_dict).
+
+    Format: `<|tool_call>call:NAME{key:<|"|>value<|"|>,key2:bare,...}<tool_call|>` (one or more).
+    Pure (no Agent state) and delimiter-aware: the `}<tool_call|>` anchor stops a `}` inside a value
+    from ending the call, and quoted `<|"|>...<|"|>` values keep their commas/braces verbatim (never a
+    raw comma-split). Names are kept only if in `valid_names` (when given). Never raises.
+    """
+    import re
+    out = []
+    if not text or "<|tool_call>" not in text:
+        return out
+    for name, body in re.findall(r'<\|tool_call>call:([\w.:-]+)\{(.*?)\}<tool_call\|>', text, re.DOTALL):
+        if valid_names is not None and name not in valid_names:
+            continue
+        args = {}
+        for m in re.finditer(r'(\w+):(?:<\|"\|>([\s\S]*?)<\|"\|>|([^,}]*))', body):
+            if m.group(2) is not None:
+                args[m.group(1)] = m.group(2)            # quoted: preserve commas / braces verbatim
+            else:
+                args[m.group(1)] = (m.group(3) or "").strip()
+        out.append((name, args))
+    return out
 
 
 def _match_action_to_tools(action_text: str, tool_names):
@@ -229,6 +254,10 @@ class Agent:
         
         # Extract model name for identity
         self.model_display_name = "VQ-1"
+        # Canonical Gemma-local mode (single source of truth): computed once here so the tool-call
+        # parser, the message-prepare merge, etc. all read these instead of re-matching "gemma" ad hoc.
+        self.is_gemma_local = False   # local Gemma GGUF of any version
+        self.model_mode = None        # "gemma4" / "gemma3n" / None -- gate for version-specific handling
         if self.provider != "local":
             api_model = self.config.get(f"api_model_{self.provider}")
             if not api_model:
@@ -247,7 +276,13 @@ class Agent:
             self.model_display_name = api_model
         elif hasattr(self, 'filename'):
             fname = self.filename.lower()
-            if "gemma" in fname: self.model_display_name = "Gemma"
+            if "gemma" in fname:
+                self.model_display_name = "Gemma"
+                self.is_gemma_local = True
+                if "gemma-4" in fname or "gemma4" in fname:
+                    self.model_mode = "gemma4"
+                elif "gemma-3n" in fname or "3n" in fname:
+                    self.model_mode = "gemma3n"
             elif "llama" in fname: self.model_display_name = "Llama"
             elif "mistral" in fname: self.model_display_name = "Mistral"
             elif "phi" in fname: self.model_display_name = "Phi"
@@ -2077,34 +2112,15 @@ class Agent:
         if not skip_download_check:
             self.ensure_model_exists()
         
-        # Check for NVIDIA GPU without CUDA and offer auto-install
+        # GPU info: used below for the standalone-server status line and, ONLY on the
+        # in-process library fallback, to decide whether to auto-install a CUDA build.
+        # The CUDA auto-install is intentionally NOT done here. The standalone (Vulkan)
+        # llama-server path below never loads llama-cpp-python in-process, so installing a
+        # CUDA build for it wastes bandwidth -- and loops forever (re-downloading the
+        # ~1.6 GB wheel every start) when the system is missing libcudart. It now runs only
+        # right before the library is actually loaded -- the one case where it is the backend.
         primary_gpu = get_primary_gpu()
-        if primary_gpu and primary_gpu.vendor == "nvidia" and not primary_gpu.compute_available:
-            if not _check_cuda_available():
-                UI.warning("NVIDIA GPU detected but CUDA not available.")
-                UI.print("[yellow]VAF can automatically install CUDA-enabled llama-cpp-python.[/yellow]")
-                # No blocking terminal prompt here: the Web UI / headless worker shares the terminal's
-                # stdin, so input() would freeze the chat request forever (the user is in the browser,
-                # not the console). Auto-install unless the user opts out via `auto_install_gpu=false`.
-                if not bool(self.config.get("auto_install_gpu", True)):
-                    UI.print("[yellow]auto_install_gpu is off -- running on CPU. Run 'vaf install-gpu' for CUDA.[/yellow]")
-                else:
-                    try:
-                        UI.event("System", "Auto-installing CUDA-enabled llama-cpp-python...", style="warning")
-                        import subprocess
-                        system = platform.system()
-                        env = os.environ.copy()
-                        pip_cmd = [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--no-cache-dir", "--force-reinstall"]
-                        if system in ("Windows", "Linux"):
-                            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-                            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
-                        subprocess.check_call(pip_cmd, env=env)
-                        UI.event("Success", "CUDA support installed -- restart VAF to use the GPU.", style="success")
-                        primary_gpu = get_primary_gpu()
-                    except Exception as e:
-                        UI.error(f"CUDA installation failed: {e}")
-                        UI.print("[yellow]Running on CPU. Manual install: vaf install-gpu[/yellow]")
-        
+
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
         n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum: system prompt ~5.5K + tool schemas ~6K + conversation
 
@@ -2225,7 +2241,37 @@ class Agent:
             UI.event("System", "Server required (force_server). Using HTTP backend (8080). Start Tray or llama-server.", style="warning")
             return
 
-        # Fallback to Local Library (optional dep: pip install llama-cpp-python)
+        # Fallback to Local Library (optional dep: pip install llama-cpp-python).
+        # Reaching here means NO standalone/HTTP server backend was used, so the in-process
+        # library really is the inference backend -- the ONLY situation where a CUDA build of
+        # llama-cpp-python is worth installing. (Gated here so the Vulkan-server path never
+        # triggers the wasteful, looping ~1.6 GB CUDA reinstall.)
+        if primary_gpu and primary_gpu.vendor == "nvidia" and not primary_gpu.compute_available:
+            if not _check_cuda_available():
+                UI.warning("NVIDIA GPU detected but CUDA not available.")
+                UI.print("[yellow]VAF can automatically install CUDA-enabled llama-cpp-python.[/yellow]")
+                # No blocking terminal prompt here: the Web UI / headless worker shares the
+                # terminal's stdin, so input() would freeze the chat request forever. Auto-install
+                # unless the user opts out via `auto_install_gpu=false`.
+                if not bool(self.config.get("auto_install_gpu", True)):
+                    UI.print("[yellow]auto_install_gpu is off -- running on CPU. Run 'vaf install-gpu' for CUDA.[/yellow]")
+                else:
+                    try:
+                        UI.event("System", "Auto-installing CUDA-enabled llama-cpp-python...", style="warning")
+                        import subprocess
+                        system = platform.system()
+                        env = os.environ.copy()
+                        pip_cmd = [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--no-cache-dir", "--force-reinstall"]
+                        if system in ("Windows", "Linux"):
+                            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
+                        subprocess.check_call(pip_cmd, env=env)
+                        UI.event("Success", "CUDA support installed -- restart VAF to use the GPU.", style="success")
+                        primary_gpu = get_primary_gpu()
+                    except Exception as e:
+                        UI.error(f"CUDA installation failed: {e}")
+                        UI.print("[yellow]Running on CPU. Manual install: vaf install-gpu[/yellow]")
+
         try:
             from llama_cpp import Llama  # type: ignore[import-untyped]
         except ImportError:
@@ -2519,7 +2565,12 @@ class Agent:
                 # If the match is in the last 20% of the text or at least after 50 chars
                 # this prevents stripping legitimate looking JSON in long technical answers
                 cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.MULTILINE)
-            
+
+        # Gemma-4 native tool-call tokens that leaked into the visible text (rare: the server usually
+        # converts them via --jinja). Strip them so they are never shown. No-op for other models.
+        cleaned = re.sub(r'<\|tool_call>[\s\S]*?<tool_call\|>', '', cleaned)
+        cleaned = cleaned.replace('<|tool_call>', '').replace('<tool_call|>', '')
+
         return cleaned.strip()
 
     def _clean_reasoning(self, text: str) -> str:
@@ -2529,8 +2580,12 @@ class Agent:
         # First, apply the JSON sanitizer to catch leaked tool calls
         t = self._sanitize_response(text)
         
-        # 1. Remove XML-style thinking blocks
+        # 1. Remove XML-style thinking blocks. Collapse doubled/nested tags first (weak local models
+        # sometimes emit <think><think>...), remove complete blocks, then drop any stray unpaired tag.
+        t = re.sub(r'<think>(?:\s*<think>)+', '<think>', t, flags=re.IGNORECASE)
+        t = re.sub(r'</think>(?:\s*</think>)+', '</think>', t, flags=re.IGNORECASE)
         t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
+        t = re.sub(r'</?think>', '', t)  # drop any stray unpaired <think> / </think>
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
         
         # 2. Remove VQ-1 specific thinking patterns
@@ -5541,7 +5596,13 @@ class Agent:
                                 "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                 "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                             )}
-                        prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
+                        # Gemma 4 has ONE native system turn (see _prepare_messages); merge memory
+                        # context INTO it instead of adding a second consecutive system message
+                        # (the template renders a single system turn).
+                        if getattr(self, "model_mode", None) == "gemma4" and prepared_messages[0].get("role") == "system":
+                            prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
+                        else:
+                            prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
@@ -5782,7 +5843,13 @@ class Agent:
                                     "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                     "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                                 )}
-                            prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
+                            # Gemma 4 has ONE native system turn (see _prepare_messages); merge memory
+                            # context INTO it instead of adding a second consecutive system message
+                            # (the template renders a single system turn).
+                            if getattr(self, "model_mode", None) == "gemma4" and prepared_messages[0].get("role") == "system":
+                                prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
+                            else:
+                                prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
@@ -6113,7 +6180,13 @@ class Agent:
 
                                     if stream_callback:
                                         # Content is sent raw - inline <think> tags are preserved
-                                        # The WebUI/CLI will parse them
+                                        # The WebUI/CLI will parse them.
+                                        # TODO(gemma): raw Gemma-4 <|tool_call> tokens (rare -- only when
+                                        # the server doesn't convert them) likewise stream raw and can
+                                        # briefly flash in the UI. Hide them at the same display/parse
+                                        # layer that strips <think> (not here: a call spans chunks). The
+                                        # stored answer is already cleaned in _sanitize_response. Accepted
+                                        # cosmetic limitation for now.
                                         stream_callback(content_chunk)
                                     full_response += content_chunk
                                     full_content += content_chunk
@@ -6234,9 +6307,12 @@ class Agent:
                 pass
 
             # 0. FALSE PROMISE DETECTION (Anti-Hallucination)
-            # Check if model claimed to use a tool but didn't emit a tool call
-            # Only check if we have content and NO tools
-            if not streaming_tools and not tool_calls_detected and full_content.strip():
+            # Check if model claimed to use a tool but didn't emit a tool call.
+            # DISABLED BY DEFAULT for all models: the forced retry on a heuristic/<Action> match caused
+            # more harm than good (retry loops, false positives -- especially on weak local models).
+            # Opt back in via config `false_promise_detection_enabled: true`. Only runs with content + NO tools.
+            if (Config.get("false_promise_detection_enabled", False)
+                    and not streaming_tools and not tool_calls_detected and full_content.strip()):
                 # Measure only the USER-VISIBLE answer: weak local models (e.g. Gemma)
                 # stream their reasoning inline as <think>...</think> in the content
                 # field, which would otherwise inflate the length and trip the >800
@@ -6636,6 +6712,18 @@ class Agent:
                                     "function": {"name": func_name, "arguments": json.dumps(args)}
                                 })
 
+                # 4. Gemma-4 native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
+                # Additive defensive net: only for a local Gemma-4 model and only when nothing matched
+                # above. The server normally converts these via --jinja; this catches the rare case
+                # where a raw call leaks into the text unconverted.
+                if not tool_calls_detected and getattr(self, "model_mode", None) == "gemma4":
+                    for _g_name, _g_args in _parse_gemma4_tool_calls(text_to_search, self.tools):
+                        tool_calls_detected.append({
+                            "id": f"call_{os.urandom(4).hex()}",
+                            "type": "function",
+                            "function": {"name": _g_name, "arguments": json.dumps(_g_args)},
+                        })
+
             try:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
             except Exception:
@@ -6645,7 +6733,7 @@ class Agent:
             # Read the agent's committed <Action> intent and fuzzy-match it against the loaded
             # tools, logging quietly (no terminal spam). This is the declared-vs-actual seed for
             # runtime learning; it does NOT drive know-how injection (that is router-driven; see
-            # docs/ACTION_TAG.md + WHARE_WANANGA.md "Delivery").
+            # docs/agents/ACTION_TAG.md + WHARE_WANANGA.md "Delivery").
             try:
                 _act = _extract_action_text(full_response)
                 if _act:
@@ -8685,13 +8773,19 @@ class Agent:
                 fixed.append(msg)
             messages = fixed
 
-        is_gemma = "gemma" in self.filename.lower()
+        is_gemma = getattr(self, "is_gemma_local", "gemma" in self.filename.lower())
         if not is_gemma:
             return messages
         
-        # Gemma Logic: Merge System into first User, Ensure Alternation
+        # Gemma 3n: merge System into the first User turn (it has no native system role).
+        # Gemma 4: keep a native `system` role (the GGUF template renders it as a <|turn>system block,
+        # where tool instructions belong) so they are not buried in the user turn; only the
+        # alternation handling is shared between the two.
+        is_gemma4 = (getattr(self, "model_mode", None) == "gemma4")
         new_messages = []
-        pending_system = ""
+        pending_system = ""        # folds into the next/trailing USER turn (3n always; gemma4: NON-leading system)
+        leading_system = ""        # gemma4 only: the leading (main) system prompt -> native front system turn
+        seen_non_system = False    # have we passed the first non-system message yet?
 
         for msg in messages:
             role = msg.get("role")
@@ -8705,19 +8799,30 @@ class Agent:
                 content = str(raw_content)
             
             if role == "system":
-                pending_system += f"{content}\n\n"
+                # Gemma 4: the LEADING system block (before any user/assistant) becomes the native
+                # front system turn. A system message that arrives LATER is an interstitial nudge
+                # (e.g. the empty-response / false-promise correction); fold it into a trailing USER
+                # turn instead -- never to the front -- otherwise the prior assistant message ends up
+                # last and the template rejects the request: "Assistant response prefill is
+                # incompatible with enable_thinking" (400). Gemma 3n folds all system into user as before.
+                if is_gemma4 and not seen_non_system:
+                    leading_system += f"{content}\n\n"
+                else:
+                    pending_system += f"{content}\n\n"
             elif role == "user":
+                seen_non_system = True
                 if pending_system:
                     content = f"{pending_system}{content}"
                     pending_system = ""
-                
+
                 # Check alternation: If last was user, merge this one
                 if new_messages and new_messages[-1]["role"] == "user":
                     new_messages[-1]["content"] += f"\n\n{content}"
                 else:
                     new_messages.append({"role": "user", "content": content})
-            
+
             elif role == "assistant":
+                seen_non_system = True
                 # Check alternation: If last was assistant, merge this one
                 if new_messages and new_messages[-1]["role"] == "assistant":
                     if content: # Only merge if content exists
@@ -8734,6 +8839,7 @@ class Agent:
                     new_messages.append(msg)
             
             elif role == "tool":
+                seen_non_system = True
                 # Gemma requires User -> Assistant -> User -> ...
                 # Tool responses usually follow Assistant (tool calls).
                 # But sometimes we have multiple Tool responses.
@@ -8741,10 +8847,15 @@ class Agent:
                 # And after Tool, we need Assistant (or User? No, model replies).
                 new_messages.append(msg)
 
-        # If system prompt is left over (no user message yet), add as user
+        # Flush leftover NON-leading system as a trailing USER turn (3n: all system; gemma4: only
+        # interstitial nudges). This steers the model without leaving a trailing assistant "prefill".
         if pending_system:
-             new_messages.append({"role": "user", "content": pending_system.strip()})
-             
+            new_messages.append({"role": "user", "content": pending_system.strip()})
+        # Gemma 4: the leading/main system prompt goes to the very front as a native system turn
+        # (the template renders it as <|turn>system, keeping tool instructions out of the user turn).
+        if leading_system:
+            new_messages.insert(0, {"role": "system", "content": leading_system.strip()})
+
         return new_messages
 
     @property

@@ -9,7 +9,7 @@ reference / spec, **not part of the built product**.
 - **`agent_avatar/`** — the living-dot agent avatar: base, emotions, away-scenes and
   activity states, plus a transition player that morphs any state into any other.
   Start with `agent_avatar/agent-all-animations.html` (everything in one place).
-  The component design and the transition integration live in `docs/AgentAvatar.md`.
+  The component design and the transition integration live in `docs/web-ui/AgentAvatar.md`.
 
 New animation systems get their own subfolder here.
 

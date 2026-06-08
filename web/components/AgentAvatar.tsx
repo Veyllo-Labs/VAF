@@ -21,7 +21,7 @@ import React from 'react';
 // the white dot (the EYE) NESTED inside it, so when the body jumps/shakes the eye moves with it.
 // Emotion modes keep the body subtle and the dot expressive; activity modes (learn/success/error)
 // let the body carry the motion + an icon overlay. State changes use the UNIVERSAL MORPH
-// (docs/AgentAvatar.md): the whole figure collapses to a soft neutral point, the mode is swapped,
+// (docs/web-ui/AgentAvatar.md): the whole figure collapses to a soft neutral point, the mode is swapped,
 // then it blooms into the new state — so any state flows into any other instead of snapping.
 export type AvatarMode =
     | 'idle' | 'waiting' | 'thinking' | 'talking'
@@ -101,7 +101,7 @@ const LITE: Partial<Record<AvatarMode, string>> = {
 };
 
 export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean }) {
-    // Settle-to-neutral transition (docs/AgentAvatar.md "Same-position switches"): the agent stays
+    // Settle-to-neutral transition (docs/web-ui/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
     // animation from rest -- its 0% is neutral, so it eases in instead of snapping. No collapse,

@@ -5,7 +5,7 @@ viewing, screenshots, and post content.
 
 > Design reference for the agent avatar. Lives in the repo under `docs/animations/agent_avatar/`,
 > but is not part of the built product (pure reference/spec).
-> The actual React integration is documented in `docs/AgentAvatar.md`.
+> The actual React integration is documented in `docs/web-ui/AgentAvatar.md`.
 
 | File | Contents |
 |---|---|
@@ -77,7 +77,7 @@ across both models). Controls: play/pause, reshuffle, duration per state. This i
 the **transitions** between the animations.
 
 > **Building it into VAF:** these transitions are documented in the real app code — see
-> `docs/AgentAvatar.md`, section *"Universal morph — any state to any state"*. It contains the
+> `docs/web-ui/AgentAvatar.md`, section *"Universal morph — any state to any state"*. It contains the
 > concrete React integration (collapse-to-neutral -> swap -> bloom) matching
 > `web/components/AgentAvatar.tsx`. The transition player here is the visual reference for it.
 

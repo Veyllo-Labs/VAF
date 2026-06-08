@@ -28,6 +28,7 @@ class Config:
         "provider": "local",
         "gpu_layers": -1,
         "auto_install_gpu": True,  # On an NVIDIA GPU without CUDA, auto-install CUDA llama-cpp-python (no terminal prompt). Set false to stay on CPU.
+        "false_promise_detection_enabled": False,  # Forced retry when a model claims a tool but emits none. OFF by default (caused retry loops / false positives); set true to re-enable.
         "n_ctx": 32768,  # Minimum supported context window; load() clamps lower values up to this.
         "n_parallel": 0, # 0 = Auto-detect based on VRAM (1 or 2); Set to 1 to force sequential if crashing
         "llama_cache_ram": 4096,  # Prompt cache size in MB. 0 = disabled. -1 = auto (40% free RAM, cap 8192).

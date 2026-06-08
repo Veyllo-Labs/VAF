@@ -4,48 +4,89 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 ## Contents
 
-### Core Systems
-- **SELF_LEARNING.md**: Overview of how VAF learns from usage — the five lanes (long-term memory/RAG, user profile, document learning, attachment-scoped retrieval, and tool know-how / Whare Wananga) and a template for new ones.
-- **MEMORY_SYSTEM.md**: Self-learning RAG memory (improves with use via session compaction and memory_save), encryption, vector search, and graph visualization.
-- **SOUL_SYSTEM.md**: Agent personality and rules (Soul, identity.json). Distinct from the human user profile.
-- **USER_IDENTITY.md**: Current user profile (user_identity.json), update_user_identity tool, and Settings UI.
-- **CONTEXT_MANAGEMENT.md**: Dynamic system prompt and token optimization strategies.
-- **ACTION_TAG.md**: The `<Action>` tag — agent declares the tool it is about to use; separate collapsible Action panel in the Web UI, persistence, and LLM-context behavior.
-- **WHARE_WANANGA.md**: Tool self-learning subsystem — learns per-tool `tool_knowledge` (Aronui/Tuatea/Tuarua facets) via a predict-then-verify loop, delivers it at runtime (proactive schema injection + reactive retry), and refreshes it (runtime re-learning, opt-in eager training, opt-in Teacher/Noho co-learning).
-- **GATEWAY.md**: Persistent gateway server and multi-channel access.
-- **WEB_UI.md**: Browser-based dashboard and WebSocket API.
-- **DOCUMENT_EDITOR_NATIVE_DOCX.md**: Native DOCX editor architecture, import/export model, editor split, and Gotenberg's role.
+Docs are grouped into category folders. Full index by category:
 
-### Speech & Voice
-- **SPEECH_FEATURES.md**: Complete TTS/STT integration across CLI, Web UI, and Telegram.
-- **DOCKER_SERVICES.md**: Docker containers for TTS (Piper), STT (Whisper), Gotenberg (Office→PDF), database, and Redis.
+### setup/ — install, services, deployment
+- [LINUX_SETUP.md](setup/LINUX_SETUP.md) — Linux setup and troubleshooting.
+- [WINDOWS_SETUP.md](setup/WINDOWS_SETUP.md) — Windows-specific setup.
+- [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md) — TTS/STT/Gotenberg/DB/Redis containers.
+- [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) — Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
+- [GATEWAY.md](setup/GATEWAY.md) — Persistent gateway server, multi-channel access.
+- [SERVER_MODE.md](setup/SERVER_MODE.md) — Standalone llama-server mode.
+- [PROCESS_MANAGEMENT.md](setup/PROCESS_MANAGEMENT.md) — Process lifecycle management.
+- [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md) — Network-mode security model, doctor checks.
 
-### Messaging & Integration
-- **TELEGRAM_INTEGRATION.md**: Telegram bot with voice message support and user whitelisting.
-- **WHATSAPP_INTEGRATION.md**: WhatsApp bridge (Baileys), voice, documents, whitelist, and best practices.
-- **CONNECTIONS.md**: External service connections and authentication.
-- **GITHUB_INTEGRATION.md**: GitHub OAuth, agent tools (list repos, read file, issues/PRs), and troubleshooting.
-- **AUTOMATIONS.md**: Scheduled automations (create_automation), short in-chat timers (set_timer), automation calendar, and planner (notes/todos).
-- **Thinking-Mode.md**: Background thinking mode when the user is idle (todos, automations, one question via messenger, sessions in chat list).
-- **CALENDAR_INTEGRATION.md**: Google/Microsoft calendar tools and Calendar Dashboard.
-- **API_INTEGRATION.md**: Integration with various LLM providers and APIs.
-- **WEBUI_WEBSOCKET_FLOW.md**: WebSocket flow, session scoping, and debugging.
+### llm/ — models, providers, backend
+- [LLM_BACKEND_FACTS.md](llm/LLM_BACKEND_FACTS.md) — Backend selection (API/server/library), local model facts.
+- [API_INTEGRATION.md](llm/API_INTEGRATION.md) — API providers and keys.
+- [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) — Catalog of provider/model-specific behavior (DeepSeek, Gemma local mode) and the additive/gated principle.
+- [DYNAMIC_MODEL_SELECTION.md](llm/DYNAMIC_MODEL_SELECTION.md) — Live model discovery per API provider.
+- [MODELL_UND_PROVIDER_WECHSEL.md](llm/MODELL_UND_PROVIDER_WECHSEL.md) — Switching local ↔ API at runtime.
+- [LAZY_LOAD_RAM_ANALYSIS.md](llm/LAZY_LOAD_RAM_ANALYSIS.md) — Model lazy-load and RAM analysis.
 
-### Sub-Agents
-- **CODER_ARCHITECTURE.md**: Deep dive into the Coder sub-agent's design and logic.
-- **SUBAGENT_IPC.md**: Inter-process communication between agents.
-- **SUBAGENT_FILE_EXTRACTION.md**: File handling in sub-agents.
+### memory/ — memory, context, learning, identity
+- [MEMORY_SYSTEM.md](memory/MEMORY_SYSTEM.md) — Self-learning RAG memory, encryption, vector search, graph.
+- [SELF_LEARNING.md](memory/SELF_LEARNING.md) — How VAF learns (the lanes) and a template for new ones.
+- [CONTEXT_MANAGEMENT.md](memory/CONTEXT_MANAGEMENT.md) — Dynamic system prompt and token optimization.
+- [CONTEXT_COMPRESSION_FLOW.md](memory/CONTEXT_COMPRESSION_FLOW.md) — History compression flow.
+- [CONTEXT_GLUE.md](memory/CONTEXT_GLUE.md) — Context assembly between turns.
+- [SESSION_MANAGEMENT.md](memory/SESSION_MANAGEMENT.md) — Session lifecycle and storage.
+- [SESSION_CONTEXT_SYSTEM_PROMPT.md](memory/SESSION_CONTEXT_SYSTEM_PROMPT.md) — Per-session context in the system prompt.
+- [USER_IDENTITY.md](memory/USER_IDENTITY.md) — User profile and `update_user_identity`.
+- [SOUL_SYSTEM.md](memory/SOUL_SYSTEM.md) — Agent personality and rules (Soul).
+- [WHARE_WANANGA.md](memory/WHARE_WANANGA.md) — Tool self-learning subsystem.
 
-### Security & Execution
-- **SANDBOXING.md**: Secure code execution using Docker.
-- **SANDBOX_MODULES.md**: Sandboxed module system.
-- **NETWORK_FEATURES.md**: Network-mode security model, OAuth session binding, and operational hardening checks (`vaf doctor` / `vaf security doctor`).
+### agents/ — tools, sub-agents, workflows, reasoning
+- [TOOL_ROUTER_ARCHITECTURE.md](agents/TOOL_ROUTER_ARCHITECTURE.md) — Tool router and per-turn scoping.
+- [TOOL_SUPERVISION.md](agents/TOOL_SUPERVISION.md) — Tool supervision/safety.
+- [ACTION_TAG.md](agents/ACTION_TAG.md) — The `<Action>` declaration tag.
+- [CODER_ARCHITECTURE.md](agents/CODER_ARCHITECTURE.md) — Coder sub-agent design.
+- [SUBAGENT_IPC.md](agents/SUBAGENT_IPC.md) — Inter-process communication between agents.
+- [SUBAGENT_FILE_EXTRACTION.md](agents/SUBAGENT_FILE_EXTRACTION.md) — File handling in sub-agents.
+- [BROWSER_AGENT.md](agents/BROWSER_AGENT.md) — Browser automation agent.
+- [RESEARCH_AND_DOCUMENT_WORKFLOWS.md](agents/RESEARCH_AND_DOCUMENT_WORKFLOWS.md) — Research and document workflows.
+- [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md) — Workflow matching/selection.
+- [FRONT_OFFICE.md](agents/FRONT_OFFICE.md) — Front-office routing.
+- [THINKING_WORKSPACE.md](agents/THINKING_WORKSPACE.md) — Thinking-mode workspace.
+- [Thinking-Mode.md](agents/Thinking-Mode.md) — Background thinking mode when idle.
+- [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md) — MCP exposed as a tool system.
 
-### Platform & Setup
-- **SYSTEM_TRAY.md**: Tray architecture and platform notes (Windows vs macOS implementation details).
-- **WINDOWS_SETUP.md**: Windows-specific setup and troubleshooting.
-- **DESIGN.md**: UI design tokens and component styles.
-- **MODELL_UND_PROVIDER_WECHSEL.md**: Switching between local models and API providers.
+### documents/ — document reading, creation, editing
+- [DOCUMENT_READING.md](documents/DOCUMENT_READING.md) — PDF/Office extraction to Markdown.
+- [DOCUMENT_CREATION.md](documents/DOCUMENT_CREATION.md) — Document creation.
+- [DOCUMENT_EDITOR_NATIVE_DOCX.md](documents/DOCUMENT_EDITOR_NATIVE_DOCX.md) — Native DOCX editor architecture.
+- [LIBRARIAN_CONFIGURATION.md](documents/LIBRARIAN_CONFIGURATION.md) — Librarian configuration.
+
+### integrations/ — connections & messengers
+- [CONNECTIONS.md](integrations/CONNECTIONS.md) — External service connections and auth.
+- [TELEGRAM_INTEGRATION.md](integrations/TELEGRAM_INTEGRATION.md) — Telegram bot.
+- [WHATSAPP_INTEGRATION.md](integrations/WHATSAPP_INTEGRATION.md) — WhatsApp bridge (Baileys).
+- [GITHUB_INTEGRATION.md](integrations/GITHUB_INTEGRATION.md) — GitHub OAuth and agent tools.
+- [CALENDAR_INTEGRATION.md](integrations/CALENDAR_INTEGRATION.md) — Google/Microsoft calendar.
+
+### web-ui/ — frontend, design, voice
+- [WEB_UI.md](web-ui/WEB_UI.md) — Browser dashboard and WebSocket API.
+- [WEBUI_WEBSOCKET_FLOW.md](web-ui/WEBUI_WEBSOCKET_FLOW.md) — WebSocket flow, session scoping, debugging.
+- [WORKFLOW_UI_COMPONENTS.md](web-ui/WORKFLOW_UI_COMPONENTS.md) — Workflow UI components.
+- [AgentAvatar.md](web-ui/AgentAvatar.md) — Agent avatar.
+- [WelcomeGreeting.md](web-ui/WelcomeGreeting.md) — Welcome greeting.
+- [WINDOW_TILING_DESIGN.md](web-ui/WINDOW_TILING_DESIGN.md) — Window tiling design.
+- [DESIGN.md](web-ui/DESIGN.md) — UI design tokens and component styles.
+- [SPEECH_FEATURES.md](web-ui/SPEECH_FEATURES.md) — TTS/STT integration.
+- [NETWORK_TAB.md](web-ui/NETWORK_TAB.md) — Network tab UI.
+
+### security/ — sandboxing & isolation
+- [SANDBOXING.md](security/SANDBOXING.md) — Secure code execution via Docker.
+- [SANDBOX_MODULES.md](security/SANDBOX_MODULES.md) — Sandboxed module system.
+- [USER_ISOLATION.md](security/USER_ISOLATION.md) — Per-user scope isolation.
+
+### platform/ — tray, automations, i18n
+- [SYSTEM_TRAY.md](platform/SYSTEM_TRAY.md) — Tray architecture and platform notes.
+- [AUTOMATIONS.md](platform/AUTOMATIONS.md) — Automations, timers, planner.
+- [I18N.md](platform/I18N.md) — Internationalization.
+- [TRANSLATION_SYSTEM.md](platform/TRANSLATION_SYSTEM.md) — Translation system.
+- [UUID.md](platform/UUID.md) — UUID/ID scheme.
+- [ABOUT.md](platform/ABOUT.md) — About VAF.
 
 See individual files for detailed documentation.
 

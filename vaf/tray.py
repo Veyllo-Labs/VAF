@@ -5,7 +5,7 @@ Platform split:
   - macOS (Darwin): Uses rumps for native Cocoa menu bar. Requires main-thread run loop.
   - Windows/Linux: Uses pystray for system tray. Icon must be shown only after event loop is ready.
 
-Key platform considerations (see docs/SYSTEM_TRAY.md):
+Key platform considerations (see docs/platform/SYSTEM_TRAY.md):
   - Windows: Icon size 32x32; CREATE_NO_WINDOW for subprocesses; os.startfile() for URLs.
   - macOS: rumps.VafTrayApp; signal handlers for Cmd+Q; delayed_init for RunLoop readiness.
 """
@@ -996,7 +996,7 @@ def create_image(color_name):
     path = get_icon_path(color_name)
     if path:
         img = Image.open(path)
-        # Windows: taskbar expects 16x16 or 32x32 (see docs/SYSTEM_TRAY.md)
+        # Windows: taskbar expects 16x16 or 32x32 (see docs/platform/SYSTEM_TRAY.md)
         if platform.system() == "Windows" and (img.width > 32 or img.height > 32):
             img = img.resize((32, 32), Image.Resampling.LANCZOS)
         return img

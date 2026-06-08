@@ -62,6 +62,11 @@ class ServerManager:
         from vaf.core.config import Config
 
         name = (model_name or Config.get("model") or "").strip()
+        # "auto" -> VRAM-aware default (gemma-4 E4B/E2B Q8). The server/tray path builds the model path
+        # independently of the Agent, so it must expand the sentinel here too (else it looks for auto.gguf).
+        if name.lower() == "auto":
+            from vaf.core.gpu_detection import recommended_default_model
+            name = recommended_default_model()
         if not name:
             return str(Path(self.base_dir) / "models" / "VQ-1_Instruct-q4_k_m.gguf")
 
@@ -622,11 +627,10 @@ class ServerManager:
             # with negligible quality loss — the closest llama.cpp analog to TurboQuant.
             "-ctk", "q8_0",
             "-ctv", "q4_0",
-            # Enable jinja so the tools/tool_choice API works.
-            # VQ-1's native template uses <tool_call> XML format which llama-server
-            # parses and converts to OpenAI tool_calls objects automatically.
-            # Do NOT override with --chat-template: the native template has proper
-            # tool-call support and overriding it breaks function calling.
+            # Enable jinja so the tools/tool_choice API works: llama-server uses the GGUF's embedded
+            # chat template to parse the model's tool calls and convert them to OpenAI tool_calls.
+            # Do NOT override with --chat-template: the model's native template has the correct
+            # tool-call format and overriding it breaks function calling.
             # Verified: b9058+ Vulkan binary handles the native template without SIGABRT.
             "--jinja",
         ]

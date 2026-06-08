@@ -1230,7 +1230,7 @@ def main_menu(agent=None):
                     from vaf.core.speech import get_speech_manager
                     get_speech_manager().speak("Speech output enabled.")
                 except ImportError:
-                    # pyttsx3 removed — TTS is via Docker (Piper). See docs/SPEECH_FEATURES.md.
+                    # pyttsx3 removed — TTS is via Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
                     UI.warning("TTS not available. Start Docker and set speech_tts_engine=docker")
             time.sleep(1.0)
             

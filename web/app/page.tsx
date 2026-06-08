@@ -250,8 +250,13 @@ const parseThinkBlocks = (content: string): { thought: string | null; answer: st
     // Normalize different thinking tag formats to <think>
     clean = clean.replace(/<thinking>/gi, '<think>').replace(/<\/thinking>/gi, '</think>');
 
-    // Merge consecutive thinking blocks
-    let merged = clean.replace(/<\/think>\s*<think>/g, ' ');
+    // Merge consecutive thinking blocks, and collapse doubled/nested tags. Weak local models
+    // (e.g. Gemma) sometimes emit <think><think>... or repeated close tags; normalizing here keeps the
+    // Thinking panel clean and stops a literal tag leaking into the answer. No-op for well-formed output.
+    let merged = clean
+        .replace(/<\/think>\s*<think>/gi, ' ')                // adjacent close->open: one block
+        .replace(/<think>(?:\s*<think>)+/gi, '<think>')       // collapse doubled open tags
+        .replace(/<\/think>(?:\s*<\/think>)+/gi, '</think>'); // collapse doubled close tags
 
     const openTag = "<think>";
     const closeTag = "</think>";

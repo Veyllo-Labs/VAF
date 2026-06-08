@@ -15,7 +15,7 @@ Plus predict-then-verify records and lifecycle metadata. Stored GLOBALLY (tool
 mechanics are objective) under ~/.vaf/whare_wananga/<tool>.json.
 
 This module does NOT learn or inject anything -- it is the foundation the learning
-loop writes to and the Action-Tag delivery reads from. See docs/ACTION_TAG.md.
+loop writes to and the Action-Tag delivery reads from. See docs/agents/ACTION_TAG.md.
 """
 
 from __future__ import annotations

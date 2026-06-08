@@ -80,7 +80,7 @@ def _safe_mode_enabled() -> bool:
     """
     Safe mode keeps the attachment lane on a lexical in-process store, bypassing the vector/embedding
     path. Default is now FALSE (vector mode on): the runaway-RSS root cause (a TextChunker infinite
-    loop, see docs/MEMORY_SYSTEM.md) was fixed and the vector + hierarchical paths verified stable.
+    loop, see docs/memory/MEMORY_SYSTEM.md) was fixed and the vector + hierarchical paths verified stable.
     Set `attachment_rag_safe_mode=true` in config to force the lexical fallback.
     """
     return bool(Config.get("attachment_rag_safe_mode", False))

@@ -138,6 +138,10 @@ class Agent:
         
         # Determine model filename from config path or just name
         model_name = os.environ.get("VAF_MODEL_OVERRIDE", "").strip() or self.config.get("model")
+        # "auto" -> VRAM-aware default (gemma-4 E4B Q8 if >10GB VRAM, else E2B).
+        if (model_name or "").strip().lower() == "auto":
+            from vaf.core.gpu_detection import recommended_default_model
+            model_name = recommended_default_model()
         # Handle full HuggingFace paths (e.g. user/repo/filename.gguf)
         if model_name.count("/") >= 2:
             parts = model_name.rsplit("/", 1)
@@ -6233,14 +6237,38 @@ class Agent:
             # Check if model claimed to use a tool but didn't emit a tool call
             # Only check if we have content and NO tools
             if not streaming_tools and not tool_calls_detected and full_content.strip():
-                _response_len = len(full_content.strip())
+                # Measure only the USER-VISIBLE answer: weak local models (e.g. Gemma)
+                # stream their reasoning inline as <think>...</think> in the content
+                # field, which would otherwise inflate the length and trip the >800
+                # skip below — hiding genuinely short false promises behind a long
+                # thinking block.
+                _visible = re.sub(r'<think>[\s\S]*?</think>', '', full_content, flags=re.IGNORECASE).strip()
+                _response_len = len(_visible)
+
+                # High-confidence signal: the model committed to a tool in its <Action>
+                # block — which per the system prompt is emitted ONLY right before a tool
+                # call — but then emitted no call at all. This is a definitional false
+                # promise, far more reliable than the free-text heuristic, and it is what
+                # catches "Using web_search to find the weather..." with no call behind it.
+                _act_intent = _extract_action_text(full_response)
+                if _act_intent:
+                    _avail_fp = list(self._active_tools) if self._active_tools else list(self.tools.keys())
+                    _act_matches = _match_action_to_tools(_act_intent, _avail_fp)
+                else:
+                    _act_matches = []
+                _action_promise = bool(_act_matches and _act_matches[0][1] >= 0.7)
+                _promised_tool = _act_matches[0][0] if _action_promise else None
+
                 # False promises are always short (1-2 sentences like "Let me search...").
                 # A long analytical/conversational response is never a false promise —
-                # skip detection entirely to avoid trapping the agent in a retry loop.
-                _skip_fp_detection = _response_len > 800
-                if not _skip_fp_detection and self._detect_false_tool_promise(full_content, tool_calls_detected):
+                # skip detection to avoid trapping the agent in a retry loop. An explicit
+                # <Action> commitment overrides the skip (the length is just thinking).
+                _skip_fp_detection = (_response_len > 800) and not _action_promise
+                if not _skip_fp_detection and (_action_promise or self._detect_false_tool_promise(_visible, tool_calls_detected)):
                     self._false_promise_retries += 1
-                    _is_substantial = _response_len > 200
+                    # An <Action> commitment is high-confidence, so it is never treated as
+                    # a "substantial answer" the validator merely misread.
+                    _is_substantial = (_response_len > 200) and not _action_promise
                     # For substantial responses, cap at 2 retries: the validator is
                     # likely misclassifying analytical text, and more retries only
                     # deepen the loop (each CORRECTION prompt produces more analysis).
@@ -6282,13 +6310,22 @@ class Agent:
                             "role": "assistant",
                             "content": full_content
                         })
-                        self.history.append({
-                            "role": "system", 
-                            "content": (
+                        if _promised_tool:
+                            _correction = (
+                                f"CORRECTION NEEDED: You announced an action (\"{_act_intent[:120]}\") "
+                                f"but did NOT execute the tool call.\n"
+                                f"Call `{_promised_tool}` NOW using a proper function call. "
+                                f"Do not describe the call — emit it."
+                            )
+                        else:
+                            _correction = (
                                 "CORRECTION NEEDED: You mentioned using a tool (e.g. 'I am using...', 'Let me search...') "
                                 "but you did NOT execute the tool call.\n"
                                 "Please call the tool using proper function syntax now."
                             )
+                        self.history.append({
+                            "role": "system",
+                            "content": _correction,
                         })
                         
                         # Force retry without user input

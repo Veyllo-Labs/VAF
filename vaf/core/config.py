@@ -24,7 +24,7 @@ class Config:
     CONFIG_FILE = APP_DIR / "config.json"
     
     DEFAULTS = {
-        "model": "Veyllo/VQ-1_Instruct-q4_k_m",
+        "model": "auto",  # "auto" = VRAM-aware default (gemma-4 E4B Q8 GGUF if >10GB VRAM, else E2B). Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,
         "auto_install_gpu": True,  # On an NVIDIA GPU without CUDA, auto-install CUDA llama-cpp-python (no terminal prompt). Set false to stay on CPU.

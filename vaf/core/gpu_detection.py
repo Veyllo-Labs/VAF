@@ -445,3 +445,20 @@ def _get_recommended_backend(gpu: GPUInfo) -> str:
     else:
         return "cpu"  # Fallback to CPU if compute not available
 
+
+# ─── Default local model (VRAM-aware) ─────────────────────────────────────────
+# Original Gemma GGUF (Q8_0) from the llama.cpp org (ggml-org). E4B is the larger variant.
+GEMMA_E2B_Q8 = "ggml-org/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q8_0.gguf"
+GEMMA_E4B_Q8 = "ggml-org/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q8_0.gguf"
+
+
+def recommended_default_model() -> str:
+    """VRAM-aware default local model: gemma-4 E4B (Q8 GGUF) when the primary GPU has more than
+    10 GB of VRAM, otherwise the smaller E2B. Falls back to E2B when VRAM is unknown/CPU-only."""
+    try:
+        gpu = get_primary_gpu()
+        vram_mb = gpu.vram_mb if (gpu and gpu.vram_mb) else 0
+    except Exception:
+        vram_mb = 0
+    return GEMMA_E4B_Q8 if vram_mb > 10 * 1024 else GEMMA_E2B_Q8
+

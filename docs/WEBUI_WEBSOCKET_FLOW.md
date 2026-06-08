@@ -170,10 +170,10 @@ If you see `LLM Call Failed: HTTPConnectionPool(127.0.0.1:8080)`:
 - Ensure the tray is running and the backend is reused instead of starting a second process.
 - If multiple `llama-server.exe` instances appear, close all of them and restart the tray.
 
-### 1c) 503 "Loading model" on first prompt / VQ1 no thinking / RAM 15–20 GB
+### 1c) 503 "Loading model" on first prompt / local model no thinking / RAM 15–20 GB
 
 - **503 on first prompt**: Headless now waits for `http://127.0.0.1:8080/v1/models` to return 200 (up to 2 min) before the first chat when using the server backend; the WebUI shows "Model is loading, please wait..." during that time.
-- **VQ1 thinking**: Once the first request no longer hits 503, the server path streams `reasoning_content` (thinking) correctly. Tool calls emitted inside `<think>` are still parsed (agent searches `full_response` + `full_reasoning` for `<tool_call>...</tool_call>`); the system prompt instructs the model to place tool calls in the main response.
+- **Local model thinking**: Once the first request no longer hits 503, the server path streams `reasoning_content` (thinking) correctly. Tool calls emitted inside `<think>` are still parsed (agent searches `full_response` + `full_reasoning` for `<tool_call>...</tool_call>`); the system prompt instructs the model to place tool calls in the main response.
 - **RAM spike (double model)**: On Windows, `force_server` defaults to **true** so the agent uses the HTTP backend (8080) only and does not load the library in-process. If the server block was skipped (e.g. server failed to start), the agent checks 8080 again before loading the library and reuses the server if reachable.
 
 ### 2) Messages Filtered on Frontend

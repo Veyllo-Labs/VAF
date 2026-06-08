@@ -11,7 +11,7 @@ from uuid import UUID
 
 from vaf.tools.base import BaseTool
 from vaf.memory.attachment_rag import read_session_attachments_sync
-from vaf.tools.learn_document import _normalize_doc_tag, _merge_thin_pages, _analyze_document_llm
+from vaf.tools.learn_document import _normalize_doc_tag, _clean_title
 
 _PAGE_MARKER_RE = re.compile(r"^---\s*Page\s+(\d+)\s*---\s*$", re.MULTILINE)
 _MAX_PAGE_CHARS = 4000  # per-page content cap sent to the vector store
@@ -86,7 +86,24 @@ class LearnAttachedKnowledgeTool(BaseTool):
         tags: List[str] = [str(t).strip().lower() for t in (kwargs.get("tags") or []) if str(t).strip()]
         tags = list(dict.fromkeys(tags))[:10]
 
-        entries = read_session_attachments_sync(session_id=session_id, user_scope_id=user_scope_id, limit=max_items)
+        # Read the FULL attachment content from the session (the librarian-extracted Markdown), not the
+        # per-section attachment-lane rows -- so each attachment is learned as one whole document and
+        # our own section split applies. (In vector mode the lane stores section rows, not full docs.)
+        entries = []
+        try:
+            from vaf.core.session import SessionManager
+            _session = SessionManager().load(session_id)
+            _docs = (getattr(_session, "runtime_state", None) or {}).get("sidebar_documents") or []
+            for _d in _docs[:max_items]:
+                _name = str((_d or {}).get("name") or "Attachment")
+                _content = str((_d or {}).get("content") or "").strip()
+                if _content:
+                    entries.append({"attachment_name": _name, "content": _content})
+        except Exception:
+            entries = []
+        if not entries:
+            # Fallback to the attachment lane (full docs in safe mode; section rows in vector mode).
+            entries = read_session_attachments_sync(session_id=session_id, user_scope_id=user_scope_id, limit=max_items)
         if not entries:
             return "No attached-document knowledge found for the current session."
 
@@ -99,35 +116,8 @@ class LearnAttachedKnowledgeTool(BaseTool):
                 def generate_fn(prompt: str) -> str:
                     return agent._generate_for_compaction(prompt)
 
-        entry_analyses: dict = {}
-        if generate_fn:
-            for entry in entries[:max_items]:
-                att_name = str(entry.get("attachment_name") or "Attachment")
-                content = str(entry.get("content") or "").strip()
-                if not content:
-                    continue
-                pages = _split_by_pages(content)
-                if not pages:
-                    pages = [(1, content[:_MAX_PAGE_CHARS])]
-                pages = _merge_thin_pages(pages)
-                analysis = _analyze_document_llm(pages, att_name, generate_fn)
-                entry_analyses[att_name] = {
-                    "doc_summary": (analysis.get("doc_summary") or "").strip(),
-                    "llm_tags": [str(t).strip().lower() for t in (analysis.get("doc_tags") or []) if str(t).strip()],
-                    "page_analysis": {
-                        int(p.get("page", 0)): p
-                        for p in (analysis.get("pages") or [])
-                        if isinstance(p, dict) and p.get("page")
-                    },
-                }
-
-        from vaf.memory.database import get_db
-        from vaf.memory.rag import RagPipeline
-        import asyncio
-
         def _emit_cursor(phase: str, **kw) -> None:
             try:
-                import json as _json
                 from vaf.core.web_interface import get_web_interface
                 get_web_interface()._push_session_update(session_id, {
                     "type": "cursor_animation",
@@ -137,136 +127,43 @@ class LearnAttachedKnowledgeTool(BaseTool):
             except Exception:
                 pass
 
+        # Animate the whole learning duration: the document analysis below is the slow part, so emit
+        # one "start" up front (and "end" at the very end). The front-end walks all rendered PDF pages
+        # on a 2s loop; total is a best-effort fallback (the front-end prefers the real page count).
+        _anim_total = 1
+        for _e in entries[:max_items]:
+            _ep = _split_by_pages(str(_e.get("content") or ""))
+            _anim_total = max(_anim_total, len(_ep) if _ep else 1)
+        _emit_cursor("start", total=_anim_total)
+
+        from vaf.memory.database import get_db
+        from vaf.tools.learn_document import ingest_document_knowledge
+        import asyncio
+
         async def _transfer() -> int:
-            from sqlalchemy import select, and_
-            from vaf.memory.models import Memory
+            created = 0
             async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
-                pipeline = RagPipeline(db)
-                created = 0
                 for idx, entry in enumerate(entries[:max_items], 1):
                     att_name = str(entry.get("attachment_name") or f"Attachment {idx}")
                     content = str(entry.get("content") or "").strip()
                     if not content:
                         continue
-
-                    doc_tag = _normalize_doc_tag(att_name)
-                    doc_title = att_name
-                    pages_stored = 0
-
-                    ea = entry_analyses.get(att_name, {})
-                    doc_summary = ea.get("doc_summary", "")
-                    llm_tags = ea.get("llm_tags", [])
-                    page_analysis = ea.get("page_analysis", {})
-                    all_tags = list(dict.fromkeys([doc_tag, "knowledge", "from-attachment"] + llm_tags + tags))
-
-                    pages = _split_by_pages(content)
-                    total_pages = len(pages) if pages else 1
-                    _emit_cursor("start", total=total_pages, attachment=att_name)
-                    if pages:
-                        for page_num, page_text in pages:
-                            if not page_text:
-                                continue
-                            pa = page_analysis.get(page_num, {})
-                            page_title = (pa.get("title") or "").strip() or f"{doc_title} \u2013 Page {page_num}"
-                            llm_content = (pa.get("content") or "").strip()
-                            stored_parts = []
-                            if doc_summary:
-                                stored_parts.append(f"[{doc_summary}]")
-                            if llm_content:
-                                stored_parts.append(llm_content)
-                            stored_parts.append(page_text)
-                            stored_content = "\n\n".join(stored_parts)
-                            meta = {
-                                "title": page_title,
-                                "type": "document",
-                                "source": "attachment_transfer",
-                                "knowledge_origin": "attachment",
-                                "attachment_name": att_name,
-                                "attachment_session_id": session_id,
-                                "doc_tag": doc_tag,
-                                "tags": all_tags,
-                            }
-                            await pipeline.ingest(
-                                content=stored_content,
-                                metadata=meta,
-                                auto_connect=True,
-                                user_scope_id=user_scope_id,
-                            )
-                            created += 1
-                            pages_stored += 1
-                            _emit_cursor("page", page=pages_stored, total=total_pages, title=page_title)
-                    else:
-                        pa = page_analysis.get(1, {})
-                        page_title = (pa.get("title") or "").strip() or doc_title
-                        llm_content = (pa.get("content") or "").strip()
-                        stored_parts = []
-                        if doc_summary:
-                            stored_parts.append(f"[{doc_summary}]")
-                        if llm_content:
-                            stored_parts.append(llm_content)
-                        stored_parts.append(content[:16000].rstrip())
-                        stored_content = "\n\n".join(stored_parts)
-                        meta = {
-                            "title": page_title,
-                            "type": "knowledge",
-                            "source": "attachment_transfer",
-                            "knowledge_origin": "attachment",
-                            "attachment_name": att_name,
-                            "attachment_session_id": session_id,
-                            "doc_tag": doc_tag,
-                            "tags": all_tags,
-                        }
-                        await pipeline.ingest(
-                            content=stored_content,
-                            metadata=meta,
-                            auto_connect=True,
-                            user_scope_id=user_scope_id,
-                        )
-                        created += 1
-                        pages_stored += 1
-
-                    if pages_stored > 0:
-                        conditions = [
-                            Memory.is_deleted == False,
-                            Memory.meta["type"].as_string() == "document_index",
-                            Memory.meta["doc_tag"].as_string() == doc_tag,
-                        ]
-                        if user_scope_id is not None:
-                            conditions.append(Memory.user_scope_id == user_scope_id)
-                        result = await db.execute(select(Memory).where(and_(*conditions)))
-                        existing_root = result.scalar_one_or_none()
-
-                        if existing_root is not None:
-                            meta_upd = dict(existing_root.meta or {})
-                            meta_upd["page_count"] = pages_stored
-                            if doc_summary:
-                                meta_upd["doc_summary"] = doc_summary
-                            existing_root.meta = meta_upd
-                        else:
-                            index_content = f"Document index: {doc_title}."
-                            if doc_summary:
-                                index_content += f" {doc_summary}"
-                            index_content += f" Contains {pages_stored} page(s) of knowledge from an attached document."
-                            index_tags = list(dict.fromkeys([doc_tag, "from-attachment"] + llm_tags + tags))
-                            index_meta: dict = {
-                                "type": "document_index",
-                                "source": "attachment_transfer",
-                                "title": doc_title,
-                                "doc_tag": doc_tag,
-                                "page_count": pages_stored,
-                                "tags": index_tags,
-                            }
-                            if doc_summary:
-                                index_meta["doc_summary"] = doc_summary
-                            await pipeline.ingest(
-                                content=index_content,
-                                metadata=index_meta,
-                                user_scope_id=user_scope_id,
-                                auto_connect=False,
-                            )
-
-                _emit_cursor("end")
-                return created
+                    res = await ingest_document_knowledge(
+                        db,
+                        content_markdown=content,
+                        doc_title=_clean_title(att_name),
+                        doc_tag=_normalize_doc_tag(_clean_title(att_name)),
+                        source="attachment_transfer",
+                        mem_type="document",
+                        generate_fn=generate_fn,
+                        user_scope_id=user_scope_id,
+                        extra_tags=tags,
+                        attachment_name=att_name,
+                        session_id=session_id,
+                    )
+                    created += int(res.get("created", 0))
+            _emit_cursor("end")
+            return created
 
         try:
             created_count = asyncio.run(_transfer())
@@ -294,5 +191,5 @@ class LearnAttachedKnowledgeTool(BaseTool):
         return (
             f"Learned {created_count} knowledge memor"
             f"{'y' if created_count == 1 else 'ies'} from attachment(s) into long-term memory "
-            f"(each PDF page stored individually for precise retrieval)."
+            f"(split into sections; each stored as a self-contained, contextual memory)."
         )

@@ -49,6 +49,14 @@ a separate, Action-independent path (router-driven injection, see
 omitted. Emission therefore depends on the model following the instruction and is
 not guaranteed on every tool call of a multi-step run.
 
+**Native function-calling models (Gemma 4).** For a local Gemma-4 model
+(`model_mode == "gemma4"`) the `<Action>` instruction is **not injected** — it is gated off on both
+paths in `build_prompt()`. Gemma 4 uses native function-calling and tended to emit the `<Action>`
+declaration and then stop, treating the declaration as the action itself. Because the tag is optional
+(nothing breaks when it is omitted), it is dropped for Gemma 4 so the model calls tools natively; the
+`<think>` instruction and the rest of the prompt are unchanged. Other models keep the tag. The Action
+panel and the declared-vs-actual matcher therefore simply do not appear for Gemma 4.
+
 ---
 
 ## Web UI rendering
@@ -192,7 +200,7 @@ always "remembers" what it did, regardless of how the tags are handled.
 
 | File | Role |
 |------|------|
-| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths) |
+| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths; gated off for Gemma 4) |
 | `web/app/page.tsx` | `parseContent` (tag extraction), `ThinkingDetails`, `ActionDetails`, session-load reconciliation |
 | `vaf/core/agent.py` | Backend Action-Tag parser (`_extract_action_text`, `_match_action_to_tools`, debug match in the generation loop); `<think>` stripped from LLM context; `<Action>` intentionally retained |
 

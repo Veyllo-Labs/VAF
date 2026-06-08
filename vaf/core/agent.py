@@ -2079,32 +2079,27 @@ class Agent:
             if not _check_cuda_available():
                 UI.warning("NVIDIA GPU detected but CUDA not available.")
                 UI.print("[yellow]VAF can automatically install CUDA-enabled llama-cpp-python.[/yellow]")
-                try:
-                    response = input("  Auto-install CUDA support? [Y/n]: ").strip().lower()
-                    if response in ('', 'y', 'yes', 'j', 'ja'):
-                        UI.event("System", "Installing CUDA support...", style="warning")
-                        # Install CUDA-enabled llama-cpp-python inline
+                # No blocking terminal prompt here: the Web UI / headless worker shares the terminal's
+                # stdin, so input() would freeze the chat request forever (the user is in the browser,
+                # not the console). Auto-install unless the user opts out via `auto_install_gpu=false`.
+                if not bool(self.config.get("auto_install_gpu", True)):
+                    UI.print("[yellow]auto_install_gpu is off -- running on CPU. Run 'vaf install-gpu' for CUDA.[/yellow]")
+                else:
+                    try:
+                        UI.event("System", "Auto-installing CUDA-enabled llama-cpp-python...", style="warning")
                         import subprocess
                         system = platform.system()
                         env = os.environ.copy()
                         pip_cmd = [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--no-cache-dir", "--force-reinstall"]
-                        
-                        if system == "Windows":
+                        if system in ("Windows", "Linux"):
                             env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
                             pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
-                        elif system == "Linux":
-                            env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-                            pip_cmd.extend(["--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124"])
-                        
                         subprocess.check_call(pip_cmd, env=env)
-                        UI.event("Success", "CUDA support installed! Restarting model load...", style="success")
-                        # Re-check after installation
+                        UI.event("Success", "CUDA support installed -- restart VAF to use the GPU.", style="success")
                         primary_gpu = get_primary_gpu()
-                except (KeyboardInterrupt, EOFError):
-                    UI.print("[dim]Skipping CUDA installation. Using CPU mode.[/dim]")
-                except Exception as e:
-                    UI.error(f"CUDA installation failed: {e}")
-                    UI.print("[yellow]You can manually install with: vaf install-gpu[/yellow]")
+                    except Exception as e:
+                        UI.error(f"CUDA installation failed: {e}")
+                        UI.print("[yellow]Running on CPU. Manual install: vaf install-gpu[/yellow]")
         
         n_gpu = self.config.get("gpu_layers", 99) # Default to max for server
         n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum: system prompt ~5.5K + tool schemas ~6K + conversation

@@ -1665,6 +1665,26 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
         logger.debug("Thinking skipped: workflow is currently running (VAF_IN_WORKFLOW_TERMINAL)")
         return False
 
+    # "Idle by last message" is not enough when everything runs on the one local server:
+    # the main agent may still be mid-task (a long generation / multi-step tools) from an
+    # older message, so the last-interaction timestamp looks idle while the local model is
+    # actually busy. Treat the main agent being busy as NOT idle -- but ONLY when the
+    # thinking run would share that local server. If the background agent runs on a separate
+    # provider (e.g. thinking via API while main is local, or vice versa) there is no
+    # contention, so we keep today's behaviour and let the thread run concurrently.
+    main_provider = (Config.get("provider") or "local").strip().lower()
+    t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
+    both_local = (main_provider == "local") and (t_provider in ("inherit", "local"))
+    if both_local:
+        try:
+            from vaf.core.task_queue import TaskQueue
+            _tq = TaskQueue()
+            if _tq.is_busy() or _tq.get_queue_size() > 0:
+                logger.debug("Thinking skipped: main agent active on the local server (not truly idle)")
+                return False
+        except Exception:
+            pass
+
     # Acquire internal lock
     run_id = acquire_lock(user_scope_id, max_duration_minutes=max_duration)
     if run_id is None:

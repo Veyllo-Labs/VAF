@@ -345,7 +345,7 @@ async function connect(authDir) {
         } catch (_) {}
         emit({
           type: "error",
-          message: "Login failed (401/device_removed). Try: disable VPN, different network, or wait 24h. See docs/CONNECTIONS.md.",
+          message: "Login failed (401/device_removed). Try: disable VPN, different network, or wait 24h. See docs/integrations/CONNECTIONS.md.",
         });
       } else if (statusCode != null) {
         emit({ type: "error", message: `Connection closed (code ${statusCode}). Reset & get new QR code.` });

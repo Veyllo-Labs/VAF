@@ -1,7 +1,7 @@
 """
 One-time migration: copy user data from users/<username>/ to scopes/<user_scope_id>/.
 
-Run after Phase 1-2 of the UUID migration (docs/UUID.md). Reads local_users to get
+Run after Phase 1-2 of the UUID migration (docs/platform/UUID.md). Reads local_users to get
 username -> user_scope_id, then copies data_dir/users/<username> to data_dir/scopes/<user_scope_id>.
 Does not delete users/ so you can verify and remove manually. Optionally migrates
 email_config_by_user to email_config_by_scope.

@@ -37,7 +37,7 @@ The installer sets up a Python venv, installs all dependencies, builds the web U
 [1] Desktop  — personal use, local only, system tray (default)
 [2] Server   — always-on service, LAN accessible via HTTPS, starts at boot
 ```
-Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/SERVER_MODE.md](docs/SERVER_MODE.md) for details.
+Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) for details.
 
 ---
 
@@ -79,7 +79,7 @@ vaf restart    # systemctl --user restart vaf
 vaf status     # systemctl --user status vaf
 ```
 
-LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/SERVER_MODE.md](docs/SERVER_MODE.md).
+LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md).
 
 ### Terminal (CLI)
 
@@ -263,7 +263,7 @@ Both are auto-discovered at startup — no registration needed.
 | Web UI | `localhost:3000` | `localhost:3000` | `localhost:3000` |
 | Install | `install.ps1` | `install.sh` | `install.sh` |
 
-Linux headless mode requires no display server. See [docs/LINUX_SETUP.md](docs/LINUX_SETUP.md) for details.
+Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) for details.
 
 ---
 
@@ -271,15 +271,15 @@ Linux headless mode requires no display server. See [docs/LINUX_SETUP.md](docs/L
 
 | Topic | Doc |
 |---|---|
-| Server mode (LAN, autostart) | [docs/SERVER_MODE.md](docs/SERVER_MODE.md) |
-| Linux setup & GPU | [docs/LINUX_SETUP.md](docs/LINUX_SETUP.md) |
-| LLM backend (local vs API) | [docs/LLM_BACKEND_FACTS.md](docs/LLM_BACKEND_FACTS.md) |
-| Memory system | [docs/MEMORY_SYSTEM.md](docs/MEMORY_SYSTEM.md) |
-| Web UI & API reference | [docs/WEB_UI.md](docs/WEB_UI.md) |
-| Context management | [docs/CONTEXT_MANAGEMENT.md](docs/CONTEXT_MANAGEMENT.md) |
-| Automations | [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md) |
-| Docker services | [docs/DOCKER_SERVICES.md](docs/DOCKER_SERVICES.md) |
-| Telegram / Discord / WhatsApp | [docs/TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) |
+| Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) |
+| Linux setup & GPU | [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) |
+| LLM backend (local vs API) | [docs/llm/LLM_BACKEND_FACTS.md](docs/llm/LLM_BACKEND_FACTS.md) |
+| Memory system | [docs/memory/MEMORY_SYSTEM.md](docs/memory/MEMORY_SYSTEM.md) |
+| Web UI & API reference | [docs/web-ui/WEB_UI.md](docs/web-ui/WEB_UI.md) |
+| Context management | [docs/memory/CONTEXT_MANAGEMENT.md](docs/memory/CONTEXT_MANAGEMENT.md) |
+| Automations | [docs/platform/AUTOMATIONS.md](docs/platform/AUTOMATIONS.md) |
+| Docker services | [docs/setup/DOCKER_SERVICES.md](docs/setup/DOCKER_SERVICES.md) |
+| Telegram / Discord / WhatsApp | [docs/integrations/TELEGRAM_INTEGRATION.md](docs/integrations/TELEGRAM_INTEGRATION.md) |
 | Workflows | [vaf/workflows/README.md](vaf/workflows/README.md) |
 
 ---

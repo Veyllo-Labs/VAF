@@ -54,7 +54,7 @@ fi
 echo "🔍 Verifying Installation..."
 
 # TTS: pyttsx3 removed — TTS is now via Docker (Piper). No local install check needed.
-# See docs/SPEECH_FEATURES.md and docker-compose.memory.yml (vaf-tts service).
+# See docs/web-ui/SPEECH_FEATURES.md and docker-compose.memory.yml (vaf-tts service).
 
 # Audio Check
 if python3 -c "import pyaudio" &> /dev/null; then

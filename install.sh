@@ -865,7 +865,7 @@ verify_module() {
 verify_module "vaf" "VAF Module"
 verify_module "fastapi" "FastAPI"
 # pyttsx3 removed — caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
-# TTS is now handled by Docker (Piper). See docs/SPEECH_FEATURES.md.
+# TTS is now handled by Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
 # verify_module "pyttsx3" "TTS Engine"
 verify_module "speech_recognition" "Speech Recognition"
 

@@ -50,7 +50,7 @@ Internal commercial use, academic research, and plugin/workflow development are 
 
 TRADEMARKS AND BRAND ASSETS
 
-"VAF", "Veyllo Agentic Framework", "Veyllo", the VAF logo, and the agent avatar — the "living dot" visual identity and its animated states (see docs/AgentAvatar.md and docs/animations/agent_avatar/) — are trademarks and brand assets of Veyllo GmbH.
+"VAF", "Veyllo Agentic Framework", "Veyllo", the VAF logo, and the agent avatar — the "living dot" visual identity and its animated states (see docs/web-ui/AgentAvatar.md and docs/animations/agent_avatar/) — are trademarks and brand assets of Veyllo GmbH.
 
 The license above applies to the source code and documentation only. It does not grant permission to use the Veyllo GmbH names, the VAF logo, or the agent-avatar brand assets, whether to identify your own products or services or in any way that suggests endorsement by or affiliation with Veyllo GmbH, beyond the reasonable and customary use needed to describe the origin of the Software. All rights in these marks and brand assets are reserved by Veyllo GmbH.
 

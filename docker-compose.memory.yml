@@ -8,7 +8,7 @@
 # Stop:
 #   docker compose -f docker-compose.memory.yml down
 #
-# See: docs/DOCKER_SERVICES.md
+# See: docs/setup/DOCKER_SERVICES.md
 #
 # Contains:
 #   - PostgreSQL 16 + pgvector (vector DB for Memory/RAG + Auth/User DB – do not remove/alter)

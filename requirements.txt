@@ -59,7 +59,7 @@ qtpy>=2.0.0; sys_platform == "linux"
 ruff>=0.1.0  # Fast Python linter and formatter
 
 # Document Processing (PDF, Word, etc.)
-# Gotenberg (Docker): optional Office→PDF for Document Viewer; see docs/DOCKER_SERVICES.md
+# Gotenberg (Docker): optional Office→PDF for Document Viewer; see docs/setup/DOCKER_SERVICES.md
 PyPDF2>=3.0.0  # PDF reading (fallback path for pdf_extract)
 pdfplumber>=0.11.0  # PDF -> markdown (headings + tables); primary path in vaf/core/pdf_extract.py (MIT)
 pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)

@@ -38,7 +38,7 @@ def test_build_resume_block_has_stable_fields(resume_enabled):
     cm.intent.primary_goal = "implement resume compaction"
     cm.intent.sub_goals = ["wire checkpoint path"]
     cm.state.files_modified = [("vaf/core/context.py", 3)]
-    cm.state.files_read = [("docs/MEMORY_SYSTEM.md", 3)]
+    cm.state.files_read = [("docs/memory/MEMORY_SYSTEM.md", 3)]
     cm.state.tools_used = ["read_file", "checkpoint_context", "read_file"]
     cm.state.key_decisions = ["Use deterministic rule-based resume fields."]
 
@@ -49,7 +49,7 @@ def test_build_resume_block_has_stable_fields(resume_enabled):
     ]
     working_memory = {
         "notes": [{"text": "Decision: keep the block deterministic."}],
-        "plan": [{"text": "Update vaf/core/context.py and docs/MEMORY_SYSTEM.md"}],
+        "plan": [{"text": "Update vaf/core/context.py and docs/memory/MEMORY_SYSTEM.md"}],
         "tasks": [
             {"text": "Add resume block builder", "status": "done"},
             {"text": "Verify checkpoint path", "status": "pending"},
@@ -61,7 +61,7 @@ def test_build_resume_block_has_stable_fields(resume_enabled):
     assert block.startswith("=== RESUME CONTEXT ===")
     assert "CURRENT_WORK:" in block
     assert "PENDING_WORK: Verify checkpoint path" in block
-    assert "KEY_FILES: vaf/core/context.py, docs/MEMORY_SYSTEM.md" in block
+    assert "KEY_FILES: vaf/core/context.py, docs/memory/MEMORY_SYSTEM.md" in block
     assert "TOOLS_USED: read_file, checkpoint_context" in block
     assert "KEY_DECISIONS:" in block
     assert block.endswith("=== END RESUME ===")
@@ -75,7 +75,7 @@ def test_compress_appends_resume_block(resume_enabled):
         {"role": "user", "content": "Implement the resume block."},
         {"role": "assistant", "content": "Created: vaf/core/context.py"},
         {"role": "tool", "name": "read_file", "content": "Read: vaf/core/context.py"},
-        {"role": "assistant", "content": "Modified: docs/MEMORY_SYSTEM.md"},
+        {"role": "assistant", "content": "Modified: docs/memory/MEMORY_SYSTEM.md"},
         {"role": "user", "content": "Now verify the checkpoint behavior."},
     ]
     working_memory = {

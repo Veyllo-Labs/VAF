@@ -3243,8 +3243,8 @@ class Agent:
         Same provider path as compaction but with lower max_tokens (memory_document_extraction_max_tokens, default 800).
         """
         from vaf.core.config import Config
-        max_tokens = int(Config.get("memory_document_extraction_max_tokens", 800) or 800)
-        max_tokens = max(200, min(max_tokens, 2000))
+        max_tokens = int(Config.get("memory_document_extraction_max_tokens", 1200) or 1200)
+        max_tokens = max(400, min(max_tokens, 4000))  # headroom for reasoning models (<think> first)
         temp_history = [{"role": "user", "content": user_prompt}]
         content = ""
         self._compaction_in_progress = True

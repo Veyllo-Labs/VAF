@@ -78,10 +78,12 @@ def _op_timeout_sec() -> int:
 
 def _safe_mode_enabled() -> bool:
     """
-    Safe mode keeps attachment lane functional while bypassing vector/embedding path.
-    Default is True until the vector path is proven stable.
+    Safe mode keeps the attachment lane on a lexical in-process store, bypassing the vector/embedding
+    path. Default is now FALSE (vector mode on): the runaway-RSS root cause (a TextChunker infinite
+    loop, see docs/MEMORY_SYSTEM.md) was fixed and the vector + hierarchical paths verified stable.
+    Set `attachment_rag_safe_mode=true` in config to force the lexical fallback.
     """
-    return bool(Config.get("attachment_rag_safe_mode", True))
+    return bool(Config.get("attachment_rag_safe_mode", False))
 
 
 def _session_cache_key(session_id: str, user_scope_id: Optional[UUID]) -> str:
@@ -465,11 +467,16 @@ def _summarize_section_llm(
             backend.chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=120,
+                max_tokens=512,  # headroom for reasoning models (they emit <think>...</think> first)
                 stream=False,
             )
         )
-        result = "".join(c if isinstance(c, str) else str(c) for c in raw_chunks if c).strip()
+        result = "".join(c if isinstance(c, str) else str(c) for c in raw_chunks if c)
+        # Strip reasoning-model <think>...</think> so it never becomes the section summary/title.
+        result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE)
+        if "<think>" in result.lower():
+            result = re.split(r"(?i)<think>", result)[0]
+        result = result.strip()
         return result if result else fallback
     except Exception:
         return fallback

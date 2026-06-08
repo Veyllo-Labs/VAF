@@ -12,7 +12,7 @@ The Memory System provides persistent, encrypted memory storage with RAG (Retrie
 - **Auto-Connections**: Automatically links semantically related memories
 - **Streaming**: Token streaming for RAG query responses
 - **Session Compaction**: Background process that every N user turns prompts the LLM to write durable memories (MEMORY:/NO_REPLY) into RAG. The model sees only a user/assistant dialogue excerpt (no system or tool messages). See [Session Compaction (background)](#session-compaction-background).
-- **Document learning**: The agent can learn a document (PDF, TXT, MD) via the `learn_document` tool; one tag per document, LLM extraction per page/section. See [Document memories (learn_document)](#document-memories-learn_document).
+- **Document learning**: The agent can learn a document (PDF, TXT, MD) via the `learn_document` tool; one tag per document, one contextual LLM summary per section. See [Document memories (learn_document)](#document-memories-learn_document).
 
 ### Self-learning behavior
 
@@ -20,7 +20,7 @@ The memory system is **self-learning**: it improves with use. The more you chat 
 
 - **Automatic learning:** Every N user turns (default 15), [session compaction](#session-compaction-background) runs: the LLM is given a recent conversation excerpt and writes durable facts into RAG (preferences, decisions, events, follow-ups). No manual saving is required; normal chat is the main source of long-term memory.
 - **Explicit saves:** The agent can call the `memory_save` tool during a conversation to store important information immediately (e.g. after you state a preference or share a detail).
-- **Document learning:** The agent can ingest a document via the `learn_document` tool (one tag per document, LLM extraction per page/section); see [Document memories (learn_document)](#document-memories-learn_document).
+- **Document learning:** The agent can ingest a document via the `learn_document` tool (one tag per document, one contextual LLM summary per section); see [Document memories (learn_document)](#document-memories-learn_document).
 - **Attachment retrieval lane:** Web UI attachments are indexed in a separate ephemeral lane (`attachment_ephemeral`) scoped by `session_id + user_scope_id` (TTL-based). This lane is used for active attachment Q&A and is excluded from normal long-term RAG by default.
 - **Attachment → long-term transfer:** Use `learn_attached_knowledge` (explicit confirmation required) to persist selected attachment knowledge into long-term memory as `type=knowledge`.
 - **Better recall over time:** RAG retrieval runs before each reply. As more memories are stored (from compaction and `memory_save`), semantic search returns more relevant context, so answers become more personalized and consistent across sessions.
@@ -154,7 +154,7 @@ Use separate thresholds for vector and lexical scoring in the attachment lane:
 | `attachment_rag_enabled` | `true` | Enable the attachment-specific RAG lane used for session-scoped uploaded documents. |
 | `attachment_rag_threshold` | `0.28` | Vector similarity threshold used by attachment vector retrieval (cosine-like relevance scale). |
 | `attachment_rag_lexical_min_score` | `0.05` | Lexical score floor used by attachment lexical retrieval (safe mode + hybrid lexical candidate filtering). Keeps lexical scale independent from vector scale. |
-| `attachment_rag_safe_mode` | `true` | If enabled, attachment retrieval uses the bounded lexical safe lane (no embedding/pgvector path). |
+| `attachment_rag_safe_mode` | `false` | When true, attachment retrieval uses the bounded lexical safe lane (no embedding/pgvector path). Default is now `false` (vector mode); see the note below. |
 | `attachment_rag_hybrid_enabled` | `true` | In vector mode, combine vector + lexical candidates with RRF fusion. |
 | `attachment_rag_hybrid_lexical_k` | `16` (dynamic default) | Max lexical candidates retained before fusion in attachment hybrid mode. |
 | `attachment_rag_hybrid_lexical_scan_limit` | `96` | Max attachment rows scanned for lexical candidates before filtering/ranking. |
@@ -168,13 +168,15 @@ Practical guidance:
 - Raise only if lexical-only noise starts dominating fused top-k.
 - Keep `attachment_rag_threshold` and `attachment_rag_lexical_min_score` independent; they are different score scales.
 
+**Why vector mode is the default.** Earlier the attachment vector path could trigger runaway RSS growth under repeated index/search/clear loops, so the bounded lexical "safe mode" was the conservative default. The root cause turned out to be an infinite loop in the text chunker's tail handling (unbounded chunk creation), **not** the embedding model or pgvector — it is fixed in `TextChunker.chunk()` (`vaf/memory/embeddings.py`, with a `reached_end`/`end >= len(text)` break plus a non-increasing-`start` guard). The vector and hierarchical paths were then verified stable (RSS stays flat over long index/search/clear runs), so vector mode is now the default. Set `attachment_rag_safe_mode=true` to force the lexical fallback. Note that the vector path requires the pgvector database (`vaf-memory-db`) to be running, like the rest of the memory system.
+
 ### Hierarchical Attachment Indexing
 
 When `attachment_rag_hierarchical_enabled=true`, large structured documents (patents, contracts, financial reports) are indexed using a **two-tier hierarchy** instead of flat chunking. This prevents hallucinations caused by chunks with no structural context.
 
 **How it works:**
 
-1. **Section detection** — the document is split into sections using markdown headers (`## Title`), page markers, or paragraph breaks. Sections shorter than 500 chars are merged; sections longer than 5 000 chars are split at sentence boundaries.
+1. **Section detection** — the document is split into sections using markdown headers (`## Title`), page markers, or paragraph breaks. Sections shorter than 500 chars are merged; sections longer than 5 000 chars are split at sentence boundaries. For PDF attachments these Markdown headings are produced by the shared extractor (`vaf/core/pdf_extract.py`), which infers headings from font size and renders tables as Markdown; without it PyPDF2 yields unstructured text and only page-marker sections are found.
 2. **Section summaries (Tier 1)** — one LLM call per section generates a 1-2 sentence summary. Each section is stored as a `Memory` row whose embedding encodes the summary. If the LLM call fails, the first 300 chars of the section are used as a fallback.
 3. **Chunk index (Tier 2)** — the section's full text is chunked normally (512-token chunks, 50-token overlap) and stored as `Chunk` rows linked to the section Memory.
 
@@ -189,7 +191,7 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 - Fewer than 2 sections detected (plain prose, no structure)
 - Any error during hierarchical ingest or retrieval
 
-**Requirements:** vector mode (`attachment_rag_safe_mode=false`) must be enabled. Recommended to raise `attachment_rag_op_timeout_sec` to ≥ 60 for documents with many sections, as section summary LLM calls run during ingest.
+**Requirements:** vector mode (`attachment_rag_safe_mode=false`, the default since the chunker fix). Recommended to raise `attachment_rag_op_timeout_sec` to ≥ 60 for documents with many sections, as section summary LLM calls run during ingest.
 
 ### Session Compaction (background)
 
@@ -227,10 +229,10 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 The agent can **learn a document** into long-term memory via the **`learn_document`** tool. Use it when the user asks to "learn", "remember", or "ingest" a document (e.g. a PDF or text file) so the agent can answer questions about it later.
 
 - **Input:** File path (required) and optional `document_title` (e.g. "Tora"). Supported formats: PDF, TXT, MD.
-- **One tag per document:** All memories from that run share a single tag derived from the title (e.g. `doc-tora`). In the memory graph, one tag node is linked to many purple document nodes (one per page/section).
-- **One memory per page/section:** The document is split by page (PDF) or by section/headers/size (TXT/MD). For each part, a short **LLM extraction** runs ("Extract key facts and knowledge from this page"); only the extracted text is stored, not the raw page. This keeps memories compact and improves retrieval.
+- **One tag per document:** All memories from that run share a single tag derived from the title (e.g. `doc-tora`). In the memory graph, one tag node is linked to many purple document nodes (one per section).
+- **One memory per section (contextual):** The document is extracted to Markdown and split into sections (by headings / page markers / paragraphs). For each section, one **LLM call** produces a contextual summary; that summary becomes the memory **title** — which drives the embedding/retrieval key in `RagPipeline.ingest` — and is prepended to the section text before storage. A single `document_index` root memory holds the document summary, so it is not repeated on every section.
 - **Scoping:** Uses the current user’s `user_scope_id` (same as `memory_save`). Paths must be under an allowed root (home, cwd, or VAF data dir).
-- **Config (optional in `config.json`):** `learn_document_max_pages` (default 200) caps how many pages/sections are processed; `memory_document_extraction_max_tokens` (default 800) limits the per-page extraction reply length.
+- **Config (optional in `config.json`):** `learn_document_max_pages` (default 200) caps how much of the document is read; `learn_max_sections` (default 40) caps how many sections are stored.
 
 Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipeline.ingest()` as other memories with `type=document`, `source=learn_document`, and `tags=[doc-<title>]`. See the memory graph legend: **Document** = purple.
 

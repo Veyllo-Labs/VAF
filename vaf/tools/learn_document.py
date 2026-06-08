@@ -1,7 +1,9 @@
 """
 learn_document: Learn a document into long-term memory (RAG).
-Splits by page/section, runs LLM extraction per part (Variant B), stores each as one memory
-with type=document and a single document tag (e.g. doc-tora).
+Extracts clean Markdown, splits it into sections, and for each section makes one LLM call that
+produces a contextual summary (used as the memory title / embedding key) prepended to the section
+text. Stores one memory per section (type=document) plus a single document_index root, all under one
+document tag (e.g. doc-tora). Shared with learn_attached_knowledge via ingest_document_knowledge().
 """
 import os
 import re
@@ -232,6 +234,227 @@ EXTRACTION_PROMPT_TEMPLATE = """Extract the key facts and knowledge from the fol
 """
 
 
+# ── Section-based contextual ingestion (shared by learn_document + learn_attached_knowledge) ──
+# Best-practice RAG: clean markdown -> structure-aware sections -> one focused LLM call per FULL
+# section that produces a self-explanatory "context" (which becomes the Memory title, i.e. the
+# embedding key in RagPipeline.ingest) -> store context + section text. doc_summary lives only in the
+# document_index root, never glued onto every unit.
+
+_MAX_DOC_CHARS = 16000
+
+_SECTION_CONTEXT_PROMPT = (
+    'Summarize this section of the document "{doc_title}" for a knowledge base. '
+    "Write 2-4 plain-text sentences: first what this section is about, then its key facts, so it is "
+    "understandable on its own. No preamble, no markdown, no JSON -- just the sentences.\n\n"
+    "Section heading: {section_title}\n\n{section_text}"
+)
+
+
+def _strip_json_fences(raw: str) -> str:
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
+def _strip_think(text: str) -> str:
+    """Remove reasoning-model <think>...</think> blocks. If an unclosed <think> remains (output was
+    truncated mid-reasoning), drop everything from it on -- so reasoning never leaks into stored text."""
+    t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+    if "<think>" in t.lower():
+        t = re.split(r"(?i)<think>", t)[0]
+    return t.strip()
+
+
+def _strip_librarian_wrapper(md: str) -> str:
+    """Remove the Librarian's '### PDF: <name>\\n**Pages:** N' header (and the temp filename it carries)
+    from the very start, so the tool wrapper is not learned as document content."""
+    return re.sub(
+        r"\A\s*###\s+\w[\w .-]*:[^\n]*\n(?:\*\*Pages:\*\*[^\n]*\n)?\s*",
+        "", md or "", count=1,
+    )
+
+
+def _clean_title(name) -> str:
+    """Strip file extensions and '-compressed' noise from a filename so it reads as a title."""
+    t = (name or "").strip()
+    for _ in range(4):
+        before = t
+        t = re.sub(r"(?i)[ _-]*compressed$", "", t).strip()
+        t = re.sub(r"(?i)\.(pdf|docx?|pptx?|txt|md|csv|xlsx?|odt|odp|ods|rtf)$", "", t).strip()
+        if t == before:
+            break
+    return t or (name or "").strip()
+
+
+def _contextualize_section_llm(section_text, section_title, doc_title, generate_fn, max_chars: int = 6000) -> str:
+    """One PLAIN-TEXT LLM call over the FULL section -> a 2-4 sentence self-contained summary.
+    No JSON required (robust for any model). Never raises; falls back to a clean section label
+    (never the raw section text)."""
+    fallback = (
+        f"{section_title} — from {doc_title}."
+        if section_title and section_title != doc_title else f"Section of {doc_title}."
+    )
+    if not (section_text or "").strip() or generate_fn is None:
+        return fallback
+    prompt = _SECTION_CONTEXT_PROMPT.format(
+        doc_title=doc_title, section_title=section_title, section_text=(section_text or "")[:max_chars]
+    )
+    try:
+        out = _strip_json_fences(_strip_think(generate_fn(prompt) or ""))
+        out = re.sub(r"^\s*(context|summary)\s*[:\-]\s*", "", out, flags=re.I)
+        out = " ".join(out.split())  # collapse newlines/whitespace
+        return out[:600] if len(out) >= 15 else fallback
+    except Exception:
+        return fallback
+
+
+def _summarize_doc_from_contexts(contexts, doc_title, generate_fn) -> tuple:
+    """Doc-level (doc_summary, doc_tags) from the per-section contexts (one call). Never raises."""
+    joined = "\n\n".join(contexts)[:8000]
+    fallback = ((contexts[0].strip()[:300] if contexts else ""), [])
+    if not joined.strip() or generate_fn is None:
+        return fallback
+    prompt = (
+        "Given these section summaries of a document, output a JSON object with "
+        '"doc_summary" (2-sentence overview) and "doc_tags" (5-8 lowercase tags). Output ONLY JSON.\n\n'
+        f"=== Document: {doc_title} ===\n\n{joined}"
+    )
+    try:
+        import json
+        d = json.loads(_strip_json_fences(_strip_think(generate_fn(prompt) or "")))
+        summary = str(d.get("doc_summary") or "").strip() or fallback[0]
+        tags = [str(t).strip().lower() for t in (d.get("doc_tags") or []) if str(t).strip()]
+        return (summary, tags)
+    except Exception:
+        return fallback
+
+
+async def ingest_document_knowledge(
+    db,
+    *,
+    content_markdown: str,
+    doc_title: str,
+    doc_tag: str,
+    source: str,
+    mem_type: str,
+    generate_fn,
+    user_scope_id,
+    extra_tags=None,
+    attachment_name=None,
+    session_id=None,
+) -> dict:
+    """Section-based, contextual ingestion of one document into long-term memory.
+
+    Returns {"created": int, "sections": int, "doc_summary": str, "doc_tags": [str]}.
+    """
+    from sqlalchemy import select, and_
+    from vaf.memory.models import Memory
+    from vaf.memory.rag import RagPipeline
+    from vaf.memory.attachment_rag import _split_into_sections
+    from vaf.core.config import Config
+    try:
+        from vaf.core.log_helper import append_domain_log
+    except Exception:  # pragma: no cover
+        def append_domain_log(*_a, **_k):
+            return None
+
+    extra_tags = [str(t).strip().lower() for t in (extra_tags or []) if str(t).strip()]
+    origin = "attachment" if attachment_name else "document"
+    pipeline = RagPipeline(db)
+
+    content_markdown = _strip_librarian_wrapper(content_markdown or "")
+    sections = _split_into_sections(content_markdown, 500, 5000)
+    if len(sections) < 2:
+        sections = [{"title": doc_title, "text": (content_markdown or "")[:_MAX_DOC_CHARS], "index": 0}]
+    max_sections = max(2, min(80, int(Config.get("learn_max_sections", 40) or 40)))
+    sections = sections[:max_sections]
+
+    doc_title = _clean_title(doc_title)
+
+    # Pass 1: a plain-text contextual summary per section (robust for any model).
+    items = []  # (section_index, section_title, section_text, context)
+    contexts = []
+    for sec in sections:
+        sec_text = (sec.get("text") or "").strip()
+        if not sec_text:
+            continue
+        sec_title = (sec.get("title") or doc_title).strip()
+        context = _contextualize_section_llm(sec_text, sec_title, doc_title, generate_fn)
+        contexts.append(context)
+        items.append((sec.get("index", len(items)), sec_title, sec_text, context))
+
+    # Doc-level summary + tags from the clean section contexts (applied to every section + the root).
+    doc_summary, doc_tags = _summarize_doc_from_contexts(contexts, doc_title, generate_fn)
+
+    # Pass 2: ingest each section -- the context summary is the title (embedding key) + body prefix.
+    created = 0
+    for sec_index, sec_title, sec_text, context in items:
+        all_tags = list(dict.fromkeys([doc_tag, "knowledge", f"from-{origin}"] + doc_tags + extra_tags))
+        meta = {
+            "title": context,  # drives Memory.embedding (rag.py) -> contextual retrieval key
+            "type": mem_type,
+            "source": source,
+            "knowledge_origin": origin,
+            "doc_tag": doc_tag,
+            "section_title": sec_title,
+            "section_index": sec_index,
+            "tags": all_tags,
+        }
+        if attachment_name:
+            meta["attachment_name"] = attachment_name
+        if session_id:
+            meta["attachment_session_id"] = session_id
+        body = f"{context}\n\n{sec_text}"
+        await pipeline.ingest(content=body, metadata=meta, auto_connect=True, user_scope_id=user_scope_id)
+        created += 1
+        append_domain_log("memory", (
+            f"[LEARN] store section {sec_index} '{doc_title}': "
+            f"title={context[:70]!r} tags={all_tags} chars={len(body)}"
+        ))
+
+    # document_index root -- created/updated exactly once (doc_summary lives here, not per section).
+    if created > 0:
+        conditions = [
+            Memory.is_deleted == False,  # noqa: E712
+            Memory.meta["type"].as_string() == "document_index",
+            Memory.meta["doc_tag"].as_string() == doc_tag,
+        ]
+        if user_scope_id is not None:
+            conditions.append(Memory.user_scope_id == user_scope_id)
+        existing_root = (await db.execute(select(Memory).where(and_(*conditions)))).scalar_one_or_none()
+        if existing_root is not None:
+            meta_upd = dict(existing_root.meta or {})
+            meta_upd["page_count"] = created
+            if doc_summary:
+                meta_upd["doc_summary"] = doc_summary
+            existing_root.meta = meta_upd
+        else:
+            index_content = f"Document index: {doc_title}."
+            if doc_summary:
+                index_content += f" {doc_summary}"
+            index_content += f" Contains {created} section(s) of knowledge from a {origin}."
+            index_tags = list(dict.fromkeys([doc_tag, f"from-{origin}"] + doc_tags + extra_tags))
+            index_meta = {
+                "type": "document_index",
+                "source": source,
+                "title": doc_title,
+                "doc_tag": doc_tag,
+                "page_count": created,
+                "tags": index_tags,
+            }
+            if doc_summary:
+                index_meta["doc_summary"] = doc_summary
+            await pipeline.ingest(content=index_content, metadata=index_meta,
+                                  user_scope_id=user_scope_id, auto_connect=False)
+        append_domain_log("memory", (
+            f"[LEARN] doc-index '{doc_title}' doc_tag={doc_tag} sections={created} "
+            f"summary={doc_summary[:80]!r}"
+        ))
+
+    return {"created": created, "sections": len(sections), "doc_summary": doc_summary, "doc_tags": doc_tags}
+
+
 class LearnDocumentTool(BaseTool):
     name = "learn_document"
     permission_level = "write"
@@ -240,7 +463,8 @@ class LearnDocumentTool(BaseTool):
         "Learn a document into long-term memory. Use when the user wants you to "
         "'learn', 'remember', or 'ingest' a document (PDF, TXT, MD) so you can answer "
         "questions about it later. Pass the full file path; optionally give a document_title "
-        "(e.g. 'Tora') for the tag. Each page/section is summarized by the model and stored."
+        "(e.g. 'Tora') for the tag. The document is split into sections; each section is summarized "
+        "for context and stored as one memory under the document tag."
     )
     parameters = {
         "type": "object",
@@ -278,7 +502,7 @@ class LearnDocumentTool(BaseTool):
         suffix = path.suffix.lower()
 
         if document_title is None:
-            document_title = path.stem or "document"
+            document_title = _clean_title(path.stem or "document")
         doc_tag = _normalize_doc_tag(document_title)
 
         if user_scope_id is not None and isinstance(user_scope_id, str):
@@ -287,142 +511,56 @@ class LearnDocumentTool(BaseTool):
             except (ValueError, TypeError):
                 user_scope_id = None
 
-        parts: List[Tuple[int, str]] = []
+        # Extract clean markdown (headings/tables); the shared section-based ingestion then handles
+        # sectioning + per-section contextual summaries + storage (one consistent pipeline).
         if suffix == ".pdf":
             try:
-                parts = _split_pdf(path, max_pages)
+                from vaf.core.pdf_extract import extract_pdf_markdown
+                content_markdown = (extract_pdf_markdown(path, max_pages=max_pages) or {}).get("markdown", "")
             except ImportError:
-                return "Error: PDF support not installed. Run: pip install PyPDF2"
+                return "Error: PDF support not installed. Run: pip install pdfplumber PyPDF2"
             except Exception as e:
                 return f"Error reading PDF: {e}"
         elif suffix in (".txt", ".md"):
             try:
-                parts = _split_txt_md(path, max_pages)
+                content_markdown = path.read_text(encoding="utf-8", errors="replace")
             except Exception as e:
                 return f"Error reading file: {e}"
         else:
             return f"Error: Unsupported format. Use .pdf, .txt, or .md (got {suffix})."
 
-        parts = _merge_thin_pages(parts)
-
-        if not parts:
+        if not (content_markdown or "").strip():
             return "Error: No text could be extracted from the document (empty or unsupported)."
 
-        # Prefer dedicated method if present, else compaction with lower max_tokens
+        # Prefer dedicated extraction method if present, else compaction.
         if hasattr(agent, "_generate_for_document_extraction"):
             generate = agent._generate_for_document_extraction
         else:
             def generate(prompt: str) -> str:
                 return agent._generate_for_compaction(prompt)
 
-        analysis = _analyze_document_llm(parts, document_title, generate)
-        doc_summary = (analysis.get("doc_summary") or "").strip()
-        llm_tags = [str(t).strip().lower() for t in (analysis.get("doc_tags") or []) if str(t).strip()]
-        page_analysis = {
-            int(p.get("page", 0)): p
-            for p in (analysis.get("pages") or [])
-            if isinstance(p, dict) and p.get("page")
-        }
+        result: dict = {}
 
-        stored = 0
-        for page_num, text in parts:
-            pa = page_analysis.get(page_num, {})
-            page_title = (pa.get("title") or "").strip() or f"{document_title} \u2013 Page {page_num}"
-            ctx = f"Document context: {doc_summary}\n\n" if doc_summary else ""
-            prompt = ctx + EXTRACTION_PROMPT_TEMPLATE.format(page_text=text)
-            try:
-                extraction = generate(prompt)
-            except Exception as e:
-                return f"Error during extraction (page {page_num}): {e}"
-            extraction = (extraction or "").strip()
-            if not extraction:
-                continue
+        async def _do_ingest() -> None:
+            from vaf.memory.database import get_db
+            async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
+                result.update(await ingest_document_knowledge(
+                    db,
+                    content_markdown=content_markdown,
+                    doc_title=document_title,
+                    doc_tag=doc_tag,
+                    source="learn_document",
+                    mem_type="document",
+                    generate_fn=generate,
+                    user_scope_id=user_scope_id,
+                ))
 
-            _page_title = page_title
-            _page_num = page_num
+        try:
+            _run_async_in_new_loop(_do_ingest())
+        except Exception as e:
+            return f"Error: Failed to learn document: {e}"
 
-            async def _ingest_one(
-                _extraction=extraction,
-                _page_title=_page_title,
-                _page_num=_page_num,
-            ) -> None:
-                from vaf.memory.database import get_db
-                from vaf.memory.rag import RagPipeline
-                async with get_db() as db:
-                    pipeline = RagPipeline(db)
-                    await pipeline.ingest(
-                        content=_extraction,
-                        metadata={
-                            "type": "document",
-                            "tags": list(dict.fromkeys([doc_tag] + llm_tags)),
-                            "source": "learn_document",
-                            "title": _page_title,
-                            "page": _page_num,
-                            "doc_tag": doc_tag,
-                        },
-                        user_scope_id=user_scope_id,
-                        auto_connect=False,
-                    )
-
-            try:
-                _run_async_in_new_loop(_ingest_one())
-                stored += 1
-            except Exception as e:
-                return f"Error storing memory (page {page_num}): {e}"
-
-        if stored > 0:
-            async def _ingest_index() -> None:
-                from sqlalchemy import select, and_
-                from vaf.memory.database import get_db
-                from vaf.memory.rag import RagPipeline
-                from vaf.memory.models import Memory
-                async with get_db() as db:
-                    conditions = [
-                        Memory.is_deleted == False,
-                        Memory.meta["type"].as_string() == "document_index",
-                        Memory.meta["doc_tag"].as_string() == doc_tag,
-                    ]
-                    if user_scope_id is not None:
-                        conditions.append(Memory.user_scope_id == user_scope_id)
-                    result = await db.execute(select(Memory).where(and_(*conditions)))
-                    existing = result.scalar_one_or_none()
-
-                    if existing is not None:
-                        meta = dict(existing.meta or {})
-                        meta["page_count"] = stored
-                        if doc_summary:
-                            meta["doc_summary"] = doc_summary
-                        existing.meta = meta
-                    else:
-                        index_content = f"Document index: {document_title}."
-                        if doc_summary:
-                            index_content += f" {doc_summary}"
-                        index_content += f" Contains {stored} pages of extracted knowledge."
-                        index_tags = list(dict.fromkeys([doc_tag] + llm_tags))
-                        index_meta: dict = {
-                            "type": "document_index",
-                            "tags": index_tags,
-                            "source": "learn_document",
-                            "title": document_title,
-                            "doc_tag": doc_tag,
-                            "page_count": stored,
-                        }
-                        if doc_summary:
-                            index_meta["doc_summary"] = doc_summary
-                        pipeline = RagPipeline(db)
-                        await pipeline.ingest(
-                            content=index_content,
-                            metadata=index_meta,
-                            user_scope_id=user_scope_id,
-                            auto_connect=False,
-                        )
-
-            try:
-                _run_async_in_new_loop(_ingest_index())
-            except Exception as e:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    f"learn_document: failed to create document_index for {doc_tag}: {e}"
-                )
-
-        return f"Stored {stored} pages from \u00ab{document_title}\u00bb under tag {doc_tag}."
+        created = int(result.get("created", 0))
+        if created <= 0:
+            return "No knowledge memories were created (document may be empty or unreadable)."
+        return f'Stored {created} knowledge section(s) from "{document_title}" under tag {doc_tag}.'

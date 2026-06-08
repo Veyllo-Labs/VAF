@@ -97,6 +97,7 @@ export function CustomCursor() {
   const agentPageTimeRef = useRef(0);
   const agentPageElRef   = useRef<Element | null>(null);
   const agentCenterRef   = useRef({ x: 0, y: 0 });
+  const learnScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);  // PDF-learning page walk (2s/page)
 
   // ── SEQUENCE / tool simulation ──
   const seqActiveRef     = useRef(false);
@@ -412,47 +413,40 @@ export function CustomCursor() {
     // ── AGENT CURSOR EVENTS ──
     const onAgentCursor = (e: Event) => {
       const d = (e as CustomEvent).detail as {
-        phase: string; page?: number; tool?: string; args?: Record<string,unknown>;
+        phase: string; page?: number; total?: number; tool?: string; args?: Record<string,unknown>;
       };
-      wake();  // agent animations need the loop running
-      const ti = trailInnerRef.current;
 
       if (d.phase === "start") {
-        // PDF reading mode
-        agentModeRef.current     = true;
-        agentPageTimeRef.current = Date.now();
-        agentPageElRef.current   = document.querySelector('[data-pdf-page-container="1"]');
-        const el = agentPageElRef.current;
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-          const r = el.getBoundingClientRect();
-          agentCenterRef.current = { x: r.left + r.width / 2, y: r.top + r.height * 0.12 };
-        } else {
-          agentCenterRef.current = { x: window.innerWidth * 0.52, y: window.innerHeight * 0.60 };
-        }
-        if (ti) {
-          ti.style.transition     = "background-color .3s, box-shadow .3s";
-          ti.style.borderRadius   = "50%"; ti.style.width = "16px"; ti.style.height = "16px";
-          ti.style.backgroundColor = "#ffffff";
-        }
+        // PDF learning: slowly walk through ALL pages, ~2s each, looping until "end".
+        // No agent cursor — just a calm page-by-page scroll. The page count is read from the
+        // actually rendered page containers, re-checked every tick so lazily-rendered pages are
+        // included (and scrolling to a page makes react-pdf render the next ones).
+        if (learnScrollTimerRef.current) clearInterval(learnScrollTimerRef.current);
+        const pageCount = () => document.querySelectorAll("[data-pdf-page-container]").length;
+        const goToPage = (p: number) => {
+          const el = document.querySelector(`[data-pdf-page-container="${p}"]`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        };
+        let page = 1;
+        goToPage(page);
+        learnScrollTimerRef.current = setInterval(() => {
+          const total = Math.max(pageCount(), Number(d.total) || 1);
+          page = page >= total ? 1 : page + 1;
+          goToPage(page);
+        }, 2000);
 
-      } else if (d.phase === "page" && d.page != null) {
-        agentPageTimeRef.current = Date.now();
-        const el = document.querySelector(`[data-pdf-page-container="${d.page}"]`);
-        agentPageElRef.current = el;
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else if (d.phase === "page") {
+        // Intentionally ignored: the front-end drives the 2s/page loop itself (see "start").
 
       } else if (d.phase === "end") {
-        // PDF reading done
-        cancelSequence();
-        agentModeRef.current   = false;
-        agentPageElRef.current = null;
-        seqPendingEndRef.current = false;
-        if (ti) {
-          setDotOrange(ti);
+        // PDF learning done -> stop the page walk.
+        if (learnScrollTimerRef.current) {
+          clearInterval(learnScrollTimerRef.current);
+          learnScrollTimerRef.current = null;
         }
 
       } else if (d.phase === "tool-sequence" && d.tool) {
+        wake();  // the tool-call cursor sequence needs the rAF loop running
         const seq = buildSequence(d.tool, d.args ?? {});
         playSequence(seq);
       }
@@ -473,6 +467,7 @@ export function CustomCursor() {
       runningRef.current = false;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       cancelSequence();
+      if (learnScrollTimerRef.current) { clearInterval(learnScrollTimerRef.current); learnScrollTimerRef.current = null; }
       window.removeEventListener("agent-cursor", onAgentCursor);
       document.removeEventListener("mousemove",  onMove);
       document.removeEventListener("mouseover",  onOver);

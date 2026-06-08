@@ -56,6 +56,8 @@ export type DocumentViewerProps = {
     insertedSelectionsCount?: number;
     /** All inserted selections; used to render persistent highlights in the current document. */
     insertedSelections?: InsertedSelectionRange[];
+    /** Attachment RAG indexing status, shown in the header (undefined = idle). */
+    indexStatus?: 'indexing' | 'ready' | 'error';
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.html,.htm';
@@ -487,6 +489,7 @@ export default function DocumentViewer({
     onInsertSelection,
     insertedSelectionsCount = 0,
     insertedSelections = [],
+    indexStatus,
 }: DocumentViewerProps) {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [listExpanded, setListExpanded] = useState(true);
@@ -579,6 +582,19 @@ export default function DocumentViewer({
         e.target.value = '';
     };
 
+    const idxDotClass = indexStatus === 'indexing' ? 'bg-amber-500'
+        : indexStatus === 'error' ? 'bg-red-500'
+            : indexStatus === 'ready' ? 'bg-green-500'
+                : 'bg-gray-400';
+    const idxLabelClass = indexStatus === 'indexing' ? 'text-amber-600'
+        : indexStatus === 'error' ? 'text-red-600'
+            : indexStatus === 'ready' ? 'text-green-600'
+                : '';
+    const idxLabel = indexStatus === 'indexing' ? 'Indexiere…'
+        : indexStatus === 'error' ? 'Fehler'
+            : indexStatus === 'ready' ? 'Bereit'
+                : 'Ready';
+
     if (!isOpen && mode === 'overlay') return null;
 
     if (mode === 'dock') {
@@ -605,8 +621,16 @@ export default function DocumentViewer({
                                 <div className="min-w-0">
                                     <div className="text-xs font-semibold text-gray-900">{title}</div>
                                     <div className="flex items-center gap-2 text-[10px] text-gray-500 flex-wrap">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 shrink-0" />
-                                        <span className="uppercase">Ready</span>
+                                        <span
+                                            className="relative flex h-1.5 w-1.5 shrink-0"
+                                            title={indexStatus === 'indexing' ? 'Anhänge werden für die Suche aufbereitet' : undefined}
+                                        >
+                                            {indexStatus === 'indexing' && (
+                                                <span className="absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75 animate-ping" />
+                                            )}
+                                            <span className={cn('relative inline-flex h-1.5 w-1.5 rounded-full', idxDotClass)} />
+                                        </span>
+                                        <span className={cn('uppercase', idxLabelClass)}>{idxLabel}</span>
                                         <span className="text-gray-300">·</span>
                                         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500 shrink-0">
                                             Anhänge

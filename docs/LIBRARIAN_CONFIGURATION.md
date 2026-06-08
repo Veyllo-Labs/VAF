@@ -300,7 +300,7 @@ Error: File too large (5123KB). Max 100KB.
 2. Add or modify the librarian settings:
    ```json
    {
-     "model": "Veyllo/VQ-1_Instruct-q4_k_m",
+     "model": "auto",
      "librarian_max_pdf_size_mb": 100,
      "librarian_auto_chunk_large_files": true
    }

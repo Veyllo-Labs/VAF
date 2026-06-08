@@ -73,7 +73,7 @@ Each provider has default models, but you can customize:
 }
 ```
 
-**Guardrail for mixed local/API setups:** If an API provider is active but a local GGUF-style model value is still present (for example `Veyllo/VQ-1_Instruct-q4_k_m`), VAF automatically falls back to the provider-specific `api_model_<provider>` value. This prevents API requests from failing with provider-side "model not found" errors.
+**Guardrail for mixed local/API setups:** If an API provider is active but a local GGUF-style model value is still present (for example `gemma-4-E2B-it-Q8_0.gguf` or `"auto"`), VAF automatically falls back to the provider-specific `api_model_<provider>` value. This prevents API requests from failing with provider-side "model not found" errors.
 
 ## Sub-Agent Provider Configuration
 

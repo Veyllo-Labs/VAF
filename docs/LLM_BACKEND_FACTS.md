@@ -39,16 +39,16 @@ In `load_model()` (see `vaf/core/agent.py`):
 
 **Practical note:** The old rule "Windows + no `force_server` = always Library" is outdated. Current builds already default to server-friendly behavior on Windows.
 
-**To force VQ1 exclusively through the server (8080):** `force_server: true` remains the explicit switch (in addition to the Windows default logic).
+**To force the local model exclusively through the server (8080):** `force_server: true` remains the explicit switch (in addition to the Windows default logic).
 
 ---
 
 ## Why was no Thinking (<think>) received?
 
-- **Server path (8080):** Reads `delta.get('reasoning_content')` **and** `delta.get('content')` and streams both (thinking + answer). Works correctly for VQ1 on the server.
+- **Server path (8080):** Reads `delta.get('reasoning_content')` **and** `delta.get('content')` and streams both (thinking + answer). Works correctly for a local reasoning model on the server.
 - **Library path (llama-cpp-python):** Previously only read `delta.get('content')`. A separate `reasoning_content` field was **not** evaluated and **not** streamed.
 
-**Change:** The library path now reads `reasoning_content` the same way as the server path and streams it as thinking (including `<think>` / `</think>`). If VQ1 returns `reasoning_content` via the library, it now appears in the UI.
+**Change:** The library path now reads `reasoning_content` the same way as the server path and streams it as thinking (including `<think>` / `</think>`). If the local model returns `reasoning_content` via the library, it now appears in the UI.
 
 ---
 
@@ -158,11 +158,11 @@ When using the Local Server (llama-server), the context window size (`n_ctx`) is
 - **Minimum: 32768** — enforced regardless of the configured value. With 100+ tools, the overhead alone is ~11K tokens (system prompt ~5.5K + tool schemas ~6K), leaving ~20K for conversation. Values below 32K cause the router safety net to trigger on every turn.
 - **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced). A value below 32768 is clamped up to 32768 when the configuration is loaded (`Config.load`), so every reader and the local server see one consistent floor. The default is `32768`.
 - **KV Cache:** VAF uses `q8_0` for keys and `q4_0` for values — ~62.5% less VRAM than f16 with negligible quality loss.
-- **VRAM estimate (RTX 3080, 10GB):** VQ-1 q4_k_m (~4GB) + 32K KV cache (~0.8GB) = ~4.8GB total, leaving ~5GB free.
+- **VRAM estimate (RTX 3080, 10GB):** the default gemma-4 E2B (Q8_0) is a small model; together with the quantized KV cache it leaves ample headroom on a 10 GB card. KV-cache use scales with `n_ctx` and becomes the main driver at large windows (e.g. 128K).
 
 ## Native Chat Template and Tool Calling
 
-VQ-1's embedded Jinja template uses `<tool_call>` XML format for function calls:
+The model's embedded Jinja template defines the tool-call format. Some GGUFs use a `<tool_call>` XML block:
 ```
 <tool_call>
 {"name": "web_search", "arguments": {"query": "..."}}
@@ -171,4 +171,4 @@ VQ-1's embedded Jinja template uses `<tool_call>` XML format for function calls:
 
 llama-server (with `--jinja`) parses these tags and converts them to standard OpenAI `tool_calls` objects in the API response. VAF's streaming parser then picks them up and executes the tools.
 
-**Do not override with `--chat-template chatml`** — the generic chatml template does not include `<tool_call>` formatting, which causes the model to describe tool usage in text instead of emitting actual tool calls (hallucination).
+**Do not override with `--chat-template chatml`** — the generic chatml template does not match the model's native tool-call format, which causes the model to describe tool usage in text instead of emitting actual tool calls (hallucination).

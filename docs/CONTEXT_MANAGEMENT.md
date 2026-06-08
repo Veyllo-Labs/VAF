@@ -43,7 +43,7 @@ VAF uses a **modular system prompt** that loads only what's needed:
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │  🔷 CORE MODULE (Always Active) ~400 tokens         │   │
-│  │  ├─ Identity (VQ-1 / Model Name)                    │   │
+│  │  ├─ Identity (Model Name)                           │   │
 │  │  ├─ Time, OS, CWD                                   │   │
 │  │  ├─ Language Settings                               │   │
 │  │  └─ Base Rules (call tools, don't talk about them)  │   │

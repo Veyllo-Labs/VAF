@@ -1141,30 +1141,9 @@ Remove duplicates and ensure smooth flow.
             return f"Error writing file: {str(e)}"
 
     def _pdf_ocr_fallback(self, file_path: Path, max_pages: int) -> str:
-        """Extract text from scanned (image-only) PDFs via OCR. Requires pdf2image + pytesseract and system deps (poppler, Tesseract)."""
-        try:
-            from pdf2image import convert_from_path
-            import pytesseract
-        except ImportError:
-            return ""
-        try:
-            images = convert_from_path(str(file_path), first_page=1, last_page=max_pages, dpi=200)
-            # Prefer German+English if Tesseract language packs installed; else English only
-            for lang in ("deu+eng", "eng", None):
-                try:
-                    lang_arg = {"lang": lang} if lang else {}
-                    parts = []
-                    for i, img in enumerate(images):
-                        text = pytesseract.image_to_string(img, **lang_arg)
-                        if text.strip():
-                            parts.append(f"--- Page {i + 1} ---\n{text.strip()}")
-                    if parts:
-                        return "\n\n".join(parts)
-                except pytesseract.TesseractError:
-                    continue
-            return ""
-        except Exception:
-            return ""
+        """Thin wrapper -> shared OCR helper (single copy lives in vaf/core/pdf_extract.py)."""
+        from vaf.core.pdf_extract import pdf_ocr_fallback
+        return pdf_ocr_fallback(file_path, max_pages)
     
     def _read_file(self, file_path: Path, enable_chunking: bool = True) -> str:
         """Read file contents - supports text, PDF, Word, Excel, PowerPoint.
@@ -1269,52 +1248,32 @@ Remove duplicates and ensure smooth flow.
             # ═══════════════════════════════════════════════════════════
             if ext == '.pdf':
                 try:
-                    import PyPDF2
                     from vaf.core.config import Config
+                    from vaf.core.pdf_extract import extract_pdf_markdown
                     config = Config.load()
-                    
-                    content = []
-                    with open(file_path, 'rb') as f:
-                        pdf_reader = PyPDF2.PdfReader(f)
-                        num_pages = len(pdf_reader.pages)
-                        
-                        # Limit to configured max pages (default: 50)
-                        max_pages_config = config.get('librarian_pdf_max_pages_preview', 50)
-                        max_pages = min(num_pages, max_pages_config)
-                        
-                        for page_num in range(max_pages):
-                            page = pdf_reader.pages[page_num]
-                            page_text = page.extract_text() or ""
-                            if page_text.strip():
-                                content.append(f"--- Page {page_num + 1} ---\n{page_text}")
-                        
-                        if num_pages > max_pages:
-                            content.append(f"\n... ({num_pages - max_pages} more pages not shown)")
-                    
-                    full_text = "\n\n".join(content)
-                    
-                    # Scanned PDFs (image-only): no embedded text. Try OCR if enabled and deps available.
+                    max_pages = config.get('librarian_pdf_max_pages_preview', 50)
                     use_ocr = config.get("librarian_ocr_fallback_for_pdf", True)
-                    if use_ocr and len(full_text.strip()) < 50 and num_pages > 0:
-                        ocr_text = self._pdf_ocr_fallback(file_path, max_pages)
-                        if ocr_text:
-                            full_text = ocr_text
-                    
-                    # Truncate if still too long
+
+                    # Shared extractor: pdfplumber markdown (headings + tables), PyPDF2 + OCR fallbacks.
+                    res = extract_pdf_markdown(file_path, max_pages=max_pages, ocr_fallback=use_ocr)
+                    full_text = res["markdown"]
+                    num_pages = res["num_pages"]
+
+                    # Truncate if too long
                     if len(full_text) > 15000:
                         full_text = full_text[:15000] + "\n\n... (truncated)"
-                    
+
                     if not full_text.strip():
                         full_text = (
                             "[Scanned PDF: no embedded text detected. For OCR install: "
                             "pip install pdf2image pytesseract, and system tools: poppler (pdf2image), Tesseract (pytesseract). "
                             "Then re-open this file."
                         )
-                    
+
                     return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
-                    
+
                 except ImportError:
-                    return f"[ERROR] PDF support not installed. Run: pip install PyPDF2"
+                    return f"[ERROR] PDF support not installed. Run: pip install pdfplumber PyPDF2"
                 except Exception as e:
                     err_str = str(e)
                     hint = " For AES-encrypted PDFs (e.g. bank statements) run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""

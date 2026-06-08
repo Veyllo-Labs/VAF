@@ -357,34 +357,26 @@ For detailed analysis of large files, consider using librarian_agent instead."""
             # ═══════════════════════════════════════════════════════════
             if ext == '.pdf':
                 try:
-                    import PyPDF2
-                    content = []
-                    with open(res, 'rb') as f:
-                        pdf_reader = PyPDF2.PdfReader(f)
-                        num_pages = len(pdf_reader.pages)
-                        
-                        # Limit to first 50 pages
-                        max_pages = min(num_pages, 50)
-                        
-                        for page_num in range(max_pages):
-                            page = pdf_reader.pages[page_num]
-                            page_text = page.extract_text()
-                            if page_text.strip():
-                                content.append(f"--- Page {page_num + 1} ---\n{page_text}")
-                        
-                        if num_pages > max_pages:
-                            content.append(f"\n... ({num_pages - max_pages} more pages not shown)")
-                    
-                    full_text = "\n\n".join(content)
-                    
-                    # Truncate if still too long
+                    from vaf.core.pdf_extract import extract_pdf_markdown
+                    # Shared extractor: pdfplumber markdown (headings + tables), PyPDF2 + OCR fallbacks.
+                    res_md = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True)
+                    full_text = res_md["markdown"]
+                    num_pages = res_md["num_pages"]
+
+                    # Truncate if too long
                     if len(full_text) > 15000:
                         full_text = full_text[:15000] + "\n\n... (truncated)"
-                    
+
+                    if not full_text.strip():
+                        full_text = (
+                            "[Scanned PDF: no embedded text detected. Install OCR deps "
+                            "(pdf2image, pytesseract, poppler, Tesseract) to read it.]"
+                        )
+
                     return f"### PDF: {file_path.name}\n**Pages:** {num_pages}\n\n{full_text}"
-                    
+
                 except ImportError:
-                    return "Error: PDF support not installed. Run: pip install PyPDF2"
+                    return "Error: PDF support not installed. Run: pip install pdfplumber PyPDF2"
                 except Exception as e:
                     err_str = str(e)
                     hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""

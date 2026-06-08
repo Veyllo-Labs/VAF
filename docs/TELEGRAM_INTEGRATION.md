@@ -335,7 +335,7 @@ The bridge synthesizes audio via TTS and sends it as a Telegram voice message. I
 When the user sends a **document** (PDF, DOCX, XLSX, PPTX, TXT, etc.) via Telegram:
 
 1. Bridge downloads the file via Telegram Bot API
-2. Librarian extracts text (PyPDF2, python-docx, OCR for scanned PDFs)
+2. Librarian extracts text (pdfplumber → Markdown, python-docx, OCR for scanned PDFs)
 3. Agent receives: `[Document: filename.pdf] (User caption if any)\n\n--- Document content ---\n{extracted text}`
 
 The agent can then answer questions about the document, summarize it, or extract data.

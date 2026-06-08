@@ -2634,7 +2634,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Switch
                                         label={tAdvanced('debugLogs')}
                                         description={tAdvanced('debugLogsDesc')}
-                                        checked={localConfig.debug_logs_enabled ?? false}
+                                        checked={localConfig.debug_logs_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
                                     <div className="h-4" />

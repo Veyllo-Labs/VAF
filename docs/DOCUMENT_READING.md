@@ -66,7 +66,8 @@ pip install -r requirements.txt
 Or install specific packages individually:
 
 ```bash
-pip install PyPDF2>=3.0.0          # For PDF support
+pip install pdfplumber>=0.11.0     # PDF support: text, headings, and tables as Markdown
+pip install PyPDF2>=3.0.0          # PDF fallback (and AES-encrypted PDFs)
 pip install python-docx>=1.1.0     # For Word documents
 pip install openpyxl>=3.1.0        # For Excel files
 pip install python-pptx>=0.6.21    # For PowerPoint files
@@ -269,7 +270,7 @@ Agent: [INFO] File is large (2.1 MB, max 500 KB direct read)
 
 The system automatically detects file types based on file extensions and uses the appropriate parser:
 
-- `.pdf` → PyPDF2 PDF reader
+- `.pdf` → pdfplumber, returning Markdown. Headings are inferred from font size and tables are rendered as Markdown tables. Falls back to PyPDF2 if pdfplumber fails, and to OCR (pdf2image + pytesseract) for scanned/image-only PDFs. Implemented in `vaf/core/pdf_extract.py` and shared by the document reader and the Web UI attachment lane.
 - `.docx` → python-docx Word reader
 - `.xlsx`, `.xls` → openpyxl Excel reader
 - `.pptx` → python-pptx PowerPoint reader
@@ -338,7 +339,7 @@ Content is automatically truncated with helpful messages if it exceeds limits.
 If a document parsing library is not installed, the system provides clear error messages:
 
 ```
-Error: PDF support not installed. Run: pip install PyPDF2
+Error: PDF support not installed. Run: pip install pdfplumber PyPDF2
 ```
 
 ### Cross-Platform Compatibility
@@ -352,20 +353,26 @@ The implementation uses `pathlib` and platform-independent file handling.
 
 ## Technical Details
 
-### PDF Reading (PyPDF2)
+### PDF Reading (pdfplumber → Markdown)
+
+PDFs are extracted to Markdown by `vaf/core/pdf_extract.py`:
 
 ```python
-import PyPDF2
-with open(file_path, 'rb') as f:
-    pdf_reader = PyPDF2.PdfReader(f)
-    for page in pdf_reader.pages:
-        text = page.extract_text()
+from vaf.core.pdf_extract import extract_pdf_markdown
+result = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True)
+# result = {"markdown": str, "num_pages": int, "used_ocr": bool,
+#           "method": "pdfplumber" | "pypdf2" | "ocr"}
 ```
 
+- **Headings** are inferred from font size: lines larger than the body size become `#`/`##`/`###`. The hierarchical attachment index keys on these (see `docs/MEMORY_SYSTEM.md`).
+- **Tables** detected by pdfplumber are rendered as Markdown tables and removed from the surrounding text flow.
+- **Fallback:** if pdfplumber raises, the per-page PyPDF2 text is used instead (`method="pypdf2"`).
+
 **Limitations:**
-- **Scanned PDFs (image-only):** If PyPDF2 extracts little or no text, the Librarian tries OCR when `librarian_ocr_fallback_for_pdf` is enabled (default: true). Requires optional deps: `pip install pdf2image pytesseract` and system tools: **poppler** (for pdf2image), **Tesseract** (for pytesseract). Install e.g. German with Tesseract for best results on German documents.
-- Complex layouts may have formatting issues
-- Password-protected PDFs are not supported
+- **Scanned PDFs (image-only):** if little or no text is extracted, OCR is tried when `librarian_ocr_fallback_for_pdf` is enabled (default: true). Requires optional deps: `pip install pdf2image pytesseract` and system tools: **poppler** (for pdf2image), **Tesseract** (for pytesseract). Install the German language pack for Tesseract for German documents.
+- **Images/diagrams:** text embedded in raster figures is not extracted (a separate, optional vision step would be required).
+- **Multi-column layouts:** extraction assumes a single-column reading order, so heavily multi-column pages may be mis-ordered.
+- Password-protected PDFs are not supported.
 
 ### Word Reading (python-docx)
 
@@ -542,7 +549,8 @@ User: "Summarize pages 1-50 of report.pdf"
 
 **Solution:** Install the required package:
 ```bash
-pip install PyPDF2        # For PDF
+pip install pdfplumber    # For PDF (primary)
+pip install PyPDF2        # For PDF (fallback)
 pip install python-docx   # For Word
 pip install openpyxl      # For Excel
 pip install python-pptx   # For PowerPoint

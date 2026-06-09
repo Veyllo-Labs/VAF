@@ -12,6 +12,15 @@ know-how reaches the model — that is router-driven and documented in
 [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) ("Delivery"). The layer stays thin: a prompt instruction, Web
 UI parsing for display, and a cheap backend matcher that is currently debug-only.
 
+> **Status — disabled by default.** The whole `<Action>` system is currently **off** via the config flag
+> `action_tag_enabled` (default `false`): it is not needed right now, and small local models (e.g.
+> Qwen / Gemma 4B) tend to emit the `<Action>` block and then *stop* instead of making the tool call.
+> Nothing is removed — while the flag is off the prompt instruction is simply not injected (for **any**
+> model, on both the Soul/persona and fallback paths in `build_prompt`), and the parser/UI become no-ops
+> because no `<Action>` is ever emitted. Set `action_tag_enabled: true` to re-enable (the Gemma-4
+> exception below still applies even when enabled). The rest of this document describes the behaviour
+> **when enabled**.
+
 ---
 
 ## Output format
@@ -200,7 +209,7 @@ always "remembers" what it did, regardless of how the tags are handled.
 
 | File | Role |
 |------|------|
-| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths; gated off for Gemma 4) |
+| `vaf/core/system_prompt.py` | "Action Declaration" instruction (both prompt paths; gated by `action_tag_enabled` — default off — and additionally off for Gemma 4 even when enabled) |
 | `web/app/page.tsx` | `parseContent` (tag extraction), `ThinkingDetails`, `ActionDetails`, session-load reconciliation |
 | `vaf/core/agent.py` | Backend Action-Tag parser (`_extract_action_text`, `_match_action_to_tools`, debug match in the generation loop); `<think>` stripped from LLM context; `<Action>` intentionally retained |
 

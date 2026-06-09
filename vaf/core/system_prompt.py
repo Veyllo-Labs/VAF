@@ -502,6 +502,11 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         # the action itself. So drop the (optional) <Action> instruction for gemma-4 -- it then calls tools
         # natively. <think> and the rest of the prompt stay.
         _gemma4 = (getattr(self.agent, "model_mode", None) == "gemma4")
+        # Master switch for the <Action> declaration tag (config "action_tag_enabled", default OFF): it is
+        # not needed currently, and small local models tend to emit the <Action> block and then stop. When
+        # off, the instruction is omitted for ALL models. The tag code + parser stay; nothing breaks
+        # without it. See docs/agents/ACTION_TAG.md.
+        _action_on = bool(Config.get("action_tag_enabled", False))
 
         # 0. MISSION STATUS (Orchestrator feedback)
         if "orchestrator" in self.active_modules:
@@ -566,7 +571,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             persona_parts.append("### Thinking Format")
             persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
             persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
-            if not _gemma4:
+            if _action_on and not _gemma4:
                 persona_parts.append("\n### Action Declaration (when you use a tool)")
                 persona_parts.append("When you use a tool, briefly declare it first: emit one short `<Action>` block right after `</think>` and immediately before the tool call. For example:\n"
                     "```\n<think>\n...your reasoning...\n</think>\n<Action>\nUsing web_search to find the current Berlin weather.\n</Action>\n```\n"
@@ -594,7 +599,7 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
             # Use generic fallback that does NOT reveal what model/system this is
             # The model should not know it's "AI", "VAF", a specific model, etc. - only soul.md defines identity
             _identity = self.fallback_identity
-            if _gemma4:
+            if _gemma4 or not _action_on:
                 import re as _re
                 _identity = _re.sub(
                     r'\n## Action Declaration \(when you use a tool\)[\s\S]*?Omit it when you reply without using a tool\.',

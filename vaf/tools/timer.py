@@ -28,7 +28,10 @@ def _fmt_duration(seconds: int) -> str:
 
 def _resolve_session(agent):
     """Return (session_id, source, user_scope_id, username, role) from the injected agent."""
-    session_id = getattr(agent, "_session_id", None)
+    # Use the live CHAT session set for this turn -- NOT agent._session_id, which is a random per-instance
+    # UUID from _register_session (process/shutdown tracking). A timer attached to that UUID fired into a
+    # session the Web UI never listens on, so the user saw nothing when it elapsed.
+    session_id = getattr(agent, "current_session_id", None)
     if not session_id:
         try:
             from vaf.core.subagent_ipc import get_current_session_id
@@ -55,10 +58,10 @@ class SetTimerTool(BaseTool):
     channel_restrictions = ("telegram", "whatsapp", "discord")
     description = (
         "Schedule a SHORT, one-time timer that fires proactively in THIS chat after a relative "
-        "delay (seconds). Use for 'in N seconds/minutes …' style requests: either deliver a fixed "
-        "message, or have yourself act again on a task when it fires.\n"
-        "- Provide exactly ONE of: 'message' (a fixed text to send) OR 'task' (an instruction you "
-        "should carry out when the timer fires).\n"
+        "delay (seconds). Use for 'in N seconds/minutes …' style requests. When it fires you are WOKEN "
+        "UP and run a real turn (you can think, call tools, reply) — it is not a passive text post.\n"
+        "- Provide exactly ONE of: 'message' (a short note/reminder you are woken to handle — act on it "
+        "or tell the user) OR 'task' (a concrete instruction you carry out when the timer fires).\n"
         "- 'seconds' is the delay from now (>= 1). For minutes/hours multiply (e.g. 90 = 90s, "
         "300 = 5 min).\n"
         "Use create_automation (frequency='once') instead for longer/persistent reminders that "
@@ -79,7 +82,7 @@ class SetTimerTool(BaseTool):
             },
             "message": {
                 "type": "string",
-                "description": "Fixed text to deliver when the timer fires. Provide this OR 'task', not both.",
+                "description": "A short note/reminder for when the timer fires; you are woken up and handle it (act on it, or tell the user). Provide this OR 'task', not both.",
             },
             "task": {
                 "type": "string",

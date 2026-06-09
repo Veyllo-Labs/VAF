@@ -144,7 +144,14 @@ def _fire(timer: Timer) -> None:
     from vaf.core.task_queue import TaskQueue
 
     if timer.message is not None:
-        input_text = f"{TIMER_MSG_PREFIX}{timer.message}"
+        # A message timer WAKES the agent: the note is fed in as a normal turn (not a passive
+        # __TIMER__ delivery), so the agent becomes active -- it reads the note, can think / call
+        # tools, and responds. This text is ALSO shown in the chat as the user-side "trigger" bubble
+        # (see the headless timer handling), so it is kept short and readable.
+        input_text = (
+            f"⏰ Timer fired — your note: \"{timer.message}\". "
+            f"Act on it now (or, if it is only a reminder, just tell the user). Keep it brief."
+        )
     else:
         input_text = timer.task or ""
 

@@ -703,8 +703,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 if str(input_text).startswith(TIMER_MSG_PREFIX):
                     timer_msg = str(input_text)[len(TIMER_MSG_PREFIX):]
                     try:
-                        get_web_interface().emit_agent_message(
-                            role="assistant", content=timer_msg, session_id=task.session_id
+                        # Proactive standalone message: APPEND it as its own new bubble. The streaming
+                        # emit_agent_message would merge into / overwrite the last assistant bubble the
+                        # agent had already shown before the timer fired (observed: the timer text
+                        # replaced the "Timer is set" reply instead of appearing below it).
+                        get_web_interface().emit_agent_message_append(
+                            content=timer_msg, session_id=task.session_id, role="assistant"
                         )
                     except Exception:
                         pass
@@ -1287,6 +1291,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     prev_webui_active = os.environ.get("VAF_WEBUI_ACTIVE")
                     force_webui_active = origin_channel == "web" or source_channel == "web"
                     _task_images = task_meta_for_env.get("images") or None
+                    # Timer wake-turn: a timer task has no preceding user message, so without a boundary
+                    # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
+                    # Emit the trigger as a user-side bubble first -> the reply then lands in its OWN new
+                    # bubble with a correct timestamp. chat_step persists user_input to history itself, so
+                    # this is a live-display emit only (no separate persist -> no double message on reload).
+                    if task_meta_for_env.get("timer"):
+                        try:
+                            get_web_interface().emit_agent_message_append(
+                                content=str(effective_input), session_id=task.session_id, role="user"
+                            )
+                        except Exception:
+                            pass
                     try:
                         if force_webui_active:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"

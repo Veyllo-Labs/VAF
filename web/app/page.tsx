@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -37,6 +37,8 @@ type Message = {
     role: 'user' | 'assistant' | 'system' | 'tool' | 'workflow';
     content: string; // For tools: this is the result
     timestamp: number;
+    /** System-activity / wake-up kind (e.g. "timer") — rendered in the left-side wake area, not a normal bubble. */
+    kind?: string;
     /** Attachments shown on user messages (name + mimeType only; data not stored) */
     files?: { name: string; mimeType: string }[];
     /** Inline images attached to user message — stored as data URIs for display */
@@ -2236,7 +2238,7 @@ function VAFDashboardContent() {
                     // Active session: append a fresh bubble. Do NOT touch isGenerating —
                     // this is a finished message, not a live turn.
                     setLoading(false);
-                    setMessages(prev => [...prev, { role: data.role || 'assistant', content, timestamp: Date.now() }]);
+                    setMessages(prev => [...prev, { role: data.role || 'assistant', content, timestamp: Date.now(), kind: data.kind }]);
                 }
                 else if (data.type === 'clear_last_assistant') {
                     // Remove faulty assistant message so only the retry response is shown (empty-response retry).
@@ -4594,6 +4596,55 @@ function VAFDashboardContent() {
                                                         const prevAnswer = parseContent(prevMsg.content).answer.trim();
                                                         const currAnswer = parseContent(msg.content).answer.trim();
                                                         if (prevAnswer && currAnswer && prevAnswer === currAnswer) return null;
+                                                    }
+                                                    // Wake / system-activity message (e.g. a fired timer): render like an AGENT
+                                                    // chat row — a timer-icon avatar (in the agent-avatar slot) + a speech bubble,
+                                                    // but with an amber border (the same accent as the Action tag). Not a plain
+                                                    // user/bot bubble. Sent as role="user" so it still creates a bubble boundary;
+                                                    // matched here by kind, or by the "⏰ Timer fired" prefix when reloaded.
+                                                    const _isWake = msg.kind === 'timer' || String(msg.content ?? '').startsWith('⏰ Timer fired');
+                                                    if (_isWake) {
+                                                        // Show only the user's note, not the internal "Act on it…" framing.
+                                                        const _noteMatch = String(msg.content ?? '').match(/your note:\s*"([\s\S]*?)"/);
+                                                        const _wakeText = (_noteMatch ? _noteMatch[1] : String(msg.content ?? '').replace(/^⏰\s*/, '')).trim();
+                                                        // Two states: ACTIVE (E) while the agent is still handling the timer — real (dark) agent
+                                                        // avatar + amber clock BADGE + amber bubble ("look here"); DONE (J) once it has replied —
+                                                        // neutral dim avatar, neutral bubble, amber only in the "TIMER" label (quietly marked,
+                                                        // like a normal agent message).
+                                                        const _afterWake = messages.slice(trueIndex + 1);
+                                                        const _wakeDone = _afterWake.some(m => m.role === 'user')
+                                                            || (_afterWake.some(m => m.role === 'assistant' && String(m.content ?? '').trim().length > 0) && !isGenerating);
+                                                        return (
+                                                            <div className="flex gap-4 pt-4 justify-center">
+                                                                <div className="w-full max-w-[85%] flex gap-4 items-start">
+                                                                    {/* Avatar: the real agent avatar. ACTIVE → dark + amber clock badge; DONE → dim + no badge. */}
+                                                                    <div className="relative shrink-0">
+                                                                        <AgentAvatar mode="idle" dim={_wakeDone} />
+                                                                        {!_wakeDone && (
+                                                                            <span className="absolute -right-1.5 -bottom-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border-2 border-white bg-amber-500 text-white shadow-sm">
+                                                                                <AlarmClock className="h-2.5 w-2.5" />
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    {/* Bubble + timestamp. ACTIVE → amber bubble; DONE → neutral bubble (amber stays only in the TIMER label). */}
+                                                                    <div className="flex flex-col items-start min-w-0">
+                                                                        <div className={cn(
+                                                                            "rounded-2xl rounded-tl-none border px-5 py-3 text-[15px] leading-relaxed shadow-sm",
+                                                                            _wakeDone ? "border-gray-200 bg-gray-50 text-gray-700" : "border-amber-300 bg-amber-50 text-amber-900"
+                                                                        )}>
+                                                                            <div className="mb-1 flex items-center gap-1.5 text-amber-500">
+                                                                                <AlarmClock className="h-3.5 w-3.5" />
+                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">Timer</span>
+                                                                            </div>
+                                                                            <div className="chat-markdown"><ChatMarkdown>{_wakeText}</ChatMarkdown></div>
+                                                                        </div>
+                                                                        <div className="w-full mt-0.5 text-left">
+                                                                            <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
                                                     }
                                                     // System/Router/Step messages are NOT rendered as rows. The live setup/plan
                                                     // indicator (SetupLine, below the list) shows the current step in ONE stable,

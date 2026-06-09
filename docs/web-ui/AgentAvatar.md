@@ -38,6 +38,8 @@ Like a facial expression, but abstract.
 - **Feel:** Archive. The agent was here, now this message is history.
 - **When:** All completed bot messages except the most recent one
 
+**Tint (`tint={{ body?, dot? }}`)** — optional colour override for the body and/or the dot, leaving the shape and animation untouched. It exists so a proactive **kind**-message (see [WEB_UI.md](WEB_UI.md) → "Wake / system-activity messages") can show a kind-coloured avatar — e.g. a planned **purple** avatar for `thinking`. Omitted ⇒ the defaults above are unchanged. (The fired-timer avatar does *not* use `tint`: it keeps the plain dim/active avatar and adds an amber clock corner badge instead.)
+
 ---
 
 ### 2. `waiting` — System pipeline / before actual processing

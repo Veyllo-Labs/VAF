@@ -114,7 +114,7 @@ const LITE: Partial<Record<AvatarMode, string>> = {
     confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
 };
 
-export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean }) {
+export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, tint }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; tint?: { body?: string; dot?: string } }) {
     // Settle-to-neutral transition (docs/web-ui/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
@@ -144,7 +144,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const overlay = '#2a3142';
     const overlayGlow = '0 0 4px 1px rgba(30,36,52,0.35)';
     const overlayRing = 'rgba(30,36,52,0.6)';
-    const bodyColor = dim ? '#e5e7eb' : invert ? '#f3f4f6' : '#111827';
+    const bodyColor = tint?.body ?? (dim ? '#e5e7eb' : invert ? '#f3f4f6' : '#111827');
     // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
     // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light mode.
     const lightBody = dim || invert;
@@ -283,7 +283,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     <span style={{
                         position: 'absolute', left: '50%', top: '50%', width: eyeSize, height: eyeSize,
                         marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2), borderRadius: '50%',
-                        backgroundColor: dim ? '#b0b0b0' : dotColor,
+                        backgroundColor: tint?.dot ?? (dim ? '#b0b0b0' : dotColor),
                         boxShadow: (active && !dim) ? glow : 'none',
                         transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
                         animation: settling ? 'none' : eyeAnimation,

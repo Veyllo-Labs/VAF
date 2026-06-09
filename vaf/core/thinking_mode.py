@@ -632,6 +632,12 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         data = json.loads(raw)
         now = time.time()
         threshold = now - (idle_minutes * 60)
+        # Upper bound on idle age: a scope silent for longer than this is treated as dead, not
+        # "idle". Without it, stale/orphan web-session scope IDs (left in last_interaction.json
+        # long after the session ended) are each seen as a distinct idle user and generate a
+        # phantom thinking run every cooldown window, forever. 0 disables the cap.
+        max_idle_age_hours = float(Config.get("thinking_max_idle_age_hours", 168) or 0)
+        max_idle_age_sec = max_idle_age_hours * 3600 if max_idle_age_hours > 0 else None
         local_admin_scope = str(get_local_admin_scope_id()).strip()
 
         # Step 1: Map all known scope IDs to logical users.
@@ -689,13 +695,19 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         for logical_id, ts_float in latest_ts.items():
             if ts_float > threshold:
                 continue
-            
+
             # Apply 2-minute grace period for ANY activity to avoid race conditions
-            # This ensures that if the user just messaged via Telegram/WhatsApp, 
+            # This ensures that if the user just messaged via Telegram/WhatsApp,
             # we don't start thinking immediately even if the idle threshold was technically met.
             if (now - ts_float) < 120:
                 continue
-                
+
+            # Dead-session cap: a non-admin scope that has been silent past the max idle age is an
+            # orphan (e.g. an old web-session UUID), not a real idle user -> never run for it. The
+            # local admin (logical_id None) is exempt so a genuinely long-away admin still works.
+            if max_idle_age_sec is not None and logical_id is not None and (now - ts_float) > max_idle_age_sec:
+                continue
+
             result.append(logical_id)
         return result
     except (json.JSONDecodeError, OSError):

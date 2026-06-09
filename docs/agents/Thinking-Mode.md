@@ -10,6 +10,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **What it does:** One run = multiple agent turns with full tool access (except `memory_save` and Git tools). The agent must call `thinking_done` when finished.
 - **Max 1 Message & History Sync:** The agent may send at most one message per run. **New:** Any question asked by the Thinking Agent is automatically persisted to the user's main chat history. This ensures that when the user replies, the normal agent has the full context of what was asked.
 - **Per user:** Idle is tracked per logical user (handling all UUID/username aliases). One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
+- **Dead-session cap:** A non-admin scope ID that has been silent longer than `thinking_max_idle_age_hours` (default 7 days) is treated as a dead/orphan session, not an idle user, and is skipped. Without this, stale web-session scope IDs left in `last_interaction.json` are each seen as a separate idle user and generate a phantom run every cooldown window indefinitely. The local admin is exempt so a genuinely long-away admin still runs.
 - **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
 - **Workflow Guard:** Thinking mode does not start while a workflow is executing (`VAF_IN_WORKFLOW_TERMINAL=1`). This prevents idle messages from interrupting long-running workflow steps.
 - **Local-server Guard:** When the background run would share the **same local model** as the main chat (main `provider=local` and `thinking_provider` is `inherit` or `local`), a run does **not** start while the main agent is busy on that server (`TaskQueue` in-flight or queued). Idle-by-last-message is not enough: the main agent may still be mid-task from an older message, so its activity is treated as 'not idle' and the background run never contends with the user for the one local model. If the background run uses a **different** provider (e.g. thinking via API while the main chat is local, or vice versa) there is no contention and it runs concurrently as before.
@@ -29,6 +30,7 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 |-----|---------|---------|
 | `thinking_enabled` | `true` | Enable thinking mode when idle |
 | `thinking_idle_minutes` | `10` | Start after this many minutes without activity |
+| `thinking_max_idle_age_hours` | `168` | Upper bound on idle age (default 7 days). A non-admin scope silent longer than this is treated as a dead/orphan session and never runs. `0` disables the cap. |
 | `thinking_check_interval_seconds` | `60` | How often to check for idle users |
 | `thinking_cooldown_minutes` | `60` | Minutes to wait after a run before starting another |
 | `thinking_max_duration_minutes` | `30` | Max duration per run (then release lock) |

@@ -30,7 +30,13 @@ export type AvatarMode =
     | 'nod' | 'shake' | 'listening' | 'search'
     | 'celebrate' | 'working'
     // Activity states (body+eye+icon model) — used for the Whare Wananga learn phase:
-    | 'learn' | 'success' | 'error';
+    | 'learn' | 'success' | 'error'
+    // Activity · Tool & Action (body+eye+compact prop)
+    | 'write'
+    // Activity · Status & Outcome (icon above the head)
+    | 'warning' | 'permission'
+    // Activity · Multi-Agent & Learning
+    | 'plan';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
@@ -75,15 +81,23 @@ const BODY_ANIM: Partial<Record<AvatarMode, string>> = {
 // Activity states: the square (body) carries strong motion (B_ACT); the eye animates with E_ACT.
 const B_ACT: Partial<Record<AvatarMode, string>> = {
     learn: 'bLearn 3s ease-in-out infinite',
+    write: 'bWrite 1.6s ease-in-out infinite',
     success: 'bSuccess 2.4s cubic-bezier(.3,.7,.3,1) infinite',
     error: 'bError 2.2s ease-in-out infinite',
+    warning: 'bWarn 2s ease-in-out infinite',
+    permission: 'bAsk 2.6s ease-in-out infinite',
+    plan: 'bPlan 3s ease-in-out infinite',
 };
 const E_ACT: Partial<Record<AvatarMode, string>> = {
     learn: 'eLearn 3s ease-in-out infinite',
+    write: 'eWrite 1.8s ease-in-out infinite',
     success: 'eSuccess 2.4s ease-in-out infinite',
     error: 'eError 2.2s ease-in-out infinite',
+    warning: 'eWarn 2s ease-in-out infinite',
+    permission: 'eAsk 1.6s ease-in-out infinite',
+    plan: 'ePlan 3.5s ease-in-out infinite',
 };
-const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error';
+const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan';
 
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
@@ -218,6 +232,42 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         lineHeight: 1, fontSize: 18, fontWeight: 800, color: overlay, opacity: 0, zIndex: 2,
                         transformOrigin: 'center', animation: 'iBang 2.2s ease-in-out infinite',
                     }}>!</span>
+                )}
+                {/* write — a short line types out (scaleX, not width = leak-safe) + a blinking caret.
+                    On the dark body, so it uses the white dot colour (not the dark overlay ink). */}
+                {shown === 'write' && !dim && (
+                    <>
+                        <span style={{
+                            position: 'absolute', left: 10, bottom: 4, width: 12, height: 2,
+                            borderRadius: 1, backgroundColor: dotColor, transformOrigin: 'left center', opacity: 0.92, zIndex: 2,
+                            animation: 'iType 2.2s steps(10, end) infinite',
+                        }} />
+                        <span style={{
+                            position: 'absolute', left: 22, bottom: 3, width: 2, height: 6,
+                            borderRadius: 0.5, backgroundColor: dotColor, zIndex: 2,
+                            animation: 'caretBlink 0.9s step-end infinite',
+                        }} />
+                    </>
+                )}
+                {/* warning — a pulsing caution triangle above the head (dark overlay: over the light panel) */}
+                {shown === 'warning' && !dim && (
+                    <svg viewBox="0 0 26 24" style={{
+                        position: 'absolute', left: '50%', bottom: '100%', width: 15, height: 14, marginLeft: -7.5, marginBottom: 2,
+                        overflow: 'visible', color: overlay, zIndex: 2, transformOrigin: 'center bottom',
+                        animation: 'iPulse 1.4s ease-in-out infinite',
+                    }}>
+                        <path d="M13 2 L24.5 22 L1.5 22 Z" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinejoin="round" />
+                        <rect x="11.8" y="9" width="2.4" height="6" rx="1.2" fill="currentColor" />
+                        <circle cx="13" cy="18.6" r="1.3" fill="currentColor" />
+                    </svg>
+                )}
+                {/* permission — a "?" above the head; the body leans/asks (bAsk) */}
+                {shown === 'permission' && !dim && (
+                    <span style={{
+                        position: 'absolute', left: '50%', bottom: '100%', width: 14, marginLeft: -7, marginBottom: 2, textAlign: 'center',
+                        lineHeight: 1, fontSize: 17, fontWeight: 800, color: overlay, zIndex: 2, transformOrigin: 'center bottom',
+                        animation: 'iPulse 1.4s ease-in-out infinite',
+                    }}>?</span>
                 )}
 
                 {/* BODY — the square; carries the motion. EYE nested inside so it moves with it.

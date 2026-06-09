@@ -306,6 +306,34 @@
 @keyframes ringExpand { 0%{transform:scale(.3);opacity:0;} 30%{opacity:.55;} 100%{transform:scale(1.7);opacity:0;} }
 @keyframes wwSpin     { to { transform: rotate(360deg); } }
 
+/* write (Activity · Tool & Action) — line types out via transform scaleX (leak-safe, NOT width
+   which repaints); caret blinks via opacity. Both compositor-only. */
+@keyframes bWrite { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-0.5px);} }
+@keyframes eWrite { 0%,100%{transform:translate(0,1px);} 50%{transform:translate(0,2px);} }
+@keyframes iType  { 0%{transform:scaleX(0);} 85%,100%{transform:scaleX(1);} }
+@keyframes caretBlink { 0%,50%{opacity:1;} 50.01%,100%{opacity:0;} }
+
+/* warning + permission (Activity · Status & Outcome) — body/eye + a pulsing icon above the head.
+   iPulse = opacity + transform (compositor-only, leak-safe). */
+@keyframes bWarn  { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-1px);} }
+@keyframes eWarn  { 0%,100%{transform:scale(1);} 50%{transform:scale(1.1);} }
+@keyframes bAsk   { 0%,100%{transform:rotate(0) translateY(0);} 25%{transform:rotate(-3deg);} 50%{transform:rotate(0) translateY(-1px);} 75%{transform:rotate(3deg);} }
+@keyframes eAsk   { 0%,100%{transform:scale(1);} 50%{transform:scale(1.12);} }
+@keyframes iPulse { 0%,100%{opacity:.6;transform:scale(1);} 50%{opacity:1;transform:scale(1.12);} }
+
+/* plan (Activity · Multi-Agent & Learning) — agent lays out steps: marks fade in in sequence
+   (opacity = leak-safe), body tilts slightly, eye scans across (transform). */
+@keyframes bPlan  { 0%,100%{transform:rotate(1deg);} 50%{transform:rotate(0);} }
+@keyframes ePlan  { 0%,100%{transform:translate(-2px,1px);} 50%{transform:translate(2px,1px);} }
+@keyframes iStep  { 0%{opacity:0;} 14%{opacity:1;} 86%{opacity:1;} 100%{opacity:0;} }
+
+/* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
+   OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */
+.planbox { display:block; width:8px; height:8px; border:1.3px solid #111827; background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }
+/* hover: pause the pulse so it's fully opaque, fill strongly with the colour, pop a touch. */
+/* hover colour is set inline by the PlanBox React component (no CSS vars); the transition above eases it. */
+.planlnk { display:block; width:5px; height:1.3px; background:#9ca3af; border-radius:1px; opacity:.5; }
+
 /* Whare Wananga training stage: data flowing from one actor to the next (agent -> tool ->
    judge). GPU-cheap (transform only); only runs while a step is active. */
 @keyframes wwFlow {

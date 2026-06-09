@@ -192,9 +192,13 @@ class UpdateWorkingMemoryTool(BaseTool):
                                 for i, t in pending[:5]
                             )
                             return (
-                                f"⚠️ You're replacing the task list, but {len(pending)} step(s) are still pending: {listed}. "
-                                f"If you finished them or are intentionally dropping them, call update_working_memory(tasks=[...]) again to confirm. "
-                                f"Otherwise keep them — include them in the new list, or mark_task_done first."
+                                f"⚠️ STOP — this is NOT an internal note to ignore; act on it. Your task "
+                                f"replacement was NOT applied: {len(pending)} step(s) are still pending: {listed}. "
+                                f"Do ONE of these NOW (do not just reply to the user without it): "
+                                f"(a) if you just FINISHED a step, call mark_task_done on it; "
+                                f"(b) keep the pending steps — include them in the new tasks=[...]; or "
+                                f"(c) if you truly mean to drop them, call update_working_memory(tasks=[...]) again "
+                                f"to confirm. Ignoring this leaves the user's tracked tasks in a wrong state."
                             )
                         _TASK_OVERWRITE_CONFIRM.pop(sid, None)
                 except Exception:

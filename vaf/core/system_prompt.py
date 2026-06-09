@@ -291,7 +291,7 @@ update_working_memory(add_notes=["Step 1 result: ..."], mark_task_done=0)
 ```
 
 ### 3. SUMMARIZE — After completing a step
-- Mark the step done in working memory
+- **Mark the finished step done immediately** with `mark_task_done` — never leave a completed step pending, and never replace the whole task list just to "clean up". If a tool warns that pending tasks would be dropped, that is NOT an internal note you may ignore: handle it (mark the finished one done, or keep the others in the list).
 - If context is getting large, your older messages will be compressed automatically —
   but your plan and notes in working_memory survive compression
 - Continue with the next step

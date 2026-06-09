@@ -343,19 +343,25 @@ class WebInterfaceManager:
             "content": content
         })
 
-    def emit_agent_message_append(self, content: str, session_id: str = None, role: str = "assistant"):
+    def emit_agent_message_append(self, content: str, session_id: str = None, role: str = "assistant", kind: str = None):
         """Emit a COMPLETE, standalone message that must be appended as its own new
         bubble — never merged/streamed in-place.
 
         Used for proactive messages (e.g. automation results) where there is no live
         agent turn to attach to. The streaming `agent_message_update` path would
         otherwise overwrite the last assistant bubble or drop the text entirely.
+
+        `kind` (optional) tags a system-activity / wake-up message (e.g. "timer") so the
+        Web UI can render it in its own left-side area with a kind-specific look.
         """
-        self._push_session_update(session_id, {
+        payload = {
             "type": "agent_message_append",
             "role": role,
-            "content": content
-        })
+            "content": content,
+        }
+        if kind:
+            payload["kind"] = kind
+        self._push_session_update(session_id, payload)
 
     def emit_clear_last_assistant(self, session_id: str = None):
         """Ask the Web UI to remove the last assistant message (e.g. before empty-response retry)."""

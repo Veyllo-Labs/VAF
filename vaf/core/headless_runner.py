@@ -1293,13 +1293,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _task_images = task_meta_for_env.get("images") or None
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary
                     # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
-                    # Emit the trigger as a user-side bubble first -> the reply then lands in its OWN new
-                    # bubble with a correct timestamp. chat_step persists user_input to history itself, so
-                    # this is a live-display emit only (no separate persist -> no double message on reload).
+                    # Emit the trigger as a "wake" system-activity message (kind="timer") -> the Web UI
+                    # renders it in its own LEFT-side area (not the user side), and it also serves as the
+                    # boundary so the agent's reply lands in its OWN new bubble with a correct timestamp.
+                    # chat_step persists the input to history itself, so this is a live-display emit only.
                     if task_meta_for_env.get("timer"):
                         try:
+                            # role="user" keeps the (proven) bubble boundary so the agent's reply lands in
+                            # its own new bubble; kind="timer" tells the Web UI to render it as a LEFT-side
+                            # wake card (clock + amber) instead of a user bubble.
                             get_web_interface().emit_agent_message_append(
-                                content=str(effective_input), session_id=task.session_id, role="user"
+                                content=str(effective_input), session_id=task.session_id,
+                                role="user", kind="timer",
                             )
                         except Exception:
                             pass

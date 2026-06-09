@@ -81,7 +81,7 @@ Singleton pattern manager that:
 - **Local Model Idle**: Shows `Idle` when the local model is unloaded and waiting for a prompt
 - **Loading States**: Animated dots during agent processing
 - **Workflow Steps**: Real-time display of Router, Workflow, System, and Info events. The **Router** step shows which tools were selected for the turn (e.g. `Router: LLM-based: list_calendar_events` or `Router: Script-based: web_search`), so you can see when and which tools the agent is using.
-- **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream. Tool events (`tool_update`) are always emitted regardless of background thinking mode — they are no longer gated by `_emit_to_web_ui()` to avoid race conditions with the `VAF_THINKING_MODE` environment variable. After page reload, tool cards show the correct status (`completed`/`error`) from the `toolStatus` field in `history_update` messages.
+- **Inline Tool Status**: Visual cards for running/completed tools directly in the chat stream. Tool events (`tool_update`) are always emitted regardless of background thinking mode — they are no longer gated by `_emit_to_web_ui()` to avoid race conditions with the `VAF_THINKING_MODE` environment variable. After page reload, tool cards show the correct status (`completed`/`error`) from the `toolStatus` field in `history_update` messages. A tool that returns **without running** — e.g. a state-changing tool gated by the plan requirement (`[PLAN REQUIRED] …`) — is shown as a **non-success** (red), not a green check, so a gated call is never mistaken for a completed one (the agent did **not**, for example, actually save a memory).
 
 ### 4. Sub-Agent Panel & Tool Cards
 
@@ -96,6 +96,10 @@ Singleton pattern manager that:
 - Extracted from `<think>...</think>` tags
 - Collapsible accordion UI
 - Monospace font for technical content
+
+**Long reply collapse**:
+- A bot answer longer than ~800 chars collapses to a ~300-char preview with a "Show full response" toggle — but **only once a newer user message exists** (i.e. it is a *past* answer). The current/streaming answer and short replies are never collapsed.
+- Collapse is computed at **render time** from the message's position + length; only the user's manual *expand* choices are stored, keyed by the stable message **timestamp**. It is deliberately **not** a set of array indices: those shifted whenever a message was removed (`clear_last_assistant`, dedup) and collapsed the wrong bubble (tiny replies collapsed, long ones stayed open, the streaming reply collapsed mid-stream).
 
 **System Steps**:
 - Timeline-style visualization

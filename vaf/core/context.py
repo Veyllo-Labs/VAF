@@ -469,7 +469,11 @@ class ContextManager:
 
         # 4. Build compressed history
         system_prompt = history[0]  # Always keep
-        recent_messages = history[-self.recent_memory_size:]  # Keep raw
+        # Exclude history[0] (the system turn) from the recent slice: when the history is shorter than
+        # recent_memory_size, history[-N:] still includes index 0, and prepending system_prompt below
+        # would then count the (large) system prompt TWICE -- which made "compression" grow the context
+        # by ~the system size (observed 31985 -> 51235). Slice from history[1:] so it can never overlap.
+        recent_messages = history[1:][-self.recent_memory_size:]  # Keep raw
 
         # 5. Build context summary
         context_summary = self._build_context_summary()
@@ -492,9 +496,20 @@ class ContextManager:
         new_history.extend(recent_messages)
 
         new_tokens = self.estimate_tokens(new_history)
-        UI.event("Context", f"Compressed: {len(history)} → {len(new_history)} msgs, {current_tokens} → {new_tokens} tokens", style="success")
-        if critical_tools:
-            UI.event("Context", f"Preserved {len(critical_tools[-5:])} critical tool results", style="dim")
+
+        # Safety: compression must NEVER grow the context. If the summary (context summary + resume block)
+        # plus the preserved tail came out larger than the original (observed: 30725 -> 43754 tokens, which
+        # then immediately tripped CRITICAL OVERFLOW), drop the summary and critical-tool block and keep
+        # just the system turn + the recent messages. That is always smaller than the input (it also drops
+        # the entire middle section), and the full history is archived for /restore.
+        if new_tokens >= current_tokens:
+            new_history = [system_prompt] + recent_messages
+            new_tokens = self.estimate_tokens(new_history)
+            UI.event("Context", f"Summary would have grown context — dropped it; kept system + {len(recent_messages)} recent msgs ({current_tokens} → {new_tokens} tokens)", style="warning")
+        else:
+            UI.event("Context", f"Compressed: {len(history)} → {len(new_history)} msgs, {current_tokens} → {new_tokens} tokens", style="success")
+            if critical_tools:
+                UI.event("Context", f"Preserved {len(critical_tools[-5:])} critical tool results", style="dim")
         UI.event("Context", f"Full history archived. Use /restore to recover.", style="dim")
 
         return new_history

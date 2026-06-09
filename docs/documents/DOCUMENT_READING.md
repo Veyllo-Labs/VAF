@@ -368,6 +368,8 @@ result = extract_pdf_markdown(file_path, max_pages=50, ocr_fallback=True)
 - **Tables** detected by pdfplumber are rendered as Markdown tables and removed from the surrounding text flow.
 - **Fallback:** if pdfplumber raises, the per-page PyPDF2 text is used instead (`method="pypdf2"`).
 
+**Reaching the agent's context (per turn):** an attachment that fits under `attachment_rag_max_chars_per_doc` (default 24000) is inlined into the turn context **in full**, so the agent can read every page. Only documents larger than that cap fall back to the hierarchical attachment index — query-driven top-k retrieval (`attachment_rag_enabled`), which cannot resolve a request *by page number* (a page number is not its content); ask a content question or `learn_document` the file instead. See `vaf/core/headless_runner.py`.
+
 **Limitations:**
 - **Scanned PDFs (image-only):** if little or no text is extracted, OCR is tried when `librarian_ocr_fallback_for_pdf` is enabled (default: true). Requires optional deps: `pip install pdf2image pytesseract` and system tools: **poppler** (for pdf2image), **Tesseract** (for pytesseract). Install the German language pack for Tesseract for German documents.
 - **Images/diagrams:** text embedded in raster figures is not extracted (a separate, optional vision step would be required).

@@ -426,8 +426,11 @@ class APIBackendManager:
     def _create_provider(self) -> BaseAIProvider:
         # Local/Ollama provider doesn't need an API key
         if self.provider_name == "local":
-            # Use OpenAI-compatible provider for Ollama
-            local_url = Config.get("local_api_url", "http://localhost:11434/v1")
+            # OpenAI-compatible endpoint of the local server. Default to VAF's own llama-server
+            # (port 8080, Docker/env-aware via get_llama_server_url) -- NOT Ollama's 11434, which is
+            # nothing in a stock VAF install and made the browser agent fail with a connection error.
+            # An explicit "local_api_url" (e.g. a real Ollama on :11434) still wins.
+            local_url = Config.get("local_api_url", "") or Config.get_llama_server_url("/v1")
             return OpenAIProvider("local", "ollama", base_url=local_url)
 
         if not self.api_key:

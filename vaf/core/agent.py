@@ -3070,7 +3070,18 @@ class Agent:
             max_tokens = self.config.get("n_ctx", 128000)
             if max_tokens <= 16384: max_tokens = 128000
         elif hasattr(self, 'context_manager'):
-            max_tokens = self.context_manager.max_tokens
+            # Use the configured context window (same formula as load_model / the server's n_ctx), NOT
+            # whatever the manager was first built with. A manager created before n_ctx was raised would
+            # otherwise pin compression/overflow to the 32768 floor while the model + server actually run
+            # at e.g. 128000 -- firing premature "Compressing…/CRITICAL OVERFLOW" at a fraction of the
+            # real window. Re-sync the manager so the limit always tracks the real context size.
+            max_tokens = max(int(Config.get("n_ctx", 32768) or 32768), 32768)  # FRESH read, not the __init__ snapshot
+            if self.context_manager.max_tokens != max_tokens:
+                try:
+                    append_domain_log("backend", f"[CTX-LIMIT] context_manager max_tokens {self.context_manager.max_tokens} -> {max_tokens}")
+                except Exception:
+                    pass
+                self.context_manager.max_tokens = max_tokens
         else:
             max_tokens = self.config.get("n_ctx", 8192)
 
@@ -5491,6 +5502,9 @@ class Agent:
         # Retry counter for empty responses
         empty_retry_count = 0
         MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
+        # Loop-protection counter for blocked redundant tool calls (per user turn). Kept SEPARATE from
+        # empty_retry_count so a redundant block never climbs into the empty-response abort.
+        redundant_block_count = 0
         # API empty guard: delay-retry (3s) up to 4 times before showing system-log error
         api_empty_delay_retries = 0
         API_EMPTY_DELAY_RETRIES_MAX = 4
@@ -5598,10 +5612,11 @@ class Agent:
                                 "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                 "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                             )}
-                        # Gemma 4 has ONE native system turn (see _prepare_messages); merge memory
-                        # context INTO it instead of adding a second consecutive system message
-                        # (the template renders a single system turn).
-                        if getattr(self, "model_mode", None) == "gemma4" and prepared_messages[0].get("role") == "system":
+                        # Merge the memory context INTO the first system message instead of inserting a
+                        # SECOND system message. Strict local chat templates (e.g. Qwen, Gemma) reject a
+                        # second / non-leading system turn ("System message must be at the beginning");
+                        # a single system turn is also fine for every other provider.
+                        if prepared_messages and prepared_messages[0].get("role") == "system":
                             prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
                         else:
                             prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
@@ -5845,10 +5860,11 @@ class Agent:
                                     "If you call memory_search, pass only a SHORT query (e.g. 'user name'), never your full thinking text. "
                                     "Do NOT use memory_save to look up – use memory_search or this block. memory_save only saves NEW facts when the user asks to remember something."
                                 )}
-                            # Gemma 4 has ONE native system turn (see _prepare_messages); merge memory
-                            # context INTO it instead of adding a second consecutive system message
-                            # (the template renders a single system turn).
-                            if getattr(self, "model_mode", None) == "gemma4" and prepared_messages[0].get("role") == "system":
+                            # Merge the memory context INTO the first system message instead of inserting a
+                            # SECOND system message. Strict local chat templates (e.g. Qwen, Gemma) reject a
+                            # second / non-leading system turn ("System message must be at the beginning");
+                            # a single system turn is also fine for every other provider.
+                            if prepared_messages and prepared_messages[0].get("role") == "system":
                                 prepared_messages[0]["content"] = (prepared_messages[0].get("content") or "") + "\n\n" + memory_msg["content"]
                             else:
                                 prepared_messages = [prepared_messages[0], memory_msg] + prepared_messages[1:]
@@ -5858,10 +5874,19 @@ class Agent:
                         
                         payload = {
                              "messages": prepared_messages,
-                             "tools": current_tools, 
+                             "tools": current_tools,
                              "tool_choice": current_tool_choice,
                              "stream": True,
                              "temperature": current_temp,
+                             # Local llama-server sampling. A repetition penalty + top_p/top_k stop the
+                             # model degenerating into a verbatim loop (observed: a 60k-token <think> that
+                             # repeated the same paragraph until it overflowed the context). max_tokens
+                             # caps a single generation so even a loop that slips through is bounded.
+                             # These are llama.cpp extensions; this payload only ever goes to :8080.
+                             "repeat_penalty": float(Config.get("repeat_penalty", 1.1) or 1.1),
+                             "top_p": float(Config.get("top_p", 0.95) or 0.95),
+                             "top_k": int(Config.get("top_k", 40) or 40),
+                             "max_tokens": int(Config.get("max_generation_tokens", 10000) or 10000),
                         }
                         
                         # Remove keys if None (some APIs don't like null tools)
@@ -6035,8 +6060,19 @@ class Agent:
                                     continue
                             except (json.JSONDecodeError, KeyError):
                                 pass  # Not a context size error, try generic 400 recovery below
-                            # Any 400 (e.g. server doesn't report "exceed"): try one round of compression and truncate last user message
-                            if _attempt < 3:
+                            # A 400 that is NOT about context size (e.g. Qwen's "Assistant response prefill
+                            # is incompatible with enable_thinking") cannot be fixed by compressing -- retrying
+                            # just burns turns and ends in the same error. Only compress-retry a size 400;
+                            # surface anything else immediately.
+                            _err_low = ""
+                            try:
+                                _err_low = str((response.json().get("error", {}) or {}).get("message", "") or "").lower()
+                            except Exception:
+                                _err_low = str(getattr(response, "text", "") or "").lower()
+                            _is_size_400 = (not _err_low) or ("exceed" in _err_low) or (
+                                "context" in _err_low and ("size" in _err_low or "length" in _err_low or "token" in _err_low)
+                            )
+                            if _attempt < 3 and _is_size_400:
                                 UI.event("Context", "Request rejected (400). Compressing context...", style="warning")
                                 self.manage_context()
                                 is_small = max_tokens <= 20000
@@ -6374,7 +6410,7 @@ class Agent:
                                     session_id=session_id,
                                 )
                                 if not _is_substantial:
-                                    get_web_interface().emit_clear_last_assistant(session_id)
+                                    self._clear_last_assistant_ui(session_id)
                             except Exception:
                                 pass
                         # Clear stream buffer so the retry sends only new content (no old + new)
@@ -6449,7 +6485,7 @@ class Agent:
                                         f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - forcing correction...",
                                         level="warning", source="System", session_id=_rg_sid,
                                     )
-                                    get_web_interface().emit_clear_last_assistant(_rg_sid)
+                                    self._clear_last_assistant_ui(_rg_sid)
                                 except Exception:
                                     pass
                             if stream_callback and hasattr(stream_callback, "clear"):
@@ -6503,7 +6539,7 @@ class Agent:
                                         f"Sub-agent still running ({_ta_list}) - holding 'done' (attempt {self._team_await_blocks})...",
                                         level="warning", source="System", session_id=_ta_sid,
                                     )
-                                    get_web_interface().emit_clear_last_assistant(_ta_sid)
+                                    self._clear_last_assistant_ui(_ta_sid)
                                 except Exception:
                                     pass
                             if stream_callback and hasattr(stream_callback, "clear"):
@@ -6628,18 +6664,31 @@ class Agent:
 
                                     if should_block:
                                         UI.event("Warning", f"Blocked redundant tool call: {tool_name}", style="warning")
-                                        self.history.append({
-                                            "role": "system",
-                                            "content": (
-                                                f"[!] STOP! You just executed '{tool_name}' successfully with these EXACT arguments.\n"
-                                                f"The result is already in the context above (look for the 'tool' message).\n"
-                                                f"DO NOT execute it again. Analyze the result and provide your answer."
-                                            )
-                                        })
-                                        # LOOP PROTECTION: Repeatedly calling same tool counts as an empty attempt
-                                        # to ensure it eventually hits the fallback/stop logic.
-                                        empty_retry_count += 1
-                                        append_domain_log("backend", f"[LOOP_PROTECTION] blocked redundant tool call '{tool_name}' - retry_count now {empty_retry_count}")
+                                        # LOOP PROTECTION. Count on a SEPARATE counter (not empty_retry_count):
+                                        # a redundant block must never climb into the empty-response abort that
+                                        # left the agent silent. After a few repeats, force ONE final text answer
+                                        # from the results already in context instead of looping further.
+                                        redundant_block_count += 1
+                                        append_domain_log("backend", f"[LOOP_PROTECTION] blocked redundant tool call '{tool_name}' (#{redundant_block_count})")
+                                        if redundant_block_count >= 3:
+                                            self.history.append({
+                                                "role": "system",
+                                                "content": (
+                                                    "You have already gathered the needed tool results (see the 'tool' messages above). "
+                                                    "Answer the user NOW in plain text. Do NOT call any tool."
+                                                )
+                                            })
+                                            disable_tools = True  # next generation: no tools -> a text answer, never an abort
+                                            redundant_block_count = 0
+                                        else:
+                                            self.history.append({
+                                                "role": "system",
+                                                "content": (
+                                                    f"[!] STOP! You just executed '{tool_name}' with these EXACT arguments. "
+                                                    f"The result is already in the context above (the 'tool' message). "
+                                                    f"Do NOT call it again -- analyze the result and provide your answer."
+                                                )
+                                            })
                                         continue
                                 except Exception as e:
                                     # If check fails, assume it's safe to proceed
@@ -6770,7 +6819,42 @@ class Agent:
 
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
-                    
+
+                    # Stop button: honour it BETWEEN tools, not only at the loop top. A single LLM
+                    # response can carry many tool calls; without this, hitting Stop drains the whole
+                    # batch (observed: list_tools fired dozens of times after "stopped by user").
+                    _stop_sid = getattr(self, 'current_session_id', None) or getattr(self, '_session_id', None)
+                    if _stop_sid:
+                        try:
+                            from vaf.core.task_queue import TaskQueue as _STQ
+                            _stq = _STQ()
+                            if _stq.should_stop(_stop_sid):
+                                _stq.clear_stop(_stop_sid)
+                                _sm = "[Generation stopped by user]"
+                                self.history.append({"role": "assistant", "content": _sm})
+                                return _sm
+                        except Exception:
+                            pass
+
+                    # EMERGENCY DEAD-LOOP BREAKER: >=10 tool executions within 5 seconds means a runaway
+                    # loop (a model spamming one tool, or a stop that didn't propagate). Abort the whole
+                    # turn at once. This is time-based and far below MAX_TOOL_TURNS_PER_STEP (75), so it
+                    # stops in seconds instead of grinding through dozens of calls and churning memory.
+                    _now = time.monotonic()
+                    _et_times = [t for t in getattr(self, "_tool_exec_times", []) if _now - t < 5.0]
+                    _et_times.append(_now)
+                    self._tool_exec_times = _et_times
+                    if len(_et_times) >= 10:
+                        self._tool_exec_times = []
+                        _emsg = f"⚠️ Emergency stop: {len(_et_times)} tool calls in under 5 seconds — a runaway tool loop was aborted."
+                        UI.event("Emergency", _emsg, style="bold red")
+                        try:
+                            append_domain_log("backend", f"[EMERGENCY_LOOP_BREAK] {len(_et_times)} tool calls <5s, last={function_name}")
+                        except Exception:
+                            pass
+                        self.history.append({"role": "assistant", "content": _emsg})
+                        return _emsg
+
                     # ═══════════════════════════════════════════════════════════════
                     # THINKING DONE PROTECTION: Hardcoded break
                     # ═══════════════════════════════════════════════════════════════
@@ -6910,7 +6994,10 @@ class Agent:
                             _r_status.startswith("failed") or
                             _r_status.startswith("tool error") or
                             _r_status.startswith("security error") or
-                            _r_status.startswith("exception")
+                            _r_status.startswith("exception") or
+                            # State-changing tool gated until a plan is set: it did NOT run, so it must not
+                            # show as a green success (the user could mistake it for "memory saved").
+                            _r_status.startswith("[plan required]")
                         )
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
@@ -7296,11 +7383,14 @@ class Agent:
                 append_domain_log("backend", f"empty_check has_final={has_final_answer} tools={len(tool_calls_detected)} content_len={len(full_content)} clean_len={len(temp_final)}")
             except Exception:
                 pass
-            # Local empty/thinking-only retry is OFF by default (config empty_response_retry_enabled):
-            # it was noisy and often a false positive -- a messy <think> makes the answer-detector think
-            # the reply is empty -- and it fired repeatedly in background thinking runs. The API
-            # empty-handling (delayed retries) below is preserved (api_backend keeps it on).
-            _empty_retry_on = bool(self.api_backend) or Config.get("empty_response_retry_enabled", False)
+            # Empty / thinking-only retry. The user wanted it OFF in BACKGROUND thinking runs (it spammed
+            # "Empty response detected..." while idle), NOT in foreground turns. In the foreground a
+            # thinking-only / no-answer generation MUST still be recovered -- otherwise the turn never
+            # closes and the Web UI hangs forever on a loading thinking block (observed). So: ON in the
+            # foreground (any provider), OFF only in thinking mode (config flag can still force it on).
+            # The API delayed-retry path further below is independent of this gate.
+            _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+            _empty_retry_on = (not _is_thinking_mode) or Config.get("empty_response_retry_enabled", False)
             if (not has_final_answer) and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False) and _empty_retry_on:
                 UI.event("System", "Empty response detected. Applying snapshot and retry...", style="warning")
                 try:
@@ -7319,7 +7409,7 @@ class Agent:
                             source="System",
                             session_id=session_id,
                         )
-                        get_web_interface().emit_clear_last_assistant(session_id)
+                        self._clear_last_assistant_ui(session_id)
                     except Exception:
                         pass
                 # Clear stream buffer so the retry sends only new content (no old + new)
@@ -8516,6 +8606,62 @@ class Agent:
                 break
         return True, (claim or "a tool outcome that did not actually happen this turn")
 
+    def _clear_last_assistant_ui(self, session_id) -> None:
+        """Ask the Web UI to drop the just-produced (faulty) assistant bubble before a retry/correction.
+
+        NEVER fires during a thinking (background) run. There the "last assistant" bubble is the user's
+        previous real answer -- not anything produced this turn -- so clearing it would REPLACE a real
+        message (observed: a background pass wiped a research answer and showed "Nothing actionable").
+        Background runs must only ever append below, never replace. `_emit_to_web_ui()` is False in
+        thinking mode, so all clears route through this single guard.
+        """
+        if not _emit_to_web_ui():
+            return
+        try:
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().emit_clear_last_assistant(session_id)
+        except Exception:
+            pass
+
+    def _consolidate_system_messages(self, messages: List[Dict]) -> List[Dict]:
+        """Make the message list valid for strict local chat templates (e.g. Qwen, Gemma 4) that require a
+        SINGLE system message at the very start.
+
+        - LEADING system turns (the system prompt + anything before the first non-system message) are
+          merged into one leading system message.
+        - A system message that appears AFTER the conversation has started (a mid-run nudge: empty-retry,
+          loop block, plan-required, correction) is converted to a USER turn IN PLACE. Hoisting it to the
+          front would (a) lose its "respond to this now" position and (b) leave the conversation ending on
+          an assistant turn, which Qwen rejects with 400 "Assistant response prefill is incompatible with
+          enable_thinking". As a user turn it stays in place and the turn ends on a user message.
+
+        Returns the input unchanged when there are no system messages."""
+        def _text(c):
+            if isinstance(c, list):
+                c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+            return str(c or "").strip()
+
+        leading: List[str] = []
+        rest: List[Dict] = []
+        seen_non_system = False
+        for m in messages:
+            if m.get("role") == "system":
+                t = _text(m.get("content"))
+                if not t:
+                    continue
+                if seen_non_system:
+                    rest.append({"role": "user", "content": t})   # mid-run instruction -> user turn
+                else:
+                    leading.append(t)
+            else:
+                seen_non_system = True
+                rest.append(m)
+        out: List[Dict] = []
+        if leading:
+            out.append({"role": "system", "content": "\n\n".join(leading)})
+        out.extend(rest)
+        return out
+
     def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
         """Prepare messages for specific model quirks (e.g. Gemma)."""
         # --- Universal: strip dangling tool_calls --------------------------
@@ -8782,6 +8928,11 @@ class Agent:
 
         is_gemma = getattr(self, "is_gemma_local", "gemma" in self.filename.lower())
         if not is_gemma:
+            # Strict local chat templates (e.g. Qwen) require exactly ONE system message, at the start.
+            # VAF injects system messages mid-conversation (memory context, first-time hint, loop nudges);
+            # merge them into the leading one for LOCAL models. API providers accept multiple -> unchanged.
+            if getattr(self, "provider", None) == "local":
+                return self._consolidate_system_messages(messages)
             return messages
         
         # Gemma 3n: merge System into the first User turn (it has no native system role).
@@ -8880,7 +9031,6 @@ class Agent:
                     append_domain_log("backend", f"[WW-STALE] tool definition changed -> marked stale: {_stale}")
             except Exception:
                 pass
-        schema = []
         n_ctx = self.config.get("n_ctx", 8192)
         # With 100+ tools, even 32K contexts are "small" — truncate descriptions
         # to keep total tool schema tokens manageable (system prompt ~5.5K + tools budget ~6K).
@@ -8890,6 +9040,17 @@ class Agent:
         tools_to_use = self._active_tools if self._active_tools is not None else self.tools.keys()
         excluded = getattr(self, "_excluded_tools", None) or set()
 
+        # Cache the built schema. This property sits on the HOT PATH of every LLM call and was rebuilt --
+        # re-running Whare Wananga pitfall injection for each tool -- on EVERY access: thousands of times
+        # per session (8478 [WW-INJECT] in one run), churning memory. Rebuild only when the scoping inputs
+        # actually change (router re-scope, exclusions, or context size); the router re-scopes per turn, so
+        # newly learned pitfalls are still picked up on the next turn.
+        _cache_key = (frozenset(tools_to_use), frozenset(excluded), n_ctx)
+        if (getattr(self, "_tools_schema_cache_key", None) == _cache_key
+                and getattr(self, "_tools_schema_cache", None) is not None):
+            return self._tools_schema_cache
+
+        schema = []
         for name in tools_to_use:
             if name not in self.tools or name in excluded:
                 continue
@@ -8940,4 +9101,6 @@ class Agent:
                     "parameters": getattr(tool, "parameters", {"type": "object", "properties": {}})
                 }
             })
+        self._tools_schema_cache = schema
+        self._tools_schema_cache_key = _cache_key
         return schema

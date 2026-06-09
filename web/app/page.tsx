@@ -811,37 +811,58 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     );
 };
 
-// A run of consecutive System/Router/Step messages, collapsed to ONE self-updating line: only the
-// NEWEST step shows; a "▸ N steps" toggle expands the full trace. Keeps the chat clean while the
-// agent works through setup/routing, without losing the history.
-const SystemStepGroup = ({ steps, loadingLast, onSubAgentClick }: { steps: string[]; loadingLast: boolean; onSubAgentClick: () => void }) => {
-    const [expanded, setExpanded] = useState(false);
-    if (steps.length === 0) return null;
-    const lastIdx = steps.length - 1;
-    const shown = expanded ? steps.map((c, k) => ({ c, k })) : [{ c: steps[lastIdx], k: lastIdx }];
+// A small preset palette; each ▢ step box flashes a RANDOM colour from it every time it lights up
+// (on each animation cycle). Colour change is event-driven (~every 2.4s), not a per-frame repaint.
+const PLAN_PALETTE = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#ec4899', '#3b82f6'];
+const randPlanColor = () => PLAN_PALETTE[Math.floor(Math.random() * PLAN_PALETTE.length)];
+const PlanBox = ({ active, color }: { active: boolean; color: string }) => (
+    <span
+        className="planbox"
+        style={{
+            // active = random palette colour + fill, bigger & fully opaque; idle = small, faint, black.
+            // transform/opacity = compositor; the colour changes per sequence tick (event-driven), not per frame.
+            borderColor: active ? color : '#111827',
+            backgroundColor: active ? `${color}cc` : 'transparent',
+            transform: active ? 'scale(1.28)' : 'scale(0.82)',
+            opacity: active ? 1 : 0.45,
+        }}
+    />
+);
+
+// The live setup/plan indicator — ONE stable element for the whole setup/routing phase, rendered
+// OUTSIDE the message map (which remounts per step). Because it stays mounted for the phase, the
+// `plan` animation + the ▢–▢–▢ step boxes loop CONTINUOUSLY; only `message` updates. The full step
+// trace lives in the logs/terminal, so the chat stays clean.
+const SetupLine = ({ message }: { message: string }) => {
+    const cleanText = message.replace(/^(Router|Step \d+\/\d+|System|Agent|Info)\s*[:\|]?\s*/, '');
+    const source = message.match(/^(Router|Step \d+\/\d+|System|Agent|Info)/)?.[0] || 'System';
+    // The ▢ sequence is driven HERE (one stable element → no remount, animation never restarts per
+    // step): every ~800ms the next box becomes "active" (random palette colour + bigger + opaque),
+    // the others idle (small, faint, black). Colour changes per tick (event-driven, not per frame).
+    const [active, setActive] = useState(0);
+    const [color, setColor] = useState(randPlanColor);
+    useEffect(() => {
+        const t = setInterval(() => { setActive(a => (a + 1) % 3); setColor(randPlanColor()); }, 800);
+        return () => clearInterval(t);
+    }, []);
     return (
-        <div className="w-full max-w-[85%]">
-            {shown.map(({ c, k }) => {
-                const isLive = k === lastIdx;
-                const isSub = c.toLowerCase().includes('sub-agent');
-                return (
-                    <SystemStep
-                        key={k}
-                        message={c}
-                        isLoading={loadingLast && isLive}
-                        useBotIcon={loadingLast && isLive}
-                        onClick={isSub ? onSubAgentClick : undefined}
-                    />
-                );
-            })}
-            {steps.length > 1 && (
-                <button
-                    onClick={() => setExpanded(e => !e)}
-                    className="ml-[52px] mt-0.5 text-[10px] font-medium uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                    {expanded ? '▾ Collapse' : `▸ ${steps.length} steps`}
-                </button>
-            )}
+        <div className="flex gap-4 items-center w-full">
+            <div className="w-9 shrink-0 flex justify-center">
+                <AgentAvatar mode="plan" />
+            </div>
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+                <span className="flex items-center gap-[3px] text-[#2a3142] shrink-0" aria-hidden="true">
+                    <PlanBox active={active === 0} color={color} />
+                    <span className="planlnk" />
+                    <PlanBox active={active === 1} color={color} />
+                    <span className="planlnk" />
+                    <PlanBox active={active === 2} color={color} />
+                </span>
+                <div className="text-xs flex items-center gap-2 min-w-0">
+                    <span className="font-semibold uppercase tracking-wider text-[10px] text-gray-600 shrink-0">{source}</span>
+                    <span className="text-gray-900 font-medium truncate">{cleanText}</span>
+                </div>
+            </div>
         </div>
     );
 };
@@ -4574,27 +4595,10 @@ function VAFDashboardContent() {
                                                         const currAnswer = parseContent(msg.content).answer.trim();
                                                         if (prevAnswer && currAnswer && prevAnswer === currAnswer) return null;
                                                     }
-                                                    // Render System Steps as ONE collapsible, self-updating line per consecutive
-                                                    // run: skip every system message except the run's last, and render the whole
-                                                    // run there (SystemStepGroup shows only the newest + a "▸ N steps" expander).
-                                                    if (msg.role === 'system') {
-                                                        const nextMsg = visibleMessages[i + 1];
-                                                        if (nextMsg && nextMsg.role === 'system') return null;   // not the run's end yet
-                                                        let s = i;
-                                                        while (s > 0 && visibleMessages[s - 1].role === 'system') s--;
-                                                        const runSteps = visibleMessages.slice(s, i + 1)
-                                                            .map(m => String(m.content ?? ''))
-                                                            .filter((c, k, arr) => k === 0 || c !== arr[k - 1]);   // drop consecutive duplicates
-                                                        return (
-                                                            <div key={`system-${trueIndex}`} className="flex justify-center pt-4">
-                                                                <SystemStepGroup
-                                                                    steps={runSteps}
-                                                                    loadingLast={loading && i === visibleMessages.length - 1}
-                                                                    onSubAgentClick={() => openSubAgentWindow(true)}
-                                                                />
-                                                            </div>
-                                                        );
-                                                    }
+                                                    // System/Router/Step messages are NOT rendered as rows. The live setup/plan
+                                                    // indicator (SetupLine, below the list) shows the current step in ONE stable,
+                                                    // continuously-animating line; the full trace stays in the logs/terminal.
+                                                    if (msg.role === 'system') return null;
 
                                                     // API empty error: show as system log (no bot bubble) for consistency
                                                     const apiEmptyErrorText = 'API returned empty responses repeatedly. Please try again.';
@@ -4944,6 +4948,17 @@ function VAFDashboardContent() {
                                     });
                                 })()}
 
+                                {/* Live setup/plan indicator — one stable element for the whole setup/routing
+                                    phase (loops continuously, only the text updates; system rows are suppressed
+                                    above). Shown while the latest message is a system step during an active turn. */}
+                                {(loading || isGenerating) && visibleMessages[visibleMessages.length - 1]?.role === 'system' && (
+                                    <div className="flex gap-4 justify-center pt-4">
+                                        <div className="w-full max-w-[85%]">
+                                            <SetupLine message={String(visibleMessages[visibleMessages.length - 1].content ?? '')} />
+                                        </div>
+                                    </div>
+                                )}
+
                                 {loading && messages.length > 0 && !(
                                     // Hide loading bubble when a tool is actively running (tool card shows spinner)
                                     (messages[messages.length - 1].role === 'tool' &&
@@ -4953,7 +4968,7 @@ function VAFDashboardContent() {
                                 ) && (
                                     <div className="flex gap-4 justify-center pt-4">
                                         <div className="w-full max-w-[85%] flex gap-4">
-                                            <AgentAvatar mode="waiting" />
+                                            <AgentAvatar mode="plan" />
                                             <div className="flex flex-col gap-1">
                                                 {activeToolName ? (
                                                     // Tool just finished / between tools: show tool name with spinner

@@ -1114,10 +1114,28 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         _warn += f'  → {_td_name}: learn_document(path="{_td_path}")\n'
                                 context_header += _warn
 
-                            # Hybrid retrieval lane: query session-scoped attachment index instead of
-                            # prepending full attachment content every turn.
+                            # Attachments that FIT in context are inlined IN FULL. RAG top-k retrieval is
+                            # query-driven and silently drops pages the query does not semantically match
+                            # (observed: "what's on page 6?" surfaced only page 1, because a page number is
+                            # not its content). A document under the indexing cap is only ~a few thousand
+                            # tokens, so inlining the whole thing every turn is cheap and lets the agent read
+                            # every page. The RAG lane stays for documents too large to inline.
                             snippet_lines = []
-                            if bool(Config.get("attachment_rag_enabled", False)):
+                            _oversize_present = False
+                            for idx, doc in enumerate(sidebar_docs, 1):
+                                d_name = str((doc or {}).get("name") or f"Attachment {idx}")
+                                d_content = str((doc or {}).get("content") or "").strip()
+                                if not d_content:
+                                    continue
+                                if len(d_content) <= _max_attach_chars:
+                                    snippet_lines.append(
+                                        f"[Attachment {idx}] {d_name} (full document, {len(d_content)} chars)\n{d_content}"
+                                    )
+                                else:
+                                    _oversize_present = True
+
+                            # Hybrid retrieval lane: only for oversize attachments (full text not inlined).
+                            if _oversize_present and bool(Config.get("attachment_rag_enabled", False)):
                                 try:
                                     from vaf.memory.attachment_rag import search_session_attachments_sync
                                     att_hits = search_session_attachments_sync(
@@ -1138,8 +1156,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     append_domain_log("rag", f"ATTACH_SEARCH failed: {e}")
 
                             if not snippet_lines:
-                                # Fallback: keep context minimal and deterministic if the index is not
-                                # ready yet OR indexing failed.
+                                # Last resort: a deterministic excerpt when an oversize doc could not be
+                                # inlined AND the index is not ready yet OR indexing failed.
                                 fallback_chars = int(Config.get("attachment_rag_snippet_chars", 900) or 900)
                                 for idx, doc in enumerate(sidebar_docs[:2], 1):
                                     d_name = str((doc or {}).get("name") or f"Attachment {idx}")

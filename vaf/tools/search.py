@@ -417,9 +417,9 @@ Answer:"""
                             {"role": "system", "content": "You are a helpful assistant that answers questions based on web page content. Always use information from the provided page, not your training data."},
                             {"role": "user", "content": prompt}
                         ],
-                        max_tokens=250,
+                        max_tokens=600,  # small so a reasoning model finishes fast inside the per-page budget; query_llm falls back to reasoning_content if cut off
                         temperature=0.2,
-                        timeout=15,
+                        timeout=30,
                     )
                     
                     if answer:
@@ -463,9 +463,9 @@ Final Answer:"""
                             {"role": "system", "content": "You are a helpful assistant that synthesizes information from multiple sources into a clear, concise answer."},
                             {"role": "user", "content": prompt}
                         ],
-                        max_tokens=300,
+                        max_tokens=1000,  # bounded so the final synthesis fits the time budget; query_llm falls back to reasoning_content if cut off
                         temperature=0.3,
-                        timeout=15,
+                        timeout=35,
                     )
                     
                     if answer:
@@ -510,6 +510,24 @@ Final Answer:"""
             # When multiple web_search calls are made, 12000 chars each = 36000+ total chars
             MAX_SUMMARY_CHARS = 8000
 
+            # Time budget: stay well under the tool-timeout wrapper, which HARD-KILLS web_search at
+            # tool_timeout_seconds and discards everything. We self-stop early and return the snippets
+            # (already added below) plus whatever page answers we managed to gather. The per-page deep
+            # fetch + LLM synthesis is the slow part with a reasoning model, so it is gated on the budget.
+            import time as _t
+            try:
+                from vaf.core.bounded_run import agent_timeout_seconds as _ats
+                _tool_budget = float(_ats("web_search"))
+            except Exception:
+                _tool_budget = 120.0
+            _budget = max(40.0, _tool_budget - 10.0)          # safety margin before the hard kill
+            _t_start = _t.monotonic()
+            # A synthesis call can run up to its own timeout PAST the moment it starts, so leave headroom:
+            # the final synthesis (~35s) must START before _deadline, and per-page work (~30s each) must
+            # START before _perpage_deadline so the last one still finishes before the final begins.
+            _deadline = _t_start + max(20.0, _budget - 40.0)
+            _perpage_deadline = _t_start + max(10.0, _budget - 70.0)
+
             for i, res in enumerate(results, 1):
                 # Respect stop button between result pages
                 try:
@@ -545,15 +563,18 @@ Final Answer:"""
                     if not suppress:
                         UI.event("Web Search", f"Reading {link[:60]}...", style="dim")
 
-                # For each result, analyze it with separate LLM context
+                # For each result, analyze it with separate LLM context — but only while we are within
+                # the per-page time budget. Once it passes we stop fetching/synthesising and just let the
+                # already-added snippets stand, so the tool returns gracefully before the hard kill.
                 page_content = None
-                if deep and link and i <= preview_limit:
+                _within_budget = _t.monotonic() < _perpage_deadline
+                if deep and link and i <= preview_limit and _within_budget:
                     # Fetch full page content if deep=True
                     # REDUCED from 2000 to 1500 chars to prevent context overflow (Issue #VAF-CTX-001)
                     page_content = fetch_text(link)
                     if page_content and len(page_content) > 1500:
                         page_content = page_content[:1500]
-                elif snippet:
+                elif snippet and _within_budget:
                     # Use snippet if deep=False (limit snippet length too)
                     page_content = snippet[:500] if len(snippet) > 500 else snippet
                 
@@ -575,49 +596,75 @@ Final Answer:"""
 
                 summary += "\n"
 
-            # Create ONE final synthesized answer from all sources (not individual answers)
-            if all_answers:
+            # Synthesize ONE final answer -- but only from sources that actually carried data. The
+            # per-page step emits a "No specific data in snippet ..." marker when a fetched page held only
+            # navigation / boilerplate (common for JavaScript-rendered sites, e.g. weather pages). Feeding
+            # those into synthesis yields an empty answer and pointless retries; detect and skip them.
+            _NO_DATA_MARKERS = ("no specific data", "no relevant data", "only shows navigation")
+            usable_answers = [a for a in all_answers
+                              if not any(m in (a.get("answer") or "").lower() for m in _NO_DATA_MARKERS)]
+
+            if usable_answers and _t.monotonic() >= _deadline:
+                # Out of time budget: skip the (slow) final synthesis and return the gathered page
+                # answers raw, so the tool finishes before the hard kill instead of being discarded.
+                UI.event("Web Search", "Time budget reached - returning gathered answers (synthesis skipped).", style="warning")
+                summary += "\n### 📊 Results (gathered; final synthesis skipped to stay responsive)\n"
+                for idx, ans in enumerate(usable_answers, 1):
+                    summary += f"{idx}. **{ans['title']}**: {ans['answer']}\n"
+                    summary += f"   [Source]({ans['url']})\n\n"
+            elif usable_answers:
                 # DEBUG: Show all collected answers before synthesis
-                UI.event("Debug", f"Collected {len(all_answers)} answers for synthesis", style="dim")
-                for idx, ans in enumerate(all_answers, 1):
+                UI.event("Debug", f"Collected {len(usable_answers)} answer(s) for synthesis", style="dim")
+                for idx, ans in enumerate(usable_answers, 1):
                     # Show full answer for debugging (no truncation)
                     UI.event("Debug", f"  {idx}. {ans['title']}: {ans['answer']}", style="dim")
-                
+
                 UI.event("Web Search", "Synthesizing final answer...", style="dim")
-                
-                # RETRY LOOP: Try synthesis multiple times until we get an answer
+
+                # RETRY LOOP: Try synthesis a couple of times in case of a transient empty generation
                 final_answer = None
-                max_retries = 3
+                max_retries = 2
                 retry_count = 0
-                
+
                 while not final_answer and retry_count < max_retries:
                     if retry_count > 0:
                         UI.event("Web Search", f"Retrying synthesis (attempt {retry_count + 1}/{max_retries})...", style="yellow")
-                    
-                    final_answer = synthesize_final_answer(user_question, all_answers)
-                    
+
+                    final_answer = synthesize_final_answer(user_question, usable_answers)
+
                     if not final_answer:
                         retry_count += 1
                         if retry_count < max_retries:
                             import time
                             time.sleep(1)  # Wait 1s before retry
-                
+
                 if final_answer:
                     # DEBUG: Show final synthesized answer (full text for debugging)
                     UI.event("Debug", f"Final synthesis result: {final_answer}", style="dim")
-                    
+
                     summary += f"\n### 🎯 Answer\n{final_answer}\n\n"
                     summary += "**Sources:**\n"
-                    for idx, ans in enumerate(all_answers, 1):
+                    for idx, ans in enumerate(usable_answers, 1):
                         summary += f"{idx}. [{ans['title']}]({ans['url']})\n"
                 else:
                     # Final fallback after all retries failed
                     UI.event("Warning", f"Synthesis failed after {max_retries} attempts - showing raw data", style="yellow")
                     summary += "\n### 📊 Results (Synthesis unavailable - raw answers)\n"
-                    for idx, ans in enumerate(all_answers, 1):
+                    for idx, ans in enumerate(usable_answers, 1):
                         # Show full answers if synthesis completely failed
                         summary += f"{idx}. **{ans['title']}**: {ans['answer']}\n"
                         summary += f"   [Source]({ans['url']})\n\n"
+            elif all_answers:
+                # Had per-page results, but none carried extractable data (navigation / boilerplate only --
+                # typical for JavaScript-rendered pages). Skip synthesis entirely: no empty generation, no
+                # retries, no debug snapshots. Report it clearly so the agent tells the user honestly.
+                UI.event("Web Search", "Pages had no extractable data (navigation/boilerplate only) - skipping synthesis", style="yellow")
+                summary += ("\n### Note\nThe fetched pages did not contain the concrete data (only navigation / "
+                            "page structure -- typical for JavaScript-rendered sites). Tell the user the live "
+                            "values could not be retrieved from these pages, and offer the source links below.\n\n"
+                            "**Sources:**\n")
+                for idx, ans in enumerate(all_answers, 1):
+                    summary += f"{idx}. [{ans['title']}]({ans['url']})\n"
             else:
                 # Fallback 2: No LLM answers generated (LLM calls failed or snippets insufficient)
                 # Snippets are already shown above - the agent can use them directly
@@ -642,10 +689,12 @@ Final Answer:"""
                     # Small delay between opens to avoid overwhelming the browser
                     time.sleep(0.3)
 
-            # Lead with the follow-up nudge so a weak model sees it FIRST (a trailing note gets ignored):
-            # snippets/synthesis lack the concrete value (live weather, prices, dates) -- that lives on the
-            # page, reachable via webfetch. Prepend it ABOVE the results.
-            if links:
+            # Follow-up nudge ONLY for a shallow (snippet-only) search. With deep=True (the default) the
+            # pages were already fetched and analysed above, so telling the model "these are short snippets,
+            # read the full page via webfetch" is false and actively harmful: observed the model think
+            # "Ich sollte die Seite lesen" and re-call web_search (-> redundant-block, no answer) instead of
+            # answering from the content it already had. Only nudge toward webfetch on a bare-snippet search.
+            if links and not deep:
                 _ex = links[0]
                 lead = (
                     "**NEXT STEP (read this first):** the results below are short search snippets, NOT full "

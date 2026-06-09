@@ -401,5 +401,9 @@ Two adjacent systems build on the tool layer described here:
   After the router scopes the turn's tools (`_active_tools`), Whare Wananga's **delivery** appends
   each selected tool's learned pitfalls to its schema description (proactive), and re-feeds a failed
   tool's know-how on error (reactive) — see [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md) "Delivery".
+  Because `Agent.TOOLS` sits on the hot path of **every** LLM call, the built schema (with the injected
+  pitfalls) is **cached** and only rebuilt when the scoping inputs change (active tools, exclusions,
+  context size). It was previously rebuilt — re-running pitfall injection per tool — on every access
+  (thousands of times per session), which steadily churned memory.
 - **Action Tag** ([ACTION_TAG.md](ACTION_TAG.md)) — the agent declares the tool it is about
   to use; a backend parser matches that intent against the loaded tool list.

@@ -262,12 +262,33 @@ class BaseTool(ABC):
             res = requests.post(
                 "http://127.0.0.1:8080/v1/chat/completions",
                 json=payload,
-                timeout=60
+                timeout=(timeout or 120),  # honour the caller's timeout (was hardcoded 60s)
             )
             if res.status_code == 200:
                 data = res.json()
                 if "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"].get("content", "").strip()
+                    choice = data["choices"][0] or {}
+                    msg = choice.get("message", {}) or {}
+                    content = (msg.get("content") or "").strip()
+                    if content:
+                        return content
+                    # Reasoning models (e.g. qwen) put the chain-of-thought in reasoning_content and the
+                    # final answer in content. If generation was cut off while still reasoning
+                    # (finish_reason="length"), content is empty even though the model produced plenty.
+                    # Log the cause, then fall back to the reasoning text -- it already holds the substance
+                    # -- instead of returning nothing.
+                    reasoning = (msg.get("reasoning_content") or "").strip()
+                    try:
+                        from vaf.core.log_helper import append_domain_log
+                        append_domain_log(
+                            "backend",
+                            f"query_llm({self.name}) empty content: finish_reason={choice.get('finish_reason')} "
+                            f"reasoning_len={len(reasoning)} max_tokens={max_tokens}",
+                        )
+                    except Exception:
+                        pass
+                    if reasoning:
+                        return reasoning
             return None
         except Exception:
             return None

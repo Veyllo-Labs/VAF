@@ -24,7 +24,7 @@ class Config:
     CONFIG_FILE = APP_DIR / "config.json"
     
     DEFAULTS = {
-        "model": "auto",  # "auto" = VRAM-aware default (gemma-4 E4B Q8 GGUF if >10GB VRAM, else E2B). Or set an explicit "repo/file.gguf".
+        "model": "auto",  # "auto" = default local model (Qwen3.5-4B UD-Q8_K_XL GGUF, unsloth). Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,
         "auto_install_gpu": True,  # On an NVIDIA GPU without CUDA, auto-install CUDA llama-cpp-python (no terminal prompt). Set false to stay on CPU.
@@ -34,6 +34,14 @@ class Config:
         "n_parallel": 0, # 0 = Auto-detect based on VRAM (1 or 2); Set to 1 to force sequential if crashing
         "llama_cache_ram": 4096,  # Prompt cache size in MB. 0 = disabled. -1 = auto (40% free RAM, cap 8192).
         "temperature": 0.7,
+        # Local-generation sampling (llama-server). A repetition penalty + top_p/top_k prevent degenerate
+        # loops where a reasoning model repeats the same text until it fills the context. Cloud APIs ignore
+        # these (they are sent only on the local path).
+        "repeat_penalty": 1.1,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_generation_tokens": 10000,  # per-call output cap on local generation; bounds a runaway loop
+
 
         # AI Provider Settings
         # Options: "local", "openai", "anthropic", "deepseek", "google", "openrouter"
@@ -210,6 +218,7 @@ class Config:
         # Thinking mode: background reflection when user idle
         "thinking_enabled": True,                              # Enable thinking mode when idle
         "thinking_idle_minutes": 10,                           # Start after this many minutes without activity
+        "thinking_max_idle_age_hours": 168,                    # Upper bound: skip scope IDs silent longer than this (default 7 days). Filters stale/orphan web-session UUIDs that would otherwise run forever. 0 disables the cap.
         "thinking_check_interval_seconds": 60,                 # How often to check for idle users
         "thinking_automation_buffer_minutes": 10,              # Do not start if automation runs within this many minutes
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)

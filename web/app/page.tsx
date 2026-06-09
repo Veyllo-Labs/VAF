@@ -13,7 +13,7 @@ import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -781,7 +781,7 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
         >
             <div className="w-9 shrink-0 flex justify-center">
                 {useBotIcon ? (
-                    <AgentAvatar mode={isLoading ? 'waiting' : 'idle'} />
+                    <AgentAvatar mode={isLoading ? 'plan' : 'idle'} />
                 ) : (
                     <div className="w-0.5 h-full bg-gray-100 relative">
                         <div className={cn(
@@ -807,6 +807,41 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
                     <span className={cn(isLoading ? "text-gray-900 font-medium" : "text-gray-600")}>{renderTextWithLinks(cleanText)}</span>
                 </div>
             </div>
+        </div>
+    );
+};
+
+// A run of consecutive System/Router/Step messages, collapsed to ONE self-updating line: only the
+// NEWEST step shows; a "▸ N steps" toggle expands the full trace. Keeps the chat clean while the
+// agent works through setup/routing, without losing the history.
+const SystemStepGroup = ({ steps, loadingLast, onSubAgentClick }: { steps: string[]; loadingLast: boolean; onSubAgentClick: () => void }) => {
+    const [expanded, setExpanded] = useState(false);
+    if (steps.length === 0) return null;
+    const lastIdx = steps.length - 1;
+    const shown = expanded ? steps.map((c, k) => ({ c, k })) : [{ c: steps[lastIdx], k: lastIdx }];
+    return (
+        <div className="w-full max-w-[85%]">
+            {shown.map(({ c, k }) => {
+                const isLive = k === lastIdx;
+                const isSub = c.toLowerCase().includes('sub-agent');
+                return (
+                    <SystemStep
+                        key={k}
+                        message={c}
+                        isLoading={loadingLast && isLive}
+                        useBotIcon={loadingLast && isLive}
+                        onClick={isSub ? onSubAgentClick : undefined}
+                    />
+                );
+            })}
+            {steps.length > 1 && (
+                <button
+                    onClick={() => setExpanded(e => !e)}
+                    className="ml-[52px] mt-0.5 text-[10px] font-medium uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                    {expanded ? '▾ Collapse' : `▸ ${steps.length} steps`}
+                </button>
+            )}
         </div>
     );
 };
@@ -1114,6 +1149,17 @@ function VAFDashboardContent() {
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string } | null>(null);
+    // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
+    // confirmation (gateRequest) shows `permission`. The flash auto-clears after ~one cycle so we
+    // never leave an infinite reaction running on the avatar.
+    const [agentReaction, setAgentReaction] = useState<AvatarMode | null>(null);
+    const agentReactionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const fireAgentReaction = useCallback((m: AvatarMode) => {
+        setAgentReaction(m);
+        if (agentReactionTimer.current) clearTimeout(agentReactionTimer.current);
+        agentReactionTimer.current = setTimeout(() => setAgentReaction(null), 2200);
+    }, []);
+    useEffect(() => () => { if (agentReactionTimer.current) clearTimeout(agentReactionTimer.current); }, []);
     const [chainAlert, setChainAlert] = useState(false);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
@@ -1169,32 +1215,15 @@ function VAFDashboardContent() {
         return next;
     });
 
-    // Auto-collapse long bot responses when the user sends a new message.
-    // collapsedBotMsgs tracks which assistant message indices are collapsed.
-    const [collapsedBotMsgs, setCollapsedBotMsgs] = useState<Set<number>>(new Set());
+    // Past long bot answers collapse to a preview once a NEWER user message exists (keeps the chat
+    // scannable). This is derived at RENDER time from the message's position + length — NOT a Set of
+    // array indices. The old index-based approach broke whenever a message was removed
+    // (clear_last_assistant, dedup): the indices shifted onto the wrong bubble, so tiny replies
+    // collapsed, long ones stayed open, and the streaming reply collapsed mid-stream. We only persist
+    // the user's manual EXPAND choices, keyed by the stable message timestamp.
+    const [expandedBotMsgs, setExpandedBotMsgs] = useState<Set<number>>(new Set());
     const BOT_COLLAPSE_THRESHOLD = 800; // chars — shorter replies stay fully visible
     const BOT_COLLAPSED_PREVIEW = 300;  // chars shown when collapsed
-
-    // Watch for new user messages and collapse the previous bot reply if it's long.
-    const lastUserMsgCountRef = useRef(0);
-    useEffect(() => {
-        const userCount = messages.filter(m => m.role === 'user').length;
-        if (userCount <= lastUserMsgCountRef.current) return;
-        lastUserMsgCountRef.current = userCount;
-
-        // Find the last assistant message before the latest user message
-        const latestUserIdx = messages.map((m, i) => m.role === 'user' ? i : -1).filter(i => i >= 0).pop() ?? -1;
-        if (latestUserIdx <= 0) return;
-        for (let i = latestUserIdx - 1; i >= 0; i--) {
-            if (messages[i].role === 'assistant') {
-                const content = String(messages[i].content ?? '');
-                if (content.length > BOT_COLLAPSE_THRESHOLD) {
-                    setCollapsedBotMsgs(prev => new Set(prev).add(i));
-                }
-                break;
-            }
-        }
-    }, [messages]);
     // Reset offset when session changes so we always start at the bottom.
     useEffect(() => { setMsgOffset(0); }, [currentSessionId]);
     const visibleMessages = useMemo(() => {
@@ -1966,6 +1995,11 @@ function VAFDashboardContent() {
                         }
                         return prev;
                     });
+
+                    // Flash the main agent avatar with the tool's outcome (success / error).
+                    if (subType === 'end' || subType === 'error') {
+                        fireAgentReaction(subType === 'error' ? 'error' : 'success');
+                    }
 
                     // When execute_workflow finishes, force-close any workflow panel still in
                     // 'running' state — workflow_done may have been lost in the WebSocket queue
@@ -4540,21 +4574,23 @@ function VAFDashboardContent() {
                                                         const currAnswer = parseContent(msg.content).answer.trim();
                                                         if (prevAnswer && currAnswer && prevAnswer === currAnswer) return null;
                                                     }
-                                                    // Skip duplicate consecutive system messages (e.g. same "Context usage..." twice)
-                                                    if (msg.role === 'system' && prevMsg?.role === 'system' && String(msg.content ?? '') === String(prevMsg.content ?? '')) return null;
-
-                                                    // Render System Steps (Timeline Style)
+                                                    // Render System Steps as ONE collapsible, self-updating line per consecutive
+                                                    // run: skip every system message except the run's last, and render the whole
+                                                    // run there (SystemStepGroup shows only the newest + a "▸ N steps" expander).
                                                     if (msg.role === 'system') {
-                                                        const isLast = i === visibleMessages.length - 1;
-                                                        const isSubAgentMessage = msg.content.toLowerCase().includes('sub-agent');
-                                                        const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
+                                                        const nextMsg = visibleMessages[i + 1];
+                                                        if (nextMsg && nextMsg.role === 'system') return null;   // not the run's end yet
+                                                        let s = i;
+                                                        while (s > 0 && visibleMessages[s - 1].role === 'system') s--;
+                                                        const runSteps = visibleMessages.slice(s, i + 1)
+                                                            .map(m => String(m.content ?? ''))
+                                                            .filter((c, k, arr) => k === 0 || c !== arr[k - 1]);   // drop consecutive duplicates
                                                         return (
-                                                            <div key={`system-${trueIndex}`} className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
-                                                                <SystemStep
-                                                                    message={msg.content}
-                                                                    isLoading={loading && isLast}
-                                                                    useBotIcon={loading && isLast}
-                                                                    onClick={isSubAgentMessage ? () => openSubAgentWindow(true) : undefined}
+                                                            <div key={`system-${trueIndex}`} className="flex justify-center pt-4">
+                                                                <SystemStepGroup
+                                                                    steps={runSteps}
+                                                                    loadingLast={loading && i === visibleMessages.length - 1}
+                                                                    onSubAgentClick={() => openSubAgentWindow(true)}
                                                                 />
                                                             </div>
                                                         );
@@ -4717,13 +4753,13 @@ function VAFDashboardContent() {
                                                                                             {expandedMsgs.has(trueIndex) ? '▲ Show less' : `▼ Show more (${displayAnswer.length.toLocaleString()} chars)`}
                                                                                         </button>
                                                                                     </>
-                                                                                ) : isBot && collapsedBotMsgs.has(trueIndex) ? (
+                                                                                ) : isBot && cleanAnswer.length > BOT_COLLAPSE_THRESHOLD && messages.slice(trueIndex + 1).some(m => m.role === 'user') && !expandedBotMsgs.has(msg.timestamp) ? (
                                                                                     <>
                                                                                         <div className="chat-markdown">
                                                                                             <ChatMarkdown>{cleanAnswer.slice(0, BOT_COLLAPSED_PREVIEW) + '…'}</ChatMarkdown>
                                                                                         </div>
                                                                                         <button
-                                                                                            onClick={() => setCollapsedBotMsgs(prev => { const n = new Set(prev); n.delete(trueIndex); return n; })}
+                                                                                            onClick={() => setExpandedBotMsgs(prev => new Set(prev).add(msg.timestamp))}
                                                                                             className="mt-1 text-xs text-gray-400 hover:text-gray-700 transition-colors"
                                                                                         >
                                                                                             ▼ Show full response ({cleanAnswer.length.toLocaleString()} chars)
@@ -4877,6 +4913,8 @@ function VAFDashboardContent() {
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     {isLatestBot && !loading ? (
                                                                         <AgentAvatar mode={(() => {
+                                                                            if (agentReaction) return agentReaction;      // flash latest tool outcome (success/error)
+                                                                            if (gateRequest) return 'permission';         // risky-tool confirmation pending → "?"
                                                                             if (!isGenerating) return 'idle';
                                                                             if (msg.content.includes('<think>') && !isThinkingComplete) return 'thinking';
                                                                             return 'talking';

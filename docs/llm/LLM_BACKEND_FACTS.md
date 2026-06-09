@@ -16,12 +16,9 @@ Exactly one of these three paths is always active. Which one is logged in **`log
 
 ## Default local model (`model: "auto"`)
 
-The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves — VRAM-aware — to the original Gemma GGUF (Q8_0) from the llama.cpp org (`ggml-org`):
+The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves to **`unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q8_K_XL.gguf`** — a single ~5 GB model with reliable native function-calling and reasoning (fits a typical GPU; offloads to CPU otherwise).
 
-- **> 10 GB VRAM** → `ggml-org/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q8_0.gguf`
-- **otherwise (≤ 10 GB or CPU-only)** → `ggml-org/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q8_0.gguf`
-
-An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model and skips the VRAM logic; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
+An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
 
 ---
 

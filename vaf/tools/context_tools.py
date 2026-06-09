@@ -156,6 +156,13 @@ class UpdateWorkingMemoryTool(BaseTool):
         add_notes = kwargs.get('add_notes')
         add_plan = kwargs.get('add_plan')
         tasks = kwargs.get('tasks')
+        # Be lenient: these are array params, but a model (esp. a small local one) often sends a bare
+        # string. Wrap it so the call still succeeds instead of being mangled (a string iterated as chars).
+        if isinstance(plan, str): plan = [plan.strip()] if plan.strip() else None
+        if isinstance(notes, str): notes = [notes.strip()] if notes.strip() else None
+        if isinstance(add_notes, str): add_notes = [add_notes.strip()] if add_notes.strip() else None
+        if isinstance(add_plan, str): add_plan = [add_plan.strip()] if add_plan.strip() else None
+        if isinstance(tasks, str): tasks = [tasks.strip()] if tasks.strip() else None
         add_task = kwargs.get('add_task')
         mark_task_done = kwargs.get('mark_task_done')
         

@@ -48,6 +48,36 @@ def _extract_action_text(text: str):
     return m.group(1).strip() if m else None
 
 
+def _parse_qwen_tool_calls(text: str, valid_names=None):
+    """Parse Qwen / Hermes style tool calls that a reasoning model sometimes emits as TEXT (often inside
+    `<think>`) instead of a native call, so the server never converts them and the call is silently
+    dropped (observed: `update_working_memory` written this way -> the plan is never set -> the
+    `[PLAN REQUIRED]` gate loops forever):
+
+        <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
+
+    Returns a list of (name, args_dict). Each parameter VALUE is JSON-decoded when possible (so a list /
+    dict / number survives) and otherwise kept as the trimmed string. Tolerant of newlines/whitespace.
+    Pure function; `valid_names` (when given) restricts results to known tool names."""
+    import re as _re
+    import json as _json
+    out = []
+    for m in _re.finditer(r'<tool_call>\s*<function=([\w.\-]+)\s*>(.*?)</function>\s*</tool_call>', text or "", _re.DOTALL):
+        name = (m.group(1) or "").strip()
+        if not name or (valid_names is not None and name not in valid_names):
+            continue
+        args = {}
+        for pm in _re.finditer(r'<parameter=([\w.\-]+)\s*>(.*?)</parameter>', m.group(2) or "", _re.DOTALL):
+            key = (pm.group(1) or "").strip()
+            raw = (pm.group(2) or "").strip()
+            try:
+                args[key] = _json.loads(raw)
+            except Exception:
+                args[key] = raw
+        out.append((name, args))
+    return out
+
+
 def _parse_gemma4_tool_calls(text: str, valid_names=None):
     """Parse Gemma-4 native tool calls from raw model output -> list of (name, args_dict).
 
@@ -6773,6 +6803,20 @@ class Agent:
                             "id": f"call_{os.urandom(4).hex()}",
                             "type": "function",
                             "function": {"name": _g_name, "arguments": json.dumps(_g_args)},
+                        })
+
+                # 5. Qwen / Hermes text tool calls: <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
+                # A reasoning model (e.g. Qwen) sometimes writes this INSIDE <think> instead of making a
+                # native call, so the server never converts it and the call is dropped (observed:
+                # update_working_memory written this way -> the plan is never set -> the [PLAN REQUIRED]
+                # gate loops). The format is specific and results are filtered to known tools, so it is
+                # safe to try for any model once nothing above matched.
+                if not tool_calls_detected:
+                    for _q_name, _q_args in _parse_qwen_tool_calls(text_to_search, self.tools):
+                        tool_calls_detected.append({
+                            "id": f"call_{os.urandom(4).hex()}",
+                            "type": "function",
+                            "function": {"name": _q_name, "arguments": json.dumps(_q_args)},
                         })
 
             try:

@@ -447,12 +447,48 @@ def _get_recommended_backend(gpu: GPUInfo) -> str:
 
 
 # ─── Default local model ──────────────────────────────────────────────────────
-# Qwen3.5-4B (UD-Q8_K_XL GGUF, unsloth): ~5 GB, reliable native function-calling + reasoning.
+# Default is DeepSeek-R1-0528-Qwen3-8B (unsloth GGUF), an 8B reasoning model. The QUANT is chosen at
+# runtime from the GPU VRAM (recommended_default_model) so each user gets the highest quality that
+# fits with a runtime buffer. https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF
+_DEEPSEEK_R1_QWEN3_8B = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/DeepSeek-R1-0528-Qwen3-8B-{quant}.gguf"
+
+# Kept for an explicit pin / reference; no longer the auto default.
 QWEN_4B_Q8 = "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q8_K_XL.gguf"
 
 
-def recommended_default_model() -> str:
-    """Default local model for `model: "auto"`: Qwen3.5-4B (Q8 GGUF). Pin a different model with an
-    explicit "repo/file.gguf"."""
-    return QWEN_4B_Q8
+def _detect_vram_gb() -> float:
+    """Best-effort TOTAL VRAM of the primary GPU in GB (0.0 if no GPU / undetectable)."""
+    try:
+        info = detect_nvidia_gpu() or detect_amd_gpu()
+        if info and getattr(info, "vram_mb", 0):
+            return float(info.vram_mb) / 1024.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def recommended_default_model(vram_gb: Optional[float] = None) -> str:
+    """Default local model for `model: "auto"`: DeepSeek-R1-0528-Qwen3-8B (unsloth GGUF), with the
+    quant chosen from available GPU VRAM -- always the highest quality that fits with a runtime
+    buffer (leave ~1-2 GB free). Pin a different model with an explicit "repo/file.gguf" in config.
+
+        VRAM >= 20 GB -> BF16        (16-bit,   16.4 GB)
+        VRAM >= 12 GB -> UD-Q8_K_XL  (8-bit XL, 10.8 GB)
+        VRAM  > 10 GB -> Q8_0        (8-bit,    8.71 GB)
+        VRAM >=  9 GB -> UD-Q6_K_XL  (6-bit XL,  7.49 GB)
+        else          -> Q6_K        (6-bit,     6.73 GB; offloads to CPU if it doesn't fully fit)
+    """
+    if vram_gb is None:
+        vram_gb = _detect_vram_gb()
+    if vram_gb >= 20:
+        quant = "BF16"
+    elif vram_gb >= 12:
+        quant = "UD-Q8_K_XL"
+    elif vram_gb > 10:
+        quant = "Q8_0"
+    elif vram_gb >= 9:
+        quant = "UD-Q6_K_XL"
+    else:
+        quant = "Q6_K"
+    return _DEEPSEEK_R1_QWEN3_8B.format(quant=quant)
 

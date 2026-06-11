@@ -142,6 +142,8 @@ Request -> RateLimitMiddleware -> IPValidationMiddleware -> AuthMiddleware -> Se
 1. **Config** (`~/.vaf/config.json` or `VAF_CONFIG_DIR`): The JWT secret used to encrypt TOTP secrets must be kept. If this file is missing or the secret is lost (e.g. new install or different user), the server cannot decrypt existing 2FA data.
 2. **Database** (PostgreSQL, see `memory_db_url`): User accounts and 2FA state (`requires_2fa_setup`, encrypted `totp_secret`) live in the same DB as RAG memory. If the DB is recreated or the data is lost (e.g. Docker without a persistent volume), users will be asked to set up 2FA again (new QR code) after the next login.
 
+**Staying logged in across a DB restart:** validating `/me` (user + active session) queries PostgreSQL, but a backend/Docker restart leaves Postgres briefly unavailable (`the database system is starting up`). To avoid logging users out on that race, `/me` **retries** the DB for a few seconds and, if it is still not ready, **falls back to JWT-only auth** (the already-verified token) instead of returning 401 — so a transient DB restart does not clear your session. Transient PG states (starting up / shutting down / in recovery / too many connections) are treated as retryable. See `auth_routes.py` `_me_user_from_token`.
+
 If you see "2FA was reset (e.g. after config or restart)" when entering your code, the encryption key changed (e.g. config was reset). Use "Back to login", sign in again, and set up 2FA with the new QR code.
 
 ### Identity vs. Memory Scoping

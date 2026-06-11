@@ -541,9 +541,16 @@ async def _me_user_from_token(request: Request, response: Response, token: str) 
             pass  # connection refused — retry
         except Exception as _db_err:
             _err_str = str(_db_err).lower()
-            if not any(kw in _err_str for kw in ("connect", "connection", "refused", "could not connect", "is the server running")):
+            # Transient states must be RETRIED (not 401'd): a restart leaves Postgres briefly
+            # "starting up" (asyncpg CannotConnectNowError) — that message has no "connect" keyword, so
+            # it used to escape here → /me returned 401 + cleared the cookie → the user got logged out
+            # after every backend/Docker restart. Include the PG startup/shutdown/recovery/overload states.
+            if not any(kw in _err_str for kw in (
+                "connect", "connection", "refused", "could not connect", "is the server running",
+                "starting up", "shutting down", "in recovery", "too many clients", "too many connections",
+            )):
                 raise
-            # connection error — retry
+            # transient DB error — retry
 
         if _attempt < _DB_RETRIES - 1:
             logger.warning("DB not ready for /me (attempt %d/%d) — retrying in %.0fs", _attempt + 1, _DB_RETRIES, _DB_RETRY_DELAY)

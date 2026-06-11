@@ -447,12 +447,15 @@ def _get_recommended_backend(gpu: GPUInfo) -> str:
 
 
 # ─── Default local model ──────────────────────────────────────────────────────
-# Default is DeepSeek-R1-0528-Qwen3-8B (unsloth GGUF), an 8B reasoning model. The QUANT is chosen at
-# runtime from the GPU VRAM (recommended_default_model) so each user gets the highest quality that
-# fits with a runtime buffer. https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF
-_DEEPSEEK_R1_QWEN3_8B = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/DeepSeek-R1-0528-Qwen3-8B-{quant}.gguf"
+# The default (model: "auto") is VRAM-adaptive (recommended_default_model): a Qwen3.5-4B on small cards
+# (<= 10 GB) and a Qwen3.5-9B on larger cards (> 10 GB), unsloth GGUF. The quant is picked so the
+# weights leave room for the desktop (~1.5-2 GB) and the KV cache -- not just for the weights alone.
+#   https://huggingface.co/unsloth/Qwen3.5-4B-GGUF   https://huggingface.co/unsloth/Qwen3.5-9B-GGUF
+_QWEN35_4B = "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-{quant}.gguf"
+_QWEN35_9B = "unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-{quant}.gguf"
 
-# Kept for an explicit pin / reference; no longer the auto default.
+# Alternative explicit pins (reference only; not the auto default).
+_DEEPSEEK_R1_QWEN3_8B = "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/DeepSeek-R1-0528-Qwen3-8B-{quant}.gguf"
 QWEN_4B_Q8 = "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q8_K_XL.gguf"
 
 
@@ -468,27 +471,42 @@ def _detect_vram_gb() -> float:
 
 
 def recommended_default_model(vram_gb: Optional[float] = None) -> str:
-    """Default local model for `model: "auto"`: DeepSeek-R1-0528-Qwen3-8B (unsloth GGUF), with the
-    quant chosen from available GPU VRAM -- always the highest quality that fits with a runtime
-    buffer (leave ~1-2 GB free). Pin a different model with an explicit "repo/file.gguf" in config.
+    """Default local model for `model: "auto"`: a VRAM-adaptive Qwen3.5 (unsloth GGUF). Small cards run
+    a 4B model, larger cards a 9B model -- and the quant is chosen so the weights leave room for the
+    desktop/compositor (~1.5-2 GB) and a usable context (the KV cache), not just for the weights alone.
+    Pin a different model with an explicit "repo/file.gguf" in config to bypass this.
 
-        VRAM >= 20 GB -> BF16        (16-bit,   16.4 GB)
-        VRAM >= 12 GB -> UD-Q8_K_XL  (8-bit XL, 10.8 GB)
-        VRAM  > 10 GB -> Q8_0        (8-bit,    8.71 GB)
-        VRAM >=  9 GB -> UD-Q6_K_XL  (6-bit XL,  7.49 GB)
-        else          -> Q6_K        (6-bit,     6.73 GB; offloads to CPU if it doesn't fully fit)
+        9 - 10 GB   -> Qwen3.5-4B  UD-Q8_K_XL  (8-bit,   5.95 GB)   e.g. a 10 GB card + desktop
+        8 GB        -> Qwen3.5-4B  Q6_K        (6-bit,   3.53 GB)   (8-bit leaves no room for context)
+        < 8 GB      -> Qwen3.5-4B  Q4_K_M      (4-bit,   2.74 GB)
+        > 10 GB: a 9B model, quant scaled by VRAM --
+        11 - <12 GB -> Qwen3.5-9B  Q5_K_M      (5-bit,   6.58 GB)
+        12 - <16 GB -> Qwen3.5-9B  Q6_K        (6-bit,   7.46 GB)
+        16 - <20 GB -> Qwen3.5-9B  Q8_0        (8-bit,   9.53 GB)
+        20 - <24 GB -> Qwen3.5-9B  UD-Q8_K_XL  (8-bit,  12.97 GB)
+        >= 24 GB    -> Qwen3.5-9B  BF16        (16-bit, 17.92 GB)
     """
     if vram_gb is None:
         vram_gb = _detect_vram_gb()
-    if vram_gb >= 20:
+    if vram_gb <= 10:
+        # small cards: a 4B model, quant scaled so weights + KV cache fit alongside the ~1.8 GB desktop
+        if vram_gb >= 9:
+            q4 = "UD-Q8_K_XL"   # 8-bit (5.95 GB) -- 9-10 GB
+        elif vram_gb >= 8:
+            q4 = "Q6_K"         # 6-bit (3.53 GB) -- 8 GB (8-bit would leave no room for context)
+        else:
+            q4 = "Q4_K_M"       # 4-bit (2.74 GB) -- < 8 GB
+        return _QWEN35_4B.format(quant=q4)
+    # > 10 GB: a 9B model, quant scaled by VRAM (leave headroom for desktop ~1.8 GB + context KV)
+    if vram_gb >= 24:
         quant = "BF16"
-    elif vram_gb >= 12:
+    elif vram_gb >= 20:
         quant = "UD-Q8_K_XL"
-    elif vram_gb > 10:
+    elif vram_gb >= 16:
         quant = "Q8_0"
-    elif vram_gb >= 9:
-        quant = "UD-Q6_K_XL"
-    else:
+    elif vram_gb >= 12:
         quant = "Q6_K"
-    return _DEEPSEEK_R1_QWEN3_8B.format(quant=quant)
+    else:  # 11 - <12 GB
+        quant = "Q5_K_M"
+    return _QWEN35_9B.format(quant=quant)
 

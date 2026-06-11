@@ -24,7 +24,7 @@ class Config:
     CONFIG_FILE = APP_DIR / "config.json"
     
     DEFAULTS = {
-        "model": "auto",  # "auto" = default local model: DeepSeek-R1-0528-Qwen3-8B (unsloth GGUF), quant auto-picked from GPU VRAM. Or set an explicit "repo/file.gguf".
+        "model": "auto",  # "auto" = VRAM-adaptive local default: Qwen3.5-4B (<=10 GB VRAM) or Qwen3.5-9B (>10 GB), unsloth GGUF, quant auto-picked. Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,
         "auto_install_gpu": True,  # On an NVIDIA GPU without CUDA, auto-install CUDA llama-cpp-python (no terminal prompt). Set false to stay on CPU.

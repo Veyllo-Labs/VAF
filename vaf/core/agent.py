@@ -405,6 +405,30 @@ class Agent:
         # Team-await State (main agent: don't declare done while sub-agents genuinely run)
         self._team_await_blocks = 0
 
+    @staticmethod
+    def _is_placeholder_plan(plan) -> bool:
+        """True when the working-memory plan is an obvious PLACEHOLDER, not a real approach -- a weak
+        model writes e.g. "Neuer Test-Plan hier" / "test" just to open the plan gate, which then lets a
+        write/dangerous tool through. Such a plan must NOT satisfy the gate. Conservative: flags only
+        plans that are near-empty or made up ENTIRELY of generic filler words, so any plan with real
+        task content passes. The gate's loop-cap still lets the model proceed after repeated blocks,
+        so a false positive never hard-locks."""
+        import re as _re
+        text = " ".join(str(p) for p in plan) if isinstance(plan, (list, tuple)) else str(plan or "")
+        core = _re.sub(r'[^\w\s]', ' ', text)        # drop punctuation / bullets
+        core = _re.sub(r'\b\d+\b', ' ', core)         # drop list numbering
+        core = _re.sub(r'\s+', ' ', core).strip().lower()
+        if len(core) < 6:
+            return True
+        _filler = {
+            "neuer", "neue", "neu", "new", "mein", "meine", "dein", "deine", "my", "your", "ein", "eine",
+            "der", "die", "das", "the", "a", "an", "test", "tests", "plan", "plans", "plane", "planen",
+            "placeholder", "platzhalter", "todo", "tbd", "tba", "na", "xxx", "hier", "here", "beispiel",
+            "example", "dummy", "temp", "temporary", "schritt", "step", "ist", "is", "und", "and", "fuer", "for",
+        }
+        words = core.split()
+        return bool(words) and all(w in _filler for w in words)
+
     def _plan_gate_decision(self, name, tool_instance):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
         ("explore freely, plan before you act"). Returns a block message (str) to show the model, or
@@ -423,11 +447,13 @@ class Agent:
             level = getattr(tool_instance, "permission_level", "read") if tool_instance else "read"
             if level not in ("write", "dangerous") or name == "python_sandbox":
                 return None
-            # Plan present? (working memory is already session-scoped). Fail-open on any error.
+            # Plan present AND substantive? (working memory is already session-scoped). A placeholder
+            # plan ("Neuer Test-Plan hier" / "test") must NOT open the gate. Fail-open on any error.
             plan_exists = True
             try:
                 if self.main_persistence is not None:
-                    plan_exists = bool(self.main_persistence.get_working_memory().get("plan"))
+                    _plan = self.main_persistence.get_working_memory().get("plan")
+                    plan_exists = bool(_plan) and not self._is_placeholder_plan(_plan)
             except Exception:
                 return None
             if plan_exists:
@@ -444,8 +470,9 @@ class Agent:
                     pass
                 return None
             return (
-                f"[PLAN REQUIRED] '{name}' changes state, so set your approach first: "
-                "update_working_memory(plan=[\"<your approach in a line or two>\"]). "
+                f"[PLAN REQUIRED] '{name}' changes state, so set your REAL approach for THIS task first "
+                "(a placeholder like \"test\" or \"new plan\" does NOT count): "
+                "update_working_memory(plan=[\"<your actual approach in a line or two>\"]). "
                 "Keep plan high-level; for multi-step work put the concrete steps in tasks (add_task). "
                 "A one-line approach is enough; then call the tool again. "
                 "Read/search tools need no plan — use them freely to work out the approach."

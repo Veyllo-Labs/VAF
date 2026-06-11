@@ -12,6 +12,22 @@ import { cn } from '@/lib/utils';
 import { CONNECTION_APPS, CATEGORIES, DiscordSetupWizard, TelegramSetupWizard, EmailSetupWizard } from '@/components/connections';
 import type { DiscordConfig, TelegramConfig } from '@/components/connections';
 import { getApiBase } from '@/lib/utils';
+import { AgentAvatar } from '@/components/AgentAvatar';
+
+// On the 2FA step, the agent "wakes up" (materialises + the eye opens) where the logo would be, then
+// settles into the patient `waiting` loop. `lite` keeps it leak-safe (no border-radius morph).
+function WakingAvatar() {
+    const [mode, setMode] = useState<'waking' | 'waiting'>('waking');
+    useEffect(() => {
+        const t = setTimeout(() => setMode('waiting'), 1500);
+        return () => clearTimeout(t);
+    }, []);
+    return (
+        <div className="w-20 h-20 mx-auto mb-4 flex items-center justify-center">
+            <div style={{ transform: 'scale(2)' }}><AgentAvatar mode={mode} lite /></div>
+        </div>
+    );
+}
 
 export default function LoginPage() {
     const router = useRouter();
@@ -329,7 +345,7 @@ export default function LoginPage() {
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
             {step !== 'connections' && step !== 'setup_2fa' && (
                 <div className="mb-8 text-center">
-                    <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />
+                    {step === '2fa' ? <WakingAvatar /> : <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />}
                     <h1 className="text-2xl font-bold text-gray-900">Veyllo Agentic Framework</h1>
                     <p className="text-sm text-gray-500 mt-1">User Login</p>
                 </div>

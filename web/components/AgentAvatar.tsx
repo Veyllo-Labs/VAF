@@ -36,7 +36,9 @@ export type AvatarMode =
     // Activity · Status & Outcome (icon above the head)
     | 'warning' | 'permission'
     // Activity · Multi-Agent & Learning
-    | 'plan';
+    | 'plan'
+    // Activity · Lifecycle (used on the 2FA / login screen)
+    | 'waking';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
@@ -87,6 +89,7 @@ const B_ACT: Partial<Record<AvatarMode, string>> = {
     warning: 'bWarn 2s ease-in-out infinite',
     permission: 'bAsk 2.6s ease-in-out infinite',
     plan: 'bPlan 3s ease-in-out infinite',
+    waking: 'bWake 1.4s ease-out',          // plays ONCE then holds at rest; caller then switches to 'waiting'
 };
 const E_ACT: Partial<Record<AvatarMode, string>> = {
     learn: 'eLearn 3s ease-in-out infinite',
@@ -96,8 +99,9 @@ const E_ACT: Partial<Record<AvatarMode, string>> = {
     warning: 'eWarn 2s ease-in-out infinite',
     permission: 'eAsk 1.6s ease-in-out infinite',
     plan: 'ePlan 3.5s ease-in-out infinite',
+    waking: 'eWake 1.4s ease-out',
 };
-const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan';
+const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking';
 
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);

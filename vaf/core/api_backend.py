@@ -15,6 +15,51 @@ from vaf.cli.ui import UI
 # Configure logging
 logger = logging.getLogger("vaf.api_backend")
 
+
+def consolidate_system_messages(messages: List[Dict]) -> List[Dict]:
+    """Make a message list valid for strict LOCAL chat templates (e.g. Qwen, Gemma 4) that require a
+    SINGLE system message at the very start.
+
+    - LEADING system turns (everything before the first non-system message) are merged into one leading
+      system message.
+    - A system message that appears AFTER the conversation has started (a mid-run nudge: empty-retry,
+      loop block, plan-required, [TODO STATUS], correction) is converted to a USER turn IN PLACE.
+      Hoisting it to the front would lose its "respond to this now" position and leave the turn ending on
+      an assistant message, which Qwen rejects with 400 "Assistant response prefill is incompatible with
+      enable_thinking". As a user turn it stays in place and the turn ends on a user message.
+
+    Pure + caller-gated (local, non-Gemma). Used by BOTH the main agent (_prepare_messages) and the coder
+    (which builds its own clean_history and calls the provider directly, so it never went through the
+    agent's consolidation -> Qwen 500 "System message must be at the beginning"). Returns the input
+    unchanged when there are no system messages.
+    """
+    def _text(c):
+        if isinstance(c, list):
+            c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+        return str(c or "").strip()
+
+    leading: List[str] = []
+    rest: List[Dict] = []
+    seen_non_system = False
+    for m in messages:
+        if m.get("role") == "system":
+            t = _text(m.get("content"))
+            if not t:
+                continue
+            if seen_non_system:
+                rest.append({"role": "user", "content": t})   # mid-run instruction -> user turn
+            else:
+                leading.append(t)
+        else:
+            seen_non_system = True
+            rest.append(m)
+    out: List[Dict] = []
+    if leading:
+        out.append({"role": "system", "content": "\n\n".join(leading)})
+    out.extend(rest)
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ABSTRACT BASE PROVIDER
 # ════───────────────────────────────────────────────────────────────────────────

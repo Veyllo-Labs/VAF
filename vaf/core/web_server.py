@@ -2246,8 +2246,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if role == "tool":
                                 # Try metadata dict first, then fall back to top-level keys
                                 # (backend stores tool info as top-level: name, tool_call_id)
-                                tool_name = (meta.get("toolName") if meta else None) or msg.get("name")
-                                tool_id = (meta.get("toolId") if meta else None) or msg.get("tool_call_id")
+                                tool_name = (meta.get("toolName") if meta else None) or (msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", None))
+                                tool_id = (meta.get("toolId") if meta else None) or (msg.get("tool_call_id") if isinstance(msg, dict) else getattr(msg, "tool_call_id", None))
                                 tool_status = (meta.get("toolStatus") if meta else None)
                                 if tool_name is not None:
                                     entry["toolName"] = tool_name

@@ -8695,43 +8695,11 @@ class Agent:
             pass
 
     def _consolidate_system_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Make the message list valid for strict local chat templates (e.g. Qwen, Gemma 4) that require a
-        SINGLE system message at the very start.
-
-        - LEADING system turns (the system prompt + anything before the first non-system message) are
-          merged into one leading system message.
-        - A system message that appears AFTER the conversation has started (a mid-run nudge: empty-retry,
-          loop block, plan-required, correction) is converted to a USER turn IN PLACE. Hoisting it to the
-          front would (a) lose its "respond to this now" position and (b) leave the conversation ending on
-          an assistant turn, which Qwen rejects with 400 "Assistant response prefill is incompatible with
-          enable_thinking". As a user turn it stays in place and the turn ends on a user message.
-
-        Returns the input unchanged when there are no system messages."""
-        def _text(c):
-            if isinstance(c, list):
-                c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
-            return str(c or "").strip()
-
-        leading: List[str] = []
-        rest: List[Dict] = []
-        seen_non_system = False
-        for m in messages:
-            if m.get("role") == "system":
-                t = _text(m.get("content"))
-                if not t:
-                    continue
-                if seen_non_system:
-                    rest.append({"role": "user", "content": t})   # mid-run instruction -> user turn
-                else:
-                    leading.append(t)
-            else:
-                seen_non_system = True
-                rest.append(m)
-        out: List[Dict] = []
-        if leading:
-            out.append({"role": "system", "content": "\n\n".join(leading)})
-        out.extend(rest)
-        return out
+        """Strict-local-template system-message consolidation (Qwen/Gemma 4: one leading system turn;
+        mid-run system nudges -> user turns in place). Delegates to the shared pure helper so the coder
+        path (which builds its own history and calls the provider directly) uses the exact same logic."""
+        from vaf.core.api_backend import consolidate_system_messages
+        return consolidate_system_messages(messages)
 
     def _prepare_messages(self, messages: List[Dict]) -> List[Dict]:
         """Prepare messages for specific model quirks (e.g. Gemma)."""

@@ -3899,6 +3899,14 @@ Task {task_idx + 1}: {current_task}
                             "Call set_todos immediately with a full task breakdown."
                         ),
                     })
+                # Strict local chat templates (Qwen, non-Gemma) require ONE leading system message. The
+                # coder builds its own history (TODO STATUS, nudges, the deepseek prompt above) and calls
+                # the provider directly, so it must consolidate mid-conversation system turns the same way
+                # the main agent's _prepare_messages does -- else the Qwen server 500s "System message
+                # must be at the beginning". Gated local + non-Gemma (Gemma needs its own handling).
+                if _provider == "local" and "gemma" not in str(model_name).lower():
+                    from vaf.core.api_backend import consolidate_system_messages
+                    _messages_for_request = consolidate_system_messages(_messages_for_request)
                 _req_body = {
                     "model": model_name,
                     "messages": _messages_for_request,

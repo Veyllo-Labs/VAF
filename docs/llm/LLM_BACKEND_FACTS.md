@@ -16,7 +16,17 @@ Exactly one of these three paths is always active. Which one is logged in **`log
 
 ## Default local model (`model: "auto"`)
 
-The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves to **`unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q8_K_XL.gguf`** — a single ~5 GB model with reliable native function-calling and reasoning (fits a typical GPU; offloads to CPU otherwise).
+The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves to **DeepSeek-R1-0528-Qwen3-8B** (`unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF`), an 8B reasoning model, with the **quantization chosen from the GPU's VRAM** — the highest quality that fits with a runtime buffer (~1–2 GB free):
+
+| VRAM | Quant | File size |
+|------|-------|-----------|
+| ≥ 20 GB | `BF16` (16-bit) | 16.4 GB |
+| ≥ 12 GB | `UD-Q8_K_XL` (8-bit XL) | 10.8 GB |
+| > 10 GB | `Q8_0` (8-bit) | 8.71 GB |
+| ≥ 9 GB | `UD-Q6_K_XL` (6-bit XL) | 7.49 GB |
+| else | `Q6_K` (6-bit) | 6.73 GB (offloads to CPU if it doesn't fully fit) |
+
+VRAM is read from the primary GPU (`nvidia-smi` / `rocm-smi`, total memory). The picker is `recommended_default_model(vram_gb=None)` in `vaf/core/gpu_detection.py` (pass an explicit `vram_gb` to override detection).
 
 An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
 

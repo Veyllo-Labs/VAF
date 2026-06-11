@@ -5154,8 +5154,10 @@ function VAFDashboardContent() {
 
                                 {/* Model download progress (visible when downloading, e.g. after closing Settings) */}
                                 {downloadModelStatus?.status === 'downloading' && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2")}>
-                                        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                        {/* spacer mirroring the input's w-9 stop-button slot, so the banner lines up with the message box */}
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
                                                     <span className="truncate">{downloadModelStatus.repo_id ? `Downloading ${downloadModelStatus.repo_id}` : 'Downloading model…'}</span>

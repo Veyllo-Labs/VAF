@@ -286,7 +286,8 @@
   @keyframes iMem { 0%,100%{opacity:.2;box-shadow:none;} 30%{opacity:1;box-shadow:0 0 6px 1px var(--glow);} }
   @keyframes bPlan { 0%,100%{transform:rotate(1deg);} 50%{transform:rotate(0);} }
   @keyframes ePlan { 0%,100%{transform:translate(0,0);} 18%{transform:translate(1px,0);} 60%{transform:translate(4px,0);} 85%{transform:translate(1px,0);} }
-  @keyframes iStep { 0%{opacity:0;transform:scale(.4);} 12%{opacity:1;transform:scale(1);} 82%{opacity:1;transform:scale(1);} 100%{opacity:0;transform:scale(.9);} }
+  /* Plan steps are driven by JS (see the script near the end) to match the app exactly: the active box
+     cycles every 800ms, randomly black-filled or a hollow outline. The .step transition does the easing. */
 
   /* ============================================================
      KOERPER+AUGE-MODELL — gemeinsame Komponente
@@ -406,9 +407,9 @@
   .scene.remembering .mem { position:absolute; width:6px; height:6px; border-radius:50%; background:var(--ink); opacity:.2; }
   .scene.remembering .mem.m1 { left:80px; top:42px; animation: iMem 2.4s ease-in-out infinite; } .scene.remembering .mem.m2 { left:96px; top:32px; animation: iMem 2.4s ease-in-out infinite .4s; } .scene.remembering .mem.m3 { left:112px; top:34px; animation: iMem 2.4s ease-in-out infinite .8s; } .scene.remembering .mem.m4 { left:124px; top:48px; animation: iMem 2.4s ease-in-out infinite 1.2s; }
   .scene.planning .agent { left:20px; top:60px; } .scene.planning .body { animation: bPlan 3s ease-in-out infinite; } .scene.planning .eye { animation: ePlan 5s ease-in-out infinite; }
-  .scene.planning .step { position:absolute; top:74px; width:14px; height:14px; border:2px solid var(--ink); border-radius:3px; background:var(--ink-fill); opacity:0; }
-  .scene.planning .step.s1 { left:96px; animation: iStep 5s ease-in-out infinite; } .scene.planning .step.s2 { left:120px; animation: iStep 5s ease-in-out infinite .5s; } .scene.planning .step.s3 { left:144px; animation: iStep 5s ease-in-out infinite 1s; }
-  .scene.planning .step.s2::before, .scene.planning .step.s3::before { content:""; position:absolute; left:-10px; top:50%; margin-top:-1px; width:10px; height:2px; background:var(--ink-soft); }
+  .scene.planning .psteps { position:absolute; left:92px; top:78px; display:flex; align-items:center; gap:5px; }
+  .scene.planning .step { width:13px; height:13px; border:2px solid var(--ink); border-radius:3px; background:transparent; transform:scale(.8); opacity:.4; transition: background-color .45s ease, transform .45s ease, opacity .45s ease; }
+  .scene.planning .slnk { width:7px; height:2px; background:var(--ink-soft); border-radius:1px; opacity:.55; }
 
   /* ============================================================
      SEITEN-CHROME
@@ -577,7 +578,7 @@
       ['handoff','Handoff','passes on', AGENT+'<div class="peer">'+MINI+'</div><span class="token"></span>'],
       ['learning','Learns / trains','Whare Wananga', AGENT+'<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>'],
       ['remembering','Remembers','memory access', AGENT+'<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>'],
-      ['planning','Plans','lays out steps', AGENT+'<span class="step s1"></span><span class="step s2"></span><span class="step s3"></span>'],
+      ['planning','Plans','lays out steps', AGENT+'<div class="psteps"><span class="step"></span><span class="slnk"></span><span class="step"></span><span class="slnk"></span><span class="step"></span></div>'],
     ]],
   ];
 
@@ -653,6 +654,25 @@
   tShufBtn.addEventListener('click', ()=>{ order=shuffle(TPLAY.slice()); tIdx=0; applyState(order[0]); });
   tSpeed.addEventListener('input', ()=>{ tHold=parseInt(tSpeed.value,10); tSpeedVal.textContent=(tHold/1000).toFixed(1)+'s'; });
   tPlay();  // autostart
+
+  // Plan steps — same mechanism as the app (web/.../plan-effect): every 800ms the next box becomes
+  // active (bigger + opaque, RANDOMLY black-filled or a hollow outline); idle boxes stay small + faint.
+  // The .step CSS transition does the easing. Re-queried each tick so it also drives the planning scene
+  // inside the transition player (which rebuilds its props).
+  setInterval(() => {
+    document.querySelectorAll('.scene.planning').forEach(scene => {
+      const steps = [...scene.querySelectorAll('.step')];
+      if (!steps.length) return;
+      const i = (parseInt(scene.dataset.pi || '-1', 10) + 1) % steps.length;
+      scene.dataset.pi = i;
+      steps.forEach((b, k) => {
+        const on = k === i;
+        b.style.transform = on ? 'scale(1.24)' : 'scale(.8)';
+        b.style.opacity = on ? '1' : '.4';
+        b.style.background = (on && Math.random() >= 0.45) ? 'var(--ink)' : 'transparent';
+      });
+    });
+  }, 800);
 
   // Hell/Dunkel global
   let lite=false;

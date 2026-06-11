@@ -38,7 +38,9 @@ export type AvatarMode =
     // Activity · Multi-Agent & Learning
     | 'plan'
     // Activity · Lifecycle (used on the 2FA / login screen)
-    | 'waking';
+    | 'waking'
+    // Activity · Status (a barrier the agent bumps into)
+    | 'blocked';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
@@ -90,6 +92,7 @@ const B_ACT: Partial<Record<AvatarMode, string>> = {
     permission: 'bAsk 2.6s ease-in-out infinite',
     plan: 'bPlan 3s ease-in-out infinite',
     waking: 'bWake 1.4s ease-out',          // plays ONCE then holds at rest; caller then switches to 'waiting'
+    blocked: 'bBlocked 2.6s ease-in-out infinite',
 };
 const E_ACT: Partial<Record<AvatarMode, string>> = {
     learn: 'eLearn 3s ease-in-out infinite',
@@ -100,8 +103,9 @@ const E_ACT: Partial<Record<AvatarMode, string>> = {
     permission: 'eAsk 1.6s ease-in-out infinite',
     plan: 'ePlan 3.5s ease-in-out infinite',
     waking: 'eWake 1.4s ease-out',
+    blocked: 'eBlocked 2.6s ease-in-out infinite',
 };
-const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking';
+const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking' || m === 'blocked';
 
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
@@ -274,25 +278,52 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     }}>?</span>
                 )}
 
-                {/* BODY — the square; carries the motion. EYE nested inside so it moves with it.
-                    While settling the animation is dropped and `transition: transform` eases both
-                    back to their rest pose, so the next animation starts from neutral. */}
-                <div style={{
-                    position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
-                    boxShadow: lightBody ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
-                    transformOrigin: act ? 'center' : 'center bottom',
-                    animation: settling ? 'none' : bodyAnimation,
-                    transition: 'transform 0.2s ease',
-                }}>
+                {/* blocked — a striped road-block barrier appears to the RIGHT, SEPARATE from the agent
+                    (the agent glides left + bumps toward it; see the stage wrapper below). Static
+                    gradient/border + a one-shot transform/opacity intro = leak-safe. The legs sit at the
+                    bar's BOTTOM edge (top past the border-box) so they don't poke through the striped panel. */}
+                {shown === 'blocked' && !dim && (
                     <span style={{
-                        position: 'absolute', left: '50%', top: '50%', width: eyeSize, height: eyeSize,
-                        marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2), borderRadius: '50%',
-                        backgroundColor: tint?.dot ?? (dim ? '#b0b0b0' : dotColor),
-                        boxShadow: (active && !dim) ? glow : 'none',
-                        transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
-                        animation: settling ? 'none' : eyeAnimation,
+                        position: 'absolute', right: -12, top: '50%', width: 24, height: 8, marginTop: -9, zIndex: 2,
+                        border: `1.6px solid ${overlay}`, borderRadius: 2,
+                        background: `repeating-linear-gradient(45deg, ${overlay} 0 3px, transparent 3px 6px)`,
+                        animation: 'blkBarIn 0.3s ease both',
+                    }}>
+                        <span style={{ position: 'absolute', top: 9.6, left: 1.5, width: 1.7, height: 9, borderRadius: '0 0 1px 1px', backgroundColor: overlay, transform: 'rotate(14deg)', transformOrigin: 'top center' }} />
+                        <span style={{ position: 'absolute', top: 9.6, right: 1.5, width: 1.7, height: 9, borderRadius: '0 0 1px 1px', backgroundColor: overlay, transform: 'rotate(-14deg)', transformOrigin: 'top center' }} />
+                    </span>
+                )}
+
+                {/* AGENT STAGE — the persistent figure (body+eye). For `blocked` the agent keeps its FIXED
+                    size and only GLIDES left (transform + transition only = leak-safe) to free room for the
+                    barrier on the right, like the showcase play: the agent is never shrunk, swapped or faded. */}
+                <div style={{
+                    position: 'absolute', inset: 0,
+                    transform: shown === 'blocked' ? 'translateX(-15px)' : 'none',
+                    transition: 'transform 0.3s ease',
+                }}>
+                    {/* BODY — the square; carries the motion. EYE nested inside so it moves with it.
+                        While settling the animation is dropped and `transition: transform` eases both
+                        back to their rest pose, so the next animation starts from neutral. */}
+                    <div style={{
+                        position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
+                        boxShadow: shown === 'blocked'
+                            ? '0 5px 14px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)'
+                            : (lightBody ? '0 1px 4px rgba(0,0,0,0.08)' : 'none'),
+                        transformOrigin: act ? 'center' : 'center bottom',
+                        animation: settling ? 'none' : bodyAnimation,
                         transition: 'transform 0.2s ease',
-                    }} />
+                    }}>
+                        <span style={{
+                            position: 'absolute', left: '50%', top: '50%', width: eyeSize, height: eyeSize,
+                            marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2), borderRadius: '50%',
+                            backgroundColor: tint?.dot ?? (dim ? '#b0b0b0' : dotColor),
+                            boxShadow: (active && !dim) ? glow : 'none',
+                            transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
+                            animation: settling ? 'none' : eyeAnimation,
+                            transition: 'transform 0.2s ease',
+                        }} />
+                    </div>
                 </div>
             </div>
         </div>

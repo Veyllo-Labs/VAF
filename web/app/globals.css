@@ -332,6 +332,12 @@
 @keyframes bWake { 0%{transform:scale(0);opacity:0;} 40%{transform:scale(.2);opacity:.3;} 60%{transform:scale(1.12);opacity:1;} 75%{transform:scale(.96);} 85%{transform:scale(1);} 100%{transform:scale(1);} }
 @keyframes eWake { 0%,55%{transform:scaleY(0);} 70%{transform:scaleY(1.2);} 80%{transform:scaleY(1);} 100%{transform:scaleY(1);} }
 
+/* blocked (Activity · Status) — the agent bumps right into a barrier twice (transform only). */
+@keyframes bBlocked { 0%,100%{transform:translateX(0);} 20%{transform:translateX(4px);} 30%{transform:translateX(2.5px) scaleX(.94);} 40%{transform:translateX(0);} 55%{transform:translateX(4px);} 65%{transform:translateX(2.5px) scaleX(.94);} 75%{transform:translateX(0);} }
+@keyframes eBlocked { 0%,100%{transform:translate(0,0);} 18%{transform:translate(2.5px,0);} 50%{transform:translate(2px,0);} 82%{transform:translate(2.5px,0);} }
+/* barrier intro — fades + slides in once when blocked starts (transient transform/opacity = leak-safe) */
+@keyframes blkBarIn { from{opacity:0; transform:translateX(-3px);} to{opacity:1; transform:translateX(0);} }
+
 /* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
    OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */
 .planbox { display:block; width:8px; height:8px; border:1.3px solid #111827; background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }

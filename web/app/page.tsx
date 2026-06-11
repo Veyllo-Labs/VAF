@@ -813,20 +813,18 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     );
 };
 
-// A small preset palette; each ▢ step box flashes a RANDOM colour from it every time it lights up
-// (on each animation cycle). Colour change is event-driven (~every 2.4s), not a per-frame repaint.
-const PLAN_PALETTE = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#a855f7', '#ec4899', '#3b82f6'];
-const randPlanColor = () => PLAN_PALETTE[Math.floor(Math.random() * PLAN_PALETTE.length)];
-const PlanBox = ({ active, color }: { active: boolean; color: string }) => (
+// One ▢ step box. The active box pops bigger + opaque and is RANDOMLY black-filled or just a crisp
+// outline; idle boxes are small, faint, hollow. Monochrome (no colours); fill toggles per tick.
+const PlanBox = ({ active, filled }: { active: boolean; filled: boolean }) => (
     <span
         className="planbox"
         style={{
-            // active = random palette colour + fill, bigger & fully opaque; idle = small, faint, black.
-            // transform/opacity = compositor; the colour changes per sequence tick (event-driven), not per frame.
-            borderColor: active ? color : '#111827',
-            backgroundColor: active ? `${color}cc` : 'transparent',
+            // Monochrome (no colours): active = bigger & fully opaque, RANDOMLY black-filled OR just a
+            // crisp bigger outline; idle = small, faint, hollow. transform/opacity = compositor and the
+            // fill toggles per sequence tick (event-driven, not per frame), so it stays leak-safe.
+            backgroundColor: active && filled ? '#111827' : 'transparent',
             transform: active ? 'scale(1.28)' : 'scale(0.82)',
-            opacity: active ? 1 : 0.45,
+            opacity: active ? 1 : 0.4,
         }}
     />
 );
@@ -839,12 +837,13 @@ const SetupLine = ({ message }: { message: string }) => {
     const cleanText = message.replace(/^(Router|Step \d+\/\d+|System|Agent|Info)\s*[:\|]?\s*/, '');
     const source = message.match(/^(Router|Step \d+\/\d+|System|Agent|Info)/)?.[0] || 'System';
     // The ▢ sequence is driven HERE (one stable element → no remount, animation never restarts per
-    // step): every ~800ms the next box becomes "active" (random palette colour + bigger + opaque),
-    // the others idle (small, faint, black). Colour changes per tick (event-driven, not per frame).
+    // step): every ~800ms the next box becomes "active" (bigger + opaque), the others idle (small,
+    // faint). The active box is RANDOMLY black-filled or just a bigger outline (~45% hollow), toggled
+    // per tick (event-driven, not per frame) — monochrome, no colours.
     const [active, setActive] = useState(0);
-    const [color, setColor] = useState(randPlanColor);
+    const [filled, setFilled] = useState(true);
     useEffect(() => {
-        const t = setInterval(() => { setActive(a => (a + 1) % 3); setColor(randPlanColor()); }, 800);
+        const t = setInterval(() => { setActive(a => (a + 1) % 3); setFilled(Math.random() >= 0.45); }, 800);
         return () => clearInterval(t);
     }, []);
     return (
@@ -854,11 +853,11 @@ const SetupLine = ({ message }: { message: string }) => {
             </div>
             <div className="flex items-center gap-3 min-w-0 flex-1">
                 <span className="flex items-center gap-[3px] text-[#2a3142] shrink-0" aria-hidden="true">
-                    <PlanBox active={active === 0} color={color} />
+                    <PlanBox active={active === 0} filled={filled} />
                     <span className="planlnk" />
-                    <PlanBox active={active === 1} color={color} />
+                    <PlanBox active={active === 1} filled={filled} />
                     <span className="planlnk" />
-                    <PlanBox active={active === 2} color={color} />
+                    <PlanBox active={active === 2} filled={filled} />
                 </span>
                 <div className="text-xs flex items-center gap-2 min-w-0">
                     <span className="font-semibold uppercase tracking-wider text-[10px] text-gray-600 shrink-0">{source}</span>
@@ -1089,6 +1088,8 @@ function VAFDashboardContent() {
         statusMessage: string;
         loadingMessageId: number | null;
     }>>({});
+    const [historyLoading, setHistoryLoading] = useState(false);  // chat history is being fetched (load_session) and nothing is cached to show meanwhile
+    const syncedSessions = useRef<Set<string>>(new Set());        // sessions whose history snapshot already arrived → re-entering an (empty) one shows no spinner flash
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
     const [config, setConfig] = useState<any>({});
@@ -1777,7 +1778,9 @@ function VAFDashboardContent() {
             setLoadingMessageId(null);
         }
 
-        // 5. Request sync
+        // 5. Request sync — show a loading spinner only when there's nothing cached AND we have not
+        //    already synced this session (a new/empty chat has nothing to load → no spinner flash).
+        setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
@@ -2019,9 +2022,15 @@ function VAFDashboardContent() {
                         return prev;
                     });
 
-                    // Flash the main agent avatar with the tool's outcome (success / error).
+                    // Flash the main agent avatar with the tool's outcome. A plan-gate / policy block
+                    // arrives as the tool RESULT ([PLAN REQUIRED] / Security Error) -> `blocked` (bumps a wall).
                     if (subType === 'end' || subType === 'error') {
-                        fireAgentReaction(subType === 'error' ? 'error' : 'success');
+                        const res = String(eventData ?? '');
+                        if (res.includes('[PLAN REQUIRED]') || res.startsWith('Security Error:')) {
+                            fireAgentReaction('blocked');
+                        } else {
+                            fireAgentReaction(subType === 'error' ? 'error' : 'success');
+                        }
                     }
 
                     // When execute_workflow finishes, force-close any workflow panel still in
@@ -2746,6 +2755,8 @@ function VAFDashboardContent() {
                     setLoading(effectiveActive);
                     setIsGenerating(effectiveActive);
                     setStatusMessage(status);
+                    syncedSessions.current.add(data.sessionId);
+                    setHistoryLoading(false);  // history snapshot arrived (active OR idle/empty) → stop the load spinner
 
                     // Update per-session loading state tracking
                     sessionLoadingStates.current[data.sessionId] = {
@@ -4561,6 +4572,13 @@ function VAFDashboardContent() {
                                         <span>Verbindung wird wiederhergestellt…</span>
                                     </div>
                                 )}
+                                {/* Chat history is being fetched and nothing is cached yet → spinner instead of a blank area */}
+                                {historyLoading && messages.length === 0 && (
+                                    <div className="min-h-[55vh] flex flex-col items-center justify-center gap-3 text-gray-400">
+                                        <Loader2 className="animate-spin" size={24} />
+                                        <span className="text-sm">Chat wird geladen…</span>
+                                    </div>
+                                )}
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
                                 {/* Empty state welcome is shown in the centered input block below */}
 
@@ -5002,7 +5020,7 @@ function VAFDashboardContent() {
                                 {/* Live setup/plan indicator — one stable element for the whole setup/routing
                                     phase (loops continuously, only the text updates; system rows are suppressed
                                     above). Shown while the latest message is a system step during an active turn. */}
-                                {(loading || isGenerating) && visibleMessages[visibleMessages.length - 1]?.role === 'system' && (
+                                {!historyLoading && (loading || isGenerating) && visibleMessages[visibleMessages.length - 1]?.role === 'system' && (
                                     <div className="flex gap-4 justify-center pt-4">
                                         <div className="w-full max-w-[85%]">
                                             <SetupLine message={String(visibleMessages[visibleMessages.length - 1].content ?? '')} />
@@ -5056,7 +5074,7 @@ function VAFDashboardContent() {
                             )}
                         >
                             <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
-                                {messages.length === 0 && (
+                                {messages.length === 0 && !historyLoading && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
                                         <div className="flex justify-center mb-8" style={{ transform: 'scale(1.8)', transformOrigin: 'center' }}>
                                             <AgentAvatar mode="idle" />

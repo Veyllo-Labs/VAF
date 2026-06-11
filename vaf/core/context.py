@@ -497,12 +497,13 @@ class ContextManager:
 
         new_tokens = self.estimate_tokens(new_history)
 
-        # Safety: compression must NEVER grow the context. If the summary (context summary + resume block)
-        # plus the preserved tail came out larger than the original (observed: 30725 -> 43754 tokens, which
-        # then immediately tripped CRITICAL OVERFLOW), drop the summary and critical-tool block and keep
-        # just the system turn + the recent messages. That is always smaller than the input (it also drops
-        # the entire middle section), and the full history is archived for /restore.
-        if new_tokens >= current_tokens:
+        # Safety net for the real failure mode: the summary backfired so the result is BOTH larger than
+        # the input AND still over the limit (observed: 30725 -> 43754 tokens over a 32768 limit, which
+        # immediately tripped CRITICAL OVERFLOW). Only then drop the summary + critical-tool block and
+        # keep just the system turn + recent messages (always smaller; the full history is archived for
+        # /restore). A small context that merely grows a little (e.g. 88 -> 150, far under the limit)
+        # KEEPS the resume block — it never overflows, and /restore + NEXT_ACTION depend on that block.
+        if new_tokens >= current_tokens and new_tokens > self.max_tokens:
             new_history = [system_prompt] + recent_messages
             new_tokens = self.estimate_tokens(new_history)
             UI.event("Context", f"Summary would have grown context — dropped it; kept system + {len(recent_messages)} recent msgs ({current_tokens} → {new_tokens} tokens)", style="warning")

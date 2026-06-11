@@ -26,6 +26,20 @@ An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specifi
 
 When the primary GPU is NVIDIA but CUDA is not available, VAF can **auto-install** CUDA-enabled `llama-cpp-python` — but **only on the in-process library path**, i.e. only when `load_model()` actually falls back to `llama-cpp-python` as the backend. The standalone (Vulkan) llama-server path does **not** trigger it: the server has its own GPU backend and never loads the in-process library, so a server-backed run (including the default on Python 3.13) installs nothing. This avoids a re-download loop where the ~1.6 GB CUDA wheel (`--no-cache-dir --force-reinstall`) was pulled on every start for a backend that was never used, and never succeeded when the system was missing `libcudart`. There is **no terminal `[Y/n]` prompt** — the Web UI / headless worker shares the terminal's stdin, so a prompt there would freeze the chat request. Controlled by **`auto_install_gpu`** (default `true`; set `false` to stay on CPU). The reinstalled package is used on the **next VAF restart**; until then the current process runs on CPU. Manual path: `vaf install-gpu`.
 
+**CUDA version mismatch (`libcudart.so.12: cannot open shared object file`):** the prebuilt CUDA `llama-cpp-python` (`libllama.so`) links against **CUDA 12** runtime libs (`libcudart.so.12`, `libcublas.so.12`, `libnvrtc.so.12`). If the environment only has a *different* CUDA major (e.g. a CUDA 13 toolkit / `libcudart.so.13`), `libllama.so` fails to load and the model never loads — surfacing as `Failed to load shared library '.../libllama.so': libcudart.so.12: cannot open shared object file`. Fix **without** disturbing the newer CUDA: add the CUDA 12 runtime libs and make them discoverable. `libllama.so` is built with `RPATH=$ORIGIN` (it searches its own directory), so:
+
+```
+venv/bin/pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cuda-nvrtc-cu12
+# symlink the cu12 libs next to libllama.so so $ORIGIN finds them:
+for d in cuda_runtime cublas cuda_nvrtc; do
+  for so in venv/lib*/python3.*/site-packages/nvidia/$d/lib/*.so.12*; do
+    ln -sfn "$(realpath "$so")" "$(dirname "$(realpath venv/lib*/python3.*/site-packages/llama_cpp/lib/libllama.so)")/$(basename "$so")"
+  done
+done
+```
+
+The NVIDIA driver is backward-compatible, so a CUDA 12 runtime runs fine alongside a CUDA 13 toolkit. **Caveat:** reinstalling/upgrading `llama-cpp-python` recreates `llama_cpp/lib/` and drops the symlinks — re-apply them.
+
 ---
 
 ## When is Server (8080) vs. Library used?

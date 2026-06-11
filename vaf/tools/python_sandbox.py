@@ -373,9 +373,14 @@ class PythonSandboxTool(BaseTool):
             scope_prefix = str(user_scope_id).replace("-", "")[:12] if user_scope_id else "shared"
             workdir = f"/tmp/vaf_{scope_prefix}_{exec_id}"
 
-            # Create workspace directory
-            exit_code, _, err = execute_fn(f"mkdir -p {workdir}", timeout=5)
+            # Create workspace directory. The mkdir is trivial; this budget is really for the
+            # docker-exec round-trip, which can be slow on a COLD or busy container (first run after a
+            # restart, or while the local model is saturating CPU/GPU). 5s was too tight and surfaced
+            # as a misleading "Failed to create workspace" (the model then misread it as "numpy
+            # missing" and gave up). Give the cold exec room, and log the failure so it is diagnosable.
+            exit_code, _, err = execute_fn(f"mkdir -p {workdir}", timeout=30)
             if exit_code != 0:
+                logger.warning("python_sandbox: workspace creation failed (workdir=%s): %s", workdir, err)
                 return f"[ERROR] Failed to create workspace: {err}"
 
             # Step 4: Install packages if requested

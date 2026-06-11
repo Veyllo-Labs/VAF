@@ -615,7 +615,8 @@ def check_activity_loop(update_icon_callback):
                 # Fix: Retrieve context window and gpu layers from config
                 n_ctx = Config.get("n_ctx", 8192)
                 gpu_layers = Config.get("gpu_layers", 99)
-                if gpu_layers == -1: gpu_layers = 99
+                # -1 = AUTO: keep it -1 so the backend omits -ngl and llama.cpp auto-fits layers to VRAM
+                # (offload overflow to CPU) instead of forcing all layers and aborting when it won't fit.
                 
                 started = server_mgr.start_server(
                     model_path=server_mgr.get_model_path(model),
@@ -848,8 +849,8 @@ def on_config_changed(key, value, old_value=None):
                 return  # cloud providers don't use llama-server
             n_ctx = Config.get("n_ctx", 8192)
             gpu_layers = Config.get("gpu_layers", 99)
-            if gpu_layers == -1:
-                gpu_layers = 99
+            # -1 = AUTO: keep it -1 so the backend omits -ngl and llama.cpp auto-fits layers to VRAM
+            # (offload overflow to CPU) instead of forcing all layers and aborting when it won't fit.
             model = Config.get("model")
             msg = f"Config changed ({key}={value}). Restarting llama-server"
             if key == "model":

@@ -546,7 +546,43 @@ class ServerManager:
             est_model_gb = model_gb + 1.0
         except Exception:
             est_model_gb = 6.5
-        
+
+        # VRAM-adaptive n_ctx cap: size the context so the model weights + KV cache + compute buffers fit
+        # in the GPU's actually-FREE memory (total minus the desktop/compositor), NOT total. With -ngl
+        # forcing all layers, llama.cpp ABORTS when the projected usage exceeds free memory (observed:
+        # "projected to use 8216 MiB vs. 7952 MiB free device memory" at n_ctx 24576 → SIGSEGV). Reading
+        # free VRAM (e.g. ~8 GB of a 10 GB card after a ~1.8 GB desktop) keeps the launch inside what is
+        # really available. KV + per-token compute ≈ 400 MiB per 8k tokens (q8_0 keys + q4_0 values, 8B).
+        if gpu and gpu.vram_mb > 0:
+            _free_mb = 0
+            try:
+                _r = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if _r.returncode == 0:
+                    _free_mb = int(_r.stdout.strip().splitlines()[0])
+            except Exception:
+                _free_mb = 0
+            if _free_mb <= 0:
+                _free_mb = gpu.vram_mb                              # fall back to total VRAM
+            _weights_mb = max(0.0, est_model_gb - 1.0) * 1024       # est_model_gb has +1 GB scratch; weights only here
+            _budget_mb = _free_mb - _weights_mb - 400               # 400 MiB headroom for desktop fluctuation + safety
+            _safe_ctx = max(4096, (int((max(0.0, _budget_mb) / 400.0) * 8192) // 2048) * 2048)
+            # VAF's own request (system prompt + routed tools) is ~9-10k tokens, so a context below this
+            # MINIMUM starves VAF itself ("request exceeds the available context size" → endless compress
+            # /retry → dead). Only cap when an on-GPU context this large actually fits. If it does not
+            # (the model fills VRAM, e.g. an 8B-Q6 on a 10GB card), DON'T cap to a tiny value -- keep the
+            # configured n_ctx so the KV offloads to CPU (slow but FUNCTIONAL) and tell the user the real
+            # fix is a smaller quant.
+            _MIN_USABLE_CTX = 16384
+            if _safe_ctx < n_ctx:
+                if _safe_ctx >= _MIN_USABLE_CTX:
+                    UI.event("System", f"n_ctx capped {n_ctx} → {_safe_ctx} (model ~{_weights_mb:.0f} MiB + KV fit ~{_free_mb} MiB FREE VRAM → on-GPU, fast)", style="warning")
+                    n_ctx = _safe_ctx
+                else:
+                    UI.event("System", f"Model fills VRAM: only ~{_safe_ctx} ctx fits on-GPU (< {_MIN_USABLE_CTX} that VAF needs). Keeping n_ctx={n_ctx} (KV → CPU, slow but working). Use a smaller quant (e.g. Q4_K_M) for on-GPU speed.", style="warning")
+
         # Context (KV) in GB — only to check if 2 slots fit; not the main driver
         est_ctx_gb_per_8k = 2.5
         os_overhead_gb = 2.0
@@ -613,7 +649,11 @@ class ServerManager:
         cmd = [
             self.server_path,
             "-m", model_path,
-            "-ngl", str(n_gpu_layers),
+            # -ngl: pin a fixed GPU layer count ONLY when explicitly requested (>= 0). For "auto" (< 0)
+            # we OMIT -ngl so llama.cpp's common_fit_params can AUTO-FIT -- it loads as many layers as
+            # fit and offloads the rest to CPU, instead of ABORTING ("n_gpu_layers already set by user
+            # to 99, abort" → SIGSEGV) when model + KV exceed VRAM. Forcing -ngl 99 disabled that safety.
+            *(["-ngl", str(n_gpu_layers)] if (n_gpu_layers is not None and int(n_gpu_layers) >= 0) else []),
             "-c", str(final_total_ctx),  # --ctx-size: total context (env: LLAMA_ARG_CTX_SIZE)
             "--port", str(port),
             "--host", "127.0.0.1",

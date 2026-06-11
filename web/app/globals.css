@@ -327,6 +327,11 @@
 @keyframes ePlan  { 0%,100%{transform:translate(-2px,1px);} 50%{transform:translate(2px,1px);} }
 @keyframes iStep  { 0%{opacity:0;} 14%{opacity:1;} 86%{opacity:1;} 100%{opacity:0;} }
 
+/* waking (Activity · Lifecycle) — the agent materialises (body scales in + fades) and the eye opens
+   (scaleY). transform/opacity only = leak-safe. Plays once, then the caller switches to 'waiting'. */
+@keyframes bWake { 0%{transform:scale(0);opacity:0;} 40%{transform:scale(.2);opacity:.3;} 60%{transform:scale(1.12);opacity:1;} 75%{transform:scale(.96);} 85%{transform:scale(1);} 100%{transform:scale(1);} }
+@keyframes eWake { 0%,55%{transform:scaleY(0);} 70%{transform:scaleY(1.2);} 80%{transform:scaleY(1);} 100%{transform:scaleY(1);} }
+
 /* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
    OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */
 .planbox { display:block; width:8px; height:8px; border:1.3px solid #111827; background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }

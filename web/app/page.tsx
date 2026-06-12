@@ -7,7 +7,8 @@ import { useTranslations } from 'next-intl';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
-    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock
+    Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
+    Folder, Download, Upload, RefreshCw, ArrowLeft
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -1206,6 +1207,114 @@ function VAFDashboardContent() {
     const [realContext, setRealContext] = useState<any | null>(null); // REAL Payload (The Truth)
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
+
+    // Session workspace window: file browser over the chat's own folder
+    // (VAF_Projects/<uid>/<session_id>) with download/upload + drag and drop
+    const [workspaceInfo, setWorkspaceInfo] = useState<{
+        path: string;
+        name: string;
+        subpath: string;
+        dirs: Array<{ name: string; items: number }>;
+        files: Array<{ name: string; size: number; modified: string }>;
+    } | null>(null);
+    const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
+    const [workspaceUploading, setWorkspaceUploading] = useState(false);
+    const workspaceFileInputRef = useRef<HTMLInputElement>(null);
+
+    const workspaceSubpathRef = useRef('');
+    const refreshWorkspace = useCallback(async (sid?: string | null, subpath?: string) => {
+        const id = sid ?? currentSessionId;
+        if (!id) { setWorkspaceInfo(null); return; }
+        const sub = subpath ?? workspaceSubpathRef.current;
+        try {
+            const res = await fetch(
+                `${getApiBase()}/api/session/workspace?sessionId=${encodeURIComponent(id)}&subpath=${encodeURIComponent(sub)}`
+            );
+            if (!res.ok) {
+                // Folder may have been deleted - fall back to the root
+                if (sub) { workspaceSubpathRef.current = ''; refreshWorkspace(id, ''); }
+                return;
+            }
+            const data = await res.json();
+            workspaceSubpathRef.current = data?.subpath ?? '';
+            setWorkspaceInfo(data?.path ? data : null);
+        } catch { /* backend unreachable - keep current state */ }
+    }, [currentSessionId]);
+
+    // Load workspace info whenever the active chat changes
+    useEffect(() => {
+        setWorkspaceInfo(null);
+        workspaceSubpathRef.current = '';
+        if (currentSessionId) refreshWorkspace(currentSessionId, '');
+    }, [currentSessionId, refreshWorkspace]);
+
+    const uploadWorkspaceFiles = useCallback(async (files: File[]) => {
+        if (!currentSessionId || !workspaceInfo?.path) return;
+        setWorkspaceUploading(true);
+        try {
+            for (const file of files.slice(0, 10)) {
+                if (file.size > 25 * 1024 * 1024) continue;
+                const base64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                await fetch(`${getApiBase()}/api/session/workspace/upload`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sessionId: currentSessionId,
+                        filename: file.name,
+                        content_base64: base64,
+                        subpath: workspaceSubpathRef.current,
+                    }),
+                });
+            }
+            await refreshWorkspace();
+        } catch { /* upload failed - list stays unchanged */ }
+        finally { setWorkspaceUploading(false); }
+    }, [currentSessionId, workspaceInfo?.path, refreshWorkspace]);
+    const [workspaceDragOver, setWorkspaceDragOver] = useState(false);
+
+    // Explorer-style navigation: history stack for the Back button, Up = parent folder
+    const [workspaceNavHist, setWorkspaceNavHist] = useState<string[]>([]);
+    const navigateWorkspace = useCallback((sub: string) => {
+        setWorkspaceNavHist(prev => [...prev, workspaceSubpathRef.current]);
+        refreshWorkspace(undefined, sub);
+    }, [refreshWorkspace]);
+    const workspaceGoBack = useCallback(() => {
+        setWorkspaceNavHist(prev => {
+            if (prev.length === 0) return prev;
+            const next = [...prev];
+            const target = next.pop() as string;
+            refreshWorkspace(undefined, target);
+            return next;
+        });
+    }, [refreshWorkspace]);
+    // Delete with confirmation dialog (target held in state while the dialog is open)
+    const [workspaceDeleteTarget, setWorkspaceDeleteTarget] = useState<{ name: string; isDir: boolean; items?: number } | null>(null);
+    const [workspaceDeleting, setWorkspaceDeleting] = useState(false);
+    const deleteWorkspaceEntry = useCallback(async () => {
+        if (!currentSessionId || !workspaceDeleteTarget) return;
+        setWorkspaceDeleting(true);
+        try {
+            await fetch(`${getApiBase()}/api/session/workspace/delete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionId: currentSessionId,
+                    name: workspaceDeleteTarget.name,
+                    subpath: workspaceSubpathRef.current,
+                }),
+            });
+            await refreshWorkspace();
+        } catch { /* delete failed - list stays unchanged */ }
+        finally {
+            setWorkspaceDeleting(false);
+            setWorkspaceDeleteTarget(null);
+        }
+    }, [currentSessionId, workspaceDeleteTarget, refreshWorkspace]);
     // xraySection state removed - Context Window modal now shows only overview diagram
 
     // Agent Brain: working memory, plan, tasks, intent, team state
@@ -1325,6 +1434,17 @@ function VAFDashboardContent() {
         steps: any[];
         browserFrame: string;
         browserUrl: string;
+        // Coder VS-Code view: streamed by the coding agent as `coder_state`
+        coder: {
+            fileTree: Array<{ name: string; size: number; status: string }>;
+            git: { branch: string; dirty: number; commits: Array<{ sha: string; when: string; msg: string }> };
+            tasks: Array<{ title: string; status: string }>;
+            loop: number;
+            taskProgress: string;
+            linterOk: boolean;
+            projectName: string;
+            projectPath: string;
+        } | null;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1339,6 +1459,7 @@ function VAFDashboardContent() {
         steps: [],
         browserFrame: "",
         browserUrl: "",
+        coder: null,
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -1631,11 +1752,33 @@ function VAFDashboardContent() {
         subAgentLogSetRef.current.add(contentKey);
         const lineLower = line.toLowerCase();
         const isFailure = lineLower.includes('failed') || lineLower.includes('timeout') || lineLower.includes('error');
-        setSubAgentState(prev => ({
-            ...prev,
-            consoleLines: [...prev.consoleLines, line].slice(-500),
-            ...(isFailure ? { status: line.trim().slice(0, 120) } : {})
-        }));
+        setSubAgentState(prev => {
+            const lines = [...prev.consoleLines];
+            // Streaming TUI redraws emit progressively longer versions of the
+            // same line ("ent", "ent navigation.", "ent navigation. The …").
+            // Replace the previous fragment in place instead of stacking them.
+            const last = lines[lines.length - 1];
+            if (last) {
+                const lastKey = last.replace(/^\[\d{2}:\d{2}:\d{2}\] /, '');
+                if (lastKey.length >= 4 && contentKey.startsWith(lastKey)) {
+                    lines[lines.length - 1] = line;
+                    return {
+                        ...prev,
+                        consoleLines: lines.slice(-500),
+                        ...(isFailure ? { status: line.trim().slice(0, 120) } : {})
+                    };
+                }
+                if (contentKey.length >= 4 && lastKey.startsWith(contentKey)) {
+                    return prev; // shorter fragment of what is already shown
+                }
+            }
+            lines.push(line);
+            return {
+                ...prev,
+                consoleLines: lines.slice(-500),
+                ...(isFailure ? { status: line.trim().slice(0, 120) } : {})
+            };
+        });
     };
 
     const appendSubAgentBlock = (block: string, keyHint?: string) => {
@@ -1946,6 +2089,7 @@ function VAFDashboardContent() {
                             browserFrame: '',
                             browserUrl: '',
                             consoleLines: [],
+                            coder: null,
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -2686,6 +2830,24 @@ function VAFDashboardContent() {
                     };
                     });
                 }
+                else if (data.type === 'coder_state') {
+                    // Live project state from the coding agent: file tree, git,
+                    // loop/task progress. Powers the VS-Code view in SubAgentWindow.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        coder: {
+                            fileTree: Array.isArray(data.fileTree) ? data.fileTree : (prev.coder?.fileTree ?? []),
+                            git: data.git ?? prev.coder?.git ?? { branch: '', dirty: 0, commits: [] },
+                            tasks: Array.isArray(data.tasks) ? data.tasks : (prev.coder?.tasks ?? []),
+                            loop: typeof data.loop === 'number' ? data.loop : (prev.coder?.loop ?? 0),
+                            taskProgress: data.taskProgress ?? prev.coder?.taskProgress ?? '',
+                            linterOk: typeof data.linterOk === 'boolean' ? data.linterOk : (prev.coder?.linterOk ?? true),
+                            projectName: data.projectName ?? prev.coder?.projectName ?? '',
+                            projectPath: data.projectPath ?? prev.coder?.projectPath ?? '',
+                        },
+                    }));
+                }
                 else if (data.type === 'artifact_update') {
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
                     setSubAgentState(prev => {
@@ -3299,6 +3461,8 @@ function VAFDashboardContent() {
                     const sid = data.sessionId || currentSessionIdRef.current || '';
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
+                        // Keep the workspace chip/window in sync with new files
+                        refreshWorkspace(activeSessionId);
                         const newChip = { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid };
                         setCreatedFiles(prev => {
                             // Avoid duplicates
@@ -5185,7 +5349,23 @@ function VAFDashboardContent() {
                                 )}
 
                                 {/* Token Stats (Clickable) + RAG Badge */}
-                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex justify-end items-baseline gap-2 min-h-[16px]")}>
+                                <div className={cn(chatWidthClass, "mx-auto mb-1 flex items-center gap-2 min-h-[16px]")}>
+                                    {/* Mirror the input row geometry: the stop-button column (w-9) sits left
+                                        of the input box, so the indicators get the same spacer + inner padding
+                                        and never stick out beyond the input field's edges. */}
+                                    <div className="w-9 shrink-0" />
+                                    <div className="flex min-w-0 flex-1 items-baseline justify-end gap-2 px-2">
+                                    {/* Workspace chip: leftmost element; mr-auto pushes RAG/tokens to the right edge */}
+                                    {workspaceInfo?.path && (
+                                        <span
+                                            className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 leading-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all select-none"
+                                            title={workspaceInfo.path}
+                                            onClick={() => { setWorkspaceNavHist([]); setIsWorkspaceModalOpen(true); refreshWorkspace(); }}
+                                        >
+                                            <Folder size={10} className="shrink-0" />
+                                            <span className="max-w-[160px] truncate">{workspaceInfo.name}</span>
+                                        </span>
+                                    )}
                                     {ragResults?.sources?.length > 0 && (
                                         <div className="group relative inline-flex items-center pt-3">
                                             <span
@@ -5242,6 +5422,7 @@ function VAFDashboardContent() {
                                             {Math.round(contextStats.percent)}% ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})
                                         </span>
                                     )}
+                                    </div>
                                 </div>
 
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
@@ -5471,6 +5652,7 @@ function VAFDashboardContent() {
                                     steps={subAgentState.steps}
                                     browserFrame={subAgentState.browserFrame}
                                     browserUrl={subAgentState.browserUrl}
+                                    coder={subAgentState.coder}
                                 />
                             )}
                         </div>
@@ -5518,6 +5700,234 @@ function VAFDashboardContent() {
             )}
 
             {/* Context Window Modal - Clean & Professional */}
+            {isWorkspaceModalOpen && workspaceInfo?.path && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+                    <div className="relative bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                        {/* Header */}
+                        <div className="shrink-0 px-8 py-5 border-b border-gray-100 bg-gray-50/80">
+                            <div className="flex justify-between items-center">
+                                <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-3 min-w-0">
+                                    <Folder className="text-gray-800 shrink-0" size={22} />
+                                    <span className="truncate">{workspaceInfo.name}</span>
+                                    <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded shrink-0">
+                                        Chat Workspace
+                                    </span>
+                                </h3>
+                                <button
+                                    onClick={() => setIsWorkspaceModalOpen(false)}
+                                    className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
+                                >
+                                    <span className="sr-only">Close</span>
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Explorer toolbar: Back / Up / address bar / refresh / upload */}
+                        <div className="shrink-0 flex items-center gap-2 border-b border-gray-100 bg-white px-6 py-2.5">
+                            <button
+                                onClick={workspaceGoBack}
+                                disabled={workspaceNavHist.length === 0}
+                                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent"
+                                title="Back"
+                            >
+                                <ArrowLeft size={16} />
+                            </button>
+                            {/* Address bar */}
+                            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-1.5 font-mono text-xs text-gray-500">
+                                <Folder size={12} className="shrink-0 text-amber-400" />
+                                <button
+                                    onClick={() => navigateWorkspace('')}
+                                    className={cn('shrink-0 rounded px-1 py-0.5 hover:bg-violet-100 hover:text-violet-700', !workspaceInfo.subpath && 'font-semibold text-gray-700')}
+                                >
+                                    {workspaceInfo.name}
+                                </button>
+                                {workspaceInfo.subpath.split('/').filter(Boolean).map((seg, i, segs) => (
+                                    <Fragment key={i}>
+                                        <ChevronRight size={11} className="shrink-0 text-gray-300" />
+                                        <button
+                                            onClick={() => navigateWorkspace(segs.slice(0, i + 1).join('/'))}
+                                            className={cn('truncate rounded px-1 py-0.5 hover:bg-violet-100 hover:text-violet-700', i === segs.length - 1 && 'font-semibold text-gray-700')}
+                                        >
+                                            {seg}
+                                        </button>
+                                    </Fragment>
+                                ))}
+                            </div>
+                            <span className="shrink-0 text-[11px] text-gray-300">
+                                {workspaceInfo.dirs.length + workspaceInfo.files.length} {workspaceInfo.dirs.length + workspaceInfo.files.length === 1 ? 'item' : 'items'}
+                            </span>
+                            <button
+                                onClick={() => refreshWorkspace()}
+                                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                                title="Refresh"
+                            >
+                                <RefreshCw size={15} />
+                            </button>
+                            <button
+                                onClick={() => workspaceFileInputRef.current?.click()}
+                                disabled={workspaceUploading}
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-50"
+                            >
+                                {workspaceUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                                {workspaceUploading ? 'Uploading…' : 'Upload'}
+                            </button>
+                        </div>
+
+                        {/* File browser (folders + files, scoped to the chat folder) */}
+                        <div
+                            className={cn(
+                                "relative min-h-0 flex-1 overflow-y-auto px-4 py-3 transition-colors",
+                                workspaceDragOver && "bg-violet-50/60"
+                            )}
+                            onDragOver={(e) => { e.preventDefault(); setWorkspaceDragOver(true); }}
+                            onDragLeave={() => setWorkspaceDragOver(false)}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                setWorkspaceDragOver(false);
+                                const dropped = Array.from(e.dataTransfer.files || []);
+                                if (dropped.length) uploadWorkspaceFiles(dropped);
+                            }}
+                        >
+                            {workspaceDragOver && (
+                                <div className="pointer-events-none absolute inset-3 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-300 bg-violet-50/80 text-sm font-semibold text-violet-600">
+                                    Drop files to upload into {workspaceInfo.subpath ? workspaceInfo.subpath.split('/').pop() : workspaceInfo.name}
+                                </div>
+                            )}
+                            {/* Explorer-style icon grid */}
+                            <div className="grid content-start gap-1 p-2 [grid-template-columns:repeat(auto-fill,minmax(130px,1fr))]">
+                                {workspaceInfo.dirs.map(d => (
+                                    <div
+                                        key={`dir-${d.name}`}
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => navigateWorkspace(workspaceInfo.subpath ? `${workspaceInfo.subpath}/${d.name}` : d.name)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') navigateWorkspace(workspaceInfo.subpath ? `${workspaceInfo.subpath}/${d.name}` : d.name); }}
+                                        className="group relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-3 text-center transition-colors hover:border-violet-100 hover:bg-violet-50/60"
+                                        title={`${d.name} (${d.items} ${d.items === 1 ? 'item' : 'items'})`}
+                                    >
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setWorkspaceDeleteTarget({ name: d.name, isDir: true, items: d.items }); }}
+                                            className="absolute right-1.5 top-1.5 rounded-full bg-white p-1.5 text-gray-400 opacity-0 shadow-sm transition-opacity hover:bg-red-100 hover:text-red-600 group-hover:opacity-100"
+                                            title={`Delete folder ${d.name}`}
+                                        >
+                                            <Trash2 size={13} />
+                                        </button>
+                                        <Folder size={44} strokeWidth={1} className="text-amber-400" fill="#fde68a" />
+                                        <span className="line-clamp-2 w-full break-all text-xs font-medium leading-tight text-gray-800">{d.name}</span>
+                                        <span className="text-[10px] text-gray-300">{d.items} {d.items === 1 ? 'item' : 'items'}</span>
+                                    </div>
+                                ))}
+                                {workspaceInfo.files.map(f => {
+                                    const fileUrl = `${getApiBase()}/api/file?path=${encodeURIComponent(`${workspaceInfo.path}${workspaceInfo.subpath ? `/${workspaceInfo.subpath}` : ''}/${f.name}`)}`;
+                                    return (
+                                        <div
+                                            key={`file-${f.name}`}
+                                            draggable
+                                            onDragStart={(e) => {
+                                                // Drag out of the browser (Chromium: DownloadURL)
+                                                const abs = fileUrl.startsWith('http') ? fileUrl : `${window.location.origin}${fileUrl}`;
+                                                e.dataTransfer.setData('DownloadURL', `application/octet-stream:${f.name}:${abs}`);
+                                                e.dataTransfer.setData('text/uri-list', abs);
+                                            }}
+                                            className="group relative flex cursor-grab flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-3 text-center transition-colors hover:border-violet-100 hover:bg-violet-50/60 active:cursor-grabbing"
+                                            title={`${f.name} — ${f.modified}`}
+                                        >
+                                            <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                                <a
+                                                    href={fileUrl}
+                                                    download={f.name}
+                                                    className="rounded-full bg-white p-1.5 text-gray-400 shadow-sm hover:bg-violet-100 hover:text-violet-700"
+                                                    title={`Download ${f.name}`}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                >
+                                                    <Download size={13} />
+                                                </a>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); setWorkspaceDeleteTarget({ name: f.name, isDir: false }); }}
+                                                    className="rounded-full bg-white p-1.5 text-gray-400 shadow-sm hover:bg-red-100 hover:text-red-600"
+                                                    title={`Delete ${f.name}`}
+                                                >
+                                                    <Trash2 size={13} />
+                                                </button>
+                                            </div>
+                                            <FileText size={44} strokeWidth={1} className="text-gray-400" fill="#f9fafb" />
+                                            <span className="line-clamp-2 w-full break-all font-mono text-xs leading-tight text-gray-800">{f.name}</span>
+                                            <span className="text-[10px] text-gray-300">{f.size >= 1024 ? `${(f.size / 1024).toFixed(1)} KB` : `${f.size} B`}</span>
+                                        </div>
+                                    );
+                                })}
+                                {workspaceInfo.dirs.length === 0 && workspaceInfo.files.length === 0 && (
+                                    <div className="col-span-full flex h-48 items-center justify-center text-sm text-gray-300">
+                                        This folder is empty — drop files here to upload.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Delete confirmation dialog */}
+                        {workspaceDeleteTarget && (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 backdrop-blur-[2px] animate-in fade-in duration-150">
+                                <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl animate-in zoom-in-95 duration-150">
+                                    <div className="flex items-start gap-3">
+                                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                                            <Trash2 size={16} />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-bold text-gray-900">
+                                                Delete {workspaceDeleteTarget.isDir ? 'folder' : 'file'}?
+                                            </div>
+                                            <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                                                <span className="font-mono font-semibold text-gray-700">{workspaceDeleteTarget.name}</span>
+                                                {workspaceDeleteTarget.isDir
+                                                    ? ` and everything inside it (${workspaceDeleteTarget.items ?? 0} ${(workspaceDeleteTarget.items ?? 0) === 1 ? 'item' : 'items'}) will be permanently deleted.`
+                                                    : ' will be permanently deleted.'}
+                                                {' '}This cannot be undone.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-4 flex justify-end gap-2">
+                                        <button
+                                            onClick={() => setWorkspaceDeleteTarget(null)}
+                                            disabled={workspaceDeleting}
+                                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={deleteWorkspaceEntry}
+                                            disabled={workspaceDeleting}
+                                            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                                        >
+                                            {workspaceDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                                            {workspaceDeleting ? 'Deleting…' : 'Delete'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Footer hint */}
+                        <div className="shrink-0 border-t border-gray-100 bg-gray-50/60 px-8 py-2.5">
+                            <p className="text-xs text-gray-400">
+                                Drag files in to upload, drag files out to save them — the agent sees everything here instantly.
+                            </p>
+                            <input
+                                ref={workspaceFileInputRef}
+                                type="file"
+                                multiple
+                                className="hidden"
+                                onChange={(e) => {
+                                    const files = Array.from(e.target.files || []);
+                                    if (files.length) uploadWorkspaceFiles(files);
+                                    e.target.value = '';
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {isContextModalOpen && contextStats && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
                     <div className="bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">

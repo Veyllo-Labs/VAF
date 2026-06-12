@@ -71,11 +71,11 @@ For large/complex documents, use document_agent instead."""
             return "[ERROR] No content provided for document."
         
         from vaf.core.platform import Platform
-        docs_dir = Platform.documents_dir()
-        
-        # Create a subdirectory for VAF documents
-        vaf_docs_dir = docs_dir / "VAF_Documents"
-        vaf_docs_dir.mkdir(exist_ok=True)
+        from vaf.core.session import resolve_agent_output_dir
+
+        # Save into the chat's workspace folder when a session exists (visible
+        # in the WebUI workspace browser); legacy VAF_Documents otherwise.
+        vaf_docs_dir = resolve_agent_output_dir(Platform.documents_dir() / "VAF_Documents")
         
         # Auto-detect format from filename
         file_path = vaf_docs_dir / Path(filename)

@@ -140,6 +140,30 @@ def test_verify_llm_yes_confirms_goal(tmp_path):
     assert "LLM" in evidence
 
 
+def test_verify_llm_reasoning_style_verdict(tmp_path):
+    # Reasoning models bury the verdict at the end of their chain of thought
+    # (and may return it via reasoning_content) — the LAST yes/no counts.
+    (tmp_path / "index.html").write_text("<html>collision code</html>")
+
+    verified, evidence = _verify_task_goal(
+        "Add collision detection", [], str(tmp_path),
+        llm_verify=lambda p: (
+            "Okay, the goal asks for collision detection. Looking at the code, "
+            "there is a checkCollision() call in the game loop... so my answer is YES"
+        ),
+    )
+    assert verified is True
+
+    verified, _ = _verify_task_goal(
+        "Add collision detection", [], str(tmp_path),
+        llm_verify=lambda p: (
+            "The goal asks for collision detection. Yes, there is a loop, but I "
+            "cannot find any collision handling at all. Final answer: NO"
+        ),
+    )
+    assert verified is False
+
+
 def test_verify_llm_no_or_error_fails(tmp_path):
     (tmp_path / "index.html").write_text("<html>something</html>")
 

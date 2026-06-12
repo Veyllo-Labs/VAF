@@ -814,6 +814,77 @@ def get_manager() -> SessionManager:
     return _manager
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PER-CHAT WORKSPACE RESOLUTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = False) -> Optional[Path]:
+    """Per-chat workspace folder: VAF_Projects/<uid[:8]>/<session_id>/.
+
+    Single source for every sub-agent that creates files (coder projects,
+    documents, research reports) and for the WebUI workspace browser — the
+    same convention the coder uses in _generate_project_directory.
+
+    session_id falls back to VAF_SESSION_ID / the IPC context. Returns None
+    without session context. With create=False only an EXISTING folder is
+    returned (browser use); with create=True the preferred candidate is
+    created (agent output use).
+    """
+    import os as _os
+    import re as _re
+
+    sid = (session_id or _os.environ.get("VAF_SESSION_ID", "")).strip()
+    if not sid:
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            sid = get_current_session_id() or ""
+        except Exception:
+            sid = ""
+    if not sid:
+        return None
+    folder = _re.sub(r'[^a-zA-Z0-9_-]', '', sid)[:32]
+    if not folder:
+        return None
+
+    uid = ""
+    try:
+        sess = get_manager().load(sid)
+        uid = str((getattr(sess, "metadata", None) or {}).get("user_scope_id") or "")
+    except Exception:
+        uid = ""
+
+    from vaf.core.platform import Platform
+    root = Platform.documents_dir() / "VAF_Projects"
+    candidates = []
+    if uid:
+        candidates.append(root / uid[:8] / folder)
+    candidates.append(root / folder)
+
+    if create:
+        target = candidates[0]
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+        except Exception:
+            return None
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def resolve_agent_output_dir(default: Path, session_id: Optional[str] = None) -> Path:
+    """Output dir for file-creating sub-agents: the chat's workspace when a
+    session exists (so documents/reports land next to the chat's projects and
+    show up in the WebUI workspace browser), otherwise the agent's legacy
+    default directory."""
+    workspace = get_session_workspace_dir(session_id, create=True)
+    if workspace:
+        return workspace
+    default.mkdir(parents=True, exist_ok=True)
+    return default
+
+
 @session_app.command("list")
 def list_sessions(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum sessions to show")

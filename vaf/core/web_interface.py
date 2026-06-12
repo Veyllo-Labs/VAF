@@ -420,6 +420,36 @@ class WebInterfaceManager:
             return
         self._push_session_update(session_id, payload)
 
+    def emit_coder_code(self, file: str, code: str, session_id: str = None):
+        """Emit the code currently being written (live editor feed).
+
+        Sent as a minimal `subagent_update` — the frontend already maps
+        file/code from that type and keeps all other fields unchanged.
+        """
+        payload = {"type": "subagent_update", "file": file, "code": code}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
+    def emit_coder_state(self, state: dict, session_id: str = None):
+        """Emit the coder's project state (file tree, git, progress) to the WebUI.
+
+        Feeds the VS-Code-style SubAgent window: explorer file list with
+        per-file status, source-control section and the status bar. Sent by the
+        coding agent on meaningful changes (init, file written, task done,
+        final commit).
+        """
+        payload = {"type": "coder_state", **(state or {})}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_stats(self, stats: dict, session_id: str = None):
         """Emit context/token statistics."""
         self.last_stats = stats

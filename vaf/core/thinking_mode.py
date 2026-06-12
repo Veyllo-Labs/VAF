@@ -940,8 +940,10 @@ Apply these rules IN ORDER:
   → Create it, call `thinking_done` with summary — DONE.
 
 **IF** you need the user's decision on something concrete and specific:
-  → Send ONE message via their main_messenger with a specific question.
-  → Then call `thinking_done`. The system handles waiting for the reply.
+  → main_messenger configured (see User Identity): send ONE message with exactly that messenger tool.
+  → NO main_messenger configured: do NOT try any send_* tool. Write the question as the plain text of your reply — it is delivered to the user's Web UI chat automatically — then call `thinking_done`.
+  → NEVER contact the user via send_mail and NEVER invent contact addresses.
+  → The system handles waiting for the reply.
 
 **IF** a tool call fails:
   → Log it silently. Try the next thing. Do NOT send error details to the user.
@@ -956,6 +958,10 @@ Only send a message to the user if ALL of these are true:
 - The question is about something SPECIFIC (not generic)
 - You haven't asked this before (check declined questions + recent activity)
 - It genuinely helps the user (not just "filling" the thinking run)
+
+Channel rules: use the main_messenger tool if one is configured; otherwise plain
+reply text reaches the user's Web UI automatically. E-mail is NEVER a channel
+for contacting the user from a background run.
 
 ## INTEL GATHERING (Pre-Computation)
 If the conversation history shows a clear, specific, and recurring interest (e.g. a specific DHL package, a stock price, or an upcoming event), you are allowed to:
@@ -983,7 +989,35 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord"}
+_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail"}
+
+# Outbound send tool -> the main_messenger value it belongs to. send_mail maps
+# to None: e-mail is never a valid main_messenger, and a thinking run once
+# tried to contact the user at a hallucinated address with it.
+_OUTBOUND_SEND_CHANNELS = {
+    "send_mail": None,
+    "send_telegram": "telegram",
+    "send_whatsapp": "whatsapp",
+    "send_discord": "discord",
+    "send_slack": "slack",
+}
+
+
+def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
+    """Remove outbound send tools the thinking agent must not use.
+
+    Only the tool matching the user's configured main_messenger survives;
+    without a configured messenger ALL send tools are removed — plain-text
+    questions still reach the user through the Web UI fallback
+    (_maybe_emit_web_question). Returns the removed tool names.
+    """
+    mm = (main_messenger or "").strip().lower()
+    removed = []
+    for tool_name, channel in _OUTBOUND_SEND_CHANNELS.items():
+        if channel is None or channel != mm:
+            if tools.pop(tool_name, None) is not None:
+                removed.append(tool_name)
+    return removed
 
 
 def _try_emit_to_web_ui_and_wait(
@@ -1250,6 +1284,26 @@ def _run_thinking_for_user(
                     logger.debug("Could not load chat session %s for thinking: %s", chat_session_id, e)
         except Exception as e:
             logger.debug("Could not resolve chat session for thinking: %s", e)
+
+        # Channel guard: the thinking agent may contact the user only via the
+        # configured main_messenger; without one, every send tool is removed
+        # and questions reach the user as plain text via the Web UI fallback.
+        try:
+            from vaf.core.messaging_connections import get_messaging_connections as _gmc
+            _guard_uname = getattr(agent, "_current_username", None) or get_local_admin_username()
+            _guard_conn = _gmc(username=_guard_uname, user_scope_id=user_scope_id) or {}
+            _guard_mm = (_guard_conn.get("main_messenger") or "").strip().lower()
+        except Exception:
+            _guard_mm = ""
+        try:
+            _removed_send_tools = _filter_thinking_send_tools(agent.tools, _guard_mm)
+            if _removed_send_tools:
+                logger.info(
+                    "Thinking Mode: removed send tools %s (main_messenger=%r)",
+                    _removed_send_tools, _guard_mm or "not set",
+                )
+        except Exception as e:
+            logger.debug("Thinking Mode: send-tool filter failed: %s", e)
 
         # Append thinking mode notice and last run summary (context so we don't repeat or re-ask)
         if agent.history and agent.history[0].get("role") == "system":

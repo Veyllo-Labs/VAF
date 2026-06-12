@@ -1156,8 +1156,192 @@ async def get_tool_source(name: str):
 SOUNDS_DIR = Path(__file__).resolve().parents[1] / "media" / "sounds"
 ALLOWED_SOUND_FILES = {"tts01.mp3", "sst.mp3"}  # Only serve known files
 
+def _resolve_session_workspace(session_id: str, request: Request) -> str:
+    """Workspace dir of a chat session ('' if none/unsafe).
+
+    User isolation: the session must belong to the requesting user (same
+    ownership rule as the WebSocket load_session handler — sessions without a
+    scope are legacy/local, the local admin may access everything). Prefers
+    the stable workspace anchor, falls back to the most recently used project.
+    Unsafe dirs (home, ~/.vaf, ...) are never exposed.
+    """
+    try:
+        sess = session_mgr.load(session_id)
+    except Exception:
+        return ""
+    try:
+        from vaf.api.config_routes import get_current_user_or_local_admin
+        from vaf.core.config import get_local_admin_scope_id
+        user_scope_id = (get_current_user_or_local_admin(request) or {}).get("user_scope_id")
+        session_scope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
+        is_owner = not session_scope or str(session_scope) == str(user_scope_id)
+        is_admin = str(user_scope_id) == str(get_local_admin_scope_id())
+        if not (is_owner or is_admin):
+            raise HTTPException(status_code=403, detail="Session does not belong to this user")
+    except HTTPException:
+        raise
+    except Exception:
+        return ""
+    # Root = the CHAT's own folder (VAF_Projects/<uid8>/<session_id>), which can
+    # hold several project folders. Fall back to the per-project path for
+    # legacy sessions created before per-chat folders existed.
+    import re as _re_ws
+    _sid_folder = _re_ws.sub(r'[^a-zA-Z0-9_-]', '', str(session_id))[:32]
+    path = ""
+    try:
+        from vaf.core.session import get_session_workspace_dir
+        _ws = get_session_workspace_dir(session_id)
+        if _ws:
+            path = str(_ws)
+    except Exception:
+        path = ""
+    if not path:
+        path = getattr(sess, "project_path", "") or ""
+        if path and os.path.isdir(path) and _sid_folder and os.path.basename(os.path.dirname(path)) == _sid_folder:
+            path = os.path.dirname(path)
+    if not path or not os.path.isdir(path):
+        path = (getattr(sess, "runtime_state", None) or {}).get("last_project_path", "") or ""
+    if not path or not os.path.isdir(path):
+        return ""
+    try:
+        from vaf.tools.coder import is_unsafe_project_dir
+        if is_unsafe_project_dir(path):
+            return ""
+    except Exception:
+        return ""
+    return path
+
+
+def _resolve_workspace_subdir(root: str, subpath: str) -> str:
+    """Join a browse subpath onto the workspace root, refusing escapes."""
+    sub = (subpath or "").strip().strip("/")
+    if not sub:
+        return root
+    target = os.path.normpath(os.path.join(root, sub))
+    root_norm = os.path.normpath(root)
+    if target != root_norm and not target.startswith(root_norm + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid subpath")
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return target
+
+
+@app.get("/api/session/workspace")
+async def get_session_workspace(
+    request: Request,
+    sessionId: str = Query(..., description="Chat session id"),
+    subpath: str = Query("", description="Folder inside the workspace to list"),
+):
+    """Browse the chat's workspace folder (feeds the WebUI workspace window)."""
+    root = _resolve_session_workspace(sessionId, request)
+    if not root:
+        return {"path": "", "name": "", "subpath": "", "dirs": [], "files": []}
+    target = _resolve_workspace_subdir(root, subpath)
+    dirs, files = [], []
+    try:
+        from datetime import datetime as _dt2
+        for entry in sorted(os.listdir(target)):
+            if entry.startswith('.'):
+                continue
+            fp = os.path.join(target, entry)
+            if os.path.isdir(fp):
+                try:
+                    items = len([e for e in os.listdir(fp) if not e.startswith('.')])
+                except Exception:
+                    items = 0
+                dirs.append({"name": entry, "items": items})
+            elif os.path.isfile(fp):
+                st = os.stat(fp)
+                files.append({
+                    "name": entry,
+                    "size": st.st_size,
+                    "modified": _dt2.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                })
+    except Exception:
+        pass
+    rel = os.path.relpath(target, root)
+    return {
+        "path": root,
+        "name": os.path.basename(root),
+        "subpath": "" if rel == "." else rel.replace(os.sep, "/"),
+        "dirs": dirs,
+        "files": files,
+    }
+
+
+class WorkspaceUploadRequest(BaseModel):
+    sessionId: str
+    filename: str
+    content_base64: str
+    subpath: str = ""
+
+
+@app.post("/api/session/workspace/upload")
+async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Request):
+    """Upload a file into the chat's workspace (gives the agent direct access)."""
+    root = _resolve_session_workspace(req.sessionId, request)
+    if not root:
+        raise HTTPException(status_code=404, detail="Session has no workspace")
+    path = _resolve_workspace_subdir(root, req.subpath)
+    name = os.path.basename((req.filename or "").strip())
+    if not name or name.startswith('.') or name != req.filename.strip():
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    import base64 as _b64
+    try:
+        data = _b64.b64decode(req.content_base64 or "", validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 content")
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 25 MB)")
+    target = os.path.join(path, name)
+    try:
+        with open(target, "wb") as f:
+            f.write(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Write failed: {e}")
+    return {"ok": True, "name": name, "size": len(data)}
+
+
+class WorkspaceDeleteRequest(BaseModel):
+    sessionId: str
+    name: str
+    subpath: str = ""
+
+
+@app.post("/api/session/workspace/delete")
+async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: Request):
+    """Delete a file or folder inside the chat's workspace.
+
+    The confirmation dialog lives in the UI; this endpoint only enforces the
+    boundaries: same ownership rules as browsing, the target must stay inside
+    the workspace root, and the root itself cannot be deleted.
+    """
+    root = _resolve_session_workspace(req.sessionId, request)
+    if not root:
+        raise HTTPException(status_code=404, detail="Session has no workspace")
+    folder = _resolve_workspace_subdir(root, req.subpath)
+    name = os.path.basename((req.name or "").strip())
+    if not name or name.startswith('.') or name != req.name.strip():
+        raise HTTPException(status_code=400, detail="Invalid name")
+    target = os.path.normpath(os.path.join(folder, name))
+    root_norm = os.path.normpath(root)
+    if target == root_norm or not target.startswith(root_norm + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid target")
+    if not os.path.exists(target):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        if os.path.isdir(target):
+            import shutil as _sh
+            _sh.rmtree(target)
+        else:
+            os.remove(target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+    return {"ok": True, "name": name}
+
+
 @app.get("/api/file")
-async def get_file(path: str = Query(..., description="Absolute path to local file")):
+async def get_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
     """Serve a local file by path (allowed roots: documents, downloads, data dir). Used by Web UI."""
     from vaf.core.platform import Platform
     import mimetypes
@@ -1175,6 +1359,27 @@ async def get_file(path: str = Query(..., description="Absolute path to local fi
     ]
     if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied")
+    # User isolation for generated projects: VAF_Projects/<uid[:8]>/... folders
+    # belong to one user — only that user (or the local admin) may download
+    # from them. Legacy flat projects (no user prefix) stay accessible.
+    try:
+        import re as _re_iso
+        _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
+        if target.is_relative_to(_projects_root):
+            _rel = target.relative_to(_projects_root)
+            _first_seg = _rel.parts[0] if _rel.parts else ""
+            if _re_iso.fullmatch(r"[0-9a-f]{8}", _first_seg):
+                from vaf.api.config_routes import get_current_user_or_local_admin
+                from vaf.core.config import get_local_admin_scope_id
+                _user = get_current_user_or_local_admin(request) or {}
+                _scope = str(_user.get("user_scope_id") or "")
+                _is_admin = _scope == str(get_local_admin_scope_id())
+                if not _is_admin and not _scope.replace("-", "").lower().startswith(_first_seg):
+                    raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     mime_type, _ = mimetypes.guess_type(str(target))
     return FileResponse(
         path=str(target),

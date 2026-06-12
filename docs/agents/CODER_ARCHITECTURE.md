@@ -85,7 +85,7 @@ The coder owns each project's version history (built up by the final commit on e
 *   `coding_agent(task="history", project_path=...)` — the coder answers directly with the formatted version list (commit id, date, description, changed files).
 *   `coding_agent(task="rollback auf <id>", project_path=...)` — the coder restores that version.
 
-`_detect_history_rollback_intent()` (`vaf/tools/project_git.py`) classifies these tasks conservatively (short task text, history/rollback keywords, no creation verbs — "Erstelle eine Seite über die History von Rom" still runs the normal loop). Matching tasks return immediately: no agentic loop, no terminal spawn, no LLM call. A rollback request without a version id returns the history plus the instruction to ask the user.
+`_detect_history_rollback_intent()` (`vaf/tools/project_git.py`) classifies these tasks. Creation verbs always win ("Erstelle eine Seite über die History von Rom" runs the normal loop). A rollback request that names a concrete commit id matches REGARDLESS of task length — the main agent often wraps the delegation in long explanatory text, and routing that into the agentic loop made a small model plan "check git status" tasks instead of simply rolling back. History requests and rollbacks without an id stay conservative (max 200 chars). Matching tasks return immediately: no agentic loop, no terminal spawn, no LLM call. A rollback request without a version id returns the history plus the instruction to ask the user.
 
 Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit — history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
 
@@ -173,7 +173,7 @@ A task that stays on the same index for more than 15 loops is never blindly mark
 
 1.  **Goal verification** via `_verify_task_goal(task_title, task_files, base_dir, linter_active, llm_verify)`:
     *   Deterministic first: if the task wrote files (`task_file_map[idx]`), they must exist, contain no template placeholders and no linter error may be active.
-    *   Without file evidence (the goal may already be implemented by an earlier task), one bounded LLM check runs (non-streaming, temperature 0, 200 tokens, 60s timeout): "Is this goal already fully implemented? YES/NO plus one line of evidence" against the main deliverable (`_pick_main_deliverable`). Any error or ambiguity counts as NOT verified.
+    *   Without file evidence (the goal may already be implemented by an earlier task), one bounded LLM check runs (non-streaming, temperature 0, 1000 tokens, 90s timeout): "Is this goal already fully implemented? YES/NO plus one line of evidence" against the main deliverable (`_pick_main_deliverable`). Reasoning models may spend their whole budget thinking and leave `content` empty — the call falls back to `reasoning_content`, and the verdict parser takes the LAST standalone YES/NO in the text (a chain of thought ends with its conclusion). Any error or ambiguity counts as NOT verified.
 2.  **Verified:** task completes with result "Auto-completed after stuck detection - goal verified: ...".
 3.  **Not verified, retry budget free:** one immediate retry — the task resets to `pending`, the poisoned task context is dropped (`context_states.pop`), a fresh context is created and a system hint describes the failed attempt. The loop budget restarts.
 4.  **Retry exhausted:** the task is marked **failed** (`TaskManager.fail_current_task`) with the reason. The run continues with the remaining tasks.
@@ -265,5 +265,14 @@ The inactivity auto-complete (idle with files present) runs the same determinist
     *   Cleans up temporary handles.
     *   Returns the final string (list of created files + instructions + task status incl. failed tasks) to the user.
 
-## 7. Telemetry (logs/debug)
+## 7. WebUI Live Feed (VS-Code SubAgent Window)
+
+During a run the coder feeds the WebUI's VS-Code style SubAgent window through two emit closures in `run()`:
+
+*   **`_emit_coder_state()`** — full project state: file tree (`_build_file_tree`, per-file status W/A/M), git state (`_build_git_state`: branch, dirty count, recent commits), the REAL task list from the TaskManager with live per-task status, loop count, task progress and linter flag. Sent at run start, every loop iteration, after each `write_file`, on task completion/failure and after the final commit — hash-throttled, so unchanged states are not resent. Event type: `coder_state`.
+*   **`_emit_live_code()`** — the partial file content while the model is still streaming a `write_file` call (hooked into the same stream parser that drives the terminal code preview). Sent as a minimal `subagent_update` with only `file` + `code`; throttled to one post per 0.35s, tail-capped at 6 KB, plus one unthrottled full-content post when `write_file` dispatches. This drives the live-typing editor pane.
+
+Both resolve the session id from `VAF_SESSION_ID` / the IPC context and stay silent without one (plain CLI runs emit nothing). Transport is `emit_coder_state()` / `emit_coder_code()` in `vaf/core/web_interface.py` (subprocess bridge or direct WebSocket push). See `docs/web-ui/WEBUI_WEBSOCKET_FLOW.md` for the payloads and the frontend rendering.
+
+## 8. Telemetry (logs/debug)
 Loop-level telemetry (`loop_start`, `tool_start`, `coder_debug`, `task_stuck_verification`, `final_commit`, ...) persists as `logs/debug/<agent_type>/<run_id>/events.jsonl` in **every** run mode. `get_subagent_logger_from_env(create_fallback=True, agent_type=...)` no longer depends on the IPC spawn path: without a `VAF_TASK_ID` a local run id (`local-<timestamp>-<pid>`) is generated. The `vaf subagent run` CLI sets this id in its own (single-task) process environment so the runner and the hosted tool log into one directory. Run directories older than 14 days are swept best-effort on logger startup.

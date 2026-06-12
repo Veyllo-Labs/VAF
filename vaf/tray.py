@@ -619,7 +619,7 @@ def check_activity_loop(update_icon_callback):
                 # (offload overflow to CPU) instead of forcing all layers and aborting when it won't fit.
                 
                 started = server_mgr.start_server(
-                    model_path=server_mgr.get_model_path(model),
+                    model_path=server_mgr.ensure_model_present(model),
                     port=8080,
                     n_ctx=n_ctx,
                     n_gpu_layers=gpu_layers
@@ -875,7 +875,7 @@ def on_config_changed(key, value, old_value=None):
                 server_mgr.stop_server(force_external=True)
                 tray_context.set_model_loaded(False)
                 time.sleep(1)
-                model_path = server_mgr.get_model_path(model)
+                model_path = server_mgr.ensure_model_present(model)
                 started = server_mgr.start_server(model_path=model_path, port=8080, n_ctx=n_ctx, n_gpu_layers=gpu_layers)
                 if started:
                     tray_context.set_model_loaded(True)

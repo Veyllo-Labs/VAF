@@ -14,6 +14,44 @@ from vaf.core.gpu_detection import get_primary_gpu
 from vaf.core.log_helper import get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.platform import Platform
 
+
+# Bare GGUF filenames of the built-in default models map back to their HuggingFace repo, so a config
+# value without a repo prefix (e.g. "Qwen3.5-4B-UD-Q8_K_XL.gguf") can still be downloaded. Keyed by a
+# lowercase filename prefix.
+_KNOWN_MODEL_REPOS = {
+    "qwen3.5-4b": "unsloth/Qwen3.5-4B-GGUF",
+    "qwen3.5-9b": "unsloth/Qwen3.5-9B-GGUF",
+    "deepseek-r1-0528-qwen3-8b": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
+}
+
+
+def _resolve_model_ref(name: str):
+    """Resolve a config model value to (repo_id, filename) for a HuggingFace download.
+
+        "owner/repo/file.gguf" (>= 2 slashes) -> ("owner/repo", "file.gguf")
+        "owner/repo"           (1 slash)      -> ("owner/repo", "<repo>.gguf")
+        "file.gguf"            (bare)         -> (known repo by prefix or None, "file.gguf")
+
+    repo_id is None for a bare filename whose repo is unknown -- it cannot be downloaded, and the
+    caller should fall back to the VRAM-adaptive default."""
+    name = (name or "").strip()
+    repo_id = None
+    if name.count("/") >= 2:
+        repo_id, filename = name.rsplit("/", 1)
+    elif "/" in name:
+        repo_id, filename = name, name.split("/")[-1] + ".gguf"
+    else:
+        filename = name
+        low = filename.lower()
+        for prefix, repo in _KNOWN_MODEL_REPOS.items():
+            if low.startswith(prefix):
+                repo_id = repo
+                break
+    if filename and not filename.lower().endswith(".gguf"):
+        filename += ".gguf"
+    return repo_id, filename
+
+
 class ServerManager:
     """
     Manages the lifecycle of the standalone llama-server executable.
@@ -80,7 +118,59 @@ class ServerManager:
             filename += ".gguf"
 
         return str(Path(self.base_dir) / "models" / filename)
-    
+
+    def ensure_model_present(self, model_name: str | None = None) -> str:
+        """Resolve the configured model (or `model_name`) and make sure its GGUF is on disk, downloading
+        it from HuggingFace when missing -- then return the local path. The server/tray auto-start path
+        uses this instead of get_model_path(), which only builds a path and would otherwise launch
+        llama-server against a non-existent file (the failure seen when the models dir was emptied).
+
+        Self-heal: if the configured model cannot be resolved to a repo (an unrecognised bare filename)
+        or its download fails, fall back to recommended_default_model() -- the VRAM-adaptive default --
+        and download THAT. So "no model at all" always ends with a model that fits the GPU's VRAM, never
+        a dead start."""
+        from vaf.core.gpu_detection import recommended_default_model
+        models_dir = Path(self.base_dir) / "models"
+
+        def _present(fname: str) -> bool:
+            return bool(fname) and (models_dir / fname).is_file()
+
+        def _download(repo_id: str, fname: str) -> str:
+            models_dir.mkdir(parents=True, exist_ok=True)
+            UI.event("System", f"Downloading {fname} from {repo_id}...", style="warning")
+            from huggingface_hub import hf_hub_download
+            hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir))
+            UI.event("System", "Download complete", style="success")
+            return str(models_dir / fname)
+
+        name = (model_name or Config.get("model") or "").strip()
+        if name.lower() == "auto":
+            name = recommended_default_model()
+
+        # 1) the configured model -- use it if present, else download it when its repo is known
+        repo_id, filename = _resolve_model_ref(name)
+        if _present(filename):
+            return str(models_dir / filename)
+        if repo_id and filename:
+            try:
+                return _download(repo_id, filename)
+            except Exception as e:
+                UI.error(f"Download of {filename} failed: {e}")
+
+        # 2) self-heal -- nothing usable was configured/downloadable: pick a model that fits this VRAM
+        auto_repo, auto_file = _resolve_model_ref(recommended_default_model())
+        if _present(auto_file):
+            return str(models_dir / auto_file)
+        if auto_repo and auto_file and auto_file != filename:
+            UI.event("System", f"No usable model for '{name or 'config'}' -- falling back to the VRAM-adaptive default ({auto_file}).", style="warning")
+            try:
+                return _download(auto_repo, auto_file)
+            except Exception as e:
+                UI.error(f"Fallback download failed: {e}")
+
+        # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
+        return str(models_dir / (filename or auto_file or "model.gguf"))
+
     def __del__(self):
         """Destructor: Clean up job object handle on Windows."""
         if hasattr(self, 'system') and self.system == "Windows" and hasattr(self, '_job_handle') and self._job_handle:

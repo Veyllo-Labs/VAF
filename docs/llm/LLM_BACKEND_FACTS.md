@@ -16,19 +16,24 @@ Exactly one of these three paths is always active. Which one is logged in **`log
 
 ## Default local model (`model: "auto"`)
 
-The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py`), `"auto"` resolves to **DeepSeek-R1-0528-Qwen3-8B** (`unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF`), an 8B reasoning model, with the **quantization chosen from the GPU's VRAM** — the highest quality that fits with a runtime buffer (~1–2 GB free):
+The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At model load (`vaf/core/agent.py` / `vaf/core/backend.py`), `"auto"` resolves to a **VRAM-adaptive Qwen3.5** GGUF: a 4B model (`unsloth/Qwen3.5-4B-GGUF`) on cards with ≤ 10 GB VRAM, a 9B model (`unsloth/Qwen3.5-9B-GGUF`) above. The quant is chosen so the weights leave room for the desktop/compositor (~1.5–2 GB) **and** the KV cache, not just for the weights alone — each tier sits a notch below "the weights alone fit":
 
-| VRAM | Quant | File size |
-|------|-------|-----------|
-| ≥ 20 GB | `BF16` (16-bit) | 16.4 GB |
-| ≥ 12 GB | `UD-Q8_K_XL` (8-bit XL) | 10.8 GB |
-| > 10 GB | `Q8_0` (8-bit) | 8.71 GB |
-| ≥ 9 GB | `UD-Q6_K_XL` (6-bit XL) | 7.49 GB |
-| else | `Q6_K` (6-bit) | 6.73 GB (offloads to CPU if it doesn't fully fit) |
+| VRAM | Model | Quant | File size |
+|------|-------|-------|-----------|
+| < 8 GB | Qwen3.5-4B | `Q4_K_M` (4-bit) | 2.74 GB |
+| 8 GB | Qwen3.5-4B | `Q6_K` (6-bit) | 3.53 GB |
+| 9–10 GB | Qwen3.5-4B | `UD-Q8_K_XL` (8-bit) | 5.95 GB |
+| 11 GB | Qwen3.5-9B | `Q5_K_M` (5-bit) | 6.58 GB |
+| 12–15 GB | Qwen3.5-9B | `Q6_K` (6-bit) | 7.46 GB |
+| 16–19 GB | Qwen3.5-9B | `Q8_0` (8-bit) | 9.53 GB |
+| 20–23 GB | Qwen3.5-9B | `UD-Q8_K_XL` (8-bit) | 12.97 GB |
+| ≥ 24 GB | Qwen3.5-9B | `BF16` (16-bit) | 17.92 GB |
 
 VRAM is read from the primary GPU (`nvidia-smi` / `rocm-smi`, total memory). The picker is `recommended_default_model(vram_gb=None)` in `vaf/core/gpu_detection.py` (pass an explicit `vram_gb` to override detection).
 
 An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
+
+**Auto-download and self-heal.** When the resolved model file is not on disk, the server/tray auto-start downloads it from HuggingFace before launching `llama-server` (`ServerManager.ensure_model_present`); the agent/CLI path does the same via `ensure_model_exists`. A bare filename of a built-in default (e.g. `Qwen3.5-4B-UD-Q8_K_XL.gguf`) is mapped back to its repo so it can still be fetched. If the configured model cannot be resolved to a repo, or its download fails, VAF falls back to the VRAM-adaptive default (`recommended_default_model`) and downloads that — so an empty `models/` directory recovers to a model that fits the GPU instead of a dead start.
 
 ---
 

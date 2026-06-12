@@ -52,6 +52,100 @@ def _resolve_model_ref(name: str):
     return repo_id, filename
 
 
+def ensure_model_available(model_name, models_dir) -> str:
+    """Resolve a model ref (auto / repo/file / known bare filename) and make sure its GGUF is on disk,
+    downloading it from HuggingFace when missing -- then return the local path. THE single model-download
+    entry point (the tray, the agent/headless worker and the CLI all go through here).
+
+    - Concurrency: the download is wrapped in a cross-thread/process ``filelock`` so the tray, the web
+      worker and a `vaf run` never fetch the same file at once or read a half-written file; a second
+      caller blocks, then finds the finished file.
+    - Progress: byte progress is mirrored into ``model_download_state.MODEL_DOWNLOAD`` so other threads
+      can show a status / wait instead of racing the download.
+    - Self-heal: if the configured model has no resolvable repo (an unrecognised bare filename) or its
+      download fails, fall back to ``recommended_default_model()`` (the VRAM-adaptive default) and
+      download THAT -- so "no model at all" recovers to a model that fits the GPU, never a dead start.
+
+    Never ``sys.exit()``s. If even the VRAM default cannot be obtained (e.g. offline) the returned path
+    may still be missing -- callers must check ``os.path.exists`` and surface a clear error."""
+    from vaf.core.gpu_detection import recommended_default_model
+    models_dir = Path(models_dir)
+
+    def _present(fname: str) -> bool:
+        return bool(fname) and (models_dir / fname).is_file()
+
+    def _download(repo_id: str, fname: str) -> str:
+        local = models_dir / fname
+        models_dir.mkdir(parents=True, exist_ok=True)
+        from filelock import FileLock
+        # Serialize downloads across threads AND processes (filelock is already used in secure_store.py).
+        with FileLock(str(models_dir / ".download.lock")):
+            if local.is_file():                       # another caller finished while we waited on the lock
+                return str(local)
+            from vaf.core.model_download_state import MODEL_DOWNLOAD, make_state_tqdm
+            from huggingface_hub import hf_hub_download
+            UI.event("System", f"Downloading {fname} from {repo_id}...", style="warning")
+            MODEL_DOWNLOAD.start(repo_id, fname)
+            # Stream progress to the WebUI download banner (same channel a WebUI-initiated download uses),
+            # so tray/auto (first-run) downloads are visible too -- not only WebUI-started ones.
+            _stop_broadcast = None
+            try:
+                from vaf.core.web_interface import start_model_download_broadcast
+                _stop_broadcast = start_model_download_broadcast()
+            except Exception:
+                _stop_broadcast = None
+            try:
+                hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir),
+                                tqdm_class=make_state_tqdm())
+            finally:
+                MODEL_DOWNLOAD.finish()
+                if _stop_broadcast:
+                    try:
+                        _stop_broadcast()
+                    except Exception:
+                        pass
+                # Tell the WebUI the download finished: clears the banner and refreshes the model list.
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    get_web_interface().push_update({
+                        "type": "model_download_done",
+                        "success": local.is_file(),
+                        "models": [p.name for p in models_dir.glob("*.gguf")],
+                    })
+                except Exception:
+                    pass
+            UI.event("System", "Download complete", style="success")
+            return str(local)
+
+    name = (model_name or Config.get("model") or "").strip()
+    if name.lower() == "auto":
+        name = recommended_default_model()
+
+    # 1) the configured model -- use it if present, else download it when its repo is known
+    repo_id, filename = _resolve_model_ref(name)
+    if _present(filename):
+        return str(models_dir / filename)
+    if repo_id and filename:
+        try:
+            return _download(repo_id, filename)
+        except Exception as e:
+            UI.error(f"Download of {filename} failed: {e}")
+
+    # 2) self-heal -- nothing usable was configured/downloadable: pick a model that fits this VRAM
+    auto_repo, auto_file = _resolve_model_ref(recommended_default_model())
+    if _present(auto_file):
+        return str(models_dir / auto_file)
+    if auto_repo and auto_file and auto_file != filename:
+        UI.event("System", f"No usable model for '{name or 'config'}' -- falling back to the VRAM-adaptive default ({auto_file}).", style="warning")
+        try:
+            return _download(auto_repo, auto_file)
+        except Exception as e:
+            UI.error(f"Fallback download failed: {e}")
+
+    # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
+    return str(models_dir / (filename or auto_file or "model.gguf"))
+
+
 class ServerManager:
     """
     Manages the lifecycle of the standalone llama-server executable.
@@ -120,56 +214,11 @@ class ServerManager:
         return str(Path(self.base_dir) / "models" / filename)
 
     def ensure_model_present(self, model_name: str | None = None) -> str:
-        """Resolve the configured model (or `model_name`) and make sure its GGUF is on disk, downloading
-        it from HuggingFace when missing -- then return the local path. The server/tray auto-start path
-        uses this instead of get_model_path(), which only builds a path and would otherwise launch
-        llama-server against a non-existent file (the failure seen when the models dir was emptied).
-
-        Self-heal: if the configured model cannot be resolved to a repo (an unrecognised bare filename)
-        or its download fails, fall back to recommended_default_model() -- the VRAM-adaptive default --
-        and download THAT. So "no model at all" always ends with a model that fits the GPU's VRAM, never
-        a dead start."""
-        from vaf.core.gpu_detection import recommended_default_model
-        models_dir = Path(self.base_dir) / "models"
-
-        def _present(fname: str) -> bool:
-            return bool(fname) and (models_dir / fname).is_file()
-
-        def _download(repo_id: str, fname: str) -> str:
-            models_dir.mkdir(parents=True, exist_ok=True)
-            UI.event("System", f"Downloading {fname} from {repo_id}...", style="warning")
-            from huggingface_hub import hf_hub_download
-            hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir))
-            UI.event("System", "Download complete", style="success")
-            return str(models_dir / fname)
-
-        name = (model_name or Config.get("model") or "").strip()
-        if name.lower() == "auto":
-            name = recommended_default_model()
-
-        # 1) the configured model -- use it if present, else download it when its repo is known
-        repo_id, filename = _resolve_model_ref(name)
-        if _present(filename):
-            return str(models_dir / filename)
-        if repo_id and filename:
-            try:
-                return _download(repo_id, filename)
-            except Exception as e:
-                UI.error(f"Download of {filename} failed: {e}")
-
-        # 2) self-heal -- nothing usable was configured/downloadable: pick a model that fits this VRAM
-        auto_repo, auto_file = _resolve_model_ref(recommended_default_model())
-        if _present(auto_file):
-            return str(models_dir / auto_file)
-        if auto_repo and auto_file and auto_file != filename:
-            UI.event("System", f"No usable model for '{name or 'config'}' -- falling back to the VRAM-adaptive default ({auto_file}).", style="warning")
-            try:
-                return _download(auto_repo, auto_file)
-            except Exception as e:
-                UI.error(f"Fallback download failed: {e}")
-
-        # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
-        return str(models_dir / (filename or auto_file or "model.gguf"))
+        """Resolve + download (locked, self-healing) the configured model and return its local path.
+        The tray/server auto-start uses this instead of get_model_path(), which only builds a path and
+        would otherwise launch llama-server against a non-existent file. Thin wrapper around the shared
+        module-level ``ensure_model_available`` so every load path uses one implementation."""
+        return ensure_model_available(model_name, Path(self.base_dir) / "models")
 
     def __del__(self):
         """Destructor: Clean up job object handle on Windows."""

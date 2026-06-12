@@ -3057,13 +3057,16 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'model_download_progress') {
-                    setDownloadModelStatus(prev => prev.status === 'downloading' ? {
-                        ...prev,
+                    // Show the banner for ANY download in progress -- including tray/auto (first-run)
+                    // downloads, not only ones started from the WebUI (which pre-set 'downloading').
+                    setDownloadModelStatus(prev => ({
+                        status: 'downloading',
+                        repo_id: data.repo_id ?? prev.repo_id,
                         progress_pct: data.progress_pct,
                         bytes_done: data.bytes_done,
                         bytes_total: data.bytes_total,
                         speed_str: data.speed_str
-                    } : prev);
+                    }));
                 }
                 else if (data.type === 'model_download_done') {
                     setAvailableModels(data.models || []);

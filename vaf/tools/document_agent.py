@@ -435,12 +435,13 @@ Text:
         return build_document_model(title=title, document_type=document_type, sections=sections)
 
     def _save_document(self, content: DocumentModel, filename: str, format: str, doc_type: str) -> Path:
-        """Save document in requested format. Uses Documents/VAF_Documents (never project root)."""
+        """Save document in requested format. Chat workspace first, legacy VAF_Documents otherwise (never CWD)."""
         from vaf.core.platform import Platform
-        
-        # Always use Documents/VAF_Documents - never CWD/project root
-        docs_dir = Platform.documents_dir() / "VAF_Documents"
-        docs_dir.mkdir(parents=True, exist_ok=True)
+        from vaf.core.session import resolve_agent_output_dir
+
+        # Chat workspace when a session exists (shows up in the WebUI workspace
+        # browser next to the chat's projects); Documents/VAF_Documents otherwise.
+        docs_dir = resolve_agent_output_dir(Platform.documents_dir() / "VAF_Documents")
         # Use only the filename (no path) to avoid injection or wrong-directory saves
         safe_name = Path(filename).name if filename else "document"
         file_path = docs_dir / safe_name

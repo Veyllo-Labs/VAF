@@ -1044,7 +1044,9 @@ class ResearchAgentTool(BaseTool):
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
                     filename = f"research_{safe_topic}_{timestamp}.md"
-                    output_dir = Platform.get_research_dir()
+                    # Chat workspace when a session exists, legacy research dir otherwise
+                    from vaf.core.session import resolve_agent_output_dir
+                    output_dir = resolve_agent_output_dir(Platform.get_research_dir())
                     output_path = output_dir / filename
 
                     if _debug_lg:
@@ -1093,9 +1095,10 @@ class ResearchAgentTool(BaseTool):
                 safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
                 filename = f"research_{safe_topic}_{timestamp}.html"
 
-                # Save to user's Documents/VAF_Research (or Downloads/VAF_Research as fallback)
-                # This is OS-independent and user-friendly
-                output_dir = Platform.get_research_dir()
+                # Save to the chat's workspace when a session exists (visible in the
+                # WebUI workspace browser); Documents/VAF_Research otherwise.
+                from vaf.core.session import resolve_agent_output_dir
+                output_dir = resolve_agent_output_dir(Platform.get_research_dir())
                 output_path = output_dir / filename
 
                 if _debug_lg:

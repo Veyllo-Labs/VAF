@@ -86,6 +86,30 @@ def test_intent_detector_ignores_normal_coding_tasks(task):
     assert _detect_history_rollback_intent(task) == ("", "")
 
 
+def test_intent_detector_long_rollback_with_commit_id_matches():
+    # The main agent wraps delegations in long explanatory text — a concrete
+    # commit id must still hit the fast path instead of the agentic loop.
+    task = (
+        "Der Benutzer möchte die ursprüngliche Version der Autowerkstatt-Website "
+        "wiederherstellen, weil die letzte Bearbeitung die Seite beschädigt hat. "
+        "Führe deshalb bitte einen Rollback auf den Commit a2200c1 aus und stelle "
+        "sicher, dass danach der ursprüngliche Zustand der Website wieder aktiv ist."
+    )
+    assert len(task) > 200
+    assert _detect_history_rollback_intent(task) == ("rollback", "a2200c1")
+
+
+def test_intent_detector_long_rollback_without_id_stays_conservative():
+    task = (
+        "Der Benutzer ist unzufrieden mit den letzten Änderungen an der Website "
+        "und möchte gerne irgendwie zu einem früheren Stand zurück, bitte führe "
+        "einen Rollback durch und überlege dir selbst, welcher Stand der richtige "
+        "sein könnte, schau dir dazu die bisherige Entwicklung im Detail an."
+    )
+    assert len(task) > 200
+    assert _detect_history_rollback_intent(task) == ("", "")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Fast path through CodingAgentTool.run (no agentic loop, no LLM)
 # ─────────────────────────────────────────────────────────────────────────────

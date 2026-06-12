@@ -45,17 +45,26 @@ _COMMIT_REF = re.compile(r'\b[0-9a-f]{7,40}\b')
 def _detect_history_rollback_intent(task: str) -> "tuple[str, str]":
     """Classify a coding_agent task as a history/rollback delegation.
 
-    Returns (kind, commit) with kind in {"", "history", "rollback"}. Kept
-    deliberately conservative: only short tasks without creation verbs match,
-    so "Erstelle eine Seite über die History von Rom" still runs the normal
-    agentic loop.
+    Returns (kind, commit) with kind in {"", "history", "rollback"}.
+    Creation verbs always win ("Erstelle eine Seite über die History von Rom"
+    runs the normal agentic loop). A rollback request that names a concrete
+    commit id matches regardless of task length — the main agent often wraps
+    the delegation in long explanatory text, and sending it into the agentic
+    loop made a small model plan "check git status" tasks instead of simply
+    rolling back. Without a commit id the conservative 200-char limit applies.
     """
     t = (task or "").strip()
-    if not t or len(t) > 200 or _CREATE_INTENT.search(t):
+    if not t or _CREATE_INTENT.search(t):
         return "", ""
     if _ROLLBACK_INTENT.search(t):
         m = _COMMIT_REF.search(t.lower())
-        return "rollback", (m.group(0) if m else "")
+        if m:
+            return "rollback", m.group(0)
+        if len(t) <= 200:
+            return "rollback", ""
+        return "", ""
+    if len(t) > 200:
+        return "", ""
     if _HISTORY_INTENT.search(t):
         return "history", ""
     return "", ""

@@ -628,6 +628,22 @@ The integrated HTTPS proxy forwards page requests to the Next.js process on `htt
 
 **Solution**: Refresh page, check connection status
 
+## Session Workspace Window (file browser)
+
+Every chat with a workspace shows a slim chip above the input field — leftmost element of the indicator bar (RAG/token displays stay on the right; the bar mirrors the input row geometry so nothing sticks out beyond the input field). Clicking it opens a centered window in Context-Window size with an explorer-style file browser: a Back button with navigation history, a clickable address bar (which covers "up one level", so there is no separate Up button), and an icon grid (folder and file tiles).
+
+Files and folders can be deleted from the tile hover actions; a confirmation dialog inside the window warns before anything is removed (folders delete recursively with their item count shown). `POST /api/session/workspace/delete` enforces the same ownership and boundary rules as browsing: targets must stay inside the workspace root, the root itself cannot be deleted, traversal names are rejected.
+
+- **Root = the chat's own folder** (`VAF_Projects/<uid[:8]>/<session_id>/`), which can contain several project folders; legacy sessions fall back to their single project directory. Resolution lives in `_resolve_session_workspace` (`vaf/core/web_server.py`).
+- **Navigation:** folders open on click, a breadcrumb and a `..` row navigate back. Browsing is strictly confined to the chat folder — `subpath` values are normalized server-side and escapes are rejected with 400 (`_resolve_workspace_subdir`).
+- **Download** per file via the existing `GET /api/file?path=...` endpoint; file rows are draggable out of the browser (Chromium `DownloadURL`).
+- **Upload** via the footer button (multi-select) or by dropping files anywhere into the list — they land in the currently open folder. Sent as base64 JSON to `POST /api/session/workspace/upload` (25 MB cap, filename sanitized).
+- **Data source:** `GET /api/session/workspace?sessionId=...&subpath=...` lists non-hidden folders (with item counts) and files (size, modified).
+- **User isolation:** both endpoints verify session ownership (`metadata.user_scope_id` vs. the requesting user; local admin exempt) and `GET /api/file` refuses downloads from another user's `VAF_Projects/<uid[:8]>/` subtree — see `docs/security/USER_ISOLATION.md`.
+- **Live refresh:** chip and window refresh on session switch, on every `file_created` event and after uploads.
+
+This matters most when VAF runs as a server: the browser is then the only way to get files in and out of the workspace.
+
 ## Future Enhancements
 
 Potential improvements:

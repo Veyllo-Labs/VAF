@@ -127,7 +127,7 @@ Agent: [Uses document_writer]
 Output:
 ### Letter created!
 **File:** resignation_letter.docx
-**Path:** ~/Documents/VAF_Documents/resignation_letter.docx
+**Path:** ~/Documents/VAF_Projects/<uid>/<session_id>/resignation_letter.docx
 **Format:** Microsoft Word (.docx)
 **Size:** 450 characters
 
@@ -159,7 +159,7 @@ Output:
 **Format:** DOCX
 
 **File:** Arbeitsvertrag_20260113_143022.docx
-**Location:** ~/Documents/VAF_Documents/Arbeitsvertrag_20260113_143022.docx
+**Location:** ~/Documents/VAF_Projects/<uid>/<session_id>/Arbeitsvertrag_20260113_143022.docx
 
 **Sections Generated:**
   1. Vertragsparteien
@@ -403,11 +403,11 @@ pip install python-docx  # For Word documents
 
 **Cause:** DOCX files are ZIP archives. This error means the file was corrupted during save or is not a valid DOCX.
 
-**Solution:** The document agent now (1) saves to `~/Documents/VAF_Documents` (never project root), (2) verifies each saved DOCX. If verification fails, it falls back to `.txt`. Ensure python-docx is up to date: `pip install --upgrade python-docx`.
+**Solution:** The document agent now (1) saves to the chat's workspace folder (never the project root or CWD), (2) verifies each saved DOCX. If verification fails, it falls back to `.txt`. Ensure python-docx is up to date: `pip install --upgrade python-docx`.
 
 ### Problem: Documents saved in wrong location (e.g. project root)
 
-**Solution:** Both `document_writer` and `document_agent` save to `~/Documents/VAF_Documents` (or `%USERPROFILE%\Documents\VAF_Documents` on Windows). This directory is created automatically.
+**Solution:** Both `document_writer` and `document_agent` save into the chat's workspace folder (`~/Documents/VAF_Projects/<uid[:8]>/<session_id>/`, resolved via `resolve_agent_output_dir` in `vaf/core/session.py`), where the files also appear in the WebUI workspace browser. Without session context (plain CLI) they fall back to the legacy `~/Documents/VAF_Documents` directory. Directories are created automatically.
 
 ## Related Documentation
 

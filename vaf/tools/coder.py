@@ -169,6 +169,74 @@ def _final_commit(base_dir: str, message: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# WebUI coder_state payload builders (file tree + git state)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_file_tree(
+    base_dir: str,
+    files_created=(),
+    current_file: str = "",
+    initial_files=(),
+) -> List[Dict[str, Any]]:
+    """Project file list for the SubAgent window explorer.
+
+    Status per file: "W" = being written right now, "A" = added this run,
+    "M" = modified this run (existed at run start), "" = untouched.
+    Hidden entries (.git/, .vaf/, dotfiles) are excluded — the explorer shows
+    the deliverable, not infrastructure.
+    """
+    created = {os.path.abspath(f) for f in (files_created or ())}
+    initial = set(initial_files or ())
+    current_name = os.path.basename(current_file or "")
+    tree: List[Dict[str, Any]] = []
+    try:
+        for entry in sorted(os.listdir(base_dir)):
+            if entry.startswith('.'):
+                continue
+            path = os.path.join(base_dir, entry)
+            if not os.path.isfile(path):
+                continue
+            if entry == current_name:
+                status = "W"
+            elif os.path.abspath(path) in created:
+                status = "M" if entry in initial else "A"
+            else:
+                status = ""
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            tree.append({"name": entry, "size": size, "status": status})
+    except Exception:
+        pass
+    return tree
+
+
+def _build_git_state(base_dir: str, max_commits: int = 5) -> Dict[str, Any]:
+    """Branch, dirty-count and recent commits for the SubAgent window."""
+    state: Dict[str, Any] = {"branch": "", "dirty": 0, "commits": []}
+    if not os.path.isdir(os.path.join(base_dir, '.git')):
+        return state
+    try:
+        from vaf.tools.project_git import _run_git
+        branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=base_dir)
+        state["branch"] = (branch.stdout or "").strip()
+        status = _run_git(["status", "--porcelain"], cwd=base_dir)
+        state["dirty"] = len([ln for ln in (status.stdout or "").splitlines() if ln.strip()])
+        log = _run_git(
+            ["log", f"-n{max_commits}", "--date=relative", "--pretty=format:%h|%ad|%s"],
+            cwd=base_dir,
+        )
+        for line in (log.stdout or "").splitlines():
+            sha, when, msg = (line.split("|", 2) + ["", ""])[:3]
+            if sha:
+                state["commits"].append({"sha": sha, "when": when, "msg": msg})
+    except Exception:
+        pass
+    return state
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Cross-Platform Clickable Links
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1620,11 +1688,17 @@ def _verify_task_goal(
             "Is this goal already fully implemented in the code above?"
         )
         response = str(llm_verify(prompt) or "").strip()
-        first_word = response.split()[0].strip('.,:;!').upper() if response.split() else ""
-        if first_word == "YES":
-            evidence = response[:200].replace('\n', ' ')
+        if not response:
+            return False, "LLM check returned no answer"
+        # Reasoning models bury the verdict at the END of their chain of thought
+        # — take the last standalone YES/NO instead of requiring the first word.
+        verdicts = re.findall(r'\b(YES|NO)\b', response.upper())
+        if verdicts and verdicts[-1] == "YES":
+            evidence = response[-200:].replace('\n', ' ')
             return True, f"verified by LLM check: {evidence}"
-        return False, f"LLM check did not confirm goal: {response[:150]}" if response else "LLM check returned no answer"
+        if verdicts:
+            return False, f"LLM check did not confirm goal: {response[-150:]}"
+        return False, f"LLM check gave no clear verdict: {response[-150:]}"
     except Exception as e:
         return False, f"verification check failed: {e}"
 
@@ -2599,6 +2673,16 @@ Thumbs.db
             
         # Initialize Persistence for TaskManager
         task_mgr.initialize(base_dir)
+
+        # Snapshot of visible files at run start — lets the WebUI file tree
+        # distinguish files added (A) vs modified (M) during this run.
+        try:
+            _initial_file_names = {
+                _e for _e in os.listdir(base_dir)
+                if not _e.startswith('.') and os.path.isfile(os.path.join(base_dir, _e))
+            }
+        except Exception:
+            _initial_file_names = set()
         
         # Add Git tools with base_dir context (create wrappers that pass base_dir)
         def make_git_tool_wrapper(tool_class, base_dir):
@@ -3826,9 +3910,12 @@ Task {task_idx + 1}: {current_task}
         def _llm_verify_call(prompt: str) -> str:
             """One bounded, non-streaming LLM call for stuck-task goal verification.
 
-            Deliberately small (200 tokens, temp 0, 60s timeout): if the model is
-            stuck on the task itself, this simpler YES/NO question is still
-            answerable; any error propagates to _verify_task_goal -> not verified.
+            Bounded (1000 tokens, temp 0, 90s timeout): if the model is stuck on
+            the task itself, this simpler YES/NO question is still answerable;
+            any error propagates to _verify_task_goal -> not verified.
+            Reasoning models (e.g. Qwen) may spend their whole budget thinking
+            and leave `content` empty — fall back to `reasoning_content`, the
+            verdict parser picks the last YES/NO from it.
             """
             _vr_headers = {"Content-Type": "application/json"}
             if _llm_api_key:
@@ -3836,14 +3923,15 @@ Task {task_idx + 1}: {current_task}
             _vr_body = {
                 "model": _llm_model or "user-model",
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 200,
+                "max_tokens": 1000,
                 "temperature": 0.0,
                 "stream": False,
             }
-            _vr_resp = requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=60)
+            _vr_resp = requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=90)
             _vr_resp.raise_for_status()
             _vr_data = _vr_resp.json()
-            return ((_vr_data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            _vr_msg = (_vr_data.get("choices") or [{}])[0].get("message") or {}
+            return _vr_msg.get("content") or _vr_msg.get("reasoning_content") or ""
 
         def _maybe_start_final_retry() -> bool:
             """One last retry round for failed tasks before the run ends.
@@ -3894,6 +3982,87 @@ Task {task_idx + 1}: {current_task}
                     ),
                 })
             return True
+
+        # WebUI live state: file tree, git, progress for the VS-Code-style
+        # SubAgent window. Hash-throttled so unchanged payloads are not resent.
+        _last_coder_state_hash = [None]
+
+        def _emit_coder_state(current_file: str = ""):
+            try:
+                _sid = os.environ.get("VAF_SESSION_ID", "").strip()
+                if not _sid:
+                    from vaf.core.subagent_ipc import get_current_session_id as _gsid
+                    _sid = _gsid() or ""
+                if not _sid:
+                    return  # no WebUI session -> nothing to feed
+                # Real task list for the window's Tasks section: the generic
+                # heartbeat steps only know "Sub-Agent running"; this is the
+                # actual plan with live per-task status.
+                _cur_idx = getattr(task_mgr, "current_task_idx", -1) if task_mgr else -1
+                _tasks_payload = []
+                for _ti, _td in enumerate(task_mgr.todos if task_mgr else []):
+                    _tstatus = _td["status"]
+                    if _tstatus in ("pending", "in_progress") and _ti == _cur_idx:
+                        _tstatus = "running"
+                    _tasks_payload.append({"title": _td["task"][:120], "status": _tstatus})
+
+                payload = {
+                    "fileTree": _build_file_tree(
+                        base_dir, files_created, current_file, _initial_file_names
+                    ),
+                    "git": _build_git_state(base_dir),
+                    "tasks": _tasks_payload[:12],
+                    "loop": loop.loop_count,
+                    "taskProgress": task_mgr.get_progress() if task_mgr else "",
+                    "linterOk": not bool(getattr(current_state, 'linter_errors_active', False)),
+                    "projectName": os.path.basename(base_dir),
+                    "projectPath": base_dir,
+                }
+                payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
+                if payload_hash == _last_coder_state_hash[0]:
+                    return
+                _last_coder_state_hash[0] = payload_hash
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().emit_coder_state(payload, session_id=_sid)
+                if lg:
+                    lg.event(
+                        "coder_state_emitted",
+                        files=len(payload["fileTree"]),
+                        commits=len(payload["git"]["commits"]),
+                        loop=payload["loop"],
+                        task_progress=payload["taskProgress"],
+                    )
+            except Exception:
+                pass
+
+        # Live editor feed: the code currently streaming out of the model.
+        # Time-throttled; content is tail-capped so huge files stay cheap.
+        _last_code_emit_at = [0.0]
+
+        def _emit_live_code(filename: str, content: str, force: bool = False):
+            try:
+                now = time.time()
+                if not force and now - _last_code_emit_at[0] < 0.35:
+                    return
+                _last_code_emit_at[0] = now
+                _sid = os.environ.get("VAF_SESSION_ID", "").strip()
+                if not _sid:
+                    from vaf.core.subagent_ipc import get_current_session_id as _gsid2
+                    _sid = _gsid2() or ""
+                if not _sid:
+                    return
+                tail = content or ""
+                if len(tail) > 6000:
+                    tail = tail[-6000:]
+                    cut = tail.find('\n')
+                    if 0 <= cut < 200:
+                        tail = tail[cut + 1:]
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().emit_coder_code(filename or "", tail, session_id=_sid)
+                if lg:
+                    lg.event("live_code_emitted", file=filename, chars=len(tail))
+            except Exception:
+                pass
         
         # Dynamic Temperature State
         current_temp = 0.3
@@ -3941,6 +4110,10 @@ Task {task_idx + 1}: {current_task}
                     )
             except Exception:
                 pass
+
+            # Feed the WebUI SubAgent window (file tree, git, progress).
+            # Hash-throttled inside, so unchanged states cost one local hash only.
+            _emit_coder_state()
 
             # ═══════════════════════════════════════════════════════════════
             # GUIDED MODE: Skip planning phase and go directly to Task 1
@@ -4817,6 +4990,8 @@ Task {task_idx + 1}: {current_task}
                                                     
                                                     # Pass FULL content to render so it can calculate line numbers correctly
                                                     tui.set_code_preview(fname_preview, current_content, "code")
+                                                    # WebUI live editor: stream the code as it is generated
+                                                    _emit_live_code(fname_preview, current_content)
                     
                     except json.JSONDecodeError:
                         try:
@@ -7774,9 +7949,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         
                         tui.add_file(fname, 0, "writing")
                         tui.set_action(f"📝 Writing: {fname}")
-                        
+
                         # Update Code Preview Panel
                         tui.set_code_preview(fname, fn_args.get("content", ""), "code")
+                        # WebUI live editor: final full content for this file
+                        _emit_live_code(fname, fn_args.get("content", ""), force=True)
 
                         # Log start of writing
                         if 'append_with_context' in locals():
@@ -7938,6 +8115,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 # Track write_file calls in session
                                 write_file_calls_in_session += 1
                                 recent_loop_write_files.append(True)  # Track this loop had write_file
+
+                                # WebUI: refresh explorer with this file marked as writing
+                                _emit_coder_state(current_file=path)
                                 
                                 tui.update_file(os.path.basename(path), "done", size)
                                 
@@ -8299,6 +8479,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         lg.event("final_commit", note=final_commit_note, status=_run_status)
                 except Exception:
                     pass
+                # WebUI: show the final commit in the source-control section
+                _emit_coder_state()
             except Exception:
                 final_commit_note = ""
         git_line = f"**💾 {final_commit_note}**\n" if final_commit_note else ""

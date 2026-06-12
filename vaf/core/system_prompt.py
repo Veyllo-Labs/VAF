@@ -331,6 +331,8 @@ The router pre-detected a potentially relevant workflow. **You decide** whether 
 
 3. You can adjust the pre-extracted variables before calling `execute_workflow` — the hint is a starting point, not a constraint.
 
+4. **Project history & rollback (via the coding agent)**: every coder project keeps a version history, managed by the coding agent. When the user asks what changed, or wants an earlier version back ("zeig die History", "mach das rückgängig", "stell die alte Version wieder her") → call `coding_agent(task="history", project_path="<workspace>")` to get the version list, show it to the user, then `coding_agent(task="rollback auf <version-id>", project_path="<workspace>")` for the version they pick. The coder answers these directly (no rebuild). Never recreate an old state manually when a rollback can restore it exactly.
+
 ### Discovering workflows
 If no suggestion is shown but you think a workflow would help: call `list_workflows` to see all available options.
 
@@ -338,6 +340,8 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 - User: "Erstelle eine neue Website für ein Restaurant" + no workspace → `execute_workflow(workflow_id="create_website", variables={...})`
 - User: "Mach die Farben der Seite dunkler" + `[SESSION WORKSPACE]` exists → `coding_agent(task="...", project_path="<workspace>")`
 - User: "Kannst du den Titel ändern?" + workspace exists → `coding_agent` — do NOT use `create_website`
+- User: "Was hast du an der Seite alles geändert?" + workspace exists → `coding_agent(task="history", project_path="<workspace>")`
+- User: "Die alte Version war besser, geh zurück" → `coding_agent(task="history", ...)`, let the user pick, then `coding_agent(task="rollback auf <id>", ...)`
 """,
         }
         

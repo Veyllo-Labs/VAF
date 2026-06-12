@@ -2161,6 +2161,33 @@ Thumbs.db
         if not task:
             return "Error: No task provided."
 
+        # ── History/Rollback delegation fast path ────────────────────────────
+        # The Main Agent talks to the coder like a tool: a task such as
+        # "zeig die History" or "rollback auf <id>" is answered directly and
+        # deterministically — no agentic loop, no terminal spawn, no LLM.
+        # The coder owns the project history; the Main Agent only delegates.
+        try:
+            from vaf.tools.project_git import (
+                ProjectHistoryTool,
+                ProjectRollbackTool,
+                _detect_history_rollback_intent,
+            )
+            _hr_kind, _hr_commit = _detect_history_rollback_intent(task)
+            if _hr_kind:
+                _hr_path = kwargs.get('project_path', '')
+                if _hr_kind == "history":
+                    return ProjectHistoryTool().run(project_path=_hr_path)
+                if not _hr_commit:
+                    history = ProjectHistoryTool().run(project_path=_hr_path)
+                    return (
+                        f"{history}\n\n"
+                        "Rollback needs a version id. Ask the user which version to restore, "
+                        'then call coding_agent again with task="rollback auf <id>".'
+                    )
+                return ProjectRollbackTool().run(commit=_hr_commit, project_path=_hr_path)
+        except Exception as _hr_e:
+            return f"Error: history/rollback handling failed: {_hr_e}"
+
         # ── Read-task guard ───────────────────────────────────────────────────
         # coding_agent is a CODE CREATOR, not a file reader.
         # If the main agent tries to use it purely to read/return file contents,
@@ -2593,6 +2620,12 @@ Thumbs.db
             self.local_tools["git_add_commit"] = make_git_tool_wrapper(GitAddCommitTool, base_dir)
             self.local_tools["git_status"] = make_git_tool_wrapper(GitStatusTool, base_dir)
             self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
+
+            # Version history + safe rollback (coder-owned; also reachable for the
+            # model so it can restore a known-good state at its own discretion)
+            from vaf.tools.project_git import ProjectHistoryTool, ProjectRollbackTool
+            self.local_tools["project_history"] = make_git_tool_wrapper(ProjectHistoryTool, base_dir)
+            self.local_tools["project_rollback"] = make_git_tool_wrapper(ProjectRollbackTool, base_dir)
             
             # Add Knowledge Tools (wrapped to inject base_dir)
             from vaf.tools.knowledge import UpdateCodexTool, AddMemoryTool
@@ -2606,10 +2639,45 @@ Thumbs.db
         template_type = None
         template_files = []
 
+        # EDIT MODE GUARD: never apply templates to a project that already has
+        # code files. TemplateManager.generate_files() writes into base_dir and
+        # would overwrite the user's work — an "add the Impressum" follow-up run
+        # once replaced a finished website with placeholder scaffolding because
+        # the task text contained "Website" and the keyword fallback forced the
+        # template. Existing projects always go through normal planning, where
+        # the fresh task context injects the existing file list for editing.
+        _existing_code_exts = (
+            '.html', '.css', '.js', '.ts', '.py', '.java', '.cpp', '.c',
+            '.go', '.rs', '.sh', '.json',
+        )
+        _existing_code_files = []
+        try:
+            for _entry in os.listdir(base_dir):
+                if _entry.startswith('.'):
+                    continue
+                _p = os.path.join(base_dir, _entry)
+                if os.path.isfile(_p) and os.path.splitext(_entry)[1].lower() in _existing_code_exts:
+                    _existing_code_files.append(_entry)
+        except Exception:
+            pass
+
         if _is_api_mode:
             tui.append_stream("[INFO] API provider detected — skipping template (not needed for capable models)")
+        elif _existing_code_files and not skip_template:
+            tui.append_stream(
+                f"[INFO] Existing project with {len(_existing_code_files)} code file(s) - "
+                f"skipping template (edit mode)"
+            )
+            try:
+                if lg:
+                    lg.event(
+                        "template_skipped_existing_project",
+                        existing_files=_existing_code_files[:10],
+                    )
+            except Exception:
+                pass
 
-        if not skip_template and not _is_api_mode:
+        if not skip_template and not _is_api_mode and not _existing_code_files:
             tui.set_action("Analyzing task for template...")
             # CRITICAL: Force immediate update BEFORE blocking operation
             tui.append_stream("[INFO] Starting template selection...")
@@ -4188,6 +4256,34 @@ Task {task_idx + 1}: {current_task}
                             "type": "object",
                             "properties": {"limit": {"type": "integer", "description": "Number of commits to show (default: 10)", "default": 10}},
                             "required": []
+                        }
+                    }
+                })
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "project_history",
+                        "description": "Show the project's version history (commit id, date, description, changed files).",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"limit": {"type": "integer", "description": "Maximum versions to show (default 15)"}},
+                            "required": []
+                        }
+                    }
+                })
+                tools_schema.append({
+                    "type": "function",
+                    "function": {
+                        "name": "project_rollback",
+                        "description": (
+                            "Restore the project to an earlier version (safe: backs up current state first, "
+                            "rollback is itself undoable). ONLY when the task asks for it or you must return "
+                            "to a known-good state after breaking the project."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"commit": {"type": "string", "description": "Version id from project_history"}},
+                            "required": ["commit"]
                         }
                     }
                 })
@@ -7706,6 +7802,12 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             tui.set_action("🔧 Checking Git status...")
                         elif fn_name == "git_log":
                             tui.set_action("🔧 Viewing Git log...")
+                        live.update(tui.render())
+                    elif fn_name == "project_history":
+                        tui.set_action("🔧 Reading version history...")
+                        live.update(tui.render())
+                    elif fn_name == "project_rollback":
+                        tui.set_action(f"🔧 Rollback to {fn_args.get('commit', '')[:10]}...")
                         live.update(tui.render())
                     
                     try:

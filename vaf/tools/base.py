@@ -142,7 +142,8 @@ class BaseTool(ABC):
     # ═══════════════════════════════════════════════════════════════════════════
     
     def query_llm(self, messages, max_tokens=300, temperature=0.7, timeout: int = None,
-                  provider: str = None, model: str = None) -> Optional[str]:
+                  provider: str = None, model: str = None,
+                  allow_reasoning_fallback: bool = True) -> Optional[str]:
         """
         Unified LLM query method for tools. 
         Supports both API providers and Local mode automatically.
@@ -277,6 +278,13 @@ class BaseTool(ABC):
                     # (finish_reason="length"), content is empty even though the model produced plenty.
                     # Log the cause, then fall back to the reasoning text -- it already holds the substance
                     # -- instead of returning nothing.
+                    # EXCEPTION: callers generating long-form output (e.g. research report
+                    # sections) must NEVER receive chain-of-thought as the answer — a run
+                    # once filled every report section with "Thinking Process: ...". They
+                    # pass allow_reasoning_fallback=False and handle the empty return via
+                    # their own retry paths.
+                    if not allow_reasoning_fallback:
+                        return None
                     reasoning = (msg.get("reasoning_content") or "").strip()
                     try:
                         from vaf.core.log_helper import append_domain_log

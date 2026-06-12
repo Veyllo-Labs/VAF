@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
 import threading
 
@@ -24,6 +25,8 @@ _state_path: pathlib.Path | None = None  # path to window_state.json
 _save_timer: threading.Timer | None = None  # debounce timer for state saves
 # Renderer crash auto-recovery bookkeeping (see _install_crash_recovery).
 _recovery = {"reloads": 0, "last": 0.0, "hooked": set()}
+# Native dialog wiring bookkeeping (see _install_download_print_handlers).
+_dialogs_hooked: set = set()
 
 
 def _load_state(default_w: int, default_h: int) -> tuple[int, int]:
@@ -255,6 +258,101 @@ def _install_crash_recovery() -> None:
             _log.debug("[DesktopWindow] could not arm crash recovery: %s", e)
 
 
+def _install_download_print_handlers() -> None:
+    """Wire native Save/Print dialogs for the embedded QtWebEngine view.
+
+    Without this, Download / Print / Save-as-PDF clicks in the WebUI do exactly
+    nothing in the desktop window: pywebview only connects its download slot when
+    ALLOW_DOWNLOADS is set — and that slot calls the Qt5-only download.setPath(),
+    which does not exist on PyQt6 — and nobody listens to printRequested at all.
+    We connect our own Qt6-correct handlers instead:
+      - profile.downloadRequested        -> native save dialog + accept()
+      - page.printRequested              -> save-as-PDF dialog + page.printToPdf()
+        (window.print() in the main frame)
+      - page.printRequestedByFrame       -> save-as-PDF dialog + frame.printToPdf()
+        (window.print() inside an iframe, e.g. the research report print document
+        and the Document Editor — prints the frame's content, not the app shell)
+
+    Idempotent like _install_crash_recovery (hooks each profile/page once).
+    """
+    try:
+        from webview.platforms.qt import BrowserView
+        from PyQt6.QtWidgets import QFileDialog
+    except Exception as e:                       # pragma: no cover - backend/version differences
+        _log.debug("[DesktopWindow] download/print dialogs unavailable: %s", e)
+        return
+
+    def _pdf_target(page) -> str:
+        """Ask the user where to save the PDF; '' when cancelled."""
+        import re as _re
+        title = ""
+        try:
+            title = (page.title() or "").strip()
+        except Exception:
+            pass
+        name = _re.sub(r"[^\w\s.-]", "", title).strip().replace(" ", "_") or "document"
+        suggested = os.path.join(os.path.expanduser("~"), "Downloads", f"{name}.pdf")
+        path, _filt = QFileDialog.getSaveFileName(None, "Save as PDF", suggested, "PDF (*.pdf)")
+        if path and not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        return path
+
+    for bv in list(getattr(BrowserView, "instances", {}).values()):
+        view = getattr(bv, "webview", None)
+        page = view.page() if view is not None else None
+        if page is None:
+            continue
+        profile = page.profile()
+
+        if id(profile) not in _dialogs_hooked:
+            _dialogs_hooked.add(id(profile))
+
+            def _on_download(download):
+                try:
+                    suggested = os.path.join(download.downloadDirectory(), download.downloadFileName())
+                except Exception:
+                    suggested = ""
+                path, _filt = QFileDialog.getSaveFileName(None, "Save file", suggested)
+                if not path:
+                    download.cancel()
+                    return
+                download.setDownloadDirectory(os.path.dirname(path) or os.path.expanduser("~"))
+                download.setDownloadFileName(os.path.basename(path))
+                download.accept()
+                _log.info("[DesktopWindow] download accepted → %s", path)
+
+            try:
+                profile.downloadRequested.connect(_on_download)
+                _log.info("[DesktopWindow] download save dialog armed")
+            except Exception as e:                # pragma: no cover
+                _log.debug("[DesktopWindow] could not arm download handler: %s", e)
+
+        if id(page) not in _dialogs_hooked:
+            _dialogs_hooked.add(id(page))
+
+            def _on_print(_page=page):
+                path = _pdf_target(_page)
+                if path:
+                    _page.printToPdf(path)
+                    _log.info("[DesktopWindow] printing page to PDF → %s", path)
+
+            def _on_print_frame(frame, _page=page):
+                path = _pdf_target(_page)
+                if path:
+                    frame.printToPdf(path)
+                    _log.info("[DesktopWindow] printing frame to PDF → %s", path)
+
+            try:
+                page.printRequested.connect(_on_print)
+                page.printRequestedByFrame.connect(_on_print_frame)
+                page.pdfPrintingFinished.connect(
+                    lambda p, ok: _log.info("[DesktopWindow] PDF print %s: %s", "done" if ok else "FAILED", p)
+                )
+                _log.info("[DesktopWindow] print-to-PDF dialogs armed")
+            except Exception as e:                # pragma: no cover
+                _log.debug("[DesktopWindow] could not arm print handlers: %s", e)
+
+
 def _on_loaded() -> None:
     """Inject link-interception JS after every page load, and arm renderer crash recovery."""
     if _window:
@@ -263,6 +361,7 @@ def _on_loaded() -> None:
         except Exception as e:
             _log.debug("[DesktopWindow] JS inject failed: %s", e)
     _install_crash_recovery()
+    _install_download_print_handlers()
 
 
 def _on_closing() -> bool:

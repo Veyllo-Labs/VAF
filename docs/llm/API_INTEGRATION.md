@@ -118,7 +118,9 @@ This saves resources when not using local models.
 
 The `web_search` tool can use optional search APIs when keys are set. This avoids reliance on scraping and improves reliability.
 
-**Order of use:** Brave Search API (if key set) → Google Custom Search API (if key and search engine ID set) → scrape Google → DuckDuckGo.
+**Order of use:** Brave Search API (if key set) → Google Custom Search API (if key and search engine ID set) → scrape Google → DuckDuckGo → **internal knowledge (RAG)**.
+
+The final fallback consults VAF's own long-term memory when every web provider fails (rate limit, missing keys, network down) or genuinely finds nothing — useful for internal topics the web cannot know. Memory hits are labeled honestly: `memory://` hrefs, titles prefixed "Internes Wissen" with the relevance score, `source: internal_knowledge`. Provider failures are also collected (`get_search_provider_errors()` in `vaf/tools/search.py`) so callers like the research agent can report "search unavailable" instead of pretending there were no results.
 
 **Where to set:** Web UI → Settings → General → "Web Search (API)", or in `~/.vaf/config.json`:
 

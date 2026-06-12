@@ -21,6 +21,13 @@ from vaf.core.log_helper import append_domain_log
 
 logger = logging.getLogger(__name__)
 
+# Silence the Hugging Face Hub "unauthenticated requests" warning: the model
+# is cached locally, the hub is only pinged for revision checks, and the
+# warning otherwise leaks into sub-agent consoles (e.g. the research agent's
+# internal-knowledge fallback loading the encoder mid-run).
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
+
 # Max chars per text sent to the encoder.
 MAX_EMBED_INPUT_CHARS = 2512
 MAX_EMBED_BATCH_SIZE = 64

@@ -1,6 +1,7 @@
 import re
 import requests
 import os
+import threading
 from urllib.parse import quote_plus, unquote, parse_qs, urlparse
 
 from bs4 import BeautifulSoup
@@ -187,6 +188,7 @@ def _search_duckduckgo(query: str, max_results: int) -> list:
                 time.sleep(4)
         if r is None or r.status_code != 200:
             UI.event("Web Search", f"DuckDuckGo: failed after 3 attempts (HTTP {r.status_code if r else 'timeout'})", style="warning")
+            _note_provider_error(f"DuckDuckGo failed after 3 attempts (HTTP {r.status_code if r else 'timeout'})")
             return []
 
         soup = BeautifulSoup(r.text, "html.parser")
@@ -211,7 +213,35 @@ def _search_duckduckgo(query: str, max_results: int) -> list:
         return out
     except Exception as _e:
         UI.event("Web Search", f"DuckDuckGo: exception — {str(_e)[:80]}", style="warning")
+        _note_provider_error(f"DuckDuckGo: {str(_e)[:120]}")
         return []
+
+
+# Provider failures are swallowed per-call (each provider falls through to the
+# next), which once made a full search outage (DDG IP-blocked, no API keys)
+# look like "no results found". Callers like the research agent read this to
+# tell outages from genuine no-hits.
+_PROVIDER_ERRORS: list = []
+_PROVIDER_ERRORS_LOCK = threading.Lock()
+
+
+def _note_provider_error(message: str) -> None:
+    try:
+        with _PROVIDER_ERRORS_LOCK:
+            if len(_PROVIDER_ERRORS) < 20:
+                _PROVIDER_ERRORS.append(str(message)[:160])
+    except Exception:
+        pass
+
+
+def reset_search_provider_errors() -> None:
+    with _PROVIDER_ERRORS_LOCK:
+        _PROVIDER_ERRORS.clear()
+
+
+def get_search_provider_errors() -> list:
+    with _PROVIDER_ERRORS_LOCK:
+        return list(_PROVIDER_ERRORS)
 
 
 def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str | None]:
@@ -246,7 +276,64 @@ def get_web_search_results(query: str, max_results: int) -> tuple[list, str, str
     UI.event("Web Search", "Google: no results or blocked – using DuckDuckGo", style="dim")
     results = _search_duckduckgo(query, max_results)
     fallback_hint = {"blocked": "Google blockiert.", "no_results": "Google: keine Treffer.", "error": "Google: Fehler."}.get(google_reason, "Google: keine Treffer.")
+    if results:
+        return (results, "DuckDuckGo", fallback_hint)
+
+    # 5) Last resort: VAF's own long-term memory (RAG). When every web provider
+    # fails (rate limit, no API keys, network down) — or the topic is internal
+    # and the web genuinely knows nothing — the knowledge base often does.
+    internal = _search_internal_knowledge(query, max_results)
+    if internal:
+        UI.event("Web Search", f"Falling back to internal knowledge: {len(internal)} snippet(s)", style="dim")
+        return (internal, "Internal Knowledge (RAG)", "Websuche nicht verfügbar — Treffer stammen aus dem internen Langzeitgedächtnis.")
     return (results, "DuckDuckGo", fallback_hint)
+
+
+def _search_internal_knowledge(query: str, max_results: int) -> list:
+    """Search VAF's long-term memory (RAG) and shape hits like web results.
+
+    Results carry memory:// hrefs and an internal_knowledge marker so reports
+    and the UI can label them honestly as memory, not web sources.
+    """
+    try:
+        scope = None
+        try:
+            from vaf.core.session import get_manager
+            sid = os.environ.get("VAF_SESSION_ID", "").strip()
+            if sid:
+                uid = (get_manager().load(sid).metadata or {}).get("user_scope_id")
+                if uid:
+                    from uuid import UUID
+                    scope = UUID(str(uid))
+        except Exception:
+            scope = None
+
+        from vaf.memory.rag import run_memory_search_sync
+        raw = run_memory_search_sync(
+            query=query, k=max(1, min(max_results, 8)),
+            user_scope_id=scope, caller="websearch_fallback",
+        )
+    except Exception as e:
+        _note_provider_error(f"internal knowledge: {str(e)[:100]}")
+        return []
+    if not raw or not raw.strip():
+        return []
+
+    results = []
+    for i, block in enumerate(re.split(r'\n\n---\n\n', raw)[:max_results], 1):
+        m = re.match(r'\[Source \d+\]\s*\(Relevance:\s*(\d+)%\)\s*\n([\s\S]*)', block.strip())
+        text = (m.group(2) if m else block).strip()
+        if not text:
+            continue
+        relevance = f" ({m.group(1)}% relevant)" if m else ""
+        first_line = text.split("\n", 1)[0][:80]
+        results.append({
+            "title": f"Internes Wissen: {first_line}{relevance}",
+            "href": f"memory://internal/{i}",
+            "body": text[:500],
+            "source": "internal_knowledge",
+        })
+    return results
 
 
 class WebSearchTool(BaseTool):
@@ -358,9 +445,20 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             if return_raw:
                 return results
 
-            title = f"### Web Search Results ({search_source})\n"
-            if fallback_hint:
-                title += f"*{fallback_hint}*\n\n"
+            if search_source == "Internal Knowledge (RAG)":
+                # Unmistakable header: a user once read this as a working web
+                # search because the generic "Web Search Results" framing buried
+                # the fallback label.
+                title = (
+                    "### INTERNAL KNOWLEDGE — NOT WEB RESULTS\n"
+                    "**The web search providers are unreachable (rate limit / network / missing API keys). "
+                    "The following snippets come from VAF's own long-term memory. "
+                    "Tell the user explicitly that the web could not be reached and these are memory results.**\n\n"
+                )
+            else:
+                title = f"### Web Search Results ({search_source})\n"
+                if fallback_hint:
+                    title += f"*{fallback_hint}*\n\n"
             title += f"Query: {query}\n\n"
             
             # Helper to fetch text

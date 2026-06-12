@@ -1,8 +1,19 @@
 'use client';
 
-import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, GitBranch, Moon } from 'lucide-react';
+import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, GitBranch, Moon, Printer } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+/** Live research state streamed by the research agent (`research_state` event). */
+export type ResearchViewState = {
+    topic: string;
+    stage: string;
+    sections: Array<{ title: string; status: string; words: number; targetWords: number }>;
+    sectionsHtml: string[];
+    sources: Array<{ url: string; title: string; domain: string }>;
+    wordsTarget: number;
+    loop: number;
+};
 
 /** Live project state streamed by the coding agent (`coder_state` event). */
 export type CoderViewState = {
@@ -41,6 +52,7 @@ export type SubAgentWindowProps = {
     browserFrame?: string;   // base64 JPEG screenshot from browser_agent
     browserUrl?: string;     // current page URL
     coder?: CoderViewState | null;  // enables the VS-Code view (coding agent only)
+    research?: ResearchViewState | null;  // enables the paper view (research agent only)
     [key: string]: any;
 };
 
@@ -143,6 +155,240 @@ function AnimatedConsoleLine({ text, state, onDone, onType }: {
     );
 }
 
+// ── DIN A4 paper preview ──────────────────────────────────────────────────────
+// The report flows through a CSS multi-column container whose column size is
+// exactly the A4 content box (210mm − 2×20mm margins). The browser's own layout
+// engine places the breaks (line-accurate, inline markup preserved); every
+// column is then shown as one fixed 210×297mm sheet. Printing reuses the same
+// sheet markup and CSS via `@page size: A4; margin: 0`, so the preview and the
+// printout are identical by construction.
+const MM_PX = 96 / 25.4;                                   // CSS: 1mm = 96/25.4 px, device-independent
+const A4_PAGE_W = 210 * MM_PX;
+const A4_PAGE_H = 297 * MM_PX;
+const A4_CONTENT_W = Math.floor((210 - 2 * 20) * MM_PX);   // content box at 20mm margins
+const A4_CONTENT_H = Math.floor((297 - 2 * 20) * MM_PX);
+const A4_COL_GAP = 48;
+const A4_FLOW_STEP = A4_CONTENT_W + A4_COL_GAP;
+
+const A4_PAGE_CSS = `
+.vaf-a4-page { width: 210mm; height: 297mm; padding: 20mm; box-sizing: border-box; background: #ffffff; overflow: hidden; }
+.vaf-a4-clip { width: ${A4_CONTENT_W}px; height: ${A4_CONTENT_H}px; overflow: hidden; }
+.vaf-a4-flow { width: ${A4_CONTENT_W}px; height: ${A4_CONTENT_H}px; column-width: ${A4_CONTENT_W}px; column-gap: ${A4_COL_GAP}px; column-fill: auto; }
+`;
+
+// Typography is fully self-contained (explicit font stack, no app classes) so the
+// print document — which loads none of the app CSS — renders the same glyphs and
+// line breaks as the preview.
+const RESEARCH_PAPER_CSS = `
+.vaf-paper { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #34353f; overflow-wrap: anywhere; }
+.vaf-paper .rpt-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #7c3aed; }
+.vaf-paper h1 { font-family: Georgia, 'Times New Roman', serif; font-size: 26px; line-height: 1.25; color: #111827; font-weight: 400; margin: 8px 0 0; }
+.vaf-paper .rpt-meta { font-size: 11.5px; color: #9ca3af; border-bottom: 1px solid #f3f4f6; padding-bottom: 16px; margin: 8px 0 24px; }
+.vaf-paper h2 { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; color: #1d1e26; margin: 24px 0 8px; break-after: avoid-column; }
+.vaf-paper p { font-size: 13.5px; line-height: 1.75; color: #34353f; margin: 0 0 10px; }
+.vaf-paper ul, .vaf-paper ol { font-size: 13.5px; line-height: 1.7; color: #34353f; margin: 0 0 10px 20px; padding: 0; }
+.vaf-paper li { break-inside: avoid-column; }
+.vaf-paper a { color: #7c3aed; text-decoration: none; }
+.vaf-paper a:hover { text-decoration: underline; }
+.vaf-paper em { color: #6b7280; }
+.vaf-paper img, .vaf-paper table { max-width: 100%; }
+.vaf-typing-caret { display: inline-block; width: 2px; height: 1em; background: #8b5cf6; vertical-align: middle; margin-left: 1px; animation: vafCaretBlink 1s step-end infinite; }
+@keyframes vafCaretBlink { 50% { opacity: 0; } }
+`;
+
+const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const buildResearchHeaderHtml = (topic: string, metaLine: string) =>
+    `<div class="rpt-label">Research Report</div><h1>${escapeHtml(topic)}</h1><div class="rpt-meta">${escapeHtml(metaLine)}</div>`;
+
+/**
+ * Print the report exactly as previewed: a hidden same-origin iframe gets the
+ * identical sheet markup and CSS, re-runs the same column measurement, and
+ * prints each sheet as one A4 page. The iframe isolates the print from the
+ * app shell (whose overflow containers would clip every page after the first).
+ */
+function printResearchReport(topic: string, metaLine: string, sectionsHtml: string[]) {
+    const fullHtml = buildResearchHeaderHtml(topic, metaLine) + sectionsHtml.join('');
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(topic)}</title><style>
+@page { size: A4; margin: 0; }
+html, body { margin: 0; padding: 0; background: #ffffff; }
+${A4_PAGE_CSS}
+${RESEARCH_PAPER_CSS}
+.vaf-a4-page { page-break-after: always; }
+.vaf-a4-page:last-child { page-break-after: auto; }
+</style></head><body>
+<div id="flow" class="vaf-a4-flow vaf-paper">${fullHtml}</div>
+<script>(function () {
+    var flow = document.getElementById('flow');
+    var step = ${A4_FLOW_STEP};
+    var n = Math.max(1, Math.round((flow.scrollWidth + ${A4_COL_GAP}) / step));
+    for (var i = 0; i < n; i++) {
+        var page = document.createElement('div'); page.className = 'vaf-a4-page';
+        var clip = document.createElement('div'); clip.className = 'vaf-a4-clip';
+        var copy = flow.cloneNode(true); copy.removeAttribute('id');
+        copy.style.transform = 'translateX(' + (-i * step) + 'px)';
+        clip.appendChild(copy); page.appendChild(clip); document.body.appendChild(page);
+    }
+    flow.remove();
+    requestAnimationFrame(function () { setTimeout(function () { window.print(); }, 60); });
+})();</` + `script></body></html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+    document.body.appendChild(iframe);
+    const cleanup = () => { try { iframe.remove(); } catch { /* already gone */ } };
+    iframe.addEventListener('load', () => {
+        iframe.contentWindow?.addEventListener('afterprint', () => setTimeout(cleanup, 100));
+    });
+    setTimeout(cleanup, 120000); // fallback if afterprint never fires
+    iframe.srcdoc = doc;
+}
+
+/**
+ * Live A4 view of the growing report. The newest section types in as plain
+ * text first (cursor caret), then swaps to its rendered HTML — same feel as
+ * before, but inside real paginated sheets. Only the measuring flow and the
+ * last sheet re-render per typing tick; finished sheets reuse a frozen copy
+ * (with `column-fill: auto`, appended content never reflows earlier columns).
+ */
+function A4ResearchPaper({ topic, metaLine, sectionsHtml, onGrow }: {
+    topic: string;
+    metaLine: string;
+    sectionsHtml: string[];
+    onGrow?: () => void;
+}) {
+    const measureRef = useRef<HTMLDivElement>(null);
+    const wrapRef = useRef<HTMLDivElement>(null);
+    const [pageCount, setPageCount] = useState(1);
+    const [scale, setScale] = useState(1);
+    const [, bumpRender] = useState(0);
+    const frozenRef = useRef('');
+    const lastStableRef = useRef('');
+    const pageCountRef = useRef(1);
+    const onGrowRef = useRef(onGrow); onGrowRef.current = onGrow;
+
+    // ── typewriter for the newest section ──
+    const [typedLen, setTypedLen] = useState(0);
+    const [animUpTo, setAnimUpTo] = useState(0);   // sections fully revealed
+    useEffect(() => {
+        // New research run -> retype from the first arriving section again
+        setAnimUpTo(0); setTypedLen(0);
+        frozenRef.current = ''; lastStableRef.current = ''; pageCountRef.current = 1;
+        setPageCount(1);
+    }, [topic]);
+
+    const lastIdx = sectionsHtml.length - 1;
+    const animatingIdx = lastIdx >= 0 && lastIdx >= animUpTo ? lastIdx : -1;
+    const animatingHtml = animatingIdx >= 0 ? sectionsHtml[animatingIdx] : '';
+    const heading = useMemo(() => {
+        const m = animatingHtml.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+        return m ? m[1].replace(/<[^>]+>/g, '').trim() : '';
+    }, [animatingHtml]);
+    const bodyText = useMemo(
+        () => animatingHtml.replace(/<h2[\s\S]*?<\/h2>/i, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+        [animatingHtml]
+    );
+
+    useEffect(() => {
+        if (animatingIdx < 0) return;
+        if (!bodyText) { setAnimUpTo(animatingIdx + 1); return; }
+        let i = 0;
+        let timer: ReturnType<typeof setTimeout>;
+        // Scale step so even long sections finish in a few seconds
+        const step = Math.max(2, Math.ceil(bodyText.length / 300));
+        const tick = () => {
+            i = Math.min(i + step, bodyText.length);
+            setTypedLen(i);
+            if (i < bodyText.length) {
+                timer = setTimeout(tick, 16 + Math.random() * 14);
+            } else {
+                setAnimUpTo(animatingIdx + 1);
+            }
+        };
+        setTypedLen(0);
+        timer = setTimeout(tick, 40);
+        return () => clearTimeout(timer);
+    }, [animatingIdx, bodyText]);
+
+    // ── flow html: stable prefix + live typing tail ──
+    const headerHtml = buildResearchHeaderHtml(topic, metaLine);
+    const stableHtml = headerHtml + sectionsHtml.slice(0, animatingIdx < 0 ? sectionsHtml.length : animatingIdx).join('');
+    const typingHtml = animatingIdx >= 0
+        ? `${heading ? `<h2>${escapeHtml(heading)}</h2>` : ''}<p>${escapeHtml(bodyText.slice(0, typedLen))}<span class="vaf-typing-caret"></span></p>`
+        : '';
+    const liveHtml = stableHtml + typingHtml;
+
+    // ── pagination: page count from the hidden measuring flow ──
+    useLayoutEffect(() => {
+        const el = measureRef.current;
+        if (!el) return;
+        const count = Math.max(1, Math.round((el.scrollWidth + A4_COL_GAP) / A4_FLOW_STEP));
+        if (count !== pageCountRef.current || stableHtml !== lastStableRef.current) {
+            // Refresh the frozen copy whenever a sheet fills up or a section
+            // swaps from typed text to final HTML — earlier sheets then show
+            // complete columns again.
+            frozenRef.current = liveHtml;
+            lastStableRef.current = stableHtml;
+            if (count !== pageCountRef.current) {
+                pageCountRef.current = count;
+                setPageCount(count);
+            } else {
+                bumpRender(v => v + 1);
+            }
+        }
+        onGrowRef.current?.();
+    }, [liveHtml, stableHtml]);
+
+    // ── fit-width scaling (sheets keep true A4 geometry, like a PDF viewer) ──
+    useEffect(() => {
+        const el = wrapRef.current;
+        if (!el) return;
+        const update = () => setScale(Math.min(1, el.clientWidth / A4_PAGE_W));
+        update();
+        const ro = new ResizeObserver(update);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    return (
+        <div ref={wrapRef} className="w-full">
+            <div
+                ref={measureRef}
+                aria-hidden
+                className="vaf-a4-flow vaf-paper"
+                style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: 0 }}
+                dangerouslySetInnerHTML={{ __html: liveHtml }}
+            />
+            {Array.from({ length: pageCount }, (_, i) => {
+                const html = i === pageCount - 1 ? liveHtml : (frozenRef.current || liveHtml);
+                return (
+                    <Fragment key={i}>
+                        <div className="mx-auto" style={{ width: A4_PAGE_W * scale, height: A4_PAGE_H * scale }}>
+                            <div
+                                className="vaf-a4-page rounded-[2px] shadow-[0_2px_14px_rgba(0,0,0,0.12)]"
+                                style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }}
+                            >
+                                <div className="vaf-a4-clip">
+                                    <div
+                                        className="vaf-a4-flow vaf-paper"
+                                        style={{ transform: `translateX(-${i * A4_FLOW_STEP}px)` }}
+                                        dangerouslySetInnerHTML={{ __html: html }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                        <div className="mx-auto mb-4 mt-1.5 text-center text-[9.5px] text-gray-400">
+                            Page {i + 1} of {pageCount} · A4
+                        </div>
+                    </Fragment>
+                );
+            })}
+        </div>
+    );
+}
+
 const actionTone = (type: string) => {
     const normalized = type.toLowerCase();
     if (normalized === 'exec') return 'bg-gray-900 text-white';
@@ -171,6 +417,7 @@ export default function SubAgentWindow({
     browserFrame,
     browserUrl,
     coder,
+    research,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -289,7 +536,227 @@ export default function SubAgentWindow({
         if (!coder) setOpenedFile(null);
     }, [coder]);
 
+    // ── Research view (research agent only) ───────────────────────────────
+    const hasResearchData = !!(research && research.sections && research.sections.length > 0);
+    const researchViewerRef = useRef<HTMLDivElement>(null);
+    const keepResearchViewerPinned = () => {
+        if (researchViewerRef.current) {
+            researchViewerRef.current.scrollTop = researchViewerRef.current.scrollHeight;
+        }
+    };
+    useEffect(() => {
+        keepResearchViewerPinned();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [research?.sectionsHtml?.length]);
+
     if (!isOpen && mode === 'overlay') return null;
+
+    if (mode === 'dock' && hasResearchData && research) {
+        const doneCount = research.sections.filter(s => s.status === 'done').length;
+        const wordsTotal = research.sections.reduce((sum, s) => sum + (s.words || 0), 0);
+        const isLive = inferredPresence === 'online';
+        const nextSection = research.sections.find(s => s.status === 'searching' || s.status === 'planned');
+        const metaLine = `${wordsTotal.toLocaleString()}${research.wordsTarget ? ` / ${research.wordsTarget.toLocaleString()}` : ''} words · ${research.sources.length} sources`;
+
+        return (
+            <div
+                className={cn(
+                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isOpen}
+            >
+                {/* Shared sheet + typography CSS — the print document uses the identical rules */}
+                <style>{A4_PAGE_CSS + RESEARCH_PAPER_CSS}</style>
+                <div className="flex h-full w-full flex-col">
+                    {/* Header */}
+                    <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
+                                <Globe size={14} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900">{agentName || 'Research Agent'}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className="truncate">{research.topic || displayStatus}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2">
+                            <span className="flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-violet-700">
+                                {isLive && <Loader2 size={9} className="animate-spin" />}
+                                {research.stage}
+                            </span>
+                            <button
+                                onClick={() => printResearchReport(research.topic, metaLine, research.sectionsHtml)}
+                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                                aria-label="Print report (A4)"
+                                title="Print report (A4)"
+                            >
+                                <Printer size={14} />
+                            </button>
+                            <button
+                                onClick={onClose}
+                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                                aria-label="Close"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex min-h-0 flex-1">
+                        {/* ── Paper document viewer: true A4 sheets with automatic page breaks ── */}
+                        <div ref={researchViewerRef} className="min-w-0 flex-1 overflow-y-auto bg-[#e9eaee] px-7 py-6">
+                            <A4ResearchPaper
+                                topic={research.topic}
+                                metaLine={metaLine}
+                                sectionsHtml={research.sectionsHtml}
+                                onGrow={keepResearchViewerPinned}
+                            />
+                            {isLive && nextSection && (
+                                <div className="mx-auto mt-1 flex max-w-[420px] items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white/60 px-4 py-3 text-xs text-gray-400">
+                                    <Loader2 size={12} className="animate-spin text-violet-400" />
+                                    {nextSection.status === 'searching'
+                                        ? <>Searching sources for &quot;{nextSection.title}&quot;…</>
+                                        : <>Planned next: &quot;{nextSection.title}&quot;</>}
+                                </div>
+                            )}
+                            {research.sectionsHtml.length === 0 && (
+                                <div className="mx-auto mt-1 flex max-w-[420px] items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white/60 px-4 py-3 text-xs text-gray-400">
+                                    <Loader2 size={12} className="animate-spin opacity-60" />
+                                    Planning and searching…
+                                </div>
+                            )}
+                        </div>
+
+                        {/* ── Sidebar: Outline / Sources / Activity ── */}
+                        <div className="flex w-[33%] min-w-[280px] max-w-[380px] flex-none flex-col border-l border-gray-200 bg-white">
+                            {/* Outline */}
+                            <div className="flex min-h-0 flex-[1.25] flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                                    Outline
+                                    <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
+                                        {doneCount}/{research.sections.length} done
+                                    </span>
+                                </div>
+                                <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-2">
+                                    {research.sections.map((s, i) => (
+                                        <div
+                                            key={i}
+                                            className={cn(
+                                                'flex items-start gap-2 rounded-lg border px-2.5 py-1.5',
+                                                s.status === 'writing' && 'border-violet-200 bg-white ring-1 ring-violet-50',
+                                                s.status === 'searching' && 'border-blue-100 bg-white',
+                                                s.status === 'done' && 'border-gray-100 bg-gray-50',
+                                                s.status === 'error' && 'border-red-100 bg-red-50/40',
+                                                s.status === 'planned' && 'border-gray-100 bg-white'
+                                            )}
+                                        >
+                                            <span className={cn(
+                                                'mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full text-[8px] font-bold',
+                                                s.status === 'done' && 'bg-emerald-100 text-emerald-600',
+                                                s.status === 'writing' && 'bg-violet-100 text-violet-600',
+                                                s.status === 'searching' && 'bg-blue-100 text-blue-600',
+                                                s.status === 'error' && 'bg-red-100 text-red-600',
+                                                s.status === 'planned' && 'bg-gray-100 text-gray-400'
+                                            )}>
+                                                {s.status === 'done' && <CheckCircle2 size={9} />}
+                                                {(s.status === 'writing' || s.status === 'searching') && <Loader2 size={9} className="animate-spin" />}
+                                                {s.status === 'error' && <X size={9} />}
+                                                {s.status === 'planned' && (i + 1)}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block text-[11px] font-semibold leading-tight text-gray-800">{i + 1}. {s.title}</span>
+                                                <span className="mt-0.5 flex items-center gap-1.5 text-[9px] text-gray-400">
+                                                    <span className="inline-block h-[3px] w-16 overflow-hidden rounded-full bg-gray-100">
+                                                        <span
+                                                            className="block h-full rounded-full bg-violet-400 transition-all"
+                                                            style={{ width: `${Math.min(100, (s.words / Math.max(1, s.targetWords)) * 100)}%` }}
+                                                        />
+                                                    </span>
+                                                    {s.status === 'done' ? `${s.words} words`
+                                                        : s.status === 'writing' ? 'writing…'
+                                                        : s.status === 'searching' ? 'searching…'
+                                                        : s.status === 'error' ? 'no results'
+                                                        : 'planned'}
+                                                </span>
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Sources */}
+                            <div className="flex min-h-0 flex-[1.15] flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                                    Sources
+                                    <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
+                                        {research.sources.length}
+                                    </span>
+                                </div>
+                                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
+                                    {research.sources.map((s, i) => (
+                                        <a
+                                            key={s.url || i}
+                                            href={s.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="flex items-baseline gap-2 rounded-md px-1.5 py-1 hover:bg-gray-50"
+                                        >
+                                            <span className="flex-none rounded bg-violet-50 px-1 font-mono text-[8.5px] text-violet-600">[{i + 1}]</span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block truncate text-[10.5px] text-gray-700">{s.title}</span>
+                                                <span className="block truncate font-mono text-[8.5px] text-gray-300">{s.domain}</span>
+                                            </span>
+                                        </a>
+                                    ))}
+                                    {research.sources.length === 0 && (
+                                        <div className="px-2 py-3 text-[10px] text-gray-300">No sources yet.</div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Activity (console lines) */}
+                            <div className="flex min-h-0 flex-1 flex-col">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
+                                <div
+                                    ref={consoleScrollRef}
+                                    onScroll={handleConsoleScroll}
+                                    className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 font-mono text-[10px] leading-relaxed text-gray-500"
+                                >
+                                    {consoleLines.slice(-80).map((line, index) => (
+                                        <div key={`${index}-${line.slice(0, 20)}`} className="break-all">{line}</div>
+                                    ))}
+                                    {consoleLines.length === 0 && (
+                                        <div className="text-gray-300">Waiting for output…</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ── Status bar ── */}
+                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10px] text-[#c8d0e8]">
+                        <div className="flex h-full items-center bg-violet-600 px-3 font-bold text-white">VAF</div>
+                        <div className="flex h-full items-center px-2.5">Stage: {research.stage}</div>
+                        <div className="flex h-full items-center px-2.5">Sections {doneCount}/{research.sections.length}</div>
+                        <div className="flex h-full items-center gap-1.5 px-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            {wordsTotal.toLocaleString()}{research.wordsTarget ? ` / ${research.wordsTarget.toLocaleString()}` : ''} words
+                        </div>
+                        <div className="flex h-full items-center px-2.5">{research.sources.length} sources</div>
+                        <div className="ml-auto flex h-full items-center px-2.5">Loop {research.loop}</div>
+                        <div className="flex h-full items-center gap-1.5 px-3">
+                            <span className={cn('h-1.5 w-1.5 rounded-full', presenceTone)} />
+                            {presenceLabel}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (mode === 'dock' && hasCoderData && coder) {
         // ── VS-Code style view for the coding agent ───────────────────────

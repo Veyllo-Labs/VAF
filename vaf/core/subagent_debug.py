@@ -47,6 +47,36 @@ def _repo_root_from_file() -> Optional[Path]:
     return None
 
 
+_RETENTION_DAYS = 14
+_retention_done = False
+
+
+def _sweep_old_run_dirs(root: Path) -> None:
+    """Best-effort retention: drop run dirs older than _RETENTION_DAYS.
+
+    Every run persists telemetry now (not only IPC-spawned ones), so the debug
+    tree would grow without bound otherwise. Runs at most once per process.
+    """
+    global _retention_done
+    if _retention_done:
+        return
+    _retention_done = True
+    cutoff = time.time() - _RETENTION_DAYS * 86400
+    try:
+        import shutil
+        for agent_dir in root.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            for run_dir in agent_dir.iterdir():
+                try:
+                    if run_dir.is_dir() and run_dir.stat().st_mtime < cutoff:
+                        shutil.rmtree(run_dir, ignore_errors=True)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
 def get_debug_root_dir() -> Path:
     """
     Prefer repo-local logs/debug (as requested). Fallback to ~/.vaf/logs/debug if not writable.
@@ -56,12 +86,14 @@ def get_debug_root_dir() -> Path:
         candidate = repo / "logs" / "debug"
         try:
             candidate.mkdir(parents=True, exist_ok=True)
+            _sweep_old_run_dirs(candidate)
             return candidate
         except Exception:
             pass
 
     fallback = Platform.vaf_dir() / "logs" / "debug"
     fallback.mkdir(parents=True, exist_ok=True)
+    _sweep_old_run_dirs(fallback)
     return fallback
 
 
@@ -151,22 +183,45 @@ class SubAgentDebugLogger:
             pass
 
 
-def get_subagent_logger_from_env() -> Optional[SubAgentDebugLogger]:
+def get_subagent_logger_from_env(
+    create_fallback: bool = False,
+    agent_type: str = "",
+) -> Optional[SubAgentDebugLogger]:
     """
-    Enabled only inside sub-agent terminals.
-    Requires VAF_AGENT_TYPE and VAF_TASK_ID to be set (done by subagent runner).
+    Default: enabled only inside sub-agent terminals; requires VAF_AGENT_TYPE and
+    VAF_TASK_ID to be set (done by subagent runner).
+
+    With create_fallback=True the logger is always created so observability does
+    not depend on the IPC spawn path: a missing VAF_TASK_ID is replaced by a
+    generated run id ("local-<timestamp>-<pid>") and agent_type may be passed
+    directly. The generated id lives only in the returned logger object — the
+    process environment is never mutated (concurrent workers share os.environ).
     """
-    in_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes")
-    in_workflow_term = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip().lower() in ("1", "true", "yes")
-    in_workflow = os.environ.get("VAF_IN_WORKFLOW", "").strip().lower() in ("1", "true", "yes")
-    if not (in_subagent or in_workflow_term or in_workflow):
-        return None
-
-    task_id = (os.environ.get("VAF_TASK_ID") or "").strip()
-    agent_type = (os.environ.get("VAF_AGENT_TYPE") or "").strip()
-    if not task_id or not agent_type:
-        return None
-
+    env_task_id = (os.environ.get("VAF_TASK_ID") or "").strip()
+    env_agent_type = (os.environ.get("VAF_AGENT_TYPE") or "").strip()
     session_id = (os.environ.get("VAF_SESSION_ID") or "").strip()
-    return SubAgentDebugLogger(agent_type=agent_type, task_id=task_id, session_id=session_id)
+
+    if not create_fallback:
+        in_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes")
+        in_workflow_term = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip().lower() in ("1", "true", "yes")
+        in_workflow = os.environ.get("VAF_IN_WORKFLOW", "").strip().lower() in ("1", "true", "yes")
+        if not (in_subagent or in_workflow_term or in_workflow):
+            return None
+        if not env_task_id or not env_agent_type:
+            return None
+        return SubAgentDebugLogger(agent_type=env_agent_type, task_id=env_task_id, session_id=session_id)
+
+    effective_agent_type = env_agent_type or agent_type
+    if not effective_agent_type:
+        return None
+    effective_task_id = env_task_id or f"local-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    try:
+        return SubAgentDebugLogger(
+            agent_type=effective_agent_type,
+            task_id=effective_task_id,
+            session_id=session_id,
+        )
+    except Exception:
+        # Observability must never break the actual run
+        return None
 

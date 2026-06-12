@@ -44,9 +44,10 @@ Implements a "Mini-IDE" using `rich.live`.
 ## 2. `CodingAgentTool` Class Structure
 
 ### `_determine_base_dir(task, provided_path)` (The Smart Switch)
+*   **Safety guard:** `is_unsafe_project_dir(path)` rejects the user's home directory itself, the standard user dirs (Documents, Desktop, ... — their subdirectories are fine), `~/.vaf` and the VAF program tree as work directories. Applied to every path source below; unsafe paths fall through to `_generate_project_directory`. Sub-agent terminals spawn with CWD=$HOME, where `~/.vaf` (and a stray `~/.git`) would otherwise make home look like a project root.
 *   **Logic:** Decides whether to work in the current directory or create a new one.
-    1.  **Explicit:** If `provided_path` is set -> Use it.
-    2.  **Edit Mode:** If CWD is a project root (`.git`, `.vaf`, etc.) AND task is NOT "create new" -> **Use CWD**.
+    1.  **Explicit:** If `provided_path` is set (and safe) -> Use it.
+    2.  **Edit Mode:** If CWD is a project root (`.git`, `.vaf`, etc.), safe, AND task is NOT "create new" -> **Use CWD**.
     3.  **Scaffold Mode:** If user intent is "create new", "scaffold" -> Call `_generate_project_directory`.
     4.  **Fallback:** If unsure, default to creating a safe sandbox in `VAF_Projects`.
 
@@ -60,15 +61,17 @@ Implements a "Mini-IDE" using `rich.live`.
     2.  Extracts semantic keywords (removing stop words like "the", "create").
     3.  Sanitizes the name using Regex to be OS-safe (removes `/ \ : * ?`).
     4.  **User isolation:** Reads `user_scope_id` from the current session (via `get_current_session_id()` + `SessionManager.load()`). If a scope ID is found, the project root becomes `~/Documents/VAF_Projects/{uid[:8]}/`. Without a scope ID (local/admin mode) the root is `~/Documents/VAF_Projects/` as before.
-    5.  Constructs path: `{projects_root}/{Prefix} {Name}`.
-    6.  **Duplicate Check:** If folder exists, appends timestamp `_{HHMMSS}`.
+    5.  **Per-chat isolation:** with a session id, each chat gets its own folder below the user root (`VAF_Projects/[uid]/[session_id]/<ProjectName>`), so projects from different chats never mix. The workflow engine builds its project paths the same way.
+    6.  Constructs path: `{projects_root}/{Prefix} {Name}`.
+    7.  **Duplicate Check:** If folder exists, appends timestamp `_{HHMMSS}`.
 
 ### `_ensure_git_repo(base_dir)`
 *   **Logic:**
-    1.  Checks for `.git` folder.
-    2.  If missing, runs `git init`.
-    3.  Writes a default `.gitignore` (Python/Node/IDE patterns).
-    4.  Runs `git add .` and `git commit -m "Initial commit"` to secure the starting state.
+    1.  Refuses unsafe locations (`is_unsafe_project_dir`) — a `.git` in e.g. the home directory would make it look like a project root forever after.
+    2.  Checks for `.git` folder.
+    3.  If missing, runs `git init`.
+    4.  Writes a default `.gitignore` (Python/Node/IDE patterns).
+    5.  Runs `git add .` and `git commit -m "Initial commit"` to secure the starting state.
 
 ---
 
@@ -152,11 +155,30 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **IF** text says "done" **AND** no `task_done` tool call:
     *   **ACTION:** Injects `⚠️ You claimed completion but didn't call task_done. Call it now.`
 
+### F. Stuck Detection with Goal Verification and Retry Stages
+A task that stays on the same index for more than 15 loops is never blindly marked completed. The flow is:
+
+1.  **Goal verification** via `_verify_task_goal(task_title, task_files, base_dir, linter_active, llm_verify)`:
+    *   Deterministic first: if the task wrote files (`task_file_map[idx]`), they must exist, contain no template placeholders and no linter error may be active.
+    *   Without file evidence (the goal may already be implemented by an earlier task), one bounded LLM check runs (non-streaming, temperature 0, 200 tokens, 60s timeout): "Is this goal already fully implemented? YES/NO plus one line of evidence" against the main deliverable (`_pick_main_deliverable`). Any error or ambiguity counts as NOT verified.
+2.  **Verified:** task completes with result "Auto-completed after stuck detection - goal verified: ...".
+3.  **Not verified, retry budget free:** one immediate retry — the task resets to `pending`, the poisoned task context is dropped (`context_states.pop`), a fresh context is created and a system hint describes the failed attempt. The loop budget restarts.
+4.  **Retry exhausted:** the task is marked **failed** (`TaskManager.fail_current_task`) with the reason. The run continues with the remaining tasks.
+5.  **Final retry round:** at every all-done exit point, `_maybe_start_final_retry()` runs once per run: failed tasks are reset to pending and re-attempted with enriched context (completed-task summaries, project file list, failure history). Tasks failing again stay failed.
+
+`TaskManager.is_all_done()` uses terminal semantics (completed, failed or skipped) so failed tasks cannot keep the loop alive; `is_all_completed()` distinguishes the strict success case. The final summary reports failed tasks explicitly and signals `[VAF_CODING_AGENT_STATUS: PARTIAL]` — a stuck task never produces a silent fake COMPLETE.
+
+The inactivity auto-complete (idle with files present) runs the same deterministic verification before completing; unverifiable tasks stay open and escalate into the stuck flow above.
+
 ---
 
 ## 5. Tool Implementation Logic (The Big IF/ELIF Block)
 
-### `set_todos` (Lines ~5180)
+### `set_todos`
+*   **Single-File Rule (code-enforced):** `_detect_single_file_deliverable(task)` checks the original task for explicit single-file phrasings (German and English, e.g. "einzelne HTML-Datei", "single html file", "everything in one file"). If the model submits more than one task for a single-file deliverable:
+    *   First violation: **REJECT** with the instruction to submit exactly one task.
+    *   Second violation: **AUTO-COERCE** — the supervisor replaces the plan with exactly one task derived from the original task text. No planning loop is possible.
+    *   The auto-generated TODO path applies the same rule (exactly one auto task for single-file deliverables).
 *   **Validation:** Checks if `tasks` list is valid.
 *   **Phase Check:**
     *   **IF** called during execution phase: **BLOCK** ("Cannot modify TODOs during execution").
@@ -224,7 +246,11 @@ Inside the loop, `current_tools` is generated dynamically based on state:
 ---
 
 ## 6. Cleanup & Exit
+*   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified). Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary.
 *   **Logic:**
     *   Stops TUI thread (`live.stop()`).
     *   Cleans up temporary handles.
-    *   Returns the final string (list of created files + instructions) to the user.
+    *   Returns the final string (list of created files + instructions + task status incl. failed tasks) to the user.
+
+## 7. Telemetry (logs/debug)
+Loop-level telemetry (`loop_start`, `tool_start`, `coder_debug`, `task_stuck_verification`, `final_commit`, ...) persists as `logs/debug/<agent_type>/<run_id>/events.jsonl` in **every** run mode. `get_subagent_logger_from_env(create_fallback=True, agent_type=...)` no longer depends on the IPC spawn path: without a `VAF_TASK_ID` a local run id (`local-<timestamp>-<pid>`) is generated. The `vaf subagent run` CLI sets this id in its own (single-task) process environment so the runner and the hosted tool log into one directory. Run directories older than 14 days are swept best-effort on logger startup.

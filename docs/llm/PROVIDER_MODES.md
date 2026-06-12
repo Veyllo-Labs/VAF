@@ -48,7 +48,7 @@ Switching provider (Local ↔ API) and its memory handling — see [MODEL_AND_PR
 
 | Area | Behavior | Where | Detail doc |
 |------|----------|-------|-----------|
-| Default model | `model: "auto"` → **DeepSeek-R1-0528-Qwen3-8B** (`unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF`, 8B reasoning); **quant chosen from GPU VRAM**: BF16 (≥20 GB) / UD-Q8_K_XL (≥12) / Q8_0 (>10) / UD-Q6_K_XL (≥9) / Q6_K (else) | `gpu_detection.recommended_default_model`, `agent.py`, `backend.py.get_model_path` | [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md#default-local-model-model-auto) |
+| Default model | `model: "auto"` → **VRAM-adaptive Qwen3.5**: 4B (`unsloth/Qwen3.5-4B-GGUF`) at ≤ 10 GB, 9B (`unsloth/Qwen3.5-9B-GGUF`) above; **quant leaves room for desktop + KV cache** — 4B: Q4_K_M (<8 GB) / Q6_K (8) / UD-Q8_K_XL (9–10); 9B: Q5_K_M (11) / Q6_K (12–15) / Q8_0 (16–19) / UD-Q8_K_XL (20–23) / BF16 (≥24) | `gpu_detection.recommended_default_model`, `agent.py`, `backend.py.get_model_path` | [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md#default-local-model-model-auto) |
 | Server launch | `--jinja` (the GGUF template parses tool calls), KV cache `q8_0`/`q4_0`, `n_ctx` floor 32768 | `backend.py` (~600-650) | [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md#context-window-configuration) |
 | CUDA | auto-install of CUDA `llama-cpp-python` only on the in-process library path (`auto_install_gpu`, default `true`) | `agent.py.load_model` | [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md#cuda-auto-install-nvidia-gpu-without-cuda) |
 | Server vs library | `force_server` / Windows default / `use_server` | `agent.py.load_model` | [LLM_BACKEND_FACTS.md](LLM_BACKEND_FACTS.md#when-is-server-8080-vs-library-used) |

@@ -779,8 +779,30 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # Lazy-load local model only when we have a real chat task (not for LOAD_SESSION etc.)
                 try:
                     if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
+                        from vaf.core.model_download_state import MODEL_DOWNLOAD
+                        # On first use the load below downloads the model (blocking, filelock-serialized so it
+                        # never races the tray). Show an immediate status so the first prompt isn't a frozen
+                        # UI; the real answer streams automatically once the model is ready (auto-retry).
+                        _showed_loading = False
+                        if not os.path.exists(getattr(agent, "model_path", "") or "") or MODEL_DOWNLOAD.active:
+                            try:
+                                get_web_interface().emit_agent_message(
+                                    "assistant",
+                                    "Preparing the local model (downloading on first use) — I'll answer as soon as it's ready…",
+                                    session_id=task.session_id,
+                                )
+                                _showed_loading = True
+                            except Exception:
+                                pass
                         agent.load_model(skip_download_check=True)
-                        if agent.llm or agent.use_server:
+                        _loaded = bool(agent.llm or agent.use_server)
+                        if _showed_loading and _loaded:
+                            # Drop the placeholder; the normal response streams in its place.
+                            try:
+                                get_web_interface().emit_clear_last_assistant(session_id=task.session_id)
+                            except Exception:
+                                pass
+                        if _loaded:
                             tray_ctx = TrayContext()
                             tray_ctx.set_model_loaded(True)
                             get_web_interface().push_update({

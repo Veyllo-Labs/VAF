@@ -15,8 +15,8 @@ from rich import print
 from rich.markup import escape
 from pathlib import Path
 
-# Dependency imports will be handled in setup or assumed present if requirements are installed
-from huggingface_hub import hf_hub_download
+# Dependency imports are handled at setup / assumed present when requirements are installed.
+# (Model downloads go through vaf.core.backend.ensure_model_available, not a direct hf_hub_download here.)
 
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
@@ -2221,6 +2221,15 @@ class Agent:
         # here — so the model is loaded twice (server process + Python process) unless force_server=True.
         if is_py313 or is_mac or force_server:
             UI.event("System", f"Initializing Standalone Server (Py3.13 / Mac / GPU Mode)...", style="warning")
+            # Make sure the model file is on disk BEFORE waiting for / starting any server. The shared
+            # ensure is filelock-serialized, so if the Tray is mid-download this BLOCKS here until it
+            # finishes -- instead of racing it and starting a server against a missing file (which used to
+            # fail and trigger a wasteful ~1.6 GB CUDA reinstall). Self-heals a missing/unknown model.
+            if not os.path.exists(self.model_path):
+                try:
+                    self.ensure_model_exists()
+                except Exception as e:
+                    UI.error(f"Model preparation failed: {e}")
             # If the server is already running (or still loading), reuse it to avoid duplicates.
             # CRITICAL: When Tray is running, it starts the server on activity. Wait for it first
             # so we never start a SECOND llama-server (would crash PC / double VRAM).
@@ -2233,8 +2242,12 @@ class Agent:
                     return
             except Exception:
                 pass
-            # Wait up to 30s for Tray (or another process) to start the server before we start ourselves.
-            for _ in range(30):
+            # Wait for the Tray (or another process) to start the server before we start ourselves.
+            # Keep waiting while a model download is still in progress so we never start a competing
+            # server mid-download (the 30-iteration floor still applies once no download is active).
+            from vaf.core.model_download_state import MODEL_DOWNLOAD
+            _waited = 0
+            while _waited < 30 or MODEL_DOWNLOAD.active:
                 try:
                     r = requests.get("http://127.0.0.1:8080/health", timeout=2)
                     if r.status_code in (200, 503):
@@ -2245,6 +2258,7 @@ class Agent:
                 except Exception:
                     pass
                 time.sleep(1)
+                _waited += 1
             self.server = ServerManager()
             if self.server.start_server(self.model_path, n_gpu_layers=n_gpu, n_ctx=n_ctx):
                 self.use_server = True
@@ -2296,6 +2310,13 @@ class Agent:
             self.server = ServerManager(skip_cleanup=True)
             self.use_server = True
             UI.event("System", "Server required (force_server). Using HTTP backend (8080). Start Tray or llama-server.", style="warning")
+            return
+
+        # If the model file still isn't on disk (download failed / offline), do NOT load the in-process
+        # library or auto-install CUDA -- the cause is a missing model, not a missing GPU backend. Bail
+        # cleanly so the caller (e.g. the headless worker) can show "model unavailable" and retry.
+        if not os.path.exists(self.model_path):
+            UI.error(f"Model file not available: {self.model_path}. Skipping in-process load / CUDA install.")
             return
 
         # Fallback to Local Library (optional dep: pip install llama-cpp-python).
@@ -2390,36 +2411,16 @@ class Agent:
             UI.event("System", "CPU Mode Active", style="warning")
 
     def ensure_model_exists(self):
-        from vaf.cli.ui import UI
-        if not os.path.exists(self.models_dir):
-            os.makedirs(self.models_dir)
-
-        if not os.path.exists(self.model_path):
-            UI.event("System", f"Downloading {self.filename}...", style="warning")
-            try:
-                # Best practice: huggingface_hub automatically uses tqdm if available
-                # This is the standard, OS-independent way (works on Windows, Linux, macOS)
-                # tqdm shows: progress bar, speed, ETA, file size
-                hf_hub_download(
-                    repo_id=self.repo_id,
-                    filename=self.filename,
-                    local_dir=self.models_dir
-                )
-                
-                UI.event("System", "Download complete", style="success")
-            except KeyboardInterrupt:
-                # Handle cancellation gracefully (OS-independent)
-                UI.event("System", "Download cancelled by user", style="warning")
-                # Clean up partial download
-                if os.path.exists(self.model_path):
-                    try:
-                        os.remove(self.model_path)
-                    except OSError:
-                        pass  # Ignore cleanup errors (OS-independent)
-                sys.exit(0)
-            except Exception as e:
-                UI.error(f"Download failed: {e}")
-                sys.exit(1)
+        """Make sure the model GGUF is on disk (download if missing) via the shared, locked, self-healing
+        ensure_model_available -- ONE implementation shared with the tray/server path. It fixes a bare
+        config filename to its real repo, serializes concurrent downloads (filelock), self-heals a
+        missing/unknown model to the VRAM-adaptive default, and never sys.exit()s. Updates
+        self.model_path/filename to the resolved (possibly self-healed) file."""
+        from vaf.core.backend import ensure_model_available
+        model_cfg = os.environ.get("VAF_MODEL_OVERRIDE", "").strip() or self.config.get("model")
+        path = ensure_model_available(model_cfg, self.models_dir)
+        self.model_path = path
+        self.filename = os.path.basename(path)
 
     def init_chat(self):
         # Initialize Prompt Manager

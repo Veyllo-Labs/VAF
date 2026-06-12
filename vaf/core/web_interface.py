@@ -544,6 +544,46 @@ def get_web_interface():
     return WebInterfaceManager()
 
 
+def start_model_download_broadcast(poll_seconds: float = 0.5):
+    """Stream the current model download's progress to all WebSocket clients as
+    ``model_download_progress`` -- the SAME message a WebUI-initiated download uses, so the existing
+    download banner renders for tray/auto (first-run) downloads too, not only WebUI-initiated ones.
+    Driven by ``model_download_state.MODEL_DOWNLOAD``; returns a ``stop()`` callable to end the stream.
+    Runs in a daemon thread because the download itself blocks its own thread (hf_hub_download)."""
+    import threading
+    import time
+    from vaf.core.model_download_state import MODEL_DOWNLOAD
+
+    stop_evt = threading.Event()
+
+    def _loop():
+        wi = get_web_interface()
+        last_bytes, last_t = 0, time.time()
+        while not stop_evt.is_set():
+            snap = MODEL_DOWNLOAD.snapshot()
+            if snap["active"]:
+                now = time.time()
+                delta_b = snap["bytes_done"] - last_bytes
+                delta_t = now - last_t
+                speed = f"{delta_b / delta_t / 1e6:.1f} MB/s" if delta_t > 0 and delta_b > 0 else ""
+                last_bytes, last_t = snap["bytes_done"], now
+                try:
+                    wi.push_update({
+                        "type": "model_download_progress",
+                        "repo_id": snap["repo"],
+                        "progress_pct": snap["pct"],
+                        "bytes_done": snap["bytes_done"],
+                        "bytes_total": snap["bytes_total"],
+                        "speed_str": speed,
+                    })
+                except Exception:
+                    pass
+            stop_evt.wait(poll_seconds)
+
+    threading.Thread(target=_loop, daemon=True, name="model-download-broadcast").start()
+    return stop_evt.set
+
+
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
     """
     Notify the Web UI that a file was created so it shows a download/open link.

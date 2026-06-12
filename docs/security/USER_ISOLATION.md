@@ -259,27 +259,31 @@ A one-time migration script (`scripts/migrate_users_to_scopes.py`) copies data f
 
 ### Generated projects (`vaf/tools/coder.py`)
 
-When the Coding Agent creates a new project (website, script, document, etc.), it writes to a user-prefixed subdirectory inside the `VAF_Projects` root:
+When the Coding Agent creates a new project (website, script, document, etc.), it writes to a user- and chat-scoped subdirectory inside the `VAF_Projects` root:
 
 ```
 ~/Documents/VAF_Projects/
 ├── <user_scope_id[:8]>/         # per-user subdirectory (authenticated users)
-│   ├── Webseite Portfolio/      # project created by this user
-│   └── Script Data Analysis/
-└── Webseite Demo/               # legacy path (local/admin, no user_scope_id)
+│   └── <session_id>/            # per-chat subdirectory (e.g. green432633)
+│       ├── Webseite Portfolio/  # project created in this chat
+│       └── Game Space Shooter/
+└── Webseite Demo/               # legacy path (local/admin, no session context)
 ```
 
-- **Authenticated users** (`user_scope_id` present in session metadata): projects are placed under `VAF_Projects/<first-8-chars-of-uuid>/`.
-- **Local/admin mode** (no `user_scope_id`): projects go directly into `VAF_Projects/` as before (backward-compatible).
+- **Authenticated users** (`user_scope_id` present in session metadata): projects are placed under `VAF_Projects/<first-8-chars-of-uuid>/<session_id>/`.
+- **Per-chat isolation:** with a session id, each chat gets its own folder, so projects from different chats never mix. The workflow engine builds its project paths the same way.
+- **Local/admin mode** (no `user_scope_id`): projects go into `VAF_Projects/` (with the `<session_id>/` level when a session id is available).
 
 The prefix is derived from `session.metadata["user_scope_id"]` at project creation time. Existing projects are never moved; only newly created directories use the prefix.
+
+**Unsafe-directory guard:** `is_unsafe_project_dir()` (`vaf/tools/coder.py`) rejects the user's home directory itself, the standard user directories (Documents, Desktop, ...), `~/.vaf` and the VAF program tree as agent work directories — for the CWD heuristic, explicit `project_path` arguments, paths extracted from task text and `git init`. Unsafe paths fall back to the `VAF_Projects` flow.
 
 ### Session workspace (`vaf/core/session.py`, `vaf/core/web_server.py`)
 
 Each chat session has a **stable workspace root** stored in `Session.project_path`. This field is set once (on the first `file_created` event for that session) and never overwritten, giving the session a permanent home directory regardless of how many sub-projects are created later.
 
 - `session.project_path` is only set for paths inside `VAF_Projects/` (temp dirs and one-off outputs are excluded).
-- `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session.
+- `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session. Unsafe directories (home dir, `~/.vaf`, ...) are never recorded — and never re-injected into prompts — so sessions that stored such a path before the guard existed self-heal (`is_unsafe_project_dir` checks in `web_server.py` and `headless_runner.py`).
 - The agent receives both values as `[SESSION WORKSPACE]` and `[ACTIVE PROJECT]` context lines at the start of each turn (injected by `vaf/core/headless_runner.py`).
 
 ### Automations (`vaf/core/automation.py`)
@@ -355,7 +359,7 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Redis cache | Scope-prefixed cache keys | Caching |
 | PostgreSQL | Row-Level Security policy | Database |
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
-| Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/` when `user_scope_id` is present; legacy flat root otherwise | OS |
+| Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |
 | Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |
 | Sandbox | Per-user working directory in Docker | Container |
 | WhatsApp | Separate subprocess per user | Process |

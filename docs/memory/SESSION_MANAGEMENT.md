@@ -249,8 +249,8 @@ Example of a tool turn as stored:
 
 Rules:
 - Only set for paths inside `~/Documents/VAF_Projects/` — temporary files and one-off outputs are excluded.
-- For authenticated users the path includes a user-scope prefix (e.g. `VAF_Projects/<uid[:8]>/Webseite Portfolio`).
-- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event.
+- New projects are created per chat: `VAF_Projects/<uid[:8]>/<session_id>/<ProjectName>` (the session level applies whenever a session id is available).
+- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event — except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; poisoned legacy sessions self-heal).
 
 At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:
 

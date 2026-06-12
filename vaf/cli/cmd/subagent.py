@@ -86,6 +86,11 @@ def run_subagent(
     os.environ["VAF_AGENT_TYPE"] = str(agent_type or "")
     if task_id:
         os.environ["VAF_TASK_ID"] = str(task_id)
+    elif not os.environ.get("VAF_TASK_ID"):
+        # Direct CLI run without IPC task id: generate a local run id so this
+        # process and the tool it hosts log into ONE debug directory. Setting it
+        # in the env is safe here — this child process runs exactly one task.
+        os.environ["VAF_TASK_ID"] = f"local-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
 
     from vaf.core.config import Config
     from vaf.cli.ui import UI
@@ -98,7 +103,7 @@ def run_subagent(
     if session_id:
         set_current_session_id(session_id)
     
-    lg = get_subagent_logger_from_env()
+    lg = get_subagent_logger_from_env(create_fallback=True, agent_type=agent_type)
     if lg:
         lg.event(
             "subagent_start",

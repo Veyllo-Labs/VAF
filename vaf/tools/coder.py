@@ -43,6 +43,132 @@ from vaf.core.persistence import PersistenceManager, ProjectState, Task
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Project Directory Safety
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def is_unsafe_project_dir(path: str) -> bool:
+    """True if `path` must never be used as a project/work directory for agents.
+
+    Agents may only create projects under safe locations (normally
+    Documents/VAF_Projects). Unsafe are:
+    - the filesystem root and the user's home directory itself
+    - the standard user directories themselves (Documents, Desktop, Downloads, ...)
+      (subdirectories of them are fine, e.g. Documents/VAF_Projects/...)
+    - anything inside the VAF config dir (~/.vaf)
+    - anything inside the VAF program/source tree
+
+    Also used by web_server/headless_runner to refuse persisting or re-injecting
+    poisoned last_project_path values (self-heal for sessions that recorded
+    /home/<user> as a project before this guard existed).
+    """
+    try:
+        p = Path(path).expanduser().resolve()
+    except Exception:
+        return True
+
+    home = Path.home().resolve()
+
+    # Filesystem root, home itself, or anything above home (e.g. /home, /Users)
+    if p == Path(p.anchor) or home.is_relative_to(p):
+        return True
+
+    # Standard user dirs themselves (their subdirs are allowed)
+    standard_dirs = {
+        home / d for d in (
+            "Documents", "Desktop", "Downloads", "Pictures",
+            "Music", "Videos", "Public", "Templates",
+        )
+    }
+    if p in standard_dirs:
+        return True
+
+    # VAF config dir (~/.vaf) and everything inside it
+    vaf_cfg = home / ".vaf"
+    if p == vaf_cfg or p.is_relative_to(vaf_cfg):
+        return True
+
+    # VAF program/source tree and everything inside it
+    vaf_root = Path(__file__).resolve().parents[2]
+    if p == vaf_root or p.is_relative_to(vaf_root):
+        return True
+
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Planning Rules (code-enforced)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SINGLE_FILE_PATTERNS = [
+    # German: "einzelne HTML-Datei", "einzigen Datei", "Einzeldatei"
+    r'\beinzeln\w*\s+(?:\w+[-\s]+)?datei\b',
+    r'\beinzig\w*\s+(?:\w+[-\s]+)?datei\b',
+    r'\beinzeldatei\b',
+    # English: "single file", "single html file", "single-file", "one single file",
+    # "everything/all in one file"
+    r'\bsingle[-\s]+(?:\w+[-\s]+)?file\b',
+    r'\bone\s+single\s+(?:\w+\s+)?file\b',
+    r'\b(?:everything|all)\s+in\s+one\s+(?:\w+\s+)?file\b',
+]
+
+
+def _detect_single_file_deliverable(task: str) -> bool:
+    """True if the task explicitly asks for a single-file deliverable.
+
+    Backs the planning rule "single-file deliverable -> exactly 1 task" with a
+    code-level check (set_todos enforcement). Deliberately conservative: only
+    unambiguous phrasings match — a bare "eine Datei" does not, because it
+    appears in many multi-file tasks too.
+    """
+    task_lower = (task or "").lower()
+    return any(re.search(p, task_lower) for p in _SINGLE_FILE_PATTERNS)
+
+
+def _final_commit(base_dir: str, message: str) -> str:
+    """Commit the project state at the end of a coder run (every exit path).
+
+    The model rarely calls the git tools itself, so without this the deliverable
+    stays untracked forever (runs used to end with only the 'Initial commit').
+    Commits on PARTIAL/FAILED runs too — the message carries the status, and an
+    honest snapshot beats losing work. Returns a one-line status for the summary.
+    """
+    if is_unsafe_project_dir(base_dir):
+        return ""
+    if not os.path.isdir(os.path.join(base_dir, '.git')):
+        return ""
+
+    run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True}
+    if platform.system() == "Windows":
+        run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+    try:
+        subprocess.run(['git', 'add', '-A'], check=True, **run_kwargs)
+        status = subprocess.run(['git', 'status', '--porcelain'], check=True, **run_kwargs)
+        if not (status.stdout or "").strip():
+            return "Git: nothing new to commit"
+
+        commit = subprocess.run(['git', 'commit', '-m', message], **run_kwargs)
+        if commit.returncode != 0:
+            err = (commit.stderr or "") + (commit.stdout or "")
+            if any(s in err for s in ("user.name", "user.email", "identity")):
+                # No git identity configured on this machine: retry with a
+                # one-off VAF identity (does not touch the user's git config).
+                commit = subprocess.run(
+                    ['git', '-c', 'user.name=VAF Coder', '-c', 'user.email=coder@vaf.local',
+                     'commit', '-m', message],
+                    **run_kwargs,
+                )
+            if commit.returncode != 0:
+                return f"Git commit failed: {(commit.stderr or '').strip()[:120]}"
+
+        short = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], **run_kwargs)
+        sha = (short.stdout or "").strip()
+        return f"Git: committed final state ({sha})" if sha else "Git: committed final state"
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        return f"Git commit skipped: {str(e)[:120]}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Cross-Platform Clickable Links
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1105,7 +1231,63 @@ class TaskManager:
             task.result = result
             task.completed_at = time.time()
             self.state.current_task_idx += 1
+            self._advance_to_next_actionable()
             self.pm.save_state(self.state)
+
+    def fail_current_task(self, reason: str):
+        """Mark current task as failed (honest terminal state) and move to next.
+
+        Used when stuck detection fires and the task goal could not be verified.
+        A failed task is never reported as completed; the final summary lists it.
+        """
+        if not self.state or not self.pm:
+            return
+
+        if self.state.current_task_idx < len(self.state.tasks):
+            task = self.state.tasks[self.state.current_task_idx]
+            task.status = "failed"
+            task.result = reason
+            task.completed_at = time.time()
+            self.state.current_task_idx += 1
+            self._advance_to_next_actionable()
+            self.pm.save_state(self.state)
+
+    def _advance_to_next_actionable(self):
+        """Skip terminal tasks so retried runs never re-enter completed work.
+
+        No-op in the normal sequential flow; relevant after reset_task_for_retry,
+        where completed tasks may sit between pending retry candidates.
+        """
+        if not self.state:
+            return
+        i = self.state.current_task_idx
+        while i < len(self.state.tasks) and self.state.tasks[i].status in self._TERMINAL_STATUSES:
+            i += 1
+        self.state.current_task_idx = i
+
+    def reset_task_for_retry(self, idx: int, note: str = ""):
+        """Put a task back to pending for a retry attempt.
+
+        The previous failure reason is archived in `description` so the retry
+        context can inject it as a hint.
+        """
+        if not self.state or not self.pm:
+            return
+        if 0 <= idx < len(self.state.tasks):
+            task = self.state.tasks[idx]
+            prev = note or task.result or ""
+            if prev:
+                task.description = f"Previous attempt: {prev}"[:500]
+            task.status = "pending"
+            task.result = None
+            task.completed_at = None
+            if idx < self.state.current_task_idx:
+                self.state.current_task_idx = idx
+            self.pm.save_state(self.state)
+
+    def failed_tasks(self) -> List[Dict]:
+        """All tasks in status 'failed' (legacy dict format, like .todos)."""
+        return [t for t in self.todos if t["status"] == "failed"]
     
     def get_progress(self) -> str:
         """Get progress string for display."""
@@ -1131,11 +1313,26 @@ class TaskManager:
         
         return "\n".join(lines)
     
+    _TERMINAL_STATUSES = ("completed", "failed", "skipped")
+
     def is_all_done(self) -> bool:
-        """Check if all tasks are completed."""
+        """True when no actionable tasks remain (all in a terminal status).
+
+        Terminal includes 'failed': a task that failed verification must not
+        keep the loop alive forever, but it is also never reported as completed
+        — use is_all_completed() to distinguish COMPLETE from PARTIAL.
+        """
         if not self.state:
             return False
-        return self.state.tasks and all(t.status == "completed" for t in self.state.tasks)
+        return bool(self.state.tasks) and all(
+            t.status in self._TERMINAL_STATUSES for t in self.state.tasks
+        )
+
+    def is_all_completed(self) -> bool:
+        """True only when every task genuinely completed (strict success)."""
+        if not self.state:
+            return False
+        return bool(self.state.tasks) and all(t.status == "completed" for t in self.state.tasks)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1333,11 +1530,103 @@ class QualityChecker:
                     result['files_with_placeholders'][os.path.basename(f)] = found_placeholders
                     result['total_placeholders'] += len(found_placeholders)
                     result['has_placeholders'] = True
-                    
+
             except Exception:
                 pass
-        
+
         return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task Goal Verification (used by stuck detection)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _pick_main_deliverable(base_dir: str) -> str:
+    """Best-effort path of the project's main deliverable file ('' if none).
+
+    Preferred well-known entry files first, then the largest code file.
+    Infrastructure files (hidden, .git/.vaf internals) are ignored.
+    """
+    preferred = ("index.html", "main.py", "app.py", "main.js", "index.js")
+    try:
+        for name in preferred:
+            p = os.path.join(base_dir, name)
+            if os.path.isfile(p):
+                return p
+        candidates = []
+        for entry in os.listdir(base_dir):
+            if entry.startswith('.'):
+                continue
+            p = os.path.join(base_dir, entry)
+            if os.path.isfile(p) and os.path.splitext(entry)[1] in (
+                '.html', '.py', '.js', '.ts', '.css', '.java', '.cpp', '.c', '.go', '.rs', '.sh'
+            ):
+                candidates.append((os.path.getsize(p), p))
+        if candidates:
+            return max(candidates)[1]
+    except Exception:
+        pass
+    return ""
+
+
+def _verify_task_goal(
+    task_title: str,
+    task_files: List[str],
+    base_dir: str,
+    linter_active: bool = False,
+    llm_verify=None,
+) -> "tuple[bool, str]":
+    """Check whether a task's goal is achieved before force-completing it.
+
+    Deterministic first: if the task wrote its own files, they must exist and be
+    free of template placeholders, and no linter error may be active. Without
+    file evidence (goal may already be implemented by an earlier task), one
+    bounded LLM check decides; `llm_verify` is an injectable callable
+    (prompt -> response text) so this stays unit-testable. Any failure or
+    ambiguity verifies as False — a stuck task must never become a silent
+    'completed'.
+
+    Returns (verified, evidence/reason).
+    """
+    # 1) Deterministic: file evidence from this task
+    if task_files:
+        missing = [f for f in task_files if not os.path.exists(f)]
+        if missing:
+            return False, f"task wrote files but they are missing: {', '.join(os.path.basename(m) for m in missing[:3])}"
+        if linter_active:
+            return False, "task files written but linter errors are still active"
+        placeholder_check = QualityChecker.check_placeholders(task_files, base_dir)
+        if placeholder_check.get('has_placeholders'):
+            return False, f"task files contain {placeholder_check['total_placeholders']} unresolved placeholders"
+        names = ', '.join(os.path.basename(f) for f in task_files[:5])
+        return True, f"files written and clean: {names}"
+
+    # 2) No file evidence -> one bounded LLM check against the main deliverable
+    if llm_verify is None:
+        return False, "no files written for this task and no verifier available"
+
+    main_file = _pick_main_deliverable(base_dir)
+    if not main_file:
+        return False, "no files written for this task and no deliverable exists yet"
+
+    try:
+        with open(main_file, 'r', encoding='utf-8', errors='replace') as f:
+            code_excerpt = f.read(6000)
+        prompt = (
+            "You are a strict code verifier. Answer with YES or NO as the first word, "
+            "then one short line of evidence.\n\n"
+            f"Goal to verify: {task_title}\n\n"
+            f"Code ({os.path.basename(main_file)}):\n```\n{code_excerpt}\n```\n\n"
+            "Is this goal already fully implemented in the code above?"
+        )
+        response = str(llm_verify(prompt) or "").strip()
+        first_word = response.split()[0].strip('.,:;!').upper() if response.split() else ""
+        if first_word == "YES":
+            evidence = response[:200].replace('\n', ' ')
+            return True, f"verified by LLM check: {evidence}"
+        return False, f"LLM check did not confirm goal: {response[:150]}" if response else "LLM check returned no answer"
+    except Exception as e:
+        return False, f"verification check failed: {e}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1630,25 +1919,21 @@ class CodingAgentTool(BaseTool):
         2. If CWD is a project root (.git, .vaf, etc.) AND task is NOT "create new project" -> Use CWD.
         3. Else -> Generate new project folder in VAF_Projects.
         """
-        # 1. Explicit path
+        # 1. Explicit path (unless it points to an unsafe location like /home/<user>)
         if provided_path:
-            return os.path.abspath(os.path.expanduser(provided_path))
+            _abs = os.path.abspath(os.path.expanduser(provided_path))
+            if not is_unsafe_project_dir(_abs):
+                return _abs
 
         cwd = os.getcwd()
 
-        # Safety: never use the VAF program root or its subdirectories as base_dir.
-        try:
-            from vaf.tools.filesystem import _VAF_PROJECT_ROOT
-            from pathlib import Path as _Path
-            _cwd_path = _Path(cwd).resolve()
-            _is_vaf_root = (_cwd_path == _VAF_PROJECT_ROOT or _cwd_path.is_relative_to(_VAF_PROJECT_ROOT))
-        except Exception:
-            _is_vaf_root = False
-
-        # 2. Check if CWD is a project root (but not the VAF source repo)
+        # 2. Check if CWD is a project root — but never for unsafe locations.
+        # Sub-agent terminals spawn with CWD=$HOME; ~/.vaf (config dir) and a stray
+        # ~/.git would otherwise make the home directory look like a project root
+        # and the agent would dump files directly into /home/<user>.
         project_markers = [".git", ".vaf", "package.json", "pyproject.toml", "requirements.txt"]
         is_project_root = (
-            not _is_vaf_root
+            not is_unsafe_project_dir(cwd)
             and any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
         )
 
@@ -1698,7 +1983,7 @@ class CodingAgentTool(BaseTool):
             _sm = _SM()
             _sess = _sm.load(_sid)
             _last = (getattr(_sess, "runtime_state", None) or {}).get("last_project_path", "")
-            if _last and os.path.isdir(_last):
+            if _last and os.path.isdir(_last) and not is_unsafe_project_dir(_last):
                 return _last
         except Exception:
             pass
@@ -1716,7 +2001,9 @@ class CodingAgentTool(BaseTool):
 
         # Detect project type
         # Note: check 'html' before 'script' so <script>-Tag in HTML tasks doesn't misclassify
-        if any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page', 'seite', '.html', 'index.html', 'html datei', 'html file']):
+        if any(kw in task_lower for kw in ['game', 'spiel ', 'spiel,', 'spiel.']):
+            prefix = "Game"
+        elif any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page', 'seite', '.html', 'index.html', 'html datei', 'html-datei', 'html file']):
             prefix = "Webseite"
         elif any(kw in task_lower for kw in ['webapp', 'web app', 'application', 'anwendung']):
             prefix = "Webapp"
@@ -1729,7 +2016,22 @@ class CodingAgentTool(BaseTool):
             prefix = "Projekt"
         
         # Extract key words from task (paths already stripped, remove common words)
-        stop_words = {'the', 'a', 'an', 'for', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'but', 'mit', 'für', 'in', 'auf', 'zu', 'von', 'und', 'oder', 'aber', 'eine', 'ein', 'der', 'die', 'das', 'read', 'file', 'path', 'return', 'contents', 'full', 'datei', 'pfad', 'inhalt'}
+        stop_words = {
+            'the', 'a', 'an', 'for', 'in', 'on', 'at', 'to', 'of', 'and', 'or', 'but',
+            'mit', 'für', 'in', 'auf', 'zu', 'von', 'und', 'oder', 'aber',
+            'eine', 'ein', 'einen', 'einem', 'einer', 'der', 'die', 'das', 'den', 'dem',
+            'read', 'file', 'path', 'return', 'contents', 'full', 'datei', 'pfad', 'inhalt',
+            # Task verbs/adjectives — say nothing about WHAT is being built
+            'erstelle', 'erstellen', 'erstell', 'create', 'baue', 'bauen', 'build',
+            'schreibe', 'schreiben', 'schreib', 'write', 'mache', 'machen', 'make',
+            'generiere', 'generieren', 'generate',
+            'einfach', 'einfache', 'einfaches', 'einfachen', 'simple', 'basic',
+            'neue', 'neues', 'neuen', 'new', 'kleines', 'kleine', 'small',
+            'professionelle', 'professionell', 'professionelles', 'professional',
+            # Project-type words — already covered by the name prefix
+            'webseite', 'website', 'homepage', 'seite', 'webapp', 'app',
+            'script', 'skript', 'projekt', 'project', 'anwendung', 'application',
+        }
         words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]{3,}\b', task_for_naming)
         keywords = [w for w in words if w.lower() not in stop_words][:3]  # Max 3 keywords
 
@@ -1758,11 +2060,16 @@ class CodingAgentTool(BaseTool):
 
         # Per-user isolation: put projects under VAF_Projects/{user_scope_id[:8]}/ when
         # running in a multi-user context. Falls back to VAF_Projects/ for local/admin.
+        # Per-chat isolation: each chat gets its own folder below that
+        # (VAF_Projects/[user]/[session_id]/<ProjectName>), so projects from
+        # different chats never mix.
         _user_prefix = ""
+        _session_folder = ""
         try:
             from vaf.core.subagent_ipc import get_current_session_id as _get_sid
             _sid = _get_sid()
             if _sid:
+                _session_folder = re.sub(r'[^a-zA-Z0-9_-]', '', _sid)[:32]
                 from vaf.core.session import SessionManager as _SM2
                 _s = _SM2().load(_sid)
                 _uid = (_s.metadata or {}).get("user_scope_id", "")
@@ -1771,10 +2078,10 @@ class CodingAgentTool(BaseTool):
         except Exception:
             pass
 
-        if _user_prefix:
-            projects_root = os.path.join(docs_dir, "VAF_Projects", _user_prefix)
-        else:
-            projects_root = os.path.join(docs_dir, "VAF_Projects")
+        projects_root = os.path.join(
+            docs_dir, "VAF_Projects",
+            *(p for p in (_user_prefix, _session_folder) if p)
+        )
         os.makedirs(projects_root, exist_ok=True)
         
         base_dir = os.path.join(projects_root, project_name)
@@ -1788,6 +2095,10 @@ class CodingAgentTool(BaseTool):
     
     def _ensure_git_repo(self, base_dir: str):
         """Initialize Git repository if not already initialized. OS-independent."""
+        # Never git-init unsafe locations (home dir, Documents root, ...) — a .git
+        # there would make them look like project roots forever after.
+        if is_unsafe_project_dir(base_dir):
+            return
         git_dir = os.path.join(base_dir, '.git')
         if os.path.exists(git_dir):
             return  # Already a git repo
@@ -1882,7 +2193,9 @@ Thumbs.db
         # Sub-agent debug logger (only active inside sub-agent terminals)
         try:
             from vaf.core.subagent_debug import get_subagent_logger_from_env
-            lg = get_subagent_logger_from_env()
+            # create_fallback: loop telemetry must persist in EVERY run mode
+            # (direct CLI, in-process, IPC spawn) — not only when an IPC task id exists.
+            lg = get_subagent_logger_from_env(create_fallback=True, agent_type="coding_agent")
             if lg:
                 lg.event(
                     "coding_agent_tool_run_invoked",
@@ -2188,6 +2501,12 @@ Thumbs.db
         
         # Check if continuing existing project
         project_path = kwargs.get('project_path', '')
+        if project_path and is_unsafe_project_dir(project_path):
+            # Sessions poisoned before the safety guard may still tell the main
+            # agent the "project" lives in /home/<user>. Ignore and fall back to
+            # the normal VAF_Projects flow instead of writing into unsafe dirs.
+            tui.append_stream(f"Ignoring unsafe project path: {project_path}")
+            project_path = ''
         if project_path:
             # Continue existing project OR create new one at specific path
             base_dir = os.path.abspath(os.path.expanduser(project_path))
@@ -2222,6 +2541,10 @@ Thumbs.db
                     _explicit_path = os.path.abspath(
                         os.path.expanduser(_m.group(1).rstrip('.,)/\\'))
                     )
+                    # A bare path mentioned in the task may include the filename
+                    # (".../index.html in /home/mert") or point to an unsafe dir.
+                    if _explicit_path and is_unsafe_project_dir(_explicit_path):
+                        _explicit_path = None
             except Exception:
                 pass
 
@@ -3421,6 +3744,88 @@ Task {task_idx + 1}: {current_task}
         write_file_calls_in_session = 0  # Track total write_file calls
         write_file_calls_in_last_3_loops = 0  # Track recent activity
         recent_loop_write_files = []  # Track write_file calls per loop
+
+        # Planning-rule enforcement: single-file deliverable -> exactly 1 task.
+        # First violation is rejected with instructions; the second one is
+        # auto-coerced so a small model cannot loop in the planning phase.
+        singlefile_rejections = 0
+
+        # Stuck/goal-verification state: per-task retry budget plus one final
+        # retry round for failed tasks at the end of the run.
+        task_retry_counts: Dict[int, int] = {}
+        final_retry_done = False
+
+        def _llm_verify_call(prompt: str) -> str:
+            """One bounded, non-streaming LLM call for stuck-task goal verification.
+
+            Deliberately small (200 tokens, temp 0, 60s timeout): if the model is
+            stuck on the task itself, this simpler YES/NO question is still
+            answerable; any error propagates to _verify_task_goal -> not verified.
+            """
+            _vr_headers = {"Content-Type": "application/json"}
+            if _llm_api_key:
+                _vr_headers["Authorization"] = f"Bearer {_llm_api_key}"
+            _vr_body = {
+                "model": _llm_model or "user-model",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 200,
+                "temperature": 0.0,
+                "stream": False,
+            }
+            _vr_resp = requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=60)
+            _vr_resp.raise_for_status()
+            _vr_data = _vr_resp.json()
+            return ((_vr_data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+        def _maybe_start_final_retry() -> bool:
+            """One last retry round for failed tasks before the run ends.
+
+            Called at every all-done exit point. If tasks failed during the main
+            phase, they are reset to pending exactly once and re-attempted with
+            an enriched context (completed-task summaries, project file list and
+            the failure history). Returns True when a retry round was started —
+            the caller must `continue` the loop instead of breaking.
+            """
+            nonlocal final_retry_done
+            if final_retry_done:
+                return False
+            failed = task_mgr.failed_tasks()
+            if not failed:
+                return False
+            final_retry_done = True
+
+            failure_notes = []
+            for t in failed:
+                idx = int(t["id"]) - 1
+                failure_notes.append(f"- Task {t['id']}: {t['task']} -> {t.get('result') or 'failed'}")
+                task_mgr.reset_task_for_retry(idx, t.get("result") or "failed in main phase")
+                # The final round is the last attempt: stuck detection fails the
+                # task definitively instead of granting another inner retry.
+                task_retry_counts[idx] = 1
+                if hasattr(loop, 'task_start_loop'):
+                    loop.task_start_loop.pop(idx, None)
+                context_states.pop(f"task_{idx}", None)
+
+            retry_idx = task_mgr.current_task_idx
+            retry_title = task_mgr.get_current_task() or ""
+            tui.append_stream(f"[RETRY] Final retry round: re-attempting {len(failed)} failed task(s)...")
+            try:
+                if lg:
+                    lg.event("final_retry_started", failed_count=len(failed), first_task_idx=retry_idx)
+            except Exception:
+                pass
+
+            if switch_to_task_context(retry_idx, retry_title):
+                history.append({
+                    "role": "system",
+                    "content": (
+                        "FINAL RETRY ROUND - these tasks failed earlier in this run:\n"
+                        + "\n".join(failure_notes)
+                        + "\n\nThis is the last attempt. Use the existing project files, make the "
+                          "required changes with write_file, then call task_done."
+                    ),
+                })
+            return True
         
         # Dynamic Temperature State
         current_temp = 0.3
@@ -3547,6 +3952,8 @@ Task {task_idx + 1}: {current_task}
             # PROACTIVE AUTO-EXIT CHECK - Break immediately if all tasks done
             # ═══════════════════════════════════════════════════════════════
             if task_mgr and task_mgr.is_all_done():
+                if _maybe_start_final_retry():
+                    continue
                 tui.append_stream("🎉 [AUTO-EXIT] All tasks completed!")
                 _trace(f"[AUTO-EXIT] Loop {loop.loop_count}: is_all_done=True, breaking immediately")
                 try:
@@ -5395,7 +5802,13 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     if is_script_task:
                         tui.append_stream(f"[DEBUG] Detected script task (keyword: '{trigger_kw}')")
                     
-                    if is_content_only:
+                    if _detect_single_file_deliverable(task):
+                        # Planning rule: single-file deliverable -> exactly 1 task,
+                        # also when the supervisor generates the plan itself.
+                        auto_todos = [
+                            "Create the complete deliverable in a single file with all required functionality"
+                        ]
+                    elif is_content_only:
                         if "html" in task_lower or "webpage" in task_lower:
                             auto_todos = [
                                 "Generate complete HTML document with all required content",
@@ -5519,38 +5932,84 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     continue
             
             # SECOND: Check for Task-Stuck (Infinite Loop on same task)
-            # If we are on same task for > 15 loops -> FORCE COMPLETE
+            # After 15 loops on the same task: verify the goal first. Verified ->
+            # complete with evidence. Not verified -> one retry in a fresh context,
+            # then an honest 'failed' (never a silent fake 'completed').
             current_task_idx = task_mgr.current_task_idx
             if current_task_idx < len(task_mgr.todos):
                 # Check how long we've been on this task
                 if not hasattr(loop, 'task_start_loop'):
                     loop.task_start_loop = {}
-                
+
                 if current_task_idx not in loop.task_start_loop:
                     loop.task_start_loop[current_task_idx] = loop.loop_count
-                
+
                 loops_on_task = loop.loop_count - loop.task_start_loop[current_task_idx]
-                
-                # Force complete after 15 loops on same task
+
                 if loops_on_task > 15:
-                    tui.set_action("Task stuck - Auto-completing...")
-                    tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck for {loops_on_task} loops. Forcing completion.")
-                    
-                    # Force complete task
-                    task_mgr.complete_current_task("Auto-completed (stuck detection)")
-                    
-                    # Move to next task context
+                    tui.set_action("Task stuck - verifying goal...")
+                    current_title = task_mgr.get_current_task() or ""
+                    verified, evidence = _verify_task_goal(
+                        current_title,
+                        task_file_map.get(current_task_idx, []),
+                        base_dir,
+                        linter_active=bool(getattr(current_state, 'linter_errors_active', False)),
+                        llm_verify=_llm_verify_call,
+                    )
+                    retry_count = task_retry_counts.get(current_task_idx, 0)
+                    try:
+                        if lg:
+                            lg.event(
+                                "task_stuck_verification",
+                                task_idx=current_task_idx,
+                                loops_on_task=loops_on_task,
+                                verified=verified,
+                                evidence=evidence[:300],
+                                retry_count=retry_count,
+                            )
+                    except Exception:
+                        pass
+
+                    if verified:
+                        tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck for {loops_on_task} loops - goal verified, completing.")
+                        task_mgr.complete_current_task(
+                            f"Auto-completed after stuck detection - goal verified: {evidence}"
+                        )
+                    elif retry_count < 1:
+                        # One immediate retry: fresh context (drop the poisoned one)
+                        # plus an explicit hint about what went wrong.
+                        task_retry_counts[current_task_idx] = retry_count + 1
+                        task_mgr.reset_task_for_retry(
+                            current_task_idx, f"stuck after {loops_on_task} loops; {evidence}"
+                        )
+                        loop.task_start_loop[current_task_idx] = loop.loop_count
+                        context_states.pop(f"task_{current_task_idx}", None)
+                        tui.append_stream(f"[AUTO] Task {current_task_idx+1} stuck, goal not verified - retrying with fresh context.")
+                        if switch_to_task_context(current_task_idx, current_title):
+                            history.append({
+                                "role": "system",
+                                "content": (
+                                    f"RETRY: The previous attempt at this task got stuck after {loops_on_task} loops "
+                                    f"and the goal could not be verified ({evidence}). "
+                                    f"Take a DIFFERENT approach now: read the relevant file, make the required "
+                                    f"change with write_file, then call task_done."
+                                ),
+                            })
+                        continue
+                    else:
+                        tui.append_stream(f"[FAIL] Task {current_task_idx+1} failed - goal not verified after retry.")
+                        task_mgr.fail_current_task(
+                            f"Stuck after {loops_on_task} loops, retry exhausted - {evidence}"
+                        )
+
+                    # Move to next task context (after verified-complete or fail)
                     next_task = task_mgr.get_current_task()
                     if next_task:
-                        # Build summary of completed work
-                        completed_info = "\n".join([f"- {t['task']}: {t.get('result', 'done')}" for t in task_mgr.todos if t['status'] == 'completed'])
-                        
                         task_idx = task_mgr.current_task_idx
-                        # Use switch_to_task_context instead
                         if switch_to_task_context(task_idx, next_task):
                             pass  # Context switched successfully
                         tui.append_stream(f"[AUTO] Switched to Task {task_idx + 1}: {next_task[:40]}")
-                    
+
                     continue # Skip to next loop with new task
             
             # If model claims completion without TODOs, force it to set them first.
@@ -5793,9 +6252,28 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
                 # AUTO-COMPLETE SAFETY: If files exist for current task but we keep idling, auto-complete to break deadlock
                 if task_file_exists and loop.no_action_since >= 4:
+                    # Same goal verification as stuck detection: file evidence must
+                    # be clean (exists, no placeholders, no linter errors). If not,
+                    # keep the task open — stuck detection escalates with retry/fail.
+                    _ac_verified, _ac_evidence = _verify_task_goal(
+                        task_mgr.get_current_task() or "",
+                        files_for_task,
+                        base_dir,
+                        linter_active=bool(getattr(current_state, 'linter_errors_active', False)),
+                        llm_verify=None,
+                    )
+                    if not _ac_verified:
+                        tui.append_stream(f"[AUTO] Inactivity auto-complete blocked - {_ac_evidence[:80]}")
+                        history.append({
+                            "role": "system",
+                            "content": (
+                                f"Auto-complete blocked: {_ac_evidence}. "
+                                f"Fix this, then call task_done."
+                            ),
+                        })
+                        continue
                     summary = (
-                        f"Auto-completed due to inactivity. "
-                        f"Files present: {', '.join([os.path.basename(f) for f in files_for_task])}"
+                        f"Auto-completed after inactivity - goal verified: {_ac_evidence}"
                     )
                     task_mgr.complete_current_task(summary)
                     next_task = task_mgr.get_current_task()
@@ -5814,6 +6292,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         tui.append_stream(f"🔄 Fresh context created for Task {task_idx + 1}: {next_task[:40]}")
                         result = f"✅ Task auto-completed.\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                     elif task_mgr.is_all_done():
+                        if _maybe_start_final_retry():
+                            continue
                         result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                         tui.append_stream("🎉 All tasks done (auto-complete)!")
                         break  # Exit loop - all tasks completed
@@ -5899,28 +6379,13 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             except Exception:
                                 pass  # Fallback to summary
                     
-                    # Normal mode: Return project summary
-                    files_list = _format_file_links(files_created, base_dir)
-                    dir_link = _get_clickable_path(base_dir)
-                    open_instructions = _get_open_instructions(files_created, base_dir)
-                    
-                    # Try to open the folder automatically
-                    folder_opened = _open_folder(base_dir)
-                    folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
-                    
-                    return (
-                        f"[VAF_CODING_AGENT_STATUS: COMPLETE]\n\n"  # Explicit signal for Main Agent
-                        f"### ✅ Task Completed\n\n"
-                        f"**📁 Project Directory**: {dir_link}\n"
-                        f"**Full Path**: `{base_dir}`\n"
-                        f"{folder_status}\n\n"
-                        f"**📄 Files ({len(files_created)})**:\n{files_list}\n\n"
-                        f"{open_instructions}\n\n"
-                        f"**⏱️ Time**: {loop.get_elapsed_str()}\n"
-                        f"**🔄 Loops**: {loop.loop_count}\n\n"
-                        f"**🔧 To continue working on this project, use:**\n"
-                        f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-                    )
+                    # Normal mode: exit the loop — the common post-loop summary
+                    # handles status (COMPLETE vs. PARTIAL incl. failed tasks) and
+                    # the final commit for every exit path identically.
+                    if _maybe_start_final_retry():
+                        continue
+                    tui.append_stream("Completion signal accepted - finishing run")
+                    break
                 else:
                     # Quality check failed - force more work
                     feedback = []
@@ -6233,8 +6698,47 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 if fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
 
+                    # HARD RULE (code-enforced): single-file deliverable -> exactly 1 task.
+                    # The system prompt states this, but small models ignore it; the
+                    # 3D-game run produced 9 tasks for one HTML file. First violation
+                    # is rejected with instructions, the second is auto-coerced.
+                    singlefile_rejected = False
+                    if (
+                        isinstance(tasks, list) and len(tasks) > 1
+                        and not current_state.is_task()
+                        and _detect_single_file_deliverable(task)
+                    ):
+                        singlefile_rejections += 1
+                        if singlefile_rejections == 1:
+                            singlefile_rejected = True
+                            result = (
+                                f"⚠️ REJECTED: This is a SINGLE-FILE deliverable, but you submitted {len(tasks)} tasks!\n\n"
+                                f"**Planning rule:** single-file deliverable -> exactly ONE task.\n"
+                                f"Call set_todos again with exactly ONE task that produces the complete file, e.g.:\n"
+                                f'set_todos(tasks=["Create the complete deliverable in a single file with all required features"])'
+                            )
+                            tui.append_stream(f"set_todos rejected - single-file deliverable needs exactly 1 task (got {len(tasks)})")
+                            _log_to_file(f"[DEBUG-X] set_todos REJECTED: single-file rule ({len(tasks)} tasks)")
+                            try:
+                                if lg:
+                                    lg.event("set_todos_singlefile_rejected", tasks_count=len(tasks))
+                            except Exception:
+                                pass
+                        else:
+                            coerced = f"Create the complete single-file deliverable: {task.strip()}"[:240]
+                            tasks = [coerced]
+                            tui.append_stream("Single-file rule: auto-coerced plan to exactly 1 task")
+                            _log_to_file("[DEBUG-X] set_todos auto-coerced to 1 task (single-file rule)")
+                            try:
+                                if lg:
+                                    lg.event("set_todos_singlefile_coerced", coerced_task=coerced)
+                            except Exception:
+                                pass
+
                     # Check current phase - CONTEXT-AWARE
-                    if current_state.is_task():
+                    if singlefile_rejected:
+                        pass  # rejection result already set above
+                    elif current_state.is_task():
                         # BLOCK: Cannot change todos during task execution
                         current_task = task_mgr.get_current_task()
                         result = (
@@ -6500,38 +7004,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     except Exception:
                                         pass  # Fallback to summary
 
-                            # Normal mode: Return project summary
-                            files_list = _format_file_links(files_created, base_dir)
-                            dir_link = _get_clickable_path(base_dir)
-                        open_instructions = _get_open_instructions(files_created, base_dir)
-                            
-                        # Try to open the folder automatically
-                        folder_opened = _open_folder(base_dir)
-                        folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
-                        
-                        # Check for placeholders
-                        placeholder_check = QualityChecker.check_placeholders(files_created, base_dir)
-                        placeholder_warning = ""
-                        if placeholder_check['has_placeholders']:
-                            placeholder_warning = "\n\n### ⚠️ Unchanged Placeholders Found\n"
-                            for fname, placeholders in placeholder_check['files_with_placeholders'].items():
-                                placeholder_warning += f"\n**{fname}**:\n"
-                                for p in placeholders[:5]:
-                                    placeholder_warning += f"- {p}\n"
-                        
-                        return (
-                                f"### ✅ Task Completed\n\n"
-                                f"**📁 Project Directory**: {dir_link}\n"
-                                f"**Full Path**: `{base_dir}`\n"
-                                f"{folder_status}\n\n"
-                                f"**📄 Files ({len(files_created)})**:\n{files_list}\n\n"
-                                f"{open_instructions}\n\n"
-                                f"**⏱️ Time**: {loop.get_elapsed_str()}\n"
-                                f"**🔄 Loops**: {loop.loop_count}\n\n"
-                                f"**🔧 To continue working on this project, use:**\n"
-                                f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-                            f"{placeholder_warning}"
-                        )
+                            # No early summary return here: the proactive auto-exit
+                            # check at the top of the loop owns run termination
+                            # (final retry round, final commit, honest status signal).
+                            result = "✅ Acknowledged. Continue with the remaining tasks or finish via task completion."
+                            tui.append_stream("task_done acknowledged (legacy path)")
                     
                     # CRITICAL: Cannot call task_done without TODOs!
                     if not task_mgr.todos:
@@ -6832,6 +7309,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                                 tui.append_stream(f"Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
+                                if _maybe_start_final_retry():
+                                    continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("All tasks done!")
                                 break  # Exit loop - all tasks completed
@@ -6844,6 +7323,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # CRITICAL FIX: Check if all tasks are done BEFORE trying to complete
                             # This handles the case where current_task_idx is out of bounds
                             if task_mgr.current_task_idx >= len(task_mgr.todos) and task_mgr.is_all_done():
+                                if _maybe_start_final_retry():
+                                    continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("🎉 [EARLY-EXIT] All tasks completed!")
                                 _log_to_file(f"[DEBUG-X] Early exit: task_idx {task_mgr.current_task_idx} >= {len(task_mgr.todos)}, all done")
@@ -6880,6 +7361,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 result = f"✅ Task completed!\n\n## NEXT TASK:\n{next_task}\n\nFocus only on this task now."
                                 tui.append_stream(f"➡️ Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
+                                if _maybe_start_final_retry():
+                                    continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("🎉 All tasks done!")
                                 break  # Exit loop - all tasks completed
@@ -7687,6 +8170,37 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         except Exception:
             pass
 
+        # ═══════════════════════════════════════════════════════════════
+        # FINAL COMMIT - persist the run result on every exit path.
+        # The model rarely calls the git tools itself; without this the
+        # deliverable stays untracked (runs ended with only 'Initial commit').
+        # Runs with failed/remaining tasks commit too - the message carries
+        # the status, an honest snapshot beats losing work.
+        # ═══════════════════════════════════════════════════════════════
+        final_commit_note = ""
+        if not skip_template:
+            try:
+                _total_tasks = len(task_mgr.todos) if task_mgr and task_mgr.todos else 0
+                _completed_tasks = (
+                    len([t for t in task_mgr.todos if t["status"] == "completed"]) if _total_tasks else 0
+                )
+                _run_status = "COMPLETE" if (task_mgr and task_mgr.is_all_completed()) else "PARTIAL"
+                _commit_msg = (
+                    f"VAF Coder: {' '.join(task.split())[:60]}\n\n"
+                    f"Status: {_run_status} ({_completed_tasks}/{_total_tasks} tasks)"
+                )
+                final_commit_note = _final_commit(base_dir, _commit_msg)
+                if final_commit_note:
+                    tui.append_stream(f"[Coder] {final_commit_note}")
+                try:
+                    if lg:
+                        lg.event("final_commit", note=final_commit_note, status=_run_status)
+                except Exception:
+                    pass
+            except Exception:
+                final_commit_note = ""
+        git_line = f"**💾 {final_commit_note}**\n" if final_commit_note else ""
+
         if files_created:
             # ═══════════════════════════════════════════════════════════════
             # CONTENT_ONLY MODE: Return actual file content instead of summary
@@ -7757,24 +8271,39 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             # Check task status for Main Agent
             task_status = ""
             has_incomplete_tasks = False
+            failed_list = []
             if task_mgr and task_mgr.todos:
                 completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
                 total_count = len(task_mgr.todos)
-                remaining = [t["task"] for t in task_mgr.todos if t["status"] != "completed"]
+                failed_list = task_mgr.failed_tasks()
+                remaining = [t["task"] for t in task_mgr.todos if t["status"] not in ("completed", "failed")]
                 task_status = f"\n\n**📋 Task Status**: {completed_count}/{total_count} tasks completed"
+                if failed_list:
+                    has_incomplete_tasks = True
+                    task_status += f"\n**❌ Failed tasks ({len(failed_list)})** (goal verification failed after retries):\n"
+                    task_status += "\n".join(
+                        f"- {t['task']}: {(t.get('result') or 'failed')[:120]}" for t in failed_list[:5]
+                    )
                 if remaining:
                     has_incomplete_tasks = True
                     task_status += f"\n**⚠️ Remaining tasks ({len(remaining)})**:\n" + "\n".join(f"- {t}" for t in remaining[:5])
                     if len(remaining) > 5:
                         task_status += f"\n- ... and {len(remaining) - 5} more"
+                if failed_list or remaining:
                     task_status += f"\n\n**💡 To complete all tasks, continue with:**\n"
                     task_status += f"`coding_agent(task=\"complete all remaining tasks\", project_path=\"{base_dir}\")`"
-            
+
             # Determine completion status
             # EXPLICIT SIGNAL for Main Agent: [VAF_CODING_AGENT_STATUS]
             if has_incomplete_tasks:
                 completion_header = "### ⚠️ Task Partially Complete"
-                completion_note = "**Note**: Loop ended before all tasks were completed. Please continue to finish all remaining tasks."
+                if failed_list:
+                    completion_note = (
+                        "**Note**: Some tasks FAILED goal verification despite retries — they were NOT silently "
+                        "marked as done. Review the failed tasks above before continuing."
+                    )
+                else:
+                    completion_note = "**Note**: Loop ended before all tasks were completed. Please continue to finish all remaining tasks."
                 status_signal = "[VAF_CODING_AGENT_STATUS: PARTIAL]"
             else:
                 completion_header = "### ✅ Task Completed"
@@ -7791,6 +8320,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 f"{open_instructions}\n\n"
                 f"**⏱️ Time**: {loop.get_elapsed_str()}\n"
                 f"**🔄 Loops**: {loop.loop_count}\n"
+                f"{git_line}"
                 f"{task_status}\n\n"
                 f"{completion_note}\n\n"
                 f"**🔧 To continue working on this project, use:**\n"
@@ -7808,7 +8338,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 f"### ❌ Task Failed\n\n"
                 f"**📁 Project Directory**: {dir_link}\n"
                 f"**Full Path**: `{base_dir}`\n"
-                f"{folder_status}\n\n"
+                f"{folder_status}\n"
+                f"{git_line}\n"
                 f"No files were created in {loop.loop_count} loops.\n\n"
                 f"**💡 Suggestion**: Try a more specific task description.\n\n"
                 f"**🔧 To retry, use:**\n"

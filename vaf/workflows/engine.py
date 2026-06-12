@@ -197,12 +197,15 @@ class WorkflowEngine:
                 from vaf.core.platform import Platform as _Platform
                 _docs = _Platform.documents_dir()
 
-                # User-scope prefix — same logic as coder._generate_project_directory
+                # User-scope prefix + per-chat folder — same logic as
+                # coder._generate_project_directory
                 _user_prefix = ""
+                _session_folder = ""
                 try:
                     from vaf.core.subagent_ipc import get_current_session_id as _get_sid2
                     _sid2 = _get_sid2()
                     if _sid2:
+                        _session_folder = _re.sub(r'[^a-zA-Z0-9_-]', '', _sid2)[:32]
                         from vaf.core.session import SessionManager as _SM2
                         _s2 = _SM2().load(_sid2)
                         _uid2 = (_s2.metadata or {}).get("user_scope_id", "")
@@ -213,10 +216,9 @@ class WorkflowEngine:
                 if not _user_prefix and self.user_scope_id:
                     _user_prefix = self.user_scope_id[:8]
 
-                _proj_root = (
-                    os.path.join(_docs, "VAF_Projects", _user_prefix)
-                    if _user_prefix
-                    else os.path.join(_docs, "VAF_Projects")
+                _proj_root = os.path.join(
+                    _docs, "VAF_Projects",
+                    *(p for p in (_user_prefix, _session_folder) if p)
                 )
 
                 # Derive a clean directory name from the workflow name

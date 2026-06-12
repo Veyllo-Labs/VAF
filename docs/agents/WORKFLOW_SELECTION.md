@@ -190,7 +190,7 @@ The table above lists the common ones, but a step can call **any tool the user h
 
 ##### Shared project path (`{workflow_project_path}`)
 
-At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/Patent Workflow/`) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
+At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/<uid[:8]>/<session_id>/Patent Workflow/` — same user/chat scoping as coder projects) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
 
 The path is also available as `{workflow_project_path}` in step input templates:
 

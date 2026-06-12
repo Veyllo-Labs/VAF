@@ -1445,6 +1445,16 @@ function VAFDashboardContent() {
             projectName: string;
             projectPath: string;
         } | null;
+        // Research view: streamed by the research agent as `research_state`
+        research: {
+            topic: string;
+            stage: string;
+            sections: Array<{ title: string; status: string; words: number; targetWords: number }>;
+            sectionsHtml: string[];
+            sources: Array<{ url: string; title: string; domain: string }>;
+            wordsTarget: number;
+            loop: number;
+        } | null;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1460,6 +1470,7 @@ function VAFDashboardContent() {
         browserFrame: "",
         browserUrl: "",
         coder: null,
+        research: null,
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -1716,6 +1727,9 @@ function VAFDashboardContent() {
     const subAgentAutoCloseRef = useRef<NodeJS.Timeout | null>(null);
     const subAgentManualOpenRef = useRef(false);
     const subAgentUserClosedRef = useRef(false);  // User explicitly closed panel - don't auto-reopen
+    // Current task has a custom view (coder/research/browser): keep the window
+    // closed until the first custom data arrives — never flash the generic window.
+    const subAgentCustomViewRef = useRef(false);
     const subAgentOutputSetRef = useRef<Set<string>>(new Set());
     const [showSubAgentPanel, setShowSubAgentPanel] = useState(true);
     const subAgentUnmountRef = useRef<NodeJS.Timeout | null>(null);
@@ -2013,8 +2027,9 @@ function VAFDashboardContent() {
                     if (isSubAgentLog) {
                         const timeStamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                         appendSubAgentLine(`[${timeStamp}] ${rawMsg}`);
-                        // Only open if not already open - avoids duplicate open from tool_update + domain_log
-                        if (!subAgentStateRef.current.isOpen) {
+                        // Only open if not already open - avoids duplicate open from tool_update + domain_log.
+                        // Custom-view tasks wait for their custom data instead of the generic window.
+                        if (!subAgentStateRef.current.isOpen && !subAgentCustomViewRef.current) {
                             openSubAgentWindow(false);
                         }
                     } else if (subAgentState.isOpen && (src === 'System' || src === 'Info') && rawMsg) {
@@ -2078,7 +2093,8 @@ function VAFDashboardContent() {
                     if (subType === 'start' && isSubAgentTool) {
                         lastSubAgentStatusRef.current = '';
                         subAgentUserClosedRef.current = false;  // New task - user wants to see it
-                        openSubAgentWindow(false);
+                        subAgentCustomViewRef.current = /coding|browser|research/i.test(String(name || ''));
+                        if (!subAgentCustomViewRef.current) openSubAgentWindow(false);
                         const title = String(name || 'Sub-Agent').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
                         setSubAgentState(prev => ({
                             ...prev,
@@ -2090,6 +2106,7 @@ function VAFDashboardContent() {
                             browserUrl: '',
                             consoleLines: [],
                             coder: null,
+                            research: null,
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -2293,7 +2310,7 @@ function VAFDashboardContent() {
                     const activeSessionId = currentSessionIdRef.current;
                     if (!activeSessionId && data.sessionId) {
                         setCurrentSessionId(data.sessionId);
-                        ws?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                        wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
                     } else if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) {
                         // Update per-session state even if not the active session
                         // So when user switches back, animations are correct
@@ -2380,7 +2397,7 @@ function VAFDashboardContent() {
                     // (the message was already persisted server-side, so it will appear).
                     if (!activeSessionId && data.sessionId) {
                         setCurrentSessionId(data.sessionId);
-                        ws?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                        wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
                         return;
                     }
                     // Targets a different session: surface an unread badge, don't inject here.
@@ -2574,17 +2591,21 @@ function VAFDashboardContent() {
 
                     // Only auto-create if we have NO sessions and NO active session selected
                     if (data.sessions.length === 0 && !activeSessionId) {
-                        ws?.send(JSON.stringify({ type: 'new_session' }));
+                        wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
                         return;
                     }
 
                     // Auto-select latest if none selected (initial load)
                     // or if the current session no longer exists in the list.
+                    // NOTE: send via wsSocketRef — the `ws` STATE captured by this
+                    // onmessage closure is still null on the first connect, which
+                    // silently dropped the initial load_session (chat stayed empty
+                    // until the user switched away and back).
                     if (data.sessions.length > 0) {
                         const sessionIds = new Set(data.sessions.map((s: Session) => s.id));
                         if (!activeSessionId || !sessionIds.has(activeSessionId)) {
                             setCurrentSessionId(data.sessions[0].id);
-                            ws?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
+                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessions[0].id }));
                         }
                     }
                 }
@@ -2638,12 +2659,22 @@ function VAFDashboardContent() {
                     appendWorkflowLine(line);
                 }
                 else if (data.type === 'document_ready') {
-                    const sid = data.sessionId || currentSessionId;
+                    // Read the session from the ref, not the closure: onmessage is bound once
+                    // per socket, so the captured currentSessionId is stale (null on first
+                    // connect) and the strict equality below would silently drop the event.
+                    const activeSid = currentSessionIdRef.current;
+                    const sid = data.sessionId || activeSid;
                     const fp = data.filePath || '';
+                    // Reports and documents (.md/.html/.docx/...) belong in the DocumentEditor.
+                    // isCodeFile() alone would misroute them: Markdown and HTML are also valid
+                    // CodeViewer languages. Only genuine code files open in the CodeViewer.
+                    const docExts = ['md', 'mdx', 'html', 'htm', 'docx', 'xlsx', 'pptx', 'txt', 'rtf'];
+                    const ext = (fp.split('/').pop() || '').split('.').pop()?.toLowerCase() || '';
+                    const isDocumentFile = docExts.includes(ext);
                     if (sid) {
-                        if (isCodeFile(fp)) {
+                        if (!isDocumentFile && isCodeFile(fp)) {
                             // Code files → CodeViewer (not DocumentEditor)
-                            if (sid === currentSessionId) {
+                            if (sid === activeSid) {
                                 setCodeViewerState({ isOpen: true, filePath: fp, title: data.title || fp.split('/').pop() || 'Code' });
                                 setShowSubAgentPanel(true);
                                 setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
@@ -2658,7 +2689,7 @@ function VAFDashboardContent() {
                                 content: undefined,
                                 docxModel: null,
                             });
-                            if (sid === currentSessionId) {
+                            if (sid === activeSid) {
                                 setShowSubAgentPanel(true);
                                 setDocumentViewerStateForSession(sid, (prev) => ({ ...prev, isOpen: false }));
                             }
@@ -2813,7 +2844,10 @@ function VAFDashboardContent() {
                         (nextPresence !== 'idle' &&
                             nextPresence !== 'error' &&
                             (statusLower.includes('running') || statusLower.includes('pending')));
-                    const shouldOpen = isRunning && !subAgentUserClosedRef.current;
+                    // Custom-view tasks open only once their custom data arrived
+                    const hasCustomData = !!(prev.coder || prev.research || prev.browserFrame);
+                    const shouldOpen = isRunning && !subAgentUserClosedRef.current
+                        && (!subAgentCustomViewRef.current || hasCustomData);
                     return {
                         ...prev,
                         isOpen: shouldOpen ? true : prev.isOpen,
@@ -2834,6 +2868,8 @@ function VAFDashboardContent() {
                     // Live project state from the coding agent: file tree, git,
                     // loop/task progress. Powers the VS-Code view in SubAgentWindow.
                     if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    // First custom data -> now the window may open (in its custom look)
+                    if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
                     setSubAgentState(prev => ({
                         ...prev,
                         coder: {
@@ -2845,6 +2881,25 @@ function VAFDashboardContent() {
                             linterOk: typeof data.linterOk === 'boolean' ? data.linterOk : (prev.coder?.linterOk ?? true),
                             projectName: data.projectName ?? prev.coder?.projectName ?? '',
                             projectPath: data.projectPath ?? prev.coder?.projectPath ?? '',
+                        },
+                    }));
+                }
+                else if (data.type === 'research_state') {
+                    // Live research state: outline, sources, finished section html.
+                    // Powers the paper-style research view in SubAgentWindow.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    // First custom data -> now the window may open (in its custom look)
+                    if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        research: {
+                            topic: data.topic ?? prev.research?.topic ?? '',
+                            stage: data.stage ?? prev.research?.stage ?? '',
+                            sections: Array.isArray(data.sections) ? data.sections : (prev.research?.sections ?? []),
+                            sectionsHtml: Array.isArray(data.sectionsHtml) ? data.sectionsHtml : (prev.research?.sectionsHtml ?? []),
+                            sources: Array.isArray(data.sources) ? data.sources : (prev.research?.sources ?? []),
+                            wordsTarget: typeof data.wordsTarget === 'number' ? data.wordsTarget : (prev.research?.wordsTarget ?? 0),
+                            loop: typeof data.loop === 'number' ? data.loop : (prev.research?.loop ?? 0),
                         },
                     }));
                 }
@@ -4573,7 +4628,7 @@ function VAFDashboardContent() {
                                                                 handleSessionSwitch(remaining[0].id);
                                                             } else {
                                                                 setTimeout(() => {
-                                                                    ws?.send(JSON.stringify({ type: 'new_session' }));
+                                                                    wsSocketRef.current?.send(JSON.stringify({ type: 'new_session' }));
                                                                 }, 100);
                                                             }
                                                         }
@@ -5574,7 +5629,16 @@ function VAFDashboardContent() {
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
                                 (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen)
-                                    ? "w-[58%] min-w-[704px] max-w-[1000px] opacity-100"
+                                    // Wide window ONLY while the SubAgentWindow itself renders a
+                                    // custom view (coder/research data or a browser frame). The
+                                    // viewers/editors take render priority over the SubAgentWindow,
+                                    // so when one of them is open (e.g. the Document Editor after a
+                                    // research run) the panel must drop back to the classic width.
+                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.browserFrame)
+                                        && !documentEditorState.isOpen && !documentViewerState.isOpen
+                                        && !codeViewerState.isOpen && !htmlViewerState.isOpen
+                                        ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
+                                        : "w-[58%] min-w-[704px] max-w-[1000px] opacity-100")
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none",
                                 stopHovered && isSubAgentRunning
                                     ? "outline outline-2 outline-red-400/60 shadow-[0_0_16px_6px_rgba(239,68,68,0.12)]"
@@ -5653,6 +5717,7 @@ function VAFDashboardContent() {
                                     browserFrame={subAgentState.browserFrame}
                                     browserUrl={subAgentState.browserUrl}
                                     coder={subAgentState.coder}
+                                    research={subAgentState.research}
                                 />
                             )}
                         </div>

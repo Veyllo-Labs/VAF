@@ -84,6 +84,7 @@ The system uses a shared `TrayContext` to manage state between the Uvicorn web s
 
 - **All platforms**: Uses `pystray` for the system tray icon (runs in a background thread via `icon.run_detached()`).
 - **Desktop window**: `pywebview` (`vaf/core/desktop_window.py`) creates a native WebView window that owns the main thread (`webview.start()` blocks). Closing the window hides it; Quit destroys it and exits. Login sessions and localStorage are **persisted** across restarts (`private_mode=False`, storage in `.vaf_webview/`).
+- **Native download/print dialogs** (Qt backend): `_install_download_print_handlers()` wires the embedded QtWebEngine view so WebUI actions get native dialogs — `downloadRequested` opens a save dialog (file downloads and blob exports like Save-as-PDF), `printRequested`/`printRequestedByFrame` open a save-as-PDF dialog and render via `printToPdf()`. The frame variant matters: `window.print()` inside an iframe (Document Editor, research report print) prints the frame's content, not the app shell. pywebview's own download handler is not used — it calls the Qt5-only `download.setPath()`, which does not exist on PyQt6.
 - **Thread model**:
   - Main thread → `webview.start()` (pywebview GUI loop)
   - Background threads → pystray tray icon, uvicorn backend, Next.js frontend, agent loop

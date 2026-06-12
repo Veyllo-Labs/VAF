@@ -95,6 +95,9 @@ function isPptxPath(path: string): boolean {
 function isOfficePath(path: string): boolean {
     return isDocxPath(path) || isXlsxPath(path) || isPptxPath(path);
 }
+function isMarkdownPath(path: string): boolean {
+    return Boolean(path && /\.(md|mdx|markdown)$/i.test(path));
+}
 
 function buildHighlightSegments(
     contentLength: number,
@@ -169,6 +172,14 @@ const A4_EDITOR_STYLE = `
                     flex-shrink: 0 !important; margin: 0 auto !important; background: white !important;
                     box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important; padding: 25mm !important; box-sizing: border-box !important;
                     overflow: hidden !important; scroll-snap-align: start !important; scroll-snap-stop: always !important;
+                }
+                /* Print: one A4 sheet = one PDF/printer page (no app chrome, no gaps). */
+                @page { size: A4; margin: 0; }
+                @media print {
+                    html body.vaf-a4 { padding: 0 !important; background: #ffffff !important; }
+                    html body.vaf-a4 .vaf-a4-center .a4-pages { gap: 0 !important; }
+                    html body.vaf-a4 .a4-page.a4-page { box-shadow: none !important; page-break-after: always !important; }
+                    html body.vaf-a4 .a4-page.a4-page:last-child { page-break-after: auto !important; }
                 }
             `;
 
@@ -1313,10 +1324,17 @@ function LegacyDocumentEditor({
                 ? `${base}/api/file/as-html?path=${encodeURIComponent(pathForUrl)}`
                 : `${base}/api/file?path=${encodeURIComponent(pathForUrl)}`;
             const response = await fetch(url);
-            const text = await response.text();
+            let text = await response.text();
             if (!response.ok) {
                 const detail = text || response.statusText || 'Failed to load document';
                 throw new Error(detail);
+            }
+            if (isMarkdownPath(filePath)) {
+                // Render Markdown (research/document reports) instead of showing raw
+                // source text; saving converts the edited HTML back to Markdown on
+                // the backend (/api/file/save).
+                const { marked } = await import('marked');
+                text = await marked.parse(text, { gfm: true, breaks: false });
             }
             setContent(text);
             onContentChangeRef.current?.(text);

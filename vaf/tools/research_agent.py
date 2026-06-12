@@ -369,11 +369,24 @@ class ResearchAgentTool(BaseTool):
     def _generate_title(self, raw_topic: str) -> str:
         """Extract a clean, professional title from a raw prompt."""
         from vaf.cli.ui import UI
+
+        # Short, instruction-free topics ARE the title already — skip the LLM
+        # call entirely (small models leak reasoning or echo the few-shot
+        # example, which once produced reports titled "SpaceX Rocket Launch
+        # Overview" for a Brandenburg Gate topic).
+        _topic_clean = (raw_topic or "").strip().strip('"').strip("'")
+        _instruction_words = (
+            "erstelle", "schreibe", "recherchiere", "mach", "bitte", "suche",
+            "tell me", "write", "create", "research", "give me", "find", "please",
+        )
+        if 0 < len(_topic_clean) <= 70 and not any(w in _topic_clean.lower() for w in _instruction_words):
+            return _topic_clean
+
         try:
             from vaf.core.config import Config
             import requests
             import time
-            
+
             UI.event("Research", "Generating clean title...", style="dim")
             
             prompt = (
@@ -392,18 +405,34 @@ class ResearchAgentTool(BaseTool):
             )
             
             if content:
-                title = content.strip('"').strip("'").split("\n")[0] # Take first line only
-                
+                # Reasoning models may return their chain of thought instead of
+                # the title (query_llm falls back to reasoning_content): strip
+                # think blocks and take the text after the LAST "Title:" marker.
+                cleaned = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+                if 'title:' in cleaned.lower():
+                    cleaned = re.split(r'(?i)\btitle\s*:', cleaned)[-1].strip()
+                title = cleaned.strip('"').strip("'").split("\n")[0].strip()
+
                 # Remove common prefixes if model is chatty
                 for prefix in ["Title:", "Report Title:", "Here is a title:", "The title is:", "Answer:"]:
                     if title.lower().startswith(prefix.lower()):
                         title = title[len(prefix):].strip()
-                        
-                if len(title) > 1: # Relaxed length check
+
+                # Reject leaked reasoning ("Thinking Process: ...", "Okay, the user wants...")
+                _reasoning_markers = (
+                    "thinking process", "okay", "let me", "let's", "first,", "hmm",
+                    "the user", "we need", "i need", "alright",
+                )
+                _looks_like_reasoning = any(title.lower().startswith(m) for m in _reasoning_markers)
+                # Reject the few-shot example echoed back as the "answer"
+                if "spacex rocket launch" in title.lower():
+                    _looks_like_reasoning = True
+
+                if 1 < len(title) <= 120 and not _looks_like_reasoning:
                     UI.event("Research", f"Title: {title}", style="dim")
                     return title
                 else:
-                    UI.event("Debug", f"Title gen: Result too short ('{title}')", style="warning")
+                    UI.event("Debug", f"Title gen: rejected ('{title[:60]}')", style="warning")
             else:
                 UI.event("Debug", f"Title gen: Failed (no response)", style="warning")
         except Exception as e:
@@ -639,6 +668,103 @@ class ResearchAgentTool(BaseTool):
             except Exception:
                 pass
 
+        # ── WebUI research window state (paper viewer / outline / sources) ──
+        # Mirrors the coder's coder_state pattern: one event type, hash+time
+        # throttled, silently inactive without a session id.
+        _rs_state: Dict[str, Any] = {
+            "topic": "",
+            "stage": "Initializing",
+            "sections": [],            # [{title, status, words, targetWords}]
+            "sectionsHtml_ref": None,  # bound to rendered_sections inside the loop
+            "sources": [],             # [{url, title, domain}]
+            "wordsTarget": 0,
+            "loop": 0,
+        }
+        _rs_last = {"hash": None, "at": 0.0}
+
+        def _emit_research_state(force: bool = False) -> None:
+            try:
+                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                if not session_id:
+                    return
+                now = time.time()
+                if not force and now - _rs_last["at"] < 0.4:
+                    return
+                html_ref = _rs_state.get("sectionsHtml_ref")
+                payload = {
+                    "topic": _rs_state["topic"],
+                    "stage": _rs_state["stage"],
+                    "sections": _rs_state["sections"],
+                    "sectionsHtml": list(html_ref) if html_ref is not None else [],
+                    "sources": _rs_state["sources"][:40],
+                    "wordsTarget": _rs_state["wordsTarget"],
+                    "loop": _rs_state["loop"],
+                }
+                payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
+                if payload_hash == _rs_last["hash"]:
+                    return
+                _rs_last["hash"] = payload_hash
+                _rs_last["at"] = now
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface().emit_research_state(payload, session_id=session_id)
+                if _debug_lg:
+                    _debug_lg.event(
+                        "research_state_emitted",
+                        stage=payload["stage"],
+                        sections=len(payload["sections"]),
+                        sources=len(payload["sources"]),
+                    )
+            except Exception:
+                pass
+
+        def _rs_set_stage(stage: str) -> None:
+            _rs_state["stage"] = stage
+            _emit_research_state(force=True)
+
+        def _rs_set_section(idx0: int, status: str, words: Optional[int] = None) -> None:
+            sections = _rs_state["sections"]
+            if 0 <= idx0 < len(sections):
+                sections[idx0]["status"] = status
+                if words is not None:
+                    sections[idx0]["words"] = words
+            _emit_research_state(force=status in ("done", "error"))
+
+        def _rs_add_sources(results) -> None:
+            try:
+                from urllib.parse import urlparse
+                known = {s["url"] for s in _rs_state["sources"]}
+                for r in (results or []):
+                    if not isinstance(r, dict):
+                        continue
+                    url = r.get("href") or r.get("link") or ""
+                    if not url or url in known:
+                        continue
+                    known.add(url)
+                    _rs_state["sources"].append({
+                        "url": url,
+                        "title": (r.get("title") or url)[:120],
+                        "domain": (urlparse(url).netloc or "").replace("www.", ""),
+                    })
+            except Exception:
+                pass
+
+        # Live word progress while a section streams: the terminal TUI (and via
+        # its refresher the WebUI status line) follows the text being written —
+        # "summarizing..." is no longer a silent multi-minute black box.
+        _sect_prog_last = [0.0]
+
+        def _section_progress(text_so_far: str) -> None:
+            now = time.time()
+            if now - _sect_prog_last[0] < 0.5:
+                return
+            _sect_prog_last[0] = now
+            try:
+                tui.set_word_progress(_visible_word_count(text_so_far), min_words_target, min_words_ok)
+            except Exception:
+                pass
+
+        self._section_progress_cb = _section_progress
+
         def _web_search_with_timeout(web_tool, timeout_sec: int = 0, **kwargs):
             """Run web search with a hard timeout to prevent indefinite hangs."""
             if timeout_sec <= 0:
@@ -689,8 +815,18 @@ class ResearchAgentTool(BaseTool):
 
             global_quality_warning = ""
 
+            # WebUI research window: initialize outline and bind the section list
+            _rs_state["topic"] = topic
+            _rs_state["sections"] = [
+                {"title": s.title, "status": "planned", "words": 0, "targetWords": min_words_target}
+                for s in specs
+            ]
+            _rs_state["sectionsHtml_ref"] = rendered_sections
+            _rs_state["wordsTarget"] = min_words_target * len(specs)
+
             # ── Stage 5: Query Profile (once before section loop) ────────────
             tui.set_stage("Profiling topic...")
+            _rs_set_stage("Profiling topic")
             tui.log("Generating query profile...")
             _query_profile = self._generate_query_profile(topic, lang)
             _profile_fallback_queries = _query_profile.get("fallback_queries", [])
@@ -726,6 +862,7 @@ class ResearchAgentTool(BaseTool):
                         rendered_sections.append(section_html)
                         tui.set_section(idx, len(specs), spec.title)
                         tui.set_word_progress(_visible_word_count(section_html), min_words_target, min_words_ok)
+                        _rs_set_section(idx - 1, "done", words=_visible_word_count(section_html))
                         continue
                     except Exception:
                         tui.log(f"Failed to read checkpoint for {spec.title}, re-generating...")
@@ -745,6 +882,9 @@ class ResearchAgentTool(BaseTool):
                         _debug_lg.event("section_start", section_idx=idx, section_title=spec.title,
                                        query=section_query[:200])
                     _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: searching sources...", style="dim")
+                    _rs_state["loop"] += 1
+                    _rs_state["stage"] = f"Searching web {idx}/{len(specs)}"
+                    _rs_set_section(idx - 1, "searching")
 
                     raw_results = None
                     _initial_had_results = False
@@ -777,18 +917,37 @@ class ResearchAgentTool(BaseTool):
                             _debug_lg.event("web_search_error", section_idx=idx, error=str(e)[:300])
                         raw_results = None
 
-                    # Fast path: no results at all → placeholder immediately, skip retry/expand
+                    # Fast path: no results at all → placeholder immediately, skip retry/expand.
+                    # Distinguish a SEARCH OUTAGE (providers unreachable/rate-limited,
+                    # no API keys) from a genuine no-hit — masking outages as
+                    # "no results found" once hid a full DuckDuckGo IP block.
                     if not _initial_had_results:
-                        tui.log(f"No results for: {spec.title} - using placeholder")
-                        _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: no results found, skipping", style="dim")
-                        if _debug_lg:
-                            _debug_lg.event("section_no_results_skip", section_idx=idx, section_title=spec.title)
-                        placeholder = (
-                            f"<h2>{spec.title}</h2>"
-                            f"<p><em>{'Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.' if lang == 'de' else 'No sufficient search results found for this section.'}</em></p>"
-                        )
+                        _search_errs = getattr(self, "_last_search_errors", []) or []
+                        if _search_errs:
+                            tui.log(f"Search providers failing: {_search_errs[0][:80]}")
+                            _emit_progress(
+                                f"[{idx}/{len(specs)}] {spec.title}: SEARCH UNAVAILABLE - {_search_errs[0][:70]}",
+                                style="error",
+                            )
+                            if _debug_lg:
+                                _debug_lg.event("section_search_outage", section_idx=idx,
+                                               section_title=spec.title, errors=_search_errs[:3])
+                            placeholder = (
+                                f"<h2>{spec.title}</h2>"
+                                f"<p><em>{'Suchdienst nicht erreichbar (Rate-Limit oder Netzwerkproblem). Bitte später erneut versuchen oder einen Brave/Google-API-Schlüssel in den Einstellungen hinterlegen.' if lang == 'de' else 'Search providers unreachable (rate limit or network issue). Try again later or configure a Brave/Google API key in the settings.'}</em></p>"
+                            )
+                        else:
+                            tui.log(f"No results for: {spec.title} - using placeholder")
+                            _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: no results found, skipping", style="dim")
+                            if _debug_lg:
+                                _debug_lg.event("section_no_results_skip", section_idx=idx, section_title=spec.title)
+                            placeholder = (
+                                f"<h2>{spec.title}</h2>"
+                                f"<p><em>{'Keine ausreichenden Suchergebnisse für diesen Abschnitt gefunden.' if lang == 'de' else 'No sufficient search results found for this section.'}</em></p>"
+                            )
                         rendered_sections.append(placeholder)
                         tui.set_word_progress(0, min_words_target, min_words_ok)
+                        _rs_set_section(idx - 1, "error", words=0)
                         if _debug_lg:
                             _debug_lg.event("section_complete", section_idx=idx, section_title=spec.title,
                                            word_count=0, elapsed=time.time() - _section_start)
@@ -897,6 +1056,8 @@ class ResearchAgentTool(BaseTool):
                     for u in sources:
                         if u and u not in all_sources:
                             all_sources.append(u)
+                    if isinstance(raw_results, list):
+                        _rs_add_sources(filtered_results)
 
                     try:
                         sources_checkpoint.write_text(json.dumps(all_sources), encoding="utf-8")
@@ -905,6 +1066,8 @@ class ResearchAgentTool(BaseTool):
 
                     tui.set_stage("Summarizing")
                     _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
+                    _rs_state["stage"] = f"Summarizing {idx}/{len(specs)}"
+                    _rs_set_section(idx - 1, "writing")
                     section_html = self._summarize_section_html(
                         topic=topic,
                         title=spec.title,
@@ -945,7 +1108,9 @@ class ResearchAgentTool(BaseTool):
                             for u in retry_sources:
                                 if u and u not in all_sources:
                                     all_sources.append(u)
+                            _rs_add_sources(retry_filtered)
                             tui.set_stage("Summarizing (retry)")
+                            _rs_set_stage(f"Retry (deep search) {idx}/{len(specs)}")
                             _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing (retry)...", style="dim")
                             section_html = self._summarize_section_html(
                                 topic=topic,
@@ -971,6 +1136,7 @@ class ResearchAgentTool(BaseTool):
                         tui.set_stage("Append expand")
                         tui.log(f"append: {spec.title} ({word_count} words)")
                         _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: expanding content...", style="dim")
+                        _rs_set_stage(f"Expanding {idx}/{len(specs)}")
                         section_html = self._summarize_section_html(
                             topic=topic,
                             title=spec.title,
@@ -984,6 +1150,7 @@ class ResearchAgentTool(BaseTool):
                         word_count = _visible_word_count(section_html)
                         tui.set_word_progress(word_count, min_words_target, min_words_ok)
                     rendered_sections.append(section_html)
+                    _rs_set_section(idx - 1, "done", words=word_count)
 
                     try:
                         section_checkpoint.write_text(section_html, encoding="utf-8")
@@ -1006,6 +1173,7 @@ class ResearchAgentTool(BaseTool):
                         f"<p><em>{'Fehler beim Generieren dieses Abschnitts.' if lang == 'de' else 'Error generating this section.'}</em></p>"
                     )
                     rendered_sections.append(placeholder)
+                    _rs_set_section(idx - 1, "error", words=0)
 
             total_elapsed = time.time() - _loop_start
             total_words = sum(_visible_word_count(s) for s in rendered_sections)
@@ -1021,7 +1189,9 @@ class ResearchAgentTool(BaseTool):
 
             # Assemble and Save
             tui.set_stage("Finalizing")
+            _rs_set_stage("Finalizing")
             html = self._assemble_html(topic, rendered_sections, all_sources, lang, global_quality_warning)
+            _rs_set_stage("Completed")
 
             try:
                 for idx, spec in enumerate(specs, 1):
@@ -1376,45 +1546,84 @@ class ResearchAgentTool(BaseTool):
         except Exception:
             return {}
 
+    _QUERY_STOPWORDS = {
+        'für', 'und', 'der', 'die', 'das', 'den', 'dem', 'ein', 'eine', 'einen',
+        'mit', 'von', 'auf', 'aus', 'bei', 'zur', 'zum', 'über', 'oder', 'als',
+        'the', 'and', 'for', 'with', 'from', 'about', 'into', 'over', 'this', 'that',
+    }
+
+    def _compress_query(self, text: str, max_words: int = 7) -> str:
+        """Searchable short query from a long topic sentence.
+
+        Long prompt-style topics ("Strategie für X GmbH (Y Labs) und Z Framework
+        - Marktanalyse, ...") return zero hits verbatim; search engines want a
+        handful of keywords. Drops parentheses, punctuation and stopwords.
+        """
+        t = re.sub(r'\([^)]*\)', ' ', text or '')
+        t = re.sub(r'[-–—:;,/"\']+', ' ', t)
+        words = [w for w in t.split() if w.lower() not in self._QUERY_STOPWORDS and len(w) > 2]
+        return ' '.join(words[:max_words]) or (text or '')[:60]
+
     def _augment_queries(self, topic: str, base_query: str, lang: str, n: int = 4) -> List[str]:
         """Stage 1a: Generate n-1 alternative search queries for a section via LLM.
 
-        Always returns a list with base_query as the first element (fallback-safe).
+        Fallback-safe: even when the LLM fails (reasoning models burning their
+        budget, JSON parse errors), this returns MULTIPLE short keyword queries
+        instead of one unsearchable full-sentence query.
         """
+        short_base = self._compress_query(base_query)
+        fallback = [short_base]
+        if len(base_query) <= 60 and base_query.lower() != short_base.lower():
+            fallback.append(base_query)
+        kw4 = ' '.join(short_base.split()[:4])
+        if kw4 and kw4.lower() != short_base.lower():
+            fallback.append(kw4)
+
         prompt = (
             f"Generate {n - 1} alternative web search queries for researching this topic.\n"
             f"Main topic: \"{topic}\"\n"
-            f"Base query: \"{base_query}\"\n"
+            f"Base query: \"{short_base}\"\n"
             f"Language: {lang}\n"
             "Rules:\n"
             "- Each query must use different keywords or angles than the base query\n"
             "- Queries should be 3-8 words, suitable for a web search engine\n"
             "- Return ONLY a JSON list of strings, no explanation\n"
-            f"Example: [\"{base_query} overview\", \"{topic} technical details\"]"
+            f"Example: [\"{short_base} overview\", \"{self._compress_query(topic, 4)} technical details\"]"
         )
         try:
             response = self.query_llm(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
+                max_tokens=700,
                 temperature=0.3,
             )
             if not response:
-                return [base_query]
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start < 0 or end <= start:
-                return [base_query]
-            variants = json.loads(response[start:end])
-            if not isinstance(variants, list):
-                return [base_query]
-            queries = [base_query]
+                return fallback
+            # Reasoning models bury the answer at the end — strip think blocks
+            # and take the LAST parseable JSON array in the text.
+            cleaned = re.sub(r'<think>[\s\S]*?</think>', '', response)
+            variants = None
+            for m in reversed(re.findall(r'\[[^\[\]]*\]', cleaned)):
+                try:
+                    candidate = json.loads(m)
+                    if isinstance(candidate, list):
+                        variants = candidate
+                        break
+                except Exception:
+                    continue
+            if variants is None:
+                return fallback
+            queries = [short_base]
             for v in variants:
                 v = str(v).strip()
-                if v and v.lower() != base_query.lower() and len(queries) < n:
+                # Reject placeholder echoes ("Query 1", "query2") — small models
+                # sometimes return the example FORMAT instead of real queries
+                if re.fullmatch(r'(?i)query[\s_]*\d+', v):
+                    continue
+                if v and v.lower() != short_base.lower() and len(v) <= 90 and len(queries) < n:
                     queries.append(v)
-            return queries
+            return queries if len(queries) > 1 else fallback
         except Exception:
-            return [base_query]
+            return fallback
 
     def _search_parallel(
         self,
@@ -1428,6 +1637,18 @@ class ResearchAgentTool(BaseTool):
 
         Merges results and deduplicates by href. Results without href are always kept.
         """
+        # Collected per-call so 0 results from FAILING providers (DDG rate-limit,
+        # network down, no API keys) is distinguishable from a genuine no-hit —
+        # masking outages as "no results found" hid a full search outage once.
+        # Provider-level failures are swallowed inside search.py; pull them from
+        # its error collector after the searches ran.
+        self._last_search_errors = []
+        try:
+            from vaf.tools.search import reset_search_provider_errors
+            reset_search_provider_errors()
+        except Exception:
+            pass
+
         if not queries:
             return []
 
@@ -1447,8 +1668,9 @@ class ResearchAgentTool(BaseTool):
                         open_in_browser=False,
                         return_raw=True,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    with lock:
+                        self._last_search_errors.append(str(exc)[:160])
 
             t = threading.Thread(target=_worker, daemon=True)
             t.start()
@@ -1474,6 +1696,12 @@ class ResearchAgentTool(BaseTool):
                                 merged.append(r)
         except concurrent.futures.TimeoutError:
             pass
+        except Exception:
+            pass
+
+        try:
+            from vaf.tools.search import get_search_provider_errors
+            self._last_search_errors = get_search_provider_errors()
         except Exception:
             pass
 
@@ -1581,6 +1809,107 @@ class ResearchAgentTool(BaseTool):
         except Exception:
             return results
 
+    def _stream_section_completion(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        idle_timeout: int = 75,
+        on_progress=None,
+    ) -> str:
+        """Stream a section from the LOCAL llama server with an IDLE timeout.
+
+        The coder's lesson applied here: a fixed total timeout kills legitimate
+        long thinking (and the orphaned request keeps the single server slot
+        busy, starving the retry). Streaming aborts only when NO tokens arrive
+        for `idle_timeout` seconds — the model may think as long as it makes
+        progress. Reasoning deltas count as progress but are never returned;
+        only `content` is. Closing the response on abort frees the server slot.
+        """
+        from vaf.core.config import Config
+        body = {
+            "model": Config.get("model", "") or "user-model",
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        content_parts: List[str] = []
+        try:
+            with requests.post(
+                "http://127.0.0.1:8080/v1/chat/completions",
+                json=body,
+                stream=True,
+                timeout=(10, idle_timeout),  # read timeout = per-chunk idle timeout
+            ) as resp:
+                resp.raise_for_status()
+                for raw_line in resp.iter_lines():
+                    # Decode explicitly as UTF-8: llama-server sends `text/event-stream`
+                    # WITHOUT a charset, so requests would assume ISO-8859-1 and turn
+                    # every umlaut into mojibake ("für" -> "fÃ¼r").
+                    line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        delta = (json.loads(data_str).get("choices") or [{}])[0].get("delta") or {}
+                    except Exception:
+                        continue
+                    piece = delta.get("content") or ""
+                    if piece:
+                        content_parts.append(piece)
+                        if on_progress:
+                            try:
+                                on_progress("".join(content_parts))
+                            except Exception:
+                                pass
+                    # reasoning_content deltas keep the connection alive (= progress
+                    # for the idle timeout) but are intentionally not collected.
+        except Exception as e:
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log("backend", f"research section stream ended: {type(e).__name__}: {str(e)[:120]}")
+            except Exception:
+                pass
+        return "".join(content_parts).strip()
+
+    def _sanitize_section_output(self, raw: str, title: str) -> str:
+        """Guard against reasoning leaks in section text.
+
+        query_llm falls back to reasoning_content when a reasoning model's
+        answer was cut off — a live run once filled every report section with
+        "Thinking Process: 1. **Analyze the Request:** ...". Cuts the text to
+        the first HTML block; pure chain-of-thought without any HTML is
+        rejected (empty return), so the caller's retry path takes over.
+        """
+        if not raw:
+            return ""
+        text = re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
+        # Models often wrap the fragment in markdown fences (```html ... ```)
+        text = re.sub(r'^```[a-zA-Z]*\s*', '', text)
+        text = re.sub(r'\s*```\s*$', '', text).strip()
+        # Mask inline-code spans for tag detection: leaked reasoning often QUOTES
+        # the prompt's structure examples ("`<h2>Section title</h2>`, 3-6
+        # paragraphs, ..."), and cutting at such a quoted tag kept the reasoning.
+        masked = re.sub(r'`[^`\n]*`', lambda mm: ' ' * len(mm.group(0)), text)
+        m = re.search(r'<(h2|h3|p|div|ul|ol|section|table)\b', masked, re.IGNORECASE)
+        if m:
+            text = text[m.start():].strip()
+            if '<h2' not in text.lower():
+                text = f"<h2>{title}</h2>\n{text}"
+            return text
+        low = text.lower()
+        reasoning_markers = (
+            'thinking process', 'okay', 'let me', "let's", 'first', 'alright',
+            'the user', 'we need', 'i need', 'hmm', '1. **analyze',
+        )
+        if not text or any(low.startswith(mk) for mk in reasoning_markers):
+            return ""
+        # Plain prose without any tags: keep it, but give the section its heading
+        return f"<h2>{title}</h2>\n<p>{text}</p>"
+
     def _summarize_section_html(
         self,
         topic: str,
@@ -1676,9 +2005,27 @@ class ResearchAgentTool(BaseTool):
 
         def call(prompt_text: str, max_tokens: int, temperature: float) -> str:
             """Provider-aware section generation (local or API), no hardcoded endpoint."""
-            # Guard against provider/SDK stream hangs (especially API streaming without read timeout).
-            # If this call blocks too long, return empty so caller can retry/fallback instead of stalling forever.
-            timeout_sec = int(Config.get("research_section_llm_timeout_seconds", 90) or 90)
+            section_messages = [
+                {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
+                {"role": "user", "content": prompt_text},
+            ]
+
+            # LOCAL provider: stream with an IDLE timeout — the model may think
+            # as long as tokens keep flowing (a fixed total timeout used to kill
+            # legitimate long reasoning AND left the orphaned request occupying
+            # the single server slot, starving the retry).
+            if (Config.get("provider", "local") or "local").strip().lower() == "local":
+                idle = int(Config.get("research_section_idle_timeout_seconds", 75) or 75)
+                return self._stream_section_completion(
+                    messages=section_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    idle_timeout=max(15, idle),
+                    on_progress=getattr(self, "_section_progress_cb", None),
+                )
+
+            # API providers: non-streaming via query_llm with a hard wall-clock guard.
+            timeout_sec = int(Config.get("research_section_llm_timeout_seconds", 240) or 240)
             if timeout_sec < 10:
                 timeout_sec = 10
 
@@ -1687,12 +2034,14 @@ class ResearchAgentTool(BaseTool):
             def _worker() -> None:
                 try:
                     holder["content"] = self.query_llm(
-                        messages=[
-                            {"role": "system", "content": f"You are a concise research assistant. {lang_instruction}"},
-                            {"role": "user", "content": prompt_text},
-                        ],
+                        messages=section_messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
+                        # Long-form output: chain-of-thought must NEVER be returned
+                        # as the section text. If generation gets cut off mid-
+                        # reasoning, we get an empty result and the retry/
+                        # placeholder path handles it.
+                        allow_reasoning_fallback=False,
                     )
                 except Exception as e:
                     holder["error"] = e
@@ -1708,7 +2057,12 @@ class ResearchAgentTool(BaseTool):
             return str(holder.get("content") or "").strip()
 
         try:
-            content = call(prompt_text=prompt, max_tokens=2200, temperature=0.2)
+            # Generous budget (coder philosophy, max_tokens=32768 there): reasoning
+            # models may think as long as they need — the answer still fits after.
+            # A tight 2200 budget used to cut generation mid-reasoning, leaving no
+            # content at all.
+            content = call(prompt_text=prompt, max_tokens=8192, temperature=0.2)
+            content = self._sanitize_section_output(content, title)
             content = _strip_answer_artifacts(content)
             content = _strip_untrusted_links(content, sources)
             if content:
@@ -1716,7 +2070,8 @@ class ResearchAgentTool(BaseTool):
 
             # Retry once with slightly different settings and a shorter web_results payload.
             retry_prompt = prompt.replace(web_results, _truncate(web_results, 2500))
-            content = call(prompt_text=retry_prompt, max_tokens=1800, temperature=0.25)
+            content = call(prompt_text=retry_prompt, max_tokens=6144, temperature=0.25)
+            content = self._sanitize_section_output(content, title)
             content = _strip_answer_artifacts(content)
             content = _strip_untrusted_links(content, sources)
             if content:

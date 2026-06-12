@@ -434,6 +434,21 @@ class WebInterfaceManager:
             return
         self._push_session_update(session_id, payload)
 
+    def emit_research_state(self, state: dict, session_id: str = None):
+        """Emit the research agent's live state (outline, sources, section html).
+
+        Feeds the research view of the SubAgent window: paper-style document
+        viewer with the report growing section by section, outline progress,
+        source citations and the status bar.
+        """
+        payload = {"type": "research_state", **(state or {})}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_coder_state(self, state: dict, session_id: str = None):
         """Emit the coder's project state (file tree, git, progress) to the WebUI.
 

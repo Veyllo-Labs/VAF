@@ -79,6 +79,18 @@ Implements a "Mini-IDE" using `rich.live`.
 
 This is the massive entry point method.
 
+### A0. History/Rollback Delegation Fast Path
+The coder owns each project's version history (built up by the final commit on every run, see section 6). The Main Agent has no git tools of its own for projects — it talks to the coder instead:
+
+*   `coding_agent(task="history", project_path=...)` — the coder answers directly with the formatted version list (commit id, date, description, changed files).
+*   `coding_agent(task="rollback auf <id>", project_path=...)` — the coder restores that version.
+
+`_detect_history_rollback_intent()` (`vaf/tools/project_git.py`) classifies these tasks conservatively (short task text, history/rollback keywords, no creation verbs — "Erstelle eine Seite über die History von Rom" still runs the normal loop). Matching tasks return immediately: no agentic loop, no terminal spawn, no LLM call. A rollback request without a version id returns the history plus the instruction to ask the user.
+
+Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit — history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
+
+Inside the agentic loop the same two tools are registered as base_dir-wrapped local tools (`project_history`, `project_rollback`), so the coder can also restore a known-good state at its own discretion after breaking something.
+
 ### A. Process Isolation & IPC (Lines ~1600-1700)
 *   **Check:** Is `VAF_IN_SUBAGENT_TERMINAL` env var set?
 *   **IF NOT (Main Process):**
@@ -96,6 +108,7 @@ This is the massive entry point method.
     *   **IF API mode:** Templates are **skipped entirely** — capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
     *   **IF local model:** Template selection logic runs as normal.
 *   **Template Logic (local models only):**
+    *   **Edit-mode guard:** templates are skipped entirely when `base_dir` already contains code files (html/css/js/py/...). `TemplateManager.generate_files()` writes into `base_dir` and would overwrite the user's work — a follow-up task whose text merely mentions "Website" must never replace a finished site with placeholder scaffolding. Existing projects always go through normal planning, where the fresh task context injects the existing file list for editing. Telemetry event: `template_skipped_existing_project`.
     *   Checks task keywords for template type ("website", "html", etc.) with an LLM-based fallback detector. HTML-specific keywords (`index.html`, `.html`, `html datei`) are included to prevent misclassification.
     *   If a matching template exists, copies files to `base_dir`.
     *   Sets `template_files` list for later reference (soft guidance, not enforcement).
@@ -246,7 +259,7 @@ The inactivity auto-complete (idle with files present) runs the same determinist
 ---
 
 ## 6. Cleanup & Exit
-*   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified). Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary.
+*   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified). Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary. These commits are what powers the history/rollback delegation (section 3.A0).
 *   **Logic:**
     *   Stops TUI thread (`live.stop()`).
     *   Cleans up temporary handles.

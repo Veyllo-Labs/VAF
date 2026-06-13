@@ -1537,6 +1537,78 @@ function VAFDashboardContent() {
         isOpen: false, filePath: '',
     });
 
+    // ── Workspace file actions (download + open in viewer) ──────────────────
+    const workspaceFileAbsPath = useCallback((name: string) => {
+        if (!workspaceInfo?.path) return '';
+        const sub = workspaceInfo.subpath ? `/${workspaceInfo.subpath}` : '';
+        return `${workspaceInfo.path}${sub}/${name}`;
+    }, [workspaceInfo?.path, workspaceInfo?.subpath]);
+
+    // Click a workspace file -> open it in the right panel AND make it visible to
+    // the agent (synced as a sidebar document, exactly like attaching a file).
+    // Documents (PDF, Office, Markdown, HTML, images, text) open in the
+    // DocumentViewer; genuine code files open in the CodeViewer (whose content
+    // already reaches the agent via the codeViewerFile chip on send).
+    const openWorkspaceFile = useCallback(async (name: string) => {
+        const full = workspaceFileAbsPath(name);
+        if (!full) return;
+        const ext = (name.split('.').pop() || '').toLowerCase();
+        // Types the DocumentViewer renders. Checked BEFORE isCodeFile because
+        // .md/.html count as code languages but belong in the document view.
+        const docExts = new Set([
+            'pdf', 'docx', 'xlsx', 'pptx', 'md', 'mdx', 'markdown', 'html', 'htm',
+            'txt', 'rtf', 'csv', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico',
+        ]);
+        if (!docExts.has(ext) && isCodeFile(name)) {
+            setCodeViewerState({ isOpen: true, filePath: full, title: name });
+            setShowSubAgentPanel(true);
+            setIsWorkspaceModalOpen(false);
+            return;
+        }
+        try {
+            const res = await fetch(`${getApiBase()}/api/file?path=${encodeURIComponent(full)}`);
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const mimeType = blob.type || 'application/octet-stream';
+            const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(ext);
+            const isBinaryDoc = /^(pdf|docx|xlsx|pptx)$/.test(ext);
+            // The backend extracts the agent-visible text from `data` (base64), so
+            // every opened doc carries `data`. The DocumentViewer additionally
+            // renders binary docs from `data`, images/markdown/html from `content`.
+            const dataUri: string = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result));
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+            let entry: DocumentViewerDoc;
+            if (isBinaryDoc) {
+                entry = { id: crypto.randomUUID(), name, mimeType, data: dataUri };
+            } else if (isImage) {
+                entry = { id: crypto.randomUUID(), name, mimeType, content: dataUri, data: dataUri };
+            } else {
+                entry = { id: crypto.randomUUID(), name, mimeType, content: await blob.text(), data: dataUri };
+            }
+            setDocumentViewerState(prev => {
+                const newList = [...prev.documents.filter(d => d.name !== name), entry];
+                // Sync to the backend so the agent sees the opened file's content
+                // (same path as attaching/drag-drop). Without this it only knows
+                // the filename and guesses at the path.
+                if (ws && currentSessionId) {
+                    ws.send(JSON.stringify({
+                        type: 'set_sidebar_documents',
+                        sessionId: currentSessionId,
+                        documents: newList.filter(d => d.data).map(d => ({ name: d.name, data: d.data, mimeType: d.mimeType })),
+                    }));
+                    sidebarDocsSyncedForSessionRef.current = currentSessionId;
+                }
+                return { ...prev, isOpen: true, documents: newList };
+            });
+            setShowSubAgentPanel(true);
+            setIsWorkspaceModalOpen(false);
+        } catch { /* network/permission error - keep the workspace open */ }
+    }, [workspaceFileAbsPath, setDocumentViewerState, ws, currentSessionId]);
+
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
     const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
@@ -2731,17 +2803,28 @@ function VAFDashboardContent() {
                         return {
                             ...prev,
                             isOpen: true,
-                            documents: contents.map((c, i) => ({
-                                ...(prev.documents[i] || {}),
-                                id: (prev.documents.length === contents.length && prev.documents[i]?.name === c.name && prev.documents[i]?.id)
-                                    ? prev.documents[i].id
-                                    : `doc-${i}-${crypto.randomUUID().slice(0, 8)}`,
-                                name: c.name,
-                                content: c.content ?? prev.documents[i]?.content ?? '',
-                                ...(c.data != null && { data: c.data }),
-                                ...(c.mimeType != null && { mimeType: c.mimeType }),
-                                ...(typeof c.htmlContent === 'string' && c.htmlContent.length > 0 && { htmlContent: c.htmlContent }),
-                            })),
+                            documents: contents.map((c, i) => {
+                                const prevDoc = prev.documents[i];
+                                // Keep locally-loaded clean content (e.g. a workspace-opened
+                                // markdown file) for DISPLAY: the backend's extracted text is
+                                // LLM-formatted ("## File: <tmpname>" + a ``` code fence) and
+                                // would render as a code block. Normal attachments have no
+                                // local content, so they fall back to the backend extraction.
+                                const localContent = prevDoc?.name === c.name
+                                    && typeof prevDoc?.content === 'string' && prevDoc.content.length > 0
+                                    ? prevDoc.content : null;
+                                return {
+                                    ...(prevDoc || {}),
+                                    id: (prev.documents.length === contents.length && prevDoc?.name === c.name && prevDoc?.id)
+                                        ? prevDoc.id
+                                        : `doc-${i}-${crypto.randomUUID().slice(0, 8)}`,
+                                    name: c.name,
+                                    content: localContent ?? c.content ?? prevDoc?.content ?? '',
+                                    ...(c.data != null && { data: c.data }),
+                                    ...(c.mimeType != null && { mimeType: c.mimeType }),
+                                    ...(typeof c.htmlContent === 'string' && c.htmlContent.length > 0 && { htmlContent: c.htmlContent }),
+                                };
+                            }),
                         };
                     };
                     if (sid) setDocumentViewerStateForSession(sid, updater);
@@ -5888,23 +5971,37 @@ function VAFDashboardContent() {
                                     return (
                                         <div
                                             key={`file-${f.name}`}
+                                            role="button"
+                                            tabIndex={0}
                                             draggable
+                                            onClick={() => openWorkspaceFile(f.name)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') openWorkspaceFile(f.name); }}
                                             onDragStart={(e) => {
                                                 // Drag out of the browser (Chromium: DownloadURL)
                                                 const abs = fileUrl.startsWith('http') ? fileUrl : `${window.location.origin}${fileUrl}`;
                                                 e.dataTransfer.setData('DownloadURL', `application/octet-stream:${f.name}:${abs}`);
                                                 e.dataTransfer.setData('text/uri-list', abs);
                                             }}
-                                            className="group relative flex cursor-grab flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-3 text-center transition-colors hover:border-violet-100 hover:bg-violet-50/60 active:cursor-grabbing"
+                                            className="group relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-transparent px-2 py-3 text-center transition-colors hover:border-violet-100 hover:bg-violet-50/60"
                                             title={`${f.name} — ${f.modified}`}
                                         >
                                             <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                                                 <a
                                                     href={fileUrl}
                                                     download={f.name}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        // Desktop window: use the native Save-As bridge
+                                                        // (QtWebEngine's own download path is brittle).
+                                                        // Browser: let the <a download> proceed.
+                                                        const api = (window as unknown as { pywebview?: { api?: { save_file_as?: (p: string) => Promise<unknown> } } }).pywebview?.api;
+                                                        if (api?.save_file_as) {
+                                                            e.preventDefault();
+                                                            api.save_file_as(workspaceFileAbsPath(f.name));
+                                                        }
+                                                    }}
                                                     className="rounded-full bg-white p-1.5 text-gray-400 shadow-sm hover:bg-violet-100 hover:text-violet-700"
                                                     title={`Download ${f.name}`}
-                                                    onClick={(e) => e.stopPropagation()}
                                                 >
                                                     <Download size={13} />
                                                 </a>

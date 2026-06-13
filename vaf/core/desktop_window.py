@@ -160,7 +160,66 @@ def init(url: str, title: str = "VAF", width: int = 1280, height: int = 800) -> 
     _window.events.closing += _on_closing
     _window.events.loaded += _on_loaded
     _window.events.resized += _on_resized
+    # Expose a native Save-As bridge to the WebUI. The workspace download relies on
+    # this in the desktop window because QtWebEngine's own download path is brittle
+    # (a parentless save dialog can open behind the window; downloads started after
+    # an awaited fetch are blocked). The WebUI calls window.pywebview.api.save_file_as.
+    try:
+        _window.expose(save_file_as)
+        _log.info("[DesktopWindow] native save_file_as bridge exposed")
+    except Exception as e:
+        _log.debug("[DesktopWindow] could not expose save bridge: %s", e)
     _log.info("[DesktopWindow] Window created → %s (size %dx%d)", url, saved_w, saved_h)
+
+
+def save_file_as(src_path: str) -> dict:
+    """Exposed to the WebUI (window.pywebview.api.save_file_as): copy a local file
+    to a user-chosen location via a native Save dialog.
+
+    Runs on a pywebview worker thread; create_file_dialog marshals to the Qt main
+    thread internally, so the dialog is safe to call here. src_path must live under
+    an allowed root (same roots the /api/file endpoint serves) — defense in depth
+    so a page cannot read arbitrary files off disk."""
+    import shutil
+    from pathlib import Path
+    try:
+        if not _window or not src_path:
+            return {"ok": False, "error": "unavailable"}
+        src = Path(src_path).resolve()
+        if not src.is_file():
+            return {"ok": False, "error": "not found"}
+        try:
+            from vaf.core.platform import Platform
+            allowed = [
+                Platform.documents_dir().resolve(),
+                Platform.downloads_dir().resolve(),
+                Platform.data_dir().resolve(),
+                Platform.get_vaf_output_dir().resolve(),
+            ]
+            if not any(_is_relative_to(src, root) for root in allowed):
+                return {"ok": False, "error": "forbidden"}
+        except Exception:
+            pass  # if roots can't be resolved, fall through (local desktop, trusted UI)
+        result = _window.create_file_dialog(_webview.SAVE_DIALOG, save_filename=src.name)
+        dest = None
+        if result:
+            dest = result[0] if isinstance(result, (list, tuple)) else result
+        if not dest:
+            return {"ok": False, "cancelled": True}
+        shutil.copyfile(str(src), str(dest))
+        _log.info("[DesktopWindow] saved %s → %s", src.name, dest)
+        return {"ok": True, "path": str(dest)}
+    except Exception as e:
+        _log.warning("[DesktopWindow] save_file_as failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def _is_relative_to(path, root) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 _INTERCEPT_JS = """
@@ -282,7 +341,7 @@ def _install_download_print_handlers() -> None:
         _log.debug("[DesktopWindow] download/print dialogs unavailable: %s", e)
         return
 
-    def _pdf_target(page) -> str:
+    def _pdf_target(page, parent) -> str:
         """Ask the user where to save the PDF; '' when cancelled."""
         import re as _re
         title = ""
@@ -292,7 +351,7 @@ def _install_download_print_handlers() -> None:
             pass
         name = _re.sub(r"[^\w\s.-]", "", title).strip().replace(" ", "_") or "document"
         suggested = os.path.join(os.path.expanduser("~"), "Downloads", f"{name}.pdf")
-        path, _filt = QFileDialog.getSaveFileName(None, "Save as PDF", suggested, "PDF (*.pdf)")
+        path, _filt = QFileDialog.getSaveFileName(parent, "Save as PDF", suggested, "PDF (*.pdf)")
         if path and not path.lower().endswith(".pdf"):
             path += ".pdf"
         return path
@@ -307,12 +366,16 @@ def _install_download_print_handlers() -> None:
         if id(profile) not in _dialogs_hooked:
             _dialogs_hooked.add(id(profile))
 
-            def _on_download(download):
+            def _on_download(download, parent=bv):
+                # Parent the dialog to the main window: a parentless QFileDialog can
+                # open BEHIND the webview window on X11 (modal but hidden), so the
+                # click looks like "nothing happens".
+                _log.info("[DesktopWindow] downloadRequested fired: %s", getattr(download, "downloadFileName", lambda: "?")())
                 try:
                     suggested = os.path.join(download.downloadDirectory(), download.downloadFileName())
                 except Exception:
                     suggested = ""
-                path, _filt = QFileDialog.getSaveFileName(None, "Save file", suggested)
+                path, _filt = QFileDialog.getSaveFileName(parent, "Save file", suggested)
                 if not path:
                     download.cancel()
                     return
@@ -330,14 +393,14 @@ def _install_download_print_handlers() -> None:
         if id(page) not in _dialogs_hooked:
             _dialogs_hooked.add(id(page))
 
-            def _on_print(_page=page):
-                path = _pdf_target(_page)
+            def _on_print(_page=page, _parent=bv):
+                path = _pdf_target(_page, _parent)
                 if path:
                     _page.printToPdf(path)
                     _log.info("[DesktopWindow] printing page to PDF → %s", path)
 
-            def _on_print_frame(frame, _page=page):
-                path = _pdf_target(_page)
+            def _on_print_frame(frame, _page=page, _parent=bv):
+                path = _pdf_target(_page, _parent)
                 if path:
                     frame.printToPdf(path)
                     _log.info("[DesktopWindow] printing frame to PDF → %s", path)

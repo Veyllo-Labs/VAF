@@ -589,6 +589,77 @@ function measureBlockHeight(win: Window, el: HTMLElement): number {
     return h + mt + mb;
 }
 
+/** Pure text/inline paragraph that may be split across pages (no nested blocks/media). */
+function isSplittableTextBlock(el: HTMLElement): boolean {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== 'p' && tag !== 'div') return false;
+    return !el.querySelector('p,div,ul,ol,table,h1,h2,h3,h4,h5,h6,img,figure,pre,blockquote');
+}
+
+/**
+ * Split a long text block at a sentence boundary so the first part fills the
+ * remaining space of the current page instead of leaving it as dead space.
+ * Split points are only taken OUTSIDE inline tags (an <a>/<em> never gets cut).
+ * Returns null when no sentence prefix fits.
+ */
+function splitBlockToFit(
+    doc: Document,
+    win: Window,
+    el: HTMLElement,
+    curPage: HTMLElement,
+    remainingPx: number
+): { first: HTMLElement; rest: HTMLElement } | null {
+    const tokens = (el.innerHTML || '').split(/(<[^>]+>)/);
+    // Candidate split offsets into a flat html string, only at depth 0 after sentence ends.
+    const html = tokens.join('');
+    const candidates: number[] = [];
+    let pos = 0;
+    let depth = 0;
+    for (const tok of tokens) {
+        if (tok.startsWith('<')) {
+            if (/^<\//.test(tok)) depth = Math.max(0, depth - 1);
+            else if (!/\/>$/.test(tok) && !/^<(br|hr|img|wbr)\b/i.test(tok)) depth += 1;
+            pos += tok.length;
+            continue;
+        }
+        if (depth === 0) {
+            const re = /[.!?:;]["')\]]?\s+/g;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(tok)) !== null) candidates.push(pos + m.index + m[0].length);
+        }
+        pos += tok.length;
+    }
+    if (candidates.length < 1) return null;
+
+    const probe = el.cloneNode(false) as HTMLElement;
+    curPage.appendChild(probe);
+    const fits = (cut: number): boolean => {
+        probe.innerHTML = html.slice(0, cut);
+        return measureBlockHeight(win, probe) <= remainingPx;
+    };
+    try {
+        // Binary search the largest sentence prefix that still fits.
+        let lo = 0, hi = candidates.length - 1, best = -1;
+        if (!fits(candidates[0])) return null;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (fits(candidates[mid])) { best = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        if (best < 0) return null;
+        const cut = candidates[best];
+        const restHtml = html.slice(cut).trim();
+        if (!restHtml) return null;
+        const first = el.cloneNode(false) as HTMLElement;
+        first.innerHTML = html.slice(0, cut).trim();
+        const rest = el.cloneNode(false) as HTMLElement;
+        rest.innerHTML = restHtml;
+        return { first, rest };
+    } finally {
+        probe.remove();
+    }
+}
+
 /**
  * Usable inner height for one A4 page (content box inside 25mm padding).
  * When embedded CSS lets `.a4-page` grow, clientHeight matches full content — use a probe
@@ -736,15 +807,42 @@ function paginateIntoA4Pages(doc: Document): void {
         container.appendChild(curPage);
         let curH = 0;
 
-        for (const { el, h } of items) {
-            if (curH > 0 && curH + h > limit) {
-                curPage = doc.createElement('div');
-                curPage.className = 'a4-page';
-                curPage.setAttribute('contenteditable', 'true');
-                applyA4PageBoxLock(curPage);
-                container.appendChild(curPage);
-                curH = 0;
+        const newPage = () => {
+            curPage = doc.createElement('div');
+            curPage.className = 'a4-page';
+            curPage.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(curPage);
+            container.appendChild(curPage);
+            curH = 0;
+        };
+        const measureDetached = (node: HTMLElement): number => {
+            curPage.appendChild(node);
+            const hh = measureBlockHeight(win, node);
+            node.remove();
+            return hh;
+        };
+
+        // Queue-based packing: long text blocks are split at sentence boundaries so
+        // a block that does not fit fills the remaining space instead of moving to
+        // the next page and leaving large dead space behind.
+        const queue = items.slice();
+        while (queue.length > 0) {
+            const { el, h } = queue.shift()!;
+            const remaining = limit - curH;
+            if (h > remaining && isSplittableTextBlock(el)) {
+                const room = curH > 0 ? remaining : limit;
+                if (room > 140) {
+                    const split = splitBlockToFit(doc, win, el, curPage, room);
+                    if (split) {
+                        curPage.appendChild(split.first);
+                        el.remove();
+                        queue.unshift({ el: split.rest, h: measureDetached(split.rest) });
+                        newPage();
+                        continue;
+                    }
+                }
             }
+            if (curH > 0 && curH + h > limit) newPage();
             curPage.appendChild(el);
             curH += h;
         }

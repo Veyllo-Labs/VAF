@@ -152,6 +152,113 @@ def _strip_untrusted_links(html: str, allowed: Sequence[str]) -> str:
     return html
 
 
+_SOURCE_HEADER_RE = re.compile(
+    r"^\s*(?:die\s+quellen|quellen(?:angaben)?|sources?(?:\s+used)?)\b[^<>]{0,120}$",
+    re.IGNORECASE,
+)
+_BARE_URL_RE = re.compile(r"^\s*https?://\S+\s*$")
+
+
+def _strip_section_source_blocks(html: str) -> str:
+    """Remove per-section source lists the model still writes despite instructions.
+
+    Reports cite with numbered [n] markers against ONE global source list; live
+    runs produced messy per-section blocks in changing formats: a "Sources:" /
+    "Die Quellen ... sind:" paragraph, <ul> lists of bare URLs, or raw URL lines.
+    """
+    if not html:
+        return html
+    # <p>Sources:</p> / <p><strong>Quellen:</strong></p> style headers
+    def _drop_header_p(m: re.Match) -> str:
+        inner = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        return "" if _SOURCE_HEADER_RE.match(inner) else m.group(0)
+    html = re.sub(r"<p[^>]*>([\s\S]*?)</p>", _drop_header_p, html, flags=re.IGNORECASE)
+    # Lists where half or more of the items are bare URLs
+    def _drop_url_list(m: re.Match) -> str:
+        items = re.findall(r"<li[^>]*>([\s\S]*?)</li>", m.group(0), flags=re.IGNORECASE)
+        if not items:
+            return m.group(0)
+        bare = sum(1 for it in items if _BARE_URL_RE.match(re.sub(r"<[^>]+>", "", it).strip()))
+        return "" if bare * 2 >= len(items) else m.group(0)
+    html = re.sub(r"<(ul|ol)[^>]*>[\s\S]*?</\1>", _drop_url_list, html, flags=re.IGNORECASE)
+    # Standalone bare-URL text lines (loose text between blocks)
+    lines = [ln for ln in html.split("\n") if not _BARE_URL_RE.match(ln)]
+    return "\n".join(lines).strip()
+
+
+_BLOCK_LEVEL_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li",
+                     "table", "thead", "tbody", "tr", "td", "th", "div", "blockquote", "pre"}
+
+
+def _wrap_loose_section_text(html: str) -> str:
+    """Wrap top-level bare text in <p> so it inherits paragraph typography.
+
+    Models emit fragments like "<h2>Title</h2>\\n\\nPlain text..." — the loose
+    text renders with the viewer's default font instead of the report style.
+    Inline tags (a/em/strong) stay inside the wrapped paragraph.
+    """
+    if not html:
+        return html
+    tokens = re.split(r"(<[^>]+>)", html)
+    out: List[str] = []
+    buf: List[str] = []
+    depth = 0
+
+    def _flush() -> None:
+        chunk = "".join(buf)
+        buf.clear()
+        if chunk.strip():
+            out.append(f"<p>{chunk.strip()}</p>")
+        elif chunk:
+            out.append(chunk)
+
+    for tok in tokens:
+        if tok.startswith("<"):
+            m = re.match(r"</?\s*([a-zA-Z0-9]+)", tok)
+            name = (m.group(1).lower() if m else "")
+            if name in _BLOCK_LEVEL_TAGS:
+                _flush()
+                depth = max(0, depth - 1) if tok.startswith("</") else depth + 1
+                out.append(tok)
+            elif depth == 0:
+                buf.append(tok)
+            else:
+                out.append(tok)
+        elif depth == 0:
+            buf.append(tok)
+        else:
+            out.append(tok)
+    _flush()
+    return "".join(out)
+
+
+def _clamp_runaway_heading(html: str, title: str) -> str:
+    """Keep section headings heading-sized.
+
+    Two live failure modes: an UNCLOSED <h2> swallows the whole section (every
+    paragraph renders big and bold), or the model packs body text into the
+    heading. Rebuilds to a clean <h2>title</h2> and demotes the rest to <p>.
+    """
+    if not html:
+        return html
+    m = re.search(r"<h2[^>]*>", html, flags=re.IGNORECASE)
+    if not m:
+        return html
+    after = html[m.end():]
+    close = re.search(r"</h2>", after, flags=re.IGNORECASE)
+    if not close:
+        rest = after.strip()
+        return f"<h2>{title}</h2>" + (f"<p>{rest}</p>" if rest and not rest.startswith("<") else rest)
+    inner_text = re.sub(r"<[^>]+>", "", after[:close.start()]).strip()
+    if len(inner_text) > 120:
+        return (
+            html[:m.start()]
+            + f"<h2>{title}</h2><p>{inner_text}</p>"
+            + after[close.end():]
+        )
+    return html
+
+
 class ResearchTUI:
     """
     Mini-IDE style TUI for the Research Agent (modeled after CoderTUI).
@@ -1064,6 +1171,10 @@ class ResearchAgentTool(BaseTool):
                     except Exception:
                         pass
 
+                    # Sections cite [n] against the GLOBAL source list (sidebar and
+                    # final report use the same numbering).
+                    _global_no = {u: all_sources.index(u) + 1 for u in sources if u in all_sources}
+
                     tui.set_stage("Summarizing")
                     _emit_progress(f"[{idx}/{len(specs)}] {spec.title}: summarizing...", style="dim")
                     _rs_state["stage"] = f"Summarizing {idx}/{len(specs)}"
@@ -1077,6 +1188,7 @@ class ResearchAgentTool(BaseTool):
                         min_words_target=min_words_target,
                         attempt="initial",
                         existing_section_html=(existing_section_html if (existing_section_html and len(specs) == 1) else ""),
+                        source_numbers=_global_no,
                     )
 
                     word_count = _visible_word_count(section_html)
@@ -1121,6 +1233,7 @@ class ResearchAgentTool(BaseTool):
                                 min_words_target=min_words_target,
                                 attempt="retry",
                                 existing_section_html="",
+                                source_numbers={u: all_sources.index(u) + 1 for u in retry_sources if u in all_sources},
                             )
                             word_count = _visible_word_count(section_html)
                             text_len = _visible_text_len(section_html)
@@ -1146,6 +1259,7 @@ class ResearchAgentTool(BaseTool):
                             min_words_target=min_words_target,
                             attempt="append",
                             existing_section_html=section_html,
+                            source_numbers=_global_no,
                         )
                         word_count = _visible_word_count(section_html)
                         tui.set_word_progress(word_count, min_words_target, min_words_ok)
@@ -1899,6 +2013,11 @@ class ResearchAgentTool(BaseTool):
             text = text[m.start():].strip()
             if '<h2' not in text.lower():
                 text = f"<h2>{title}</h2>\n{text}"
+            # Normalize structure: drop per-section source blocks (the report has
+            # one global numbered list), fix runaway headings, wrap loose text.
+            text = _strip_section_source_blocks(text)
+            text = _clamp_runaway_heading(text, title)
+            text = _wrap_loose_section_text(text)
             return text
         low = text.lower()
         reasoning_markers = (
@@ -1920,9 +2039,14 @@ class ResearchAgentTool(BaseTool):
         min_words_target: int,
         attempt: str = "initial",
         existing_section_html: str = "",
+        source_numbers: Optional[Dict[str, int]] = None,
     ) -> str:
         """
         Call the model for ONE section only (bounded input), return an HTML fragment.
+
+        `source_numbers` maps a source URL to its number in the report's GLOBAL
+        source list — sections cite with [n] markers against that list instead
+        of writing URLs or per-section source paragraphs.
         """
         # Data sanity check
         if not web_results or len(str(web_results).strip()) < 50:
@@ -1967,11 +2091,19 @@ class ResearchAgentTool(BaseTool):
             "  Instead write: <em>[Data not found in search results]</em>\n"
             "A short accurate report is FAR better than a long hallucinated one.\n\n"
             "CITATION GUIDELINES:\n"
-            "1. Support every claim with an explicit search result. Quote the source inline.\n"
-            "2. If a claim cannot be supported by the provided search results, use <em>[Not found in sources]</em>.\n"
-            "3. At the end of the section, add a small 'Sources' paragraph listing domain names of used sources.\n"
+            "1. Support every claim with an explicit search result.\n"
+            "2. Cite by putting the bracketed NUMBER of the supporting source directly after the\n"
+            "   statement, e.g. 'Die Strategie wurde 2020 verabschiedet [3].' Use ONLY the numbers\n"
+            "   from the numbered source list below.\n"
+            "3. NEVER write URLs in the text and NEVER add a 'Sources'/'Quellen' paragraph or list\n"
+            "   to the section — the report appends ONE global numbered source list automatically.\n"
+            "4. If a claim cannot be supported by the provided search results, use <em>[Not found in sources]</em>.\n"
             "Return ONLY an HTML fragment (no <html>, no <head>, no <body>).\n"
         )
+
+        def _numbered_source_lines(urls: Sequence[str]) -> str:
+            nums = source_numbers or {}
+            return "\n".join(f"[{nums.get(u, i + 1)}] {u}" for i, u in enumerate(urls))
 
         if attempt == "append" and existing_section_html:
             prompt = (
@@ -1986,8 +2118,8 @@ class ResearchAgentTool(BaseTool):
                 + existing_section_html
                 + "\n\nWeb search results:\n"
                 + str(web_results)
-                + "\n\nCite 2-4 of these sources inline where relevant (as plain URLs):\n"
-                + "\n".join(sources[:6])
+                + "\n\nNumbered source list (cite as [n] after the supported statement):\n"
+                + _numbered_source_lines(sources[:6])
             )
         else:
             prompt = (
@@ -1999,8 +2131,8 @@ class ResearchAgentTool(BaseTool):
                   "- If uncertain, say so briefly.\n\n"
                   "Web search results:\n"
                 + str(web_results)
-                + "\n\nCite 2-4 of these sources inline where relevant (as plain URLs):\n"
-                + "\n".join(sources[:6])
+                + "\n\nNumbered source list (cite as [n] after the supported statement):\n"
+                + _numbered_source_lines(sources[:6])
             )
 
         def call(prompt_text: str, max_tokens: int, temperature: float) -> str:
@@ -2095,7 +2227,8 @@ class ResearchAgentTool(BaseTool):
 
     def _assemble_html(self, topic: str, sections: Sequence[str], sources: Sequence[str], lang: str, quality_warning: str = "") -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        source_items = "\n".join(f'<li><a href="{u}">{u}</a></li>' for u in sources[:30])
+        # Ordered list: the numbers match the [n] citation markers in the sections.
+        source_items = "\n".join(f'<li><a href="{u}">{u}</a></li>' for u in sources[:50])
         sections_html = "\n\n".join(sections)
         # Remove any standalone "Answer" artifacts that slipped through.
         sections_html = _strip_answer_artifacts(sections_html)
@@ -2120,9 +2253,9 @@ class ResearchAgentTool(BaseTool):
             f"  <p class=\"meta\">Generated: {now}</p>\n"
             f"{sections_html}\n"
             "  <h2>Sources</h2>\n"
-            "  <ul>\n"
+            "  <ol>\n"
             f"{source_items}\n"
-            "  </ul>\n"
+            "  </ol>\n"
             "</body>\n"
             "</html>\n"
         )
@@ -2185,7 +2318,8 @@ class ResearchAgentTool(BaseTool):
         out = [f"# Research Report: {topic}", f"_Generated: {now}_", ""]
         out.extend(sections)
         out.append("\n## Sources\n")
-        out.extend([f"- {u}" for u in sources[:30]])
+        # Numbered: matches the [n] citation markers in the sections.
+        out.extend([f"{i}. {u}" for i, u in enumerate(sources[:50], 1)])
         return "\n".join(out)
 
 

@@ -194,6 +194,11 @@ const RESEARCH_PAPER_CSS = `
 .vaf-paper img, .vaf-paper table { max-width: 100%; }
 .vaf-typing-caret { display: inline-block; width: 2px; height: 1em; background: #8b5cf6; vertical-align: middle; margin-left: 1px; animation: vafCaretBlink 1s step-end infinite; }
 @keyframes vafCaretBlink { 50% { opacity: 0; } }
+.vaf-paper .cite { font-size: 10px; color: #7c3aed; background: #f3e8ff; border-radius: 4px; padding: 0 4px; margin-left: 2px; vertical-align: super; font-family: Consolas, monospace; }
+.vaf-paper .pending-note { margin-top: 22px; padding: 13px 16px; border: 1px dashed #e5e7eb; border-radius: 9px; font-size: 12px; color: #9ca3af; }
+.vaf-paper .searching-note { display: flex; gap: 9px; align-items: center; }
+.vaf-paper .searching-note .spin { display: inline-block; animation: vafSpin 1s linear infinite; color: #7c3aed; }
+@keyframes vafSpin { to { transform: rotate(360deg); } }
 `;
 
 const escapeHtml = (s: string) =>
@@ -202,6 +207,13 @@ const escapeHtml = (s: string) =>
 const buildResearchHeaderHtml = (topic: string, metaLine: string) =>
     `<div class="rpt-label">Research Report</div><h1>${escapeHtml(topic)}</h1><div class="rpt-meta">${escapeHtml(metaLine)}</div>`;
 
+/** Renders [n] citation markers as the mockup's superscript chips (text nodes only,
+ *  never inside tags/attributes). The numbers reference the global source list. */
+const decorateCitations = (html: string) =>
+    html.split(/(<[^>]+>)/).map(part =>
+        part.startsWith('<') ? part : part.replace(/\[(\d{1,3})\]/g, '<span class="cite">[$1]</span>')
+    ).join('');
+
 /**
  * Print the report exactly as previewed: a hidden same-origin iframe gets the
  * identical sheet markup and CSS, re-runs the same column measurement, and
@@ -209,7 +221,7 @@ const buildResearchHeaderHtml = (topic: string, metaLine: string) =>
  * app shell (whose overflow containers would clip every page after the first).
  */
 function printResearchReport(topic: string, metaLine: string, sectionsHtml: string[]) {
-    const fullHtml = buildResearchHeaderHtml(topic, metaLine) + sectionsHtml.join('');
+    const fullHtml = buildResearchHeaderHtml(topic, metaLine) + decorateCitations(sectionsHtml.join(''));
     const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(topic)}</title><style>
 @page { size: A4; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
@@ -253,10 +265,13 @@ ${RESEARCH_PAPER_CSS}
  * last sheet re-render per typing tick; finished sheets reuse a frozen copy
  * (with `column-fill: auto`, appended content never reflows earlier columns).
  */
-function A4ResearchPaper({ topic, metaLine, sectionsHtml, onGrow }: {
+function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: {
     topic: string;
     metaLine: string;
     sectionsHtml: string[];
+    /** Live status box (mockup's .pending-note) rendered IN the page flow after the
+     *  last text — never part of the print document. */
+    noticeHtml?: string;
     onGrow?: () => void;
 }) {
     const measureRef = useRef<HTMLDivElement>(null);
@@ -314,11 +329,13 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, onGrow }: {
 
     // ── flow html: stable prefix + live typing tail ──
     const headerHtml = buildResearchHeaderHtml(topic, metaLine);
-    const stableHtml = headerHtml + sectionsHtml.slice(0, animatingIdx < 0 ? sectionsHtml.length : animatingIdx).join('');
+    const stableHtml = headerHtml + decorateCitations(
+        sectionsHtml.slice(0, animatingIdx < 0 ? sectionsHtml.length : animatingIdx).join('')
+    );
     const typingHtml = animatingIdx >= 0
         ? `${heading ? `<h2>${escapeHtml(heading)}</h2>` : ''}<p>${escapeHtml(bodyText.slice(0, typedLen))}<span class="vaf-typing-caret"></span></p>`
         : '';
-    const liveHtml = stableHtml + typingHtml;
+    const liveHtml = stableHtml + typingHtml + (noticeHtml || '');
 
     // ── pagination: page count from the hidden measuring flow ──
     useLayoutEffect(() => {
@@ -557,6 +574,15 @@ export default function SubAgentWindow({
         const isLive = inferredPresence === 'online';
         const nextSection = research.sections.find(s => s.status === 'searching' || s.status === 'planned');
         const metaLine = `${wordsTotal.toLocaleString()}${research.wordsTarget ? ` / ${research.wordsTarget.toLocaleString()}` : ''} words · ${research.sources.length} sources`;
+        // Live status box ON the sheet (mockup's .pending-note), one at a time:
+        // a concrete next section beats the generic planning state.
+        const researchNoticeHtml = !isLive ? '' : nextSection
+            ? (nextSection.status === 'searching'
+                ? `<div class="pending-note"><div class="searching-note"><span class="spin">&#9906;</span>Searching sources for &quot;${escapeHtml(nextSection.title)}&quot;…</div></div>`
+                : `<div class="pending-note">Planned next: &quot;${escapeHtml(nextSection.title)}&quot;</div>`)
+            : (research.sectionsHtml.length === 0
+                ? '<div class="pending-note"><div class="searching-note"><span class="spin">&#9906;</span>Planning and searching…</div></div>'
+                : '');
 
         return (
             <div
@@ -613,22 +639,9 @@ export default function SubAgentWindow({
                                 topic={research.topic}
                                 metaLine={metaLine}
                                 sectionsHtml={research.sectionsHtml}
+                                noticeHtml={researchNoticeHtml}
                                 onGrow={keepResearchViewerPinned}
                             />
-                            {isLive && nextSection && (
-                                <div className="mx-auto mt-1 flex max-w-[420px] items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white/60 px-4 py-3 text-xs text-gray-400">
-                                    <Loader2 size={12} className="animate-spin text-violet-400" />
-                                    {nextSection.status === 'searching'
-                                        ? <>Searching sources for &quot;{nextSection.title}&quot;…</>
-                                        : <>Planned next: &quot;{nextSection.title}&quot;</>}
-                                </div>
-                            )}
-                            {research.sectionsHtml.length === 0 && (
-                                <div className="mx-auto mt-1 flex max-w-[420px] items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white/60 px-4 py-3 text-xs text-gray-400">
-                                    <Loader2 size={12} className="animate-spin opacity-60" />
-                                    Planning and searching…
-                                </div>
-                            )}
                         </div>
 
                         {/* ── Sidebar: Outline / Sources / Activity ── */}

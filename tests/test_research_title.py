@@ -210,6 +210,51 @@ def test_stream_section_returns_partial_on_connection_error(tool, monkeypatch):
     assert out == ""
 
 
+def test_sanitize_strips_per_section_source_blocks(tool):
+    # A live report ended sections with messy source blocks in changing formats:
+    # "Die Quellen ... sind:" + raw URLs, or <p><strong>Sources:</strong></p> + <ul> of URLs.
+    raw = (
+        "<h2>Impact</h2><p>Echter Inhalt mit Aussage [2].</p>"
+        "<p>Die Quellen für die Informationen in diesem Bericht sind wie folgt:</p>"
+        "<p><strong>Sources:</strong></p>"
+        "<ul><li>https://example.org/a</li><li>https://example.org/b</li></ul>"
+    )
+    out = tool._sanitize_section_output(raw, "Impact")
+    assert "Echter Inhalt" in out
+    assert "Quellen für die Informationen" not in out
+    assert "Sources:" not in out
+    assert "https://example.org/a" not in out
+
+
+def test_sanitize_keeps_content_lists(tool):
+    raw = "<h2>Impact</h2><p>Inhalt.</p><ul><li>Kernaussage eins</li><li>Kernaussage zwei</li></ul>"
+    out = tool._sanitize_section_output(raw, "Impact")
+    assert "Kernaussage eins" in out and "<ul>" in out
+
+
+def test_sanitize_wraps_loose_text_after_heading(tool):
+    # Models emit "<h2>..</h2>\n\nPlain text" — the loose text must become a <p>
+    # so it renders with paragraph typography instead of the viewer default.
+    raw = "<h2>Overview</h2>\n\nDie strategische Einordnung des VAF erfolgt im EU-Kontext."
+    out = tool._sanitize_section_output(raw, "Overview")
+    assert "<p>Die strategische Einordnung" in out
+
+
+def test_sanitize_clamps_unclosed_heading(tool):
+    # An unclosed <h2> swallowed whole sections (everything rendered big and bold).
+    raw = "<h2>Overview Die strategische Einordnung des VAF erfolgt im Kontext der EU und vieler weiterer Programme ohne schliessendes Tag"
+    out = tool._sanitize_section_output(raw, "Overview")
+    assert out.startswith("<h2>Overview</h2>")
+    assert "</h2><p>" in out.replace("\n", "") or "<p>" in out
+    assert "strategische Einordnung" in out
+
+
+def test_numbered_source_list_in_markdown(tool):
+    md = tool._assemble_markdown("Topic", ["<h2>S</h2><p>Text [2].</p>"], ["https://a.de", "https://b.de"])
+    assert "1. https://a.de" in md
+    assert "2. https://b.de" in md
+
+
 def test_search_provider_error_collector():
     from vaf.tools.search import (
         _note_provider_error,

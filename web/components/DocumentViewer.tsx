@@ -674,7 +674,12 @@ export default function DocumentViewer({
                                             const mdHtml = isMarkdownDocument(doc) && doc.content
                                                 ? `<div class="markdown-body">${marked(doc.content, { async: false })}</div>`
                                                 : null;
-                                            const displayHtml = htmlContent ?? (isDocxWithData(doc) ? null : officeHtml) ?? (mdHtml ? `<!DOCTYPE html><html><head><meta charset="utf-8"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css"/><style>.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style></head><body>${mdHtml}</body></html>` : null);
+                                            // Force the LIGHT markdown theme: the plain
+                                            // github-markdown.css auto-switches to dark via
+                                            // prefers-color-scheme, so a dark OS/desktop rendered
+                                            // the report on a dark page. The -light variant + an
+                                            // explicit color-scheme keeps it white everywhere.
+                                            const displayHtml = htmlContent ?? (isDocxWithData(doc) ? null : officeHtml) ?? (mdHtml ? `<!DOCTYPE html><html data-color-mode="light" data-light-theme="light"><head><meta charset="utf-8"/><meta name="color-scheme" content="light"/><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"/><style>:root{color-scheme:light}html,body{background:#fff}.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;background:#fff;color:#1f2328;}</style></head><body>${mdHtml}</body></html>` : null);
                                             const showPdf = isPdfWithData(doc);
                                             const showDocx = isDocxWithData(doc);
                                             const showAsDocument = showPdf || showDocx || !!displayHtml;

@@ -1471,9 +1471,30 @@ function LegacyDocumentEditor({
         }
     };
 
-    const openPrintDialog = () => {
+    // Native bridges exposed by the desktop window (QtWebEngine). Undefined in a
+    // real browser, where the iframe's own print dialog / html2pdf are used.
+    const getDesktopApi = () => (window as unknown as {
+        pywebview?: { api?: {
+            render_pdf?: (html: string, name: string, mode: string) => Promise<unknown>;
+            save_text_as?: (content: string, name: string) => Promise<unknown>;
+        } };
+    }).pywebview?.api;
+    const printBaseName = () => (displayFile || 'document').replace(/\.[^.]+$/, '') || 'document';
+    // Full rendered HTML of the editor iframe (head A4 styles + paginated body) —
+    // the desktop bridge renders this off-screen and prints it to PDF.
+    const editorPrintHtml = () => iframeRef.current?.contentDocument?.documentElement?.outerHTML || '';
+
+    const openPrintDialog = async () => {
         const iframe = iframeRef.current;
         if (!iframe?.contentWindow) return;
+        // Desktop: render the A4 document to PDF and open it in the system viewer,
+        // whose print dialog targets any printer or saves as PDF (iframe.print()
+        // does not reliably reach QtWebEngine's print signal). Browser: native dialog.
+        const api = getDesktopApi();
+        if (api?.render_pdf) {
+            await api.render_pdf(editorPrintHtml(), printBaseName(), 'print');
+            return;
+        }
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
     };
@@ -1481,6 +1502,13 @@ function LegacyDocumentEditor({
     const [isExportingPdf, setIsExportingPdf] = useState(false);
     const exportAsPDF = async () => {
         const iframe = iframeRef.current;
+        // Desktop: native save-as-PDF via QtWebEngine printToPdf (faithful A4,
+        // unlike html2canvas which drops styles inside the iframe).
+        const api = getDesktopApi();
+        if (api?.render_pdf && iframe?.contentDocument) {
+            await api.render_pdf(editorPrintHtml(), printBaseName(), 'pdf');
+            return;
+        }
         const body = iframe?.contentDocument?.body;
         if (!body) return;
         setIsExportingPdf(true);
@@ -1533,7 +1561,13 @@ function LegacyDocumentEditor({
         }
     };
 
-    const downloadHTML = () => {
+    const downloadHTML = async () => {
+        // Desktop: native Save-As dialog writes the current content to disk.
+        const api = getDesktopApi();
+        if (api?.save_text_as) {
+            await api.save_text_as(content, displayFile);
+            return;
+        }
         const blob = new Blob([content], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

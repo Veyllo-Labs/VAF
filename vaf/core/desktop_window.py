@@ -27,6 +27,8 @@ _save_timer: threading.Timer | None = None  # debounce timer for state saves
 _recovery = {"reloads": 0, "last": 0.0, "hooked": set()}
 # Native dialog wiring bookkeeping (see _install_download_print_handlers).
 _dialogs_hooked: set = set()
+# Offscreen PDF renderer (created on the Qt main thread, see _ensure_pdf_renderer).
+_pdf_renderer = None
 
 
 def _load_state(default_w: int, default_h: int) -> tuple[int, int]:
@@ -165,8 +167,8 @@ def init(url: str, title: str = "VAF", width: int = 1280, height: int = 800) -> 
     # (a parentless save dialog can open behind the window; downloads started after
     # an awaited fetch are blocked). The WebUI calls window.pywebview.api.save_file_as.
     try:
-        _window.expose(save_file_as)
-        _log.info("[DesktopWindow] native save_file_as bridge exposed")
+        _window.expose(save_file_as, save_text_as, render_pdf)
+        _log.info("[DesktopWindow] native save/print bridges exposed")
     except Exception as e:
         _log.debug("[DesktopWindow] could not expose save bridge: %s", e)
     _log.info("[DesktopWindow] Window created → %s (size %dx%d)", url, saved_w, saved_h)
@@ -220,6 +222,153 @@ def _is_relative_to(path, root) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _main_window_widget():
+    """The QMainWindow behind the webview (dialog parent), or None."""
+    try:
+        from webview.platforms.qt import BrowserView
+        for bv in list(getattr(BrowserView, "instances", {}).values()):
+            return bv
+    except Exception:
+        pass
+    return None
+
+
+def _ensure_pdf_renderer():
+    """Create the offscreen PDF renderer on the Qt main thread (idempotent).
+
+    iframe.print() does not reliably emit printRequestedByFrame in this embedded
+    QtWebEngine, so the Document Editor's Print/PDF buttons render the document
+    HTML in a headless QWebEnginePage and use printToPdf — a direct path like the
+    working Download bridge, with no dependency on the print signal."""
+    global _pdf_renderer
+    if _pdf_renderer is not None:
+        return _pdf_renderer
+    try:
+        from PyQt6.QtCore import QObject, pyqtSlot, QUrl, QTimer
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+        from PyQt6.QtWidgets import QFileDialog
+        from PyQt6.QtGui import QDesktopServices
+    except Exception as e:
+        _log.debug("[DesktopWindow] PDF renderer unavailable: %s", e)
+        return None
+
+    class _PdfRenderer(QObject):
+        def __init__(self):
+            super().__init__()
+            self._pages = []  # keep refs until each render finishes
+
+        @pyqtSlot(str, str, str)
+        def render(self, html, mode, name):
+            import os as _os, re as _re, tempfile
+            clean = _re.sub(r"[^\w\s.-]", "", name or "document").strip().replace(" ", "_") or "document"
+            if mode == "print":
+                dest = _os.path.join(tempfile.gettempdir(), f"vaf_print_{clean}.pdf")
+            else:
+                suggested = _os.path.join(_os.path.expanduser("~"), "Downloads", f"{clean}.pdf")
+                dest, _filt = QFileDialog.getSaveFileName(_main_window_widget(), "Save as PDF", suggested, "PDF (*.pdf)")
+                if not dest:
+                    return
+                if not dest.lower().endswith(".pdf"):
+                    dest += ".pdf"
+            page = QWebEnginePage(self)
+            self._pages.append(page)
+
+            def _cleanup():
+                try:
+                    self._pages.remove(page)
+                except ValueError:
+                    pass
+                page.deleteLater()
+
+            def _on_pdf(data):
+                ok = False
+                try:
+                    raw = bytes(data) if data is not None else b""
+                    if raw:
+                        with open(dest, "wb") as fh:
+                            fh.write(raw)
+                        ok = True
+                except Exception as e:
+                    _log.warning("[DesktopWindow] PDF write failed: %s", e)
+                if ok and mode == "print":
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(dest))
+                _log.info("[DesktopWindow] %s -> %s (%s)", mode, dest, "ok" if ok else "FAILED")
+                _cleanup()
+
+            def _on_load(loaded_ok):
+                if not loaded_ok:
+                    _log.warning("[DesktopWindow] offscreen render load failed")
+                    _cleanup()
+                    return
+                # Give layout/fonts a beat, then render.
+                QTimer.singleShot(180, lambda: page.printToPdf(_on_pdf))
+
+            page.loadFinished.connect(_on_load)
+            page.setHtml(html or "", QUrl("file:///"))
+
+    _pdf_renderer = _PdfRenderer()
+    # pywebview fires the `loaded` event (and thus _ensure_pdf_renderer) on a
+    # WORKER thread, so the QObject is born with the wrong thread affinity and a
+    # QueuedConnection to it would never run. Push it onto the Qt main thread
+    # (the QApplication's thread) so the marshaled render slot actually executes.
+    try:
+        from PyQt6.QtWidgets import QApplication
+        _app = QApplication.instance()
+        if _app is not None and _pdf_renderer.thread() is not _app.thread():
+            _pdf_renderer.moveToThread(_app.thread())
+            _log.info("[DesktopWindow] PDF renderer moved to the Qt main thread")
+    except Exception as e:
+        _log.debug("[DesktopWindow] could not move PDF renderer to main thread: %s", e)
+    _log.info("[DesktopWindow] offscreen PDF renderer ready")
+    return _pdf_renderer
+
+
+def render_pdf(html: str, name: str = "document", mode: str = "pdf") -> dict:
+    """Exposed to the WebUI: render document HTML to PDF. mode 'pdf' prompts for a
+    save location; mode 'print' writes a temp PDF and opens it in the system
+    viewer (whose print dialog targets any printer). Marshals the Qt work to the
+    main thread (this runs on a pywebview worker thread)."""
+    try:
+        _log.info("[DesktopWindow] render_pdf called: mode=%s name=%s html_len=%d", mode, name, len(html or ""))
+        # Must already exist (created + moved to the main thread in _on_loaded);
+        # never create it here — this runs on a worker thread.
+        renderer = _pdf_renderer
+        if renderer is None:
+            return {"ok": False, "error": "renderer not ready"}
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+        QMetaObject.invokeMethod(
+            renderer, "render", Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, html or ""),
+            Q_ARG(str, "print" if str(mode).lower() == "print" else "pdf"),
+            Q_ARG(str, name or "document"),
+        )
+        return {"ok": True}
+    except Exception as e:
+        _log.warning("[DesktopWindow] render_pdf failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
+def save_text_as(content: str, suggested_name: str = "document.html") -> dict:
+    """Exposed to the WebUI: write edited text/HTML to a user-chosen file via a
+    native Save dialog (the Document Editor's Download button)."""
+    try:
+        if not _window:
+            return {"ok": False, "error": "unavailable"}
+        result = _window.create_file_dialog(_webview.SAVE_DIALOG, save_filename=(suggested_name or "document"))
+        dest = None
+        if result:
+            dest = result[0] if isinstance(result, (list, tuple)) else result
+        if not dest:
+            return {"ok": False, "cancelled": True}
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(content or "")
+        _log.info("[DesktopWindow] saved edited content → %s", dest)
+        return {"ok": True, "path": str(dest)}
+    except Exception as e:
+        _log.warning("[DesktopWindow] save_text_as failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 _INTERCEPT_JS = """
@@ -341,20 +490,30 @@ def _install_download_print_handlers() -> None:
         _log.debug("[DesktopWindow] download/print dialogs unavailable: %s", e)
         return
 
-    def _pdf_target(page, parent) -> str:
-        """Ask the user where to save the PDF; '' when cancelled."""
-        import re as _re
-        title = ""
-        try:
-            title = (page.title() or "").strip()
-        except Exception:
-            pass
-        name = _re.sub(r"[^\w\s.-]", "", title).strip().replace(" ", "_") or "document"
-        suggested = os.path.join(os.path.expanduser("~"), "Downloads", f"{name}.pdf")
+    def _do_print(frame_or_page, parent) -> None:
+        """Fallback for any window.print() that DOES emit the signal (e.g. the
+        research report's in-iframe print): save the frame/page to a chosen PDF.
+        The Document Editor uses the render_pdf bridge instead, because its
+        iframe.print() does not reliably reach this signal."""
+        suggested = os.path.join(os.path.expanduser("~"), "Downloads", "document.pdf")
         path, _filt = QFileDialog.getSaveFileName(parent, "Save as PDF", suggested, "PDF (*.pdf)")
-        if path and not path.lower().endswith(".pdf"):
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
             path += ".pdf"
-        return path
+
+        def _cb(data):
+            try:
+                raw = bytes(data) if data is not None else b""
+                if raw:
+                    with open(path, "wb") as fh:
+                        fh.write(raw)
+                    _log.info("[DesktopWindow] saved PDF → %s", path)
+                else:
+                    _log.warning("[DesktopWindow] PDF render produced no data")
+            except Exception as e:
+                _log.warning("[DesktopWindow] writing PDF failed: %s", e)
+        frame_or_page.printToPdf(_cb)
 
     for bv in list(getattr(BrowserView, "instances", {}).values()):
         view = getattr(bv, "webview", None)
@@ -394,23 +553,14 @@ def _install_download_print_handlers() -> None:
             _dialogs_hooked.add(id(page))
 
             def _on_print(_page=page, _parent=bv):
-                path = _pdf_target(_page, _parent)
-                if path:
-                    _page.printToPdf(path)
-                    _log.info("[DesktopWindow] printing page to PDF → %s", path)
+                _do_print(_page, _parent)
 
             def _on_print_frame(frame, _page=page, _parent=bv):
-                path = _pdf_target(_page, _parent)
-                if path:
-                    frame.printToPdf(path)
-                    _log.info("[DesktopWindow] printing frame to PDF → %s", path)
+                _do_print(frame, _parent)
 
             try:
                 page.printRequested.connect(_on_print)
                 page.printRequestedByFrame.connect(_on_print_frame)
-                page.pdfPrintingFinished.connect(
-                    lambda p, ok: _log.info("[DesktopWindow] PDF print %s: %s", "done" if ok else "FAILED", p)
-                )
                 _log.info("[DesktopWindow] print-to-PDF dialogs armed")
             except Exception as e:                # pragma: no cover
                 _log.debug("[DesktopWindow] could not arm print handlers: %s", e)
@@ -425,6 +575,9 @@ def _on_loaded() -> None:
             _log.debug("[DesktopWindow] JS inject failed: %s", e)
     _install_crash_recovery()
     _install_download_print_handlers()
+    # Create the offscreen PDF renderer here so it lives on the Qt main thread
+    # (render_pdf is invoked from a pywebview worker thread and only marshals to it).
+    _ensure_pdf_renderer()
 
 
 def _on_closing() -> bool:

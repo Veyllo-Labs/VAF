@@ -487,7 +487,15 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) 
             ]
             if wi and web_sessions:
                 sid = web_sessions[0]["id"]
-                wi.emit_agent_message("assistant", nudge, session_id=sid)
+                # Append + persist (not emit_agent_message, which overwrites the
+                # last assistant bubble and is lost on refresh).
+                try:
+                    _sess = sm.load(sid)
+                    _sess.add_message("assistant", nudge)
+                    sm.save(_sess)
+                except Exception:
+                    pass
+                wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant")
                 wi.emit_session_unread(sid)
                 logger.info("Thinking nudge sent via Web UI session %s", sid)
                 return True
@@ -1073,7 +1081,18 @@ def _try_emit_to_web_ui_and_wait(
             if not wi or not web_sessions:
                 return False
             sid = web_sessions[0]["id"]
-            wi.emit_agent_message("assistant", content, session_id=sid)
+            # APPEND as its own new bubble — emit_agent_message streams an
+            # agent_message_update that merges into / overwrites the last assistant
+            # bubble (observed: this proactive question overwrote a research agent's
+            # final reply). Persist it too, so it survives a chat refresh (the append
+            # handler reloads from history and would otherwise lose the live-only text).
+            try:
+                _sess = sm.load(sid)
+                _sess.add_message("assistant", content)
+                sm.save(_sess)
+            except Exception:
+                pass
+            wi.emit_agent_message_append(content=content, session_id=sid, role="assistant")
             wi.emit_session_unread(sid)
             set_waiting_for_reply(user_scope_id, username, display_name=display_name, question_text=content)
             logger.info("Thinking Mode: question emitted to Web UI session %s", sid)

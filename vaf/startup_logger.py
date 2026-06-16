@@ -21,9 +21,14 @@ def log(component, message):
         entry = f"[{timestamp}] [{component}] {message}\n"
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(entry)
-        print(f"DEBUG: {entry.strip()}")
-    except Exception as e:
-        print(f"!!! FAILED TO WRITE LOG: {e}")
+        # A sub-agent subprocess's stdout is streamed into the WebUI console; the
+        # module-load startup trace would flood it (the "[WebServer] Module load…"
+        # noise the user sees before the custom window opens). Keep the file trace,
+        # but don't print it to stdout in a sub-agent.
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip() not in ("1", "true", "yes"):
+            print(f"DEBUG: {entry.strip()}")
+    except Exception:
+        pass
 
 
 def clear_log():

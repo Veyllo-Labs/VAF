@@ -575,6 +575,12 @@ class Platform:
                 # flood the pipe buffer (4 KB on Windows) and deadlock the process.
                 env["VAF_NONINTERACTIVE"] = "1"
 
+                # Mark the child as a sub-agent FROM PROCESS BIRTH (cmd/subagent.py also sets
+                # this, but only at runtime — AFTER the heavy imports whose startup trace would
+                # otherwise flood the WebUI console with "[WebServer] Module load…"). Setting it
+                # here means the import-time startup_logger suppression actually takes effect.
+                env["VAF_IN_SUBAGENT_TERMINAL"] = "1"
+
                 # Force Python to use unbuffered stdout in the child process.
                 # Without this, piped stdout uses ~8 KB full buffering and the
                 # parent's _stream_output thread sees nothing until the child exits.

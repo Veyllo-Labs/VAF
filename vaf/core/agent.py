@@ -1639,6 +1639,55 @@ class Agent:
             return (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
         return ""
 
+    def _reply_needs_user(self, reply: str) -> bool:
+        """Stage-3 brake for pending-task auto-continue: does this final reply ask the user a
+        question / request input it NEEDS before it can keep working? The foreground Web UI has no
+        tool signal for "I'm asking the user" (the question is plain text), so we classify the text.
+
+        Uses a tiny validation LLM when available — robust to phrasing, including a real question
+        that carries no "?" (e.g. "Sag mir bitte, welche Datei gemeint ist."). Falls back to a cheap
+        heuristic (last line contains "?") when the classifier is disabled, no backend is available,
+        or the call errors, so the main loop can never break here."""
+        text = (reply or "").strip()
+        if not text:
+            return False
+
+        def _heuristic() -> bool:
+            last_line = text.splitlines()[-1] if text else ""
+            return "?" in last_line
+
+        try:
+            from vaf.core.config import Config as _Cfg
+            if not _Cfg.get("autocontinue_question_classifier_enabled", True):
+                return _heuristic()
+        except Exception:
+            return _heuristic()
+
+        if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None)
+                or getattr(self, "llm", None)):
+            return _heuristic()
+
+        prompt = (
+            "You decide ONE thing about an assistant's reply: does it ask the user a question or "
+            "request input/a decision that the assistant NEEDS before it can continue its task?\n"
+            "Answer YES only if the assistant is genuinely blocked waiting on the user. A rhetorical "
+            "question, a status update, or a courtesy line like 'let me know if you need anything' is "
+            "NOT blocking -> answer NO.\n"
+            "Reply with exactly one word: YES or NO.\n\n"
+            f"ASSISTANT REPLY:\n{text[:1500]}"
+        )
+        try:
+            out = self._run_validation_llm(
+                [{"role": "user", "content": prompt}], max_tokens=8
+            ).strip().lower()
+        except Exception:
+            return _heuristic()
+        if "yes" in out:
+            return True
+        if "no" in out:
+            return False
+        return _heuristic()  # unparseable output -> safe fallback
+
     def _resolve_user_intent(self) -> str:
         """Best-effort original user intent: delegation intent (written before a sub-agent call),
         then persisted user intent, then the last user message in history. Used by both the
@@ -7789,6 +7838,75 @@ class Agent:
                         # If nothing to summarize, just delete without inserting
             except Exception as e:
                 UI.event("Debug", f"Compression Warning: {e}", style="dim")
+
+            # ── Pending-task auto-continue ───────────────────────────────────────────
+            # The model gave a final text answer (no tool calls) but may still have pending tasks in
+            # working memory. Without this the turn ends here and the step nugget only re-fires on the
+            # NEXT user message — so the task list sits there unworked (the bug we saw). Instead, when
+            # pending tasks remain, re-inject the step nugget as a system "continue" message and loop
+            # again INSIDE this same user turn. Shares the existing tool_turn_count budget (soft 50 /
+            # hard 75) — no parallel counter; we just count this as one turn so a pure-text continue
+            # loop can't run past the hard stop. Brakes: a genuine question to the user (waiting state
+            # or _reply_needs_user classifier), background thinking pass, and a config kill-switch.
+            try:
+                _ac_on = Config.get("autocontinue_pending_tasks_enabled", True)
+                _ac_thinking = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                _ac_budget_left = tool_turn_count < MAX_TOOL_TURNS_PER_STEP
+                # Brake = "the agent needs the user before it can continue". Same principle as the
+                # thinking-pass: prefer an EXPLICIT signal over guessing from the text. The thinking-
+                # pass sets a persistent waiting_for_reply state when the agent reaches out; we honor
+                # that state here (no side effects, safe in the foreground). The foreground Web UI has
+                # NO tool signal for "I'm asking the user" — the question is plain text, and a
+                # messenger send here usually means a completed task, not a question — so for that case
+                # a tiny validation LLM classifies whether the reply is a blocking question
+                # (_reply_needs_user), with a last-line "?" heuristic as fallback.
+                _ac_needs_user = False
+                try:
+                    from vaf.core.thinking_mode import get_waiting_for_reply
+                    if get_waiting_for_reply(getattr(self, "_current_user_scope_id", None)):
+                        _ac_needs_user = True
+                except Exception:
+                    pass
+                if not _ac_needs_user:
+                    _ac_needs_user = self._reply_needs_user(history_content)
+                if (_ac_on and not _ac_thinking and not _ac_needs_user and _ac_budget_left
+                        and not tool_calls_detected and not auto_retry
+                        and getattr(self, "main_persistence", None)):
+                    _wm = self.main_persistence.get_working_memory()
+                    _step = self.main_persistence._current_step(_wm.get("tasks", []))
+                    if _step is not None:
+                        _idx, _text, _done, _total = _step
+                        tool_turn_count += 1  # share the existing soft(50)/hard(75) budget
+                        self.history.append({
+                            "role": "system",
+                            "content": (
+                                "[System: You still have pending tasks — do NOT stop yet. Work the next "
+                                "step NOW by calling the needed tools.\n"
+                                f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish it, then call "
+                                f"update_working_memory(mark_task_done={_idx}). Only stop when every task "
+                                "is done or you have a genuine question that requires the user.]"
+                            ),
+                        })
+                        UI.event(
+                            "System",
+                            f"Pending tasks remain — auto-continuing (step {_done + 1}/{_total}, "
+                            f"turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP}).",
+                            style="dim",
+                        )
+                        try:
+                            append_domain_log(
+                                "backend",
+                                f"autocontinue step={_done + 1}/{_total} turn={tool_turn_count}",
+                            )
+                        except Exception:
+                            pass
+                        continue
+            except Exception as _ac_e:
+                try:
+                    append_domain_log("backend", f"autocontinue_skip {type(_ac_e).__name__}: {_ac_e}")
+                except Exception:
+                    pass
+            # ─────────────────────────────────────────────────────────────────────────
 
             try:
                 append_domain_log("backend", "chat_step_break_reached")

@@ -97,7 +97,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
         "plan = your high-level approach (short); tasks = the concrete steps that carry it out (tracked and kept on course). "
         "Set notes/plan to replace the list, add_notes/add_plan to append. "
-        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark done; for multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
+        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark ONE done, or mark_all_done=true to mark EVERY pending task done at once (use this when the user says they are finished / 'mark everything done'). For multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
     )
     
     parameters = {
@@ -143,6 +143,10 @@ class UpdateWorkingMemoryTool(BaseTool):
             "mark_task_done": {
                 "type": "integer",
                 "description": "0-based index of the task to mark as done."
+            },
+            "mark_all_done": {
+                "type": "boolean",
+                "description": "Mark EVERY pending task done in one call. Use when the user says they are finished / wants all remaining tasks marked done."
             }
         },
         "required": []
@@ -165,7 +169,11 @@ class UpdateWorkingMemoryTool(BaseTool):
         if isinstance(tasks, str): tasks = [tasks.strip()] if tasks.strip() else None
         add_task = kwargs.get('add_task')
         mark_task_done = kwargs.get('mark_task_done')
-        
+        mark_all_done = kwargs.get('mark_all_done')
+        if isinstance(mark_all_done, str):
+            mark_all_done = mark_all_done.strip().lower() in ("1", "true", "yes")
+        mark_all_done = bool(mark_all_done)
+
         try:
             mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             pre_tasks = mpm.get_working_memory().get("tasks", [])
@@ -204,9 +212,17 @@ class UpdateWorkingMemoryTool(BaseTool):
                 except Exception:
                     pass
 
+            def _pending(ts):
+                return sum(
+                    1 for t in ts
+                    if str((t.get("status") if isinstance(t, dict) else None) or "pending").lower() != "done"
+                )
+            pre_pending = _pending(pre_tasks)
+
             mpm.update_working_memory(
                 notes=notes, plan=plan, add_notes=add_notes, add_plan=add_plan,
                 tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,
+                mark_all_done=mark_all_done,
             )
             # Thinking Workspace bridge: in thinking mode, mirror latest working_memory snapshot
             # into the per-user workspace for auditable run continuity.
@@ -239,7 +255,17 @@ class UpdateWorkingMemoryTool(BaseTool):
                             break
             except Exception:
                 nudge = ""
-            return "✅ Working Memory updated." + nudge
+
+            # Informative result so the model sees what actually changed (a silent no-op on a
+            # duplicate add_task otherwise invites a confused retry — observed: 5x re-add).
+            post_tasks = mpm.get_working_memory().get("tasks", [])
+            info = ""
+            if mark_all_done:
+                done_now = pre_pending - _pending(post_tasks)
+                info = f" Marked {max(done_now, 0)} pending task(s) done; all {len(post_tasks)} task(s) complete."
+            elif add_task is not None and str(add_task).strip() and len(post_tasks) == len(pre_tasks):
+                info = " (That task was already in the list — not re-added.)"
+            return "✅ Working Memory updated." + info + nudge
         except Exception as e:
             return f"❌ Error updating working memory: {e}"
 

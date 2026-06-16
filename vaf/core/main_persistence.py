@@ -319,6 +319,48 @@ class MainPersistenceManager:
             self._save_json(self.context_dir / WORKING_MEMORY_FILE, mem)
         return mem
 
+    @staticmethod
+    def _wm_text(entry: Any) -> str:
+        """Text of a working-memory entry (dict with 'text', or a bare value)."""
+        return str(entry.get("text", "")) if isinstance(entry, dict) else str(entry)
+
+    @classmethod
+    def _wm_norm(cls, text: Any) -> str:
+        """Normalized dedupe key: collapsed whitespace, casefolded. '' for blank."""
+        return " ".join(cls._wm_text(text).split()).casefold()
+
+    @classmethod
+    def _dedupe_notes_plan(cls, entries: List[Any]) -> List[Any]:
+        """Drop entries whose normalized text repeats an earlier one (keep first)."""
+        seen: set = set()
+        out: List[Any] = []
+        for e in entries:
+            k = cls._wm_norm(e)
+            if k and k in seen:
+                continue
+            seen.add(k)
+            out.append(e)
+        return out
+
+    @classmethod
+    def _dedupe_tasks(cls, tasks: List[Any]) -> List[Any]:
+        """Collapse tasks with the same normalized text (keep first); the kept one is 'done' if ANY
+        duplicate was done, so cleaning up a polluted list never silently un-finishes a step."""
+        order: List[str] = []
+        by_key: Dict[str, Any] = {}
+        for t in tasks:
+            k = cls._wm_norm(t)
+            if not k:
+                continue
+            if k not in by_key:
+                by_key[k] = dict(t) if isinstance(t, dict) else {"text": str(t), "status": "pending"}
+                order.append(k)
+            else:
+                st = (t.get("status") if isinstance(t, dict) else None) or "pending"
+                if str(st).lower() == "done":
+                    by_key[k]["status"] = "done"
+        return [by_key[k] for k in order]
+
     def update_working_memory(
         self,
         notes: Optional[List[Any]] = None,
@@ -328,6 +370,7 @@ class MainPersistenceManager:
         tasks: Optional[List[Dict]] = None,
         add_task: Optional[str] = None,
         mark_task_done: Optional[int] = None,
+        mark_all_done: bool = False,
     ):
         mem = self.get_working_memory()
         now_iso = self._now_iso()
@@ -336,23 +379,36 @@ class MainPersistenceManager:
         plan_list = list(mem.get("plan", []))
         tasks_list = list(mem.get("tasks", []))
 
+        # Append-with-dedupe: a model that loses track re-adds the same note/plan/task many times
+        # (observed: the same task appended 5x in one turn), polluting working memory. Skip an
+        # append whose normalized text already exists.
         if add_notes:
+            seen = {self._wm_norm(e) for e in notes_list}
             for item in add_notes:
-                notes_list.append({"t": now_iso, "text": str(item)})
+                k = self._wm_norm(item)
+                if k and k not in seen:
+                    notes_list.append({"t": now_iso, "text": str(item)})
+                    seen.add(k)
         if add_plan:
+            seen = {self._wm_norm(e) for e in plan_list}
             for item in add_plan:
-                plan_list.append({"t": now_iso, "text": str(item)})
+                k = self._wm_norm(item)
+                if k and k not in seen:
+                    plan_list.append({"t": now_iso, "text": str(item)})
+                    seen.add(k)
         if notes is not None:
-            notes_list = [self._normalize_wm_entry(e, now_iso) for e in notes]
+            notes_list = self._dedupe_notes_plan([self._normalize_wm_entry(e, now_iso) for e in notes])
         if plan is not None:
-            plan_list = [self._normalize_wm_entry(e, now_iso) for e in plan]
+            plan_list = self._dedupe_notes_plan([self._normalize_wm_entry(e, now_iso) for e in plan])
 
         if add_task is not None and str(add_task).strip():
-            tasks_list.append({
-                "text": str(add_task).strip(),
-                "status": "pending",
-                "ts": now_iso,
-            })
+            k = self._wm_norm(add_task)
+            if k and k not in {self._wm_norm(t) for t in tasks_list}:
+                tasks_list.append({
+                    "text": str(add_task).strip(),
+                    "status": "pending",
+                    "ts": now_iso,
+                })
         if mark_task_done is not None and 0 <= mark_task_done < len(tasks_list):
             t = tasks_list[mark_task_done]
             if isinstance(t, dict):
@@ -360,18 +416,32 @@ class MainPersistenceManager:
                 t["status"] = "done"
                 t["ts"] = now_iso
                 tasks_list[mark_task_done] = t
+        # Bulk completion: the user says "mark everything done". Without this the model has to loop
+        # mark_task_done by index and tends to lose track (observed). Mark every pending task done
+        # in one call.
+        if mark_all_done:
+            for _i, _t in enumerate(tasks_list):
+                if isinstance(_t, dict):
+                    if str(_t.get("status") or "pending").lower() != "done":
+                        _t = dict(_t)
+                        _t["status"] = "done"
+                        _t["ts"] = now_iso
+                        tasks_list[_i] = _t
+                else:
+                    tasks_list[_i] = {"text": str(_t), "status": "done", "ts": now_iso}
         if tasks is not None:
-            tasks_list = []
+            rebuilt = []
             for e in tasks:
                 if isinstance(e, dict) and e.get("text") is not None:
                     st = (e.get("status") or "pending").lower()
-                    tasks_list.append({
+                    rebuilt.append({
                         "text": str(e["text"]),
                         "status": "done" if st == "done" else "pending",
                         "ts": e.get("ts") or now_iso,
                     })
                 else:
-                    tasks_list.append({"text": str(e), "status": "pending", "ts": now_iso})
+                    rebuilt.append({"text": str(e), "status": "pending", "ts": now_iso})
+            tasks_list = self._dedupe_tasks(rebuilt)
 
         notes_list = notes_list[-WORKING_MEMORY_MAX_ENTRIES:]
         plan_list = plan_list[-WORKING_MEMORY_MAX_ENTRIES:]

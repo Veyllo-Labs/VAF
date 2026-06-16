@@ -1506,9 +1506,14 @@ function VAFDashboardContent() {
     const documentViewerState = currentSessionId
         ? (sessionViewerState[currentSessionId] ?? defaultViewerState)
         : defaultViewerState;
-    // Attachment indexing status per session (for the Document Viewer header indicator).
+    // Attachment indexing status per session (for the Document Viewer header indicator + banner).
     const [attachmentIndexStatus, setAttachmentIndexStatus] = useState<Record<string, 'indexing' | 'ready' | 'error'>>({});
+    const [attachmentIndexCount, setAttachmentIndexCount] = useState<Record<string, number>>({});
     const activeAttachmentIndexStatus = currentSessionId ? attachmentIndexStatus[currentSessionId] : undefined;
+    const activeAttachmentIndexCount = currentSessionId ? attachmentIndexCount[currentSessionId] : undefined;
+    // True while the LLM is indexing attached documents — blocks prompting + closing the
+    // Document Viewer, and surfaces the stop button so the user can cancel.
+    const isIndexing = activeAttachmentIndexStatus === 'indexing';
     const setDocumentViewerState = useCallback((
         valueOrUpdater: { isOpen: boolean; documents: DocumentViewerDoc[] } | ((prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => { isOpen: boolean; documents: DocumentViewerDoc[] })
     ) => {
@@ -2355,24 +2360,38 @@ function VAFDashboardContent() {
                 else if (data.type === 'rag_results') {
                     setRagResults(data);
                 }
-                else if (data.type === 'attachment_indexing' || data.type === 'attachment_indexed' || data.type === 'attachment_index_error') {
-                    // Attachment lane indexing status -> Document Viewer header indicator.
+                else if (data.type === 'attachment_indexing' || data.type === 'attachment_indexed' || data.type === 'attachment_index_error' || data.type === 'attachment_index_cancelled') {
+                    // Attachment lane indexing status -> Document Viewer header indicator + banner.
                     const sid: string | undefined = data.sessionId;
                     if (sid) {
-                        const status: 'indexing' | 'ready' | 'error' =
-                            data.type === 'attachment_indexing' ? 'indexing'
-                                : data.type === 'attachment_indexed' ? 'ready' : 'error';
-                        setAttachmentIndexStatus(prev => ({ ...prev, [sid]: status }));
-                        // Auto-clear the transient 'ready'/'error' so the header returns to neutral.
-                        if (status !== 'indexing') {
-                            setTimeout(() => {
-                                setAttachmentIndexStatus(prev => {
-                                    if (prev[sid] !== status) return prev;
-                                    const next = { ...prev };
-                                    delete next[sid];
-                                    return next;
-                                });
-                            }, status === 'ready' ? 4000 : 8000);
+                        if (data.type === 'attachment_index_cancelled') {
+                            // User cancelled via the stop button — drop the status entirely so the
+                            // banner disappears and prompting/closing unblocks immediately.
+                            setAttachmentIndexStatus(prev => {
+                                const next = { ...prev }; delete next[sid]; return next;
+                            });
+                            setAttachmentIndexCount(prev => {
+                                const next = { ...prev }; delete next[sid]; return next;
+                            });
+                        } else {
+                            const status: 'indexing' | 'ready' | 'error' =
+                                data.type === 'attachment_indexing' ? 'indexing'
+                                    : data.type === 'attachment_indexed' ? 'ready' : 'error';
+                            setAttachmentIndexStatus(prev => ({ ...prev, [sid]: status }));
+                            if (status === 'indexing' && typeof data.count === 'number') {
+                                setAttachmentIndexCount(prev => ({ ...prev, [sid]: data.count }));
+                            }
+                            // Auto-clear the transient 'ready'/'error' so the header returns to neutral.
+                            if (status !== 'indexing') {
+                                setTimeout(() => {
+                                    setAttachmentIndexStatus(prev => {
+                                        if (prev[sid] !== status) return prev;
+                                        const next = { ...prev };
+                                        delete next[sid];
+                                        return next;
+                                    });
+                                }, status === 'ready' ? 4000 : 8000);
+                            }
                         }
                     }
                 }
@@ -3803,7 +3822,20 @@ function VAFDashboardContent() {
     }, [isContextModalOpen]);
 
     const stopGeneration = () => {
-        if (!ws || !currentSessionId || isStoppingGenerationRef.current) return;
+        if (!ws || !currentSessionId) return;
+        // Unblock attachment indexing locally right away (the backend cancels the task
+        // server-side too) so prompting + closing the Document Viewer recover instantly.
+        if (isIndexing) {
+            const sid = currentSessionId;
+            setAttachmentIndexStatus(prev => { const next = { ...prev }; delete next[sid]; return next; });
+            setAttachmentIndexCount(prev => { const next = { ...prev }; delete next[sid]; return next; });
+        }
+        if (isStoppingGenerationRef.current) {
+            // Already stopping a generation; still send the stop so any in-flight indexing
+            // for this session is cancelled, then bail out of the pulse/animation setup.
+            ws.send(JSON.stringify({ type: 'stop_generation', sessionId: currentSessionId }));
+            return;
+        }
         isStoppingGenerationRef.current = true;
         setIsStoppingGeneration(true);
         // Capture button position for portal ripples before state change
@@ -3827,6 +3859,8 @@ function VAFDashboardContent() {
         const textToSend = overrideText ?? combined;
         const imagesToSend = [...attachedImages];
         if (!textToSend.trim() || !ws) return;
+        // Block prompting while attachments are still being indexed for retrieval.
+        if (isIndexing) return;
 
         // Compute code viewer chip metadata upfront (no content stored in message state)
         const _cvChip = codeViewerState.isOpen && codeViewerState.loadedContent ? {
@@ -4060,6 +4094,9 @@ function VAFDashboardContent() {
     };
 
     const handleDocumentViewerClose = () => {
+        // While the LLM is indexing the attached documents, closing would clear them
+        // mid-flight; keep the viewer open until indexing finishes or the user hits stop.
+        if (isIndexing) return;
         if (ws && currentSessionId) {
             ws.send(JSON.stringify({ type: 'set_sidebar_documents', sessionId: currentSessionId, documents: [] }));
         }
@@ -4086,7 +4123,7 @@ function VAFDashboardContent() {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             const hasContent = input.trim() || insertedSelections.length > 0;
-            if (hasContent && !isGenerating) {
+            if (hasContent && !isGenerating && !isIndexing) {
                 sendMessage(undefined);
             }
             return;
@@ -5436,21 +5473,63 @@ function VAFDashboardContent() {
 
                                 {/* Memory Learning Banner */}
                                 {memoryLearning && (
-                                    <div className={cn(chatWidthClass, "mx-auto mb-2")}>
-                                        <div className={cn(
-                                            "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
-                                            memoryLearning.active
-                                                ? "bg-violet-50 border-violet-300 text-violet-700"
-                                                : "bg-green-50 border-green-300 text-green-700"
-                                        )}>
-                                            {memoryLearning.active ? (
-                                                <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-                                            ) : (
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                                </svg>
-                                            )}
-                                            <span className="text-sm font-medium">{memoryLearning.message}</span>
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                        {/* Spacer mirroring the input's w-9 stop-button slot, so the banner is
+                                            centered on the message box rather than flush-left under the row. */}
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex-1 min-w-0 flex justify-center">
+                                            <div className={cn(
+                                                "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
+                                                memoryLearning.active
+                                                    ? "bg-violet-50 border-violet-300 text-violet-700"
+                                                    : "bg-green-50 border-green-300 text-green-700"
+                                            )}>
+                                                {memoryLearning.active ? (
+                                                    <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                                                ) : (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                )}
+                                                <span className="text-sm font-medium">{memoryLearning.message}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Attachment Indexing Banner — same UI as the Memory Learning banner,
+                                    shown while the LLM indexes attached documents for retrieval. */}
+                                {activeAttachmentIndexStatus && (
+                                    <div className={cn(chatWidthClass, "mx-auto mb-2 flex items-center gap-2")}>
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div className="flex-1 min-w-0 flex justify-center">
+                                            <div className={cn(
+                                                "flex items-center gap-2 px-4 py-2 rounded-xl border shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2",
+                                                activeAttachmentIndexStatus === 'indexing'
+                                                    ? "bg-amber-50 border-amber-300 text-amber-700"
+                                                    : activeAttachmentIndexStatus === 'error'
+                                                        ? "bg-red-50 border-red-300 text-red-700"
+                                                        : "bg-green-50 border-green-300 text-green-700"
+                                            )}>
+                                                {activeAttachmentIndexStatus === 'indexing' ? (
+                                                    <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                                                ) : activeAttachmentIndexStatus === 'error' ? (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                    </svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                )}
+                                                <span className="text-sm font-medium">
+                                                    {activeAttachmentIndexStatus === 'indexing'
+                                                        ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 })
+                                                        : activeAttachmentIndexStatus === 'error'
+                                                            ? tMain('indexingError')
+                                                            : tMain('indexingComplete')}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -5566,7 +5645,7 @@ function VAFDashboardContent() {
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
                                     <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing) && (
+                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
                                             <div className="relative flex items-center justify-center">
                                                 {/* Hover aura — inline, only needs to surround the button itself */}
                                                 {stopHovered && !stopPulsing && (
@@ -5671,9 +5750,9 @@ function VAFDashboardContent() {
                                                     value={input}
                                                     onChange={handleInputChange}
                                                     onKeyDown={handleKeyDown}
-                                                    placeholder={input ? "" : "Ask anything..."}
+                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : input ? "" : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
-                                                    disabled={isGenerating}
+                                                    disabled={isGenerating || isIndexing}
                                                 />
                                             </div>
                                         </div>
@@ -5760,6 +5839,7 @@ function VAFDashboardContent() {
                                     insertedSelectionsCount={insertedSelections.length}
                                     insertedSelections={insertedSelections}
                                     indexStatus={activeAttachmentIndexStatus}
+                                    canClose={!isIndexing}
                                 />
                             ) : documentEditorState.isOpen ? (
                                 <DocumentEditor

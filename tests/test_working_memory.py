@@ -84,3 +84,68 @@ def test_overwrite_guard_silent_when_no_pending(tmp_path):
     assert "updated" in r.lower()                                   # no bounce
     after = MainPersistenceManager(base, session_id=ct._current_session_id()).get_working_memory()
     assert [t["text"] for t in after["tasks"]] == ["brand new"]
+
+
+# ── Dedupe: a confused model re-adds the same note/plan/task many times (observed 5x) ───────────────
+
+def test_add_task_dedupes_identical_text(tmp_path):
+    m = _mgr(tmp_path)
+    for _ in range(5):
+        m.update_working_memory(add_task="Lesen des Dokuments")
+    m.update_working_memory(add_task="  lesen   des   dokuments  ")   # whitespace/case variant
+    tasks = m.get_working_memory()["tasks"]
+    assert len(tasks) == 1
+
+
+def test_add_notes_and_plan_dedupe(tmp_path):
+    m = _mgr(tmp_path)
+    for _ in range(3):
+        m.update_working_memory(add_notes=["Doc opened: x.md"], add_plan=["Step A"])
+    wm = m.get_working_memory()
+    assert len(wm["notes"]) == 1
+    assert len(wm["plan"]) == 1
+
+
+def test_tasks_rebuild_dedupes_and_keeps_done(tmp_path):
+    m = _mgr(tmp_path)
+    m.update_working_memory(tasks=[
+        {"text": "X", "status": "pending"},
+        {"text": "X", "status": "done"},      # same text, done -> kept one is done
+        {"text": "Y", "status": "pending"},
+    ])
+    tasks = {t["text"]: t["status"] for t in m.get_working_memory()["tasks"]}
+    assert tasks == {"X": "done", "Y": "pending"}
+
+
+# ── Bulk completion: "mark everything done" in one call ─────────────────────────────────────────────
+
+def test_mark_all_done_marks_every_pending(tmp_path):
+    m = _mgr(tmp_path)
+    m.update_working_memory(add_task="a")
+    m.update_working_memory(add_task="b")
+    m.update_working_memory(add_task="c")
+    m.update_working_memory(mark_task_done=0)        # one already done
+    m.update_working_memory(mark_all_done=True)
+    statuses = [t["status"] for t in m.get_working_memory()["tasks"]]
+    assert statuses == ["done", "done", "done"]
+
+
+def test_mark_all_done_tool_reports_count(tmp_path):
+    import vaf.tools.context_tools as ct
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+    tool.run(base_dir=base, add_task="a")
+    tool.run(base_dir=base, add_task="b")
+    r = tool.run(base_dir=base, mark_all_done=True)
+    assert "2" in r and "done" in r.lower()
+
+
+def test_tool_reports_duplicate_add_not_re_added(tmp_path):
+    import vaf.tools.context_tools as ct
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+    tool.run(base_dir=base, add_task="same step")
+    r = tool.run(base_dir=base, add_task="same step")
+    assert "already" in r.lower()
+    after = MainPersistenceManager(base, session_id=ct._current_session_id()).get_working_memory()
+    assert len(after["tasks"]) == 1

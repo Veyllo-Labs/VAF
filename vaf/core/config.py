@@ -161,6 +161,19 @@ class Config:
                 # when there is no plan (plain chat).
                 "plan_without_tasks_reminder_enabled": True,   # global kill-switch
 
+                # Pending-task auto-continue (main agent): when the model gives a final text answer
+                # but still has pending tasks in working memory, re-inject the current-step nugget as a
+                # system "continue" message and keep working INSIDE the same user turn instead of
+                # yielding (otherwise the nugget only re-fires on the next user message and the task
+                # list sits unworked). Shares the tool_turn_count budget (soft 50 / hard 75) — no
+                # parallel counter. Brakes: a genuine question to the user (answer ends with "?"),
+                # background thinking pass, and this kill-switch.
+                "autocontinue_pending_tasks_enabled": True,    # global kill-switch
+                # Stage-3 brake for the above: in the foreground Web UI a clarifying question is plain
+                # text (no tool signal), so a tiny validation LLM judges whether the reply is a
+                # blocking question to the user before auto-continuing. Off -> last-line "?" heuristic.
+                "autocontinue_question_classifier_enabled": True,
+
                 # Task-overwrite guard: replacing the whole task list (tasks=[...]) while steps are
                 # still pending can silently drop work in progress. The first such replace is bounced
                 # once with the pending steps listed ("are you sure?"); a re-call within the window

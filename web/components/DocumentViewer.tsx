@@ -646,8 +646,15 @@ export default function DocumentViewer({
                                 </div>
                             </div>
                             <button
-                                onClick={onClose}
-                                className="rounded-full p-1 text-gray-400 shrink-0 transition hover:bg-gray-100 hover:text-gray-600"
+                                onClick={() => { if (canClose) onClose(); }}
+                                disabled={!canClose}
+                                title={canClose ? undefined : (indexStatus === 'indexing' ? 'Anhänge werden indexiert – bitte warten oder Stopp drücken' : undefined)}
+                                className={cn(
+                                    "rounded-full p-1 shrink-0 transition",
+                                    canClose
+                                        ? "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                                        : "text-gray-300 cursor-not-allowed"
+                                )}
                                 aria-label="Close"
                             >
                                 <X size={14} />
@@ -889,8 +896,15 @@ export default function DocumentViewer({
                             </div>
                         </div>
                         <button
-                            onClick={onClose}
-                            className="rounded-full p-2 shrink-0 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                            onClick={() => { if (canClose) onClose(); }}
+                            disabled={!canClose}
+                            title={canClose ? undefined : (indexStatus === 'indexing' ? 'Anhänge werden indexiert – bitte warten oder Stopp drücken' : undefined)}
+                            className={cn(
+                                "rounded-full p-2 shrink-0 transition",
+                                canClose
+                                    ? "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                                    : "text-gray-300 cursor-not-allowed"
+                            )}
                             aria-label="Close"
                         >
                             <X size={16} />

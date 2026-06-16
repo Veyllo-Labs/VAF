@@ -46,6 +46,17 @@ const INPUT_PRIORITY = [
     'command', 'cmd', 'topic', 'subject',
 ];
 
+/** Compact one-value rendering for the structured-args fallback. Arrays/objects are summarized so a
+ *  big payload never floods the card; strings are truncated. */
+function compactValue(v: unknown): string {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string') return v.length > 80 ? v.slice(0, 80) + '…' : v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) return `[${v.length} item${v.length === 1 ? '' : 's'}]`;
+    if (typeof v === 'object') return '{…}';
+    return '';
+}
+
 function extractMainInput(argsJson: string | undefined): string {
     if (!argsJson) return '';
     try {
@@ -57,6 +68,14 @@ function extractMainInput(argsJson: string | undefined): string {
         for (const v of Object.values(obj)) {
             if (typeof v === 'string' && v.trim()) return v.trim();
         }
+        // No string value (structured args, e.g. update_working_memory: arrays / numbers / booleans).
+        // Show a compact key: value summary so the call's input is still visible instead of blank.
+        const summary = Object.entries(obj)
+            .filter(([, v]) => v !== null && v !== undefined)
+            .map(([k, v]) => `${k}: ${compactValue(v)}`)
+            .filter(s => !s.endsWith(': '))
+            .join(', ');
+        if (summary) return summary;
     } catch { /* empty */ }
     return '';
 }

@@ -34,6 +34,10 @@ app = FastAPI(title="VAF Local Server")
 
 # Active model download cancel events keyed by websocket id (for cancel_model_download)
 _active_model_download_cancels: dict[int, threading.Event] = {}
+
+# Active attachment-indexing tasks keyed by session id, so the stop button can cancel
+# in-flight document indexing (the LLM RAG-indexes attachments in the background).
+_active_index_tasks: "dict[str, set[asyncio.Task]]" = {}
 _headless_agent_thread: Optional[threading.Thread] = None
 _headless_agent_lock = threading.Lock()
 
@@ -3460,18 +3464,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log_attachment("SAVE_OK", session=session_id, docs=len(_slim),
                                 names=[d.get("name","?") for d in _slim])
                             if bool(Config.get("attachment_rag_enabled", False)):
+                                # Show the banner immediately, then index in a cancellable
+                                # background task so the WS loop stays free for the stop button.
                                 await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
-                                try:
-                                    from vaf.memory.attachment_rag import index_session_attachments_async
-                                    await index_session_attachments_async(
-                                        session_id=session_id,
-                                        user_scope_id=user_scope_id,
-                                        documents=contents,
-                                    )
-                                    await _notify_attachment_index(manager, session_id, "attachment_indexed", count=len(contents))
-                                except Exception as e:
-                                    log("WebServer", f"attachment index failed: {e}")
-                                    await _notify_attachment_index(manager, session_id, "attachment_index_error")
+                                _spawn_attachment_index(manager, session_id, user_scope_id, contents)
                             await websocket.send_json({
                                 "type": "sidebar_documents_set",
                                 "contents": contents,
@@ -3494,17 +3490,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         else:
                             if bool(Config.get("attachment_rag_enabled", False)):
                                 await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
-                                try:
-                                    from vaf.memory.attachment_rag import index_session_attachments_async
-                                    await index_session_attachments_async(
-                                        session_id=session_id,
-                                        user_scope_id=user_scope_id,
-                                        documents=contents,
-                                    )
-                                    await _notify_attachment_index(manager, session_id, "attachment_indexed", count=len(contents))
-                                except Exception as e:
-                                    log("WebServer", f"attachment index failed (new session): {e}")
-                                    await _notify_attachment_index(manager, session_id, "attachment_index_error")
+                                _spawn_attachment_index(manager, session_id, user_scope_id, contents)
                         await websocket.send_json({
                             "type": "sidebar_documents_set",
                             "contents": contents,
@@ -4939,6 +4925,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
                     if session_id:
                         tq.request_stop(session_id)
+                        # Cancel any in-flight attachment indexing for this session — the kill
+                        # switch must stop the background RAG indexing too, not just generation.
+                        try:
+                            for _idx_task in list(_active_index_tasks.get(str(session_id), set())):
+                                _idx_task.cancel()
+                        except Exception:
+                            pass
                         dropped = 0
                         try:
                             # Also drop already queued follow-up tasks for this session.
@@ -5084,11 +5077,58 @@ def _is_temp_like_filename(name: str) -> bool:
 
 async def _notify_attachment_index(manager, session_id: str, kind: str, **extra) -> None:
     """Fail-safe WS broadcast for the attachment indexing-status indicator in the Web UI.
-    kind: 'attachment_indexing' (start) | 'attachment_indexed' (done) | 'attachment_index_error'."""
+    kind: 'attachment_indexing' (start) | 'attachment_indexed' (done) | 'attachment_index_error'
+        | 'attachment_index_cancelled' (stop button)."""
     try:
         await manager.broadcast_to_session(session_id, {"type": kind, "sessionId": session_id, **extra})
     except Exception:
         pass
+
+
+def _spawn_attachment_index(manager, session_id: str, user_scope_id, contents: list) -> "asyncio.Task":
+    """Run attachment RAG indexing as a cancellable background task.
+
+    Indexing used to be awaited inline in the set_sidebar_documents handler, which blocked
+    the per-connection WS receive loop for the whole index — so the stop button could not be
+    processed mid-index. Running it as a tracked task lets stop_generation cancel it and lets
+    the user keep interacting once indexing settles.
+    The caller is responsible for sending the initial 'attachment_indexing' notify so the UI
+    shows the banner immediately even before this task is scheduled."""
+    sid = str(session_id)
+
+    async def _runner():
+        try:
+            from vaf.memory.attachment_rag import index_session_attachments_async
+            await index_session_attachments_async(
+                session_id=sid,
+                user_scope_id=user_scope_id,
+                documents=contents,
+            )
+            await _notify_attachment_index(manager, sid, "attachment_indexed", count=len(contents))
+        except asyncio.CancelledError:
+            # Stop button: the frontend already cleared its local indexing state, but emit a
+            # cancelled notify so any other connected client unblocks too. Best-effort.
+            try:
+                await _notify_attachment_index(manager, sid, "attachment_index_cancelled")
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            log("WebServer", f"attachment index failed: {e}")
+            await _notify_attachment_index(manager, sid, "attachment_index_error")
+
+    task = asyncio.create_task(_runner())
+    _active_index_tasks.setdefault(sid, set()).add(task)
+
+    def _cleanup(t: "asyncio.Task") -> None:
+        bucket = _active_index_tasks.get(sid)
+        if bucket is not None:
+            bucket.discard(t)
+            if not bucket:
+                _active_index_tasks.pop(sid, None)
+
+    task.add_done_callback(_cleanup)
+    return task
 
 
 async def process_files_to_sidebar_list(files: list) -> list:

@@ -706,10 +706,28 @@ Then use the results to answer. Do NOT guess from your training data!
             _home = str(Path.home())
             _docs = str(Platform.documents_dir())
             _os_name = _sys.platform
+            # Advertise THIS chat's actual per-chat workspace folder
+            # (VAF_Projects/<uid[:8]>/<session_id>/), not the shared VAF_Projects
+            # parent. Otherwise the model builds paths like
+            # ".../VAF_Projects/<file>" and drops the per-chat subfolder, so the
+            # file (which a sub-agent saved into the per-chat folder) is "not found".
+            _proj_base = f"{_docs}/VAF_Projects/<this-chat>/"
+            try:
+                from vaf.core.session import get_session_workspace_dir
+                _ws = get_session_workspace_dir(create=False)
+                if _ws:
+                    _proj_base = str(_ws).rstrip("/") + "/"
+            except Exception:
+                pass
             context_lines.append(
-                f"os: {_os_name} | home: {_home} | new projects: {_docs}/VAF_Projects/"
+                f"os: {_os_name} | home: {_home} | this chat's workspace (agent files & projects): {_proj_base}"
             )
-            context_lines.append("Never invent file paths — only use paths confirmed via tool output or user instruction.")
+            context_lines.append(
+                "Never invent or shorten file paths — open files using the EXACT path "
+                "from a tool's output (e.g. a research report's 'Saved to:' line) or the "
+                "user. Agent-created files live in this chat's workspace folder above, not "
+                "directly under VAF_Projects/."
+            )
         except Exception:
             pass
 

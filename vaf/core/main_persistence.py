@@ -14,8 +14,12 @@ WORKING_MEMORY_FILE = "working_memory.json"
 RESULTS_DIR = "results"
 SUBAGENT_VALIDATION_FILE = "subagent_validation.json"
 
-# Team state: entries older than this are pruned (per session / recent-only in prompt)
+# Team state: a stuck entry (e.g. a sub-agent that crashed without reporting) is pruned
+# after this wall-clock TTL as a safety net.
 TEAM_STATE_TTL_SECONDS = 3 * 3600  # 3 hours
+# A finished (completed/failed) team entry is shown as "done HH:MM" for this many main-agent
+# turns, then removed from the team list entirely.
+TEAM_DONE_PRUNE_TURNS = 3
 
 # Working memory: max entries per list (notes, plan, tasks); oldest dropped when exceeded
 WORKING_MEMORY_MAX_ENTRIES = 500
@@ -32,6 +36,10 @@ class SubAgentState:
     result_summary: Optional[str] = None
     clarification_question: Optional[str] = None
     result_file: Optional[str] = None
+    # Set when the agent reaches a terminal status; drives the "done HH:MM" label and
+    # the turn-based prune. prune_in_turns < 0 means "active" (not counting down).
+    completed_at: Optional[float] = None
+    prune_in_turns: int = -1
 
 @dataclass
 class TeamState:
@@ -204,33 +212,60 @@ class MainPersistenceManager:
         Critical for the 'Needs Clarification' protocol.
         """
         state = self.get_team_state()
-        
+        now = time.time()
+        is_terminal = status in ("completed", "failed")
+
         # Create or Update agent state
         agent_key = f"{agent_type}_{task_id[:8]}"
-        
+
         if agent_key not in state.active_agents:
             state.active_agents[agent_key] = SubAgentState(
                 agent_type=agent_type,
                 task_id=task_id,
                 status=status,
-                current_task=details or "Starting..."
+                current_task=details or ("Done." if is_terminal else "Starting..."),
             )
-        else:
-            agent = state.active_agents[agent_key]
-            agent.status = status
-            agent.last_update = time.time()
-            if details: agent.current_task = details
-            if question: agent.clarification_question = question
-            if result_summary: agent.result_summary = result_summary
-        
-        # Move to completed list if done
-        if status in ["completed", "failed"]:
-            # Optionally keep in active list for a bit or move to history
-            # For now, we flag it but keep it so Main Agent sees the result
-            pass
+        agent = state.active_agents[agent_key]
+        agent.status = status
+        agent.last_update = now
+        if details:
+            agent.current_task = details
+        if question:
+            agent.clarification_question = question
+        if result_summary:
+            agent.result_summary = result_summary
 
-        state.last_updated = time.time()
+        # A finished agent gets a completion timestamp and starts its turn-based prune
+        # countdown, so it shows as "done HH:MM" for a few turns and is then removed.
+        # An agent that goes back to running (re-used key) clears the countdown.
+        if is_terminal:
+            if agent.completed_at is None:
+                agent.completed_at = now
+            agent.prune_in_turns = TEAM_DONE_PRUNE_TURNS
+        else:
+            agent.completed_at = None
+            agent.prune_in_turns = -1
+
+        state.last_updated = now
         self._save_json(self.context_dir / TEAM_STATE_FILE, state.to_dict())
+
+    def tick_team_state(self) -> None:
+        """Advance the team list by one main-agent turn: count down finished entries and
+        drop those whose grace period (TEAM_DONE_PRUNE_TURNS) has elapsed. Called once per
+        user turn so a completed sub-agent lingers as "done HH:MM" briefly, then disappears."""
+        state = self.get_team_state()
+        changed = False
+        for key in list(state.active_agents.keys()):
+            agent = state.active_agents[key]
+            if agent.completed_at is None:
+                continue                      # still active — never pruned by turn count
+            agent.prune_in_turns -= 1
+            changed = True
+            if agent.prune_in_turns <= 0:
+                del state.active_agents[key]
+        if changed:
+            state.last_updated = time.time()
+            self._save_json(self.context_dir / TEAM_STATE_FILE, state.to_dict())
 
     def save_subagent_result_full(self, task_id: str, content: str) -> str:
         """
@@ -505,14 +540,31 @@ class MainPersistenceManager:
         team = self.get_team_state()
         memory = self.get_working_memory()
         
-        # Format Team State for LLM
+        # Format Team State for LLM. A finished agent renders as "done HH:MM" (or
+        # "failed HH:MM") so the main agent can SEE it has stopped and stop waiting on it;
+        # it lingers a few turns (TEAM_DONE_PRUNE_TURNS) then tick_team_state() removes it.
         team_str = "No active agents."
         if team.active_agents:
             lines = []
             for k, v in team.active_agents.items():
-                status_icon = "🟢" if v.status == "running" else "🔴" if v.status == "failed" else "🟡" if v.status == "needs_clarification" else "✅"
-                line = f"{status_icon} **{v.agent_type}** (ID: {v.task_id[:8]})\n   Status: {v.status}"
-                if v.current_task: line += f"\n   Doing: {v.current_task}"
+                done_time = ""
+                if v.completed_at:
+                    try:
+                        done_time = " " + datetime.fromtimestamp(v.completed_at).strftime("%H:%M")
+                    except Exception:
+                        done_time = ""
+                if v.status == "running":
+                    status_icon, status_label = "🟢", "running"
+                elif v.status == "failed":
+                    status_icon, status_label = "🔴", f"failed{done_time}"
+                elif v.status == "needs_clarification":
+                    status_icon, status_label = "🟡", "needs clarification"
+                else:  # completed
+                    status_icon, status_label = "✅", f"done{done_time}"
+                line = f"{status_icon} **{v.agent_type}** (ID: {v.task_id[:8]})\n   Status: {status_label}"
+                # Only show the live "Doing:" line while the agent is actually working.
+                if v.current_task and v.completed_at is None:
+                    line += f"\n   Doing: {v.current_task}"
                 if v.clarification_question: line += f"\n   ❓ QUESTION: {v.clarification_question}"
                 if v.result_summary: line += f"\n   Result: {v.result_summary[:100]}..."
                 lines.append(line)

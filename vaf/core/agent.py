@@ -48,6 +48,13 @@ def _extract_action_text(text: str):
     return m.group(1).strip() if m else None
 
 
+# Bookkeeping tools that manage working memory / intent but do NOT do the actual task work.
+# The anti-spin guard counts CONSECUTIVE calls to these to catch a "plan forever, never act"
+# loop. Kept narrow on purpose: other system-permission tools (thinking_done, batch, builders,
+# request_clarification, memory_save) are real actions and must NOT count as spin.
+_BOOKKEEPING_TOOLS = frozenset({"update_working_memory", "update_intent", "add_task"})
+
+
 def _parse_qwen_tool_calls(text: str, valid_names=None):
     """Parse Qwen / Hermes style tool calls that a reasoning model sometimes emits as TEXT (often inside
     `<think>`) instead of a native call, so the server never converts them and the call is silently
@@ -245,6 +252,7 @@ class Agent:
         # Trust gating state (session-only)
         self._allow_once_tools = set()
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
+        self._anti_spin_streak = 0  # consecutive bookkeeping (plan/intent) calls; anti-spin guard
         self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
         self._event_sink = None  # optional callable(dict)
         
@@ -293,7 +301,7 @@ class Agent:
             if not api_model:
                 api_defaults = {
                     "openai": "gpt-4o",
-                    "anthropic": "claude-3-5-sonnet-20241022",
+                    "anthropic": "claude-sonnet-4-6",
                     "deepseek": "deepseek-v4-flash",
                     "google": "gemini-1.5-flash",
                     "openrouter": "anthropic/claude-3.5-sonnet",
@@ -428,6 +436,49 @@ class Agent:
         }
         words = core.split()
         return bool(words) and all(w in _filler for w in words)
+
+    def _anti_spin_step(self, function_name: str):
+        """Anti-spin guard: track CONSECUTIVE bookkeeping calls (update_working_memory /
+        update_intent / add_task) — a weak model can re-plan the same task forever without ever
+        acting. Any non-bookkeeping tool resets the streak. Returns ``(nudge_message_or_None,
+        force_disable_tools)``: a firm nudge at the threshold, then a forced tools-off turn two
+        steps later. The current call still runs; only the next turn is steered. Governed by
+        anti_spin_enabled / anti_spin_max_planning_calls."""
+        try:
+            from vaf.core.config import Config
+            if not Config.get("anti_spin_enabled", True):
+                return (None, False)
+            if function_name not in _BOOKKEEPING_TOOLS:
+                self._anti_spin_streak = 0
+                return (None, False)
+            self._anti_spin_streak = getattr(self, "_anti_spin_streak", 0) + 1
+            spin_max = max(2, int(Config.get("anti_spin_max_planning_calls", 4) or 4))
+            if self._anti_spin_streak == spin_max:
+                try:
+                    append_domain_log("backend", f"[ANTI_SPIN] {self._anti_spin_streak} consecutive planning calls — nudging to act")
+                except Exception:
+                    pass
+                return (
+                    f"[!] STOP PLANNING. You have updated your plan/tasks/intent {self._anti_spin_streak} times in a row "
+                    "without doing the actual work. Do NOT call update_working_memory, update_intent or add_task again now "
+                    "— call the tool the task actually needs (e.g. the sub-agent or a write tool). If the task is already "
+                    "done, answer the user in plain text.",
+                    False,
+                )
+            if self._anti_spin_streak >= spin_max + 2:
+                try:
+                    append_domain_log("backend", f"[ANTI_SPIN] {self._anti_spin_streak} planning calls — forcing action (tools off next turn)")
+                except Exception:
+                    pass
+                self._anti_spin_streak = 0
+                return (
+                    "You keep updating working memory instead of acting. Tools are disabled for one turn. "
+                    "State your result, or the next concrete step you will take, to the user in plain text now.",
+                    True,
+                )
+            return (None, False)
+        except Exception:
+            return (None, False)
 
     def _plan_gate_decision(self, name, tool_instance):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
@@ -5357,6 +5408,13 @@ class Agent:
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
             self._team_await_blocks = 0  # New turn: fresh team-await budget
+            self._anti_spin_streak = 0  # New turn: fresh anti-spin streak
+            # New turn: age finished team entries; "done HH:MM" lingers a few turns then drops.
+            if hasattr(self, 'main_persistence') and self.main_persistence:
+                try:
+                    self.main_persistence.tick_team_state()
+                except Exception:
+                    pass
 
             # ═══════════════════════════════════════════════════════════════════════
             # FIRST-TIME USER: Automatic Greeting & Language Detection
@@ -5660,6 +5718,9 @@ class Agent:
 
             streaming_tools = {}
             tool_calls_detected = []
+            # Anthropic only: raw assistant content blocks (thinking + tool_use, with
+            # signatures) for verbatim replay so a thinking-enabled tool loop doesn't 400.
+            anthropic_blocks_raw = None
             auto_continue = False  # Track if response was cut off
 
             # When we're about to stream the next assistant turn after tool execution,
@@ -5778,11 +5839,15 @@ class Agent:
                         if chunk.startswith("{"):
                             try:
                                 data = json.loads(chunk)
-                                if isinstance(data, dict) and any(k in data for k in ["tool_calls", "finish_reason", "tool_use"]):
+                                if isinstance(data, dict) and any(k in data for k in ["tool_calls", "finish_reason", "tool_use", "_anthropic_blocks"]):
                                     is_control_msg = True
-                                    
+
+                                    # Anthropic: raw assistant content blocks for verbatim replay
+                                    # (preserves thinking blocks + signatures in the tool loop).
+                                    if "_anthropic_blocks" in data:
+                                        anthropic_blocks_raw = data["_anthropic_blocks"]
                                     # Handle Finish Reason
-                                    if "finish_reason" in data:
+                                    elif "finish_reason" in data:
                                         if data["finish_reason"] == "length":
                                             UI.event("System", "Response cut off - Auto-continuing...", style="dim")
                                     
@@ -6929,7 +6994,12 @@ class Agent:
                 
                 msg = {"role": "assistant", "content": content_for_history, "tool_calls": tool_calls_detected}
                 if not content_for_history: del msg["content"]
-                
+                # Anthropic: carry the raw assistant blocks (thinking + tool_use, signed) so
+                # _convert_messages_to_anthropic can replay them verbatim next turn. Side-key
+                # is JSON-serializable and ignored by every other provider.
+                if anthropic_blocks_raw:
+                    msg["_anthropic_blocks"] = anthropic_blocks_raw
+
                 self.history.append(msg)
 
                 # Defer system/user messages that tool handlers want to append until
@@ -6975,6 +7045,25 @@ class Agent:
                             pass
                         self.history.append({"role": "assistant", "content": _emsg})
                         return _emsg
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # ANTI-SPIN GUARD: "plan forever, never act" loops
+                    # ═══════════════════════════════════════════════════════════════
+                    # A weak model can churn the bookkeeping tools (update_working_memory /
+                    # update_intent / add_task) over and over — re-planning the same task with
+                    # slightly varying text — without ever calling the tool that does the actual
+                    # work (observed: ~8 update_working_memory calls, then it gave up and used the
+                    # wrong tool). The redundant-call block needs EXACT args and the emergency
+                    # breaker needs <5s, so neither catches this slow near-duplicate planning spin.
+                    # Count CONSECUTIVE bookkeeping calls (any other tool resets it): nudge at the
+                    # threshold, then disable tools for one turn so the model must act or answer.
+                    # The current call still runs; only the NEXT turn is steered (no tool-message
+                    # reordering). Governed by anti_spin_enabled / anti_spin_max_planning_calls.
+                    _spin_msg, _spin_force = self._anti_spin_step(function_name)
+                    if _spin_msg:
+                        _post_tc_messages.append({"role": "system", "content": _spin_msg})
+                    if _spin_force:
+                        disable_tools = True  # next generation: no tools -> must act or answer
 
                     # ═══════════════════════════════════════════════════════════════
                     # THINKING DONE PROTECTION: Hardcoded break
@@ -8852,8 +8941,11 @@ class Agent:
                     and _tc_response_idx[tc.get("id")] > _i  # response must follow the TC
                 ]
                 if len(live_calls) != len(msg["tool_calls"]):
-                    # Some calls have no response — rebuild the message
-                    msg = dict(msg)
+                    # Some calls have no response — rebuild the message. Also drop the
+                    # Anthropic raw-block replay cache: it holds the ORIGINAL tool_use
+                    # blocks, which would now reference dropped tool_results (-> 400). The
+                    # converter then re-synthesizes from the trimmed tool_calls instead.
+                    msg = {k: v for k, v in msg.items() if k != "_anthropic_blocks"}
                     if live_calls:
                         msg["tool_calls"] = live_calls
                     else:
@@ -8969,7 +9061,7 @@ class Agent:
                     # Safe default vision models per provider (used when vision_model is not set)
                     _VISION_DEFAULTS = {
                         "openai":     "gpt-4o",
-                        "anthropic":  "claude-3-5-sonnet-20241022",
+                        "anthropic":  "claude-sonnet-4-6",
                         "google":     "gemini-2.0-flash",
                         "openrouter": "openai/gpt-4o",
                     }
@@ -9032,9 +9124,9 @@ class Agent:
                         names = [img.get("name", "image") for img in imgs]
                         img_list = ", ".join(f"`{n}`" for n in names)
                         _vision_models = {
-                            "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-3-5-sonnet-20241022`) or OpenAI (`gpt-4o`), or configure a Vision Model in Settings → AI & Model.",
+                            "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-sonnet-4-6`) or OpenAI (`gpt-4o`), or configure a Vision Model in Settings → AI & Model.",
                             "openai":   "`gpt-4o` or `gpt-4-turbo`",
-                            "anthropic": "`claude-3-5-sonnet-20241022` or newer",
+                            "anthropic": "`claude-sonnet-4-6` or newer",
                             "google":   "`gemini-1.5-pro` or `gemini-2.0-flash`",
                             "openrouter": "a vision model such as `openai/gpt-4o`",
                         }

@@ -1316,52 +1316,64 @@ class ResearchAgentTool(BaseTool):
             except Exception:
                 pass
 
+            # Direct sub-agent research (not in a workflow): ALWAYS save a .docx and open it
+            # in the native Word editor — regardless of which format the model requested. The
+            # requested format only matters to programmatic / workflow callers (handled below).
+            if os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1" and not in_workflow:
+                from vaf.core.session import resolve_agent_output_dir
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
+                output_dir = resolve_agent_output_dir(Platform.get_research_dir())
+                output_path = output_dir / f"research_{safe_topic}_{timestamp}.docx"
+                try:
+                    from vaf.core.document_formatting import infer_document_model, save_document_model_as_docx
+                    md_sections = [self._section_html_to_markdown(s) for s in rendered_sections]
+                    md_clean = self._assemble_markdown(topic, md_sections, all_sources)
+                    md_clean = re.sub(r'(?m)^_Generated:.*$', '', md_clean)  # drop metadata so it isn't a stray "Content" section
+                    model = infer_document_model(f"Research Report: {topic}", "report", md_clean)
+                    save_document_model_as_docx(model, output_path)
+                    if _debug_lg:
+                        _debug_lg.event("saving_report_docx", output_path=str(output_path), sections=len(model.sections))
+                except Exception as e:
+                    if _debug_lg:
+                        _debug_lg.event("docx_save_failed_fallback_md", error=str(e))
+                    UI.warning(f"DOCX export failed ({e}); saving as Markdown instead.")
+                    output_path = output_dir / f"research_{safe_topic}_{timestamp}.md"
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(self._assemble_markdown(topic, rendered_sections, all_sources))
+
+                webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+                session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+                if webui_mode and session_id:
+                    try:
+                        from vaf.core.web_interface import notify_document_created
+                        notify_document_created(session_id, str(output_path), title=output_path.name)
+                    except Exception:
+                        pass
+
+                word_count = sum(len(s.split()) for s in rendered_sections)
+                outline = "; ".join(getattr(sp, "title", str(sp)) for sp in specs[:15])
+                if _debug_lg:
+                    _debug_lg.event("research_complete", output_path=str(output_path), word_count=word_count, num_sections=len(rendered_sections))
+                return (
+                    f"TASK COMPLETE — Research Report: {topic}\n\n"
+                    f"Saved to: {output_path}\n"
+                    f"{len(rendered_sections)} sections, ~{word_count} words\n"
+                    f"{len(all_sources)} sources analyzed\n"
+                    f"Outline (for your verbal summary to the user): {outline}\n\n"
+                    f"The report has been saved and is now open in the Document Editor.\n"
+                    f"DO NOT run another research or open the file again. "
+                    f"Summarize briefly for the user using the outline and counts above."
+                )
+
             if out_format == "html_fragment":
                 # Return only fragments (useful for patching missing sections)
                 return "\n\n".join(rendered_sections).strip()
 
             if out_format == "markdown":
-                md = self._assemble_markdown(topic, rendered_sections, all_sources)
-
-                is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL") == "1"
-                if is_subagent and not in_workflow:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    safe_topic = re.sub(r'[^\w\s-]', '', topic).strip().replace(' ', '_')[:50]
-                    filename = f"research_{safe_topic}_{timestamp}.md"
-                    # Chat workspace when a session exists, legacy research dir otherwise
-                    from vaf.core.session import resolve_agent_output_dir
-                    output_dir = resolve_agent_output_dir(Platform.get_research_dir())
-                    output_path = output_dir / filename
-
-                    if _debug_lg:
-                        _debug_lg.event("saving_report_md", output_path=str(output_path), md_len=len(md))
-
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(md)
-
-                    webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
-                    session_id_env = os.environ.get("VAF_SESSION_ID", "").strip()
-                    if webui_mode and session_id_env:
-                        try:
-                            from vaf.core.web_interface import notify_document_created
-                            notify_document_created(session_id_env, str(output_path), title=output_path.name)
-                        except Exception:
-                            pass
-
-                    word_count = sum(len(s.split()) for s in rendered_sections)
-                    outline = "; ".join(getattr(sp, "title", str(sp)) for sp in specs[:15])
-                    return (
-                        f"TASK COMPLETE — Research Report: {topic}\n\n"
-                        f"Saved to: {output_path}\n"
-                        f"{len(rendered_sections)} sections, ~{word_count} words\n"
-                        f"{len(all_sources)} sources analyzed\n"
-                        f"Outline (for your verbal summary to the user): {outline}\n\n"
-                        f"The report has been saved and is now open in the Document Editor.\n"
-                        f"DO NOT run another research or open the file again. "
-                        f"Summarize briefly for the user using the outline and counts above."
-                    )
-
-                return md
+                # Direct sub-agent markdown is handled by the .docx path above; this returns
+                # markdown only to programmatic / workflow callers.
+                return self._assemble_markdown(topic, rendered_sections, all_sources)
 
             # ═══════════════════════════════════════════════════════════════
             # SAVE HTML TO FILE + RETURN SHORT SUMMARY (for sub-agent mode)
@@ -2312,14 +2324,40 @@ class ResearchAgentTool(BaseTool):
         return summary.strip()
 
     def _assemble_markdown(self, topic: str, sections: Sequence[str], sources: Sequence[str]) -> str:
-        # Sections are HTML fragments; keep it simple and include them as-is.
-        # If you want, we can later generate markdown sections instead.
+        # Sections may be HTML fragments OR already-markdown (see _section_html_to_markdown);
+        # both are joined as-is. The numbered Sources list matches the [n] citation markers.
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         out = [f"# Research Report: {topic}", f"_Generated: {now}_", ""]
         out.extend(sections)
         out.append("\n## Sources\n")
-        # Numbered: matches the [n] citation markers in the sections.
         out.extend([f"{i}. {u}" for i, u in enumerate(sources[:50], 1)])
         return "\n".join(out)
+
+    @staticmethod
+    def _section_html_to_markdown(html: str) -> str:
+        """Convert a research section HTML fragment to clean Markdown so the report can be
+        built into a DocumentModel (infer_document_model expects Markdown, not HTML) and
+        saved as .docx. Handles the tags the sections actually use; [n] citations are kept."""
+        if not html:
+            return ""
+        import html as _htmllib
+        s = html
+        # Inline first so block conversions wrap clean text.
+        s = re.sub(r'(?is)<span[^>]*class="[^"]*cite[^"]*"[^>]*>(.*?)</span>', r'\1', s)  # keep [n]
+        s = re.sub(r'(?is)<(strong|b)\b[^>]*>(.*?)</\1>', r'**\2**', s)
+        s = re.sub(r'(?is)<(em|i)\b[^>]*>(.*?)</\1>', r'*\2*', s)
+        s = re.sub(r'(?is)<a\b[^>]*>(.*?)</a>', r'\1', s)
+        # Block-level -> markdown.
+        s = re.sub(r'(?is)<h2\b[^>]*>(.*?)</h2>', lambda m: f"\n## {m.group(1).strip()}\n", s)
+        s = re.sub(r'(?is)<h3\b[^>]*>(.*?)</h3>', lambda m: f"\n### {m.group(1).strip()}\n", s)
+        s = re.sub(r'(?is)<li\b[^>]*>(.*?)</li>', lambda m: f"- {m.group(1).strip()}\n", s)
+        s = re.sub(r'(?is)</?(ul|ol)\b[^>]*>', "\n", s)
+        s = re.sub(r'(?is)<p\b[^>]*>(.*?)</p>', lambda m: f"\n{m.group(1).strip()}\n", s)
+        s = re.sub(r'(?is)<br\s*/?>', "\n", s)
+        s = re.sub(r'(?is)<[^>]+>', "", s)            # strip any remaining tags
+        s = _htmllib.unescape(s)
+        s = re.sub(r'[ \t]+', ' ', s)
+        s = re.sub(r'\n{3,}', '\n\n', s)
+        return s.strip()
 
 

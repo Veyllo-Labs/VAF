@@ -449,6 +449,22 @@ class WebInterfaceManager:
             return
         self._push_session_update(session_id, payload)
 
+    def emit_document_state(self, state: dict, session_id: str = None):
+        """Emit the document agent's live state (sections, placeholders, section html).
+
+        Feeds the document view of the SubAgent window: A4 paper viewer with the
+        document growing section by section, outline progress, placeholder values
+        (resolved from memory / chat) and the status bar. Sent by the document agent
+        on meaningful changes (plan ready, section writing/done, placeholders resolved).
+        """
+        payload = {"type": "document_state", **(state or {})}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_coder_state(self, state: dict, session_id: str = None):
         """Emit the coder's project state (file tree, git, progress) to the WebUI.
 

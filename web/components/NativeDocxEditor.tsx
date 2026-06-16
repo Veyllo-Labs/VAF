@@ -899,29 +899,39 @@ export default function NativeDocxEditor({
 
   return (
     <div className={cn('flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-[#F9FAFB] transition-all duration-300 ease-out', isOpen ? 'translate-x-0 opacity-100' : 'translate-x-8 opacity-0 pointer-events-none')}>
-      {/* Top bar */}
-      <div className="flex h-11 items-center justify-between border-b border-gray-200 bg-white px-3 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <FileText size={14} className="text-blue-600 shrink-0" />
-          <span className="truncate text-xs font-semibold text-gray-900">{title}</span>
-          {saveMessage && <span className="text-[10px] text-emerald-600 truncate max-w-[140px]">Saved</span>}
-          {error && <span className="text-[10px] text-red-600 truncate max-w-[200px]">{error}</span>}
+      {/* Header — matches the A4 editor: icon box + filename + status dot */}
+      <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-white px-4 shrink-0">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-blue-600">
+            <FileText size={14} />
+          </div>
+          <div className="min-w-0 flex-1 flex flex-col">
+            <span className="truncate text-xs font-semibold text-gray-900">{title}</span>
+            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gray-400" />
+              {error ? <span className="truncate max-w-[240px] text-red-600">{error}</span>
+                : saveMessage ? <span className="text-emerald-600">Gespeichert</span>
+                  : <span className="uppercase">Ready</span>}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <button type="button" onClick={() => addBlock('paragraph')} className="rounded border border-gray-300 bg-white p-1.5 text-gray-500 hover:bg-gray-100" title="Add paragraph"><Plus size={13} /></button>
-          <button type="button" onClick={() => addBlock('table')} className="rounded border border-gray-300 bg-white px-2 py-1 text-[10px] text-gray-600 hover:bg-gray-100" title="Add table">Table</button>
-          <button type="button" onClick={() => addBlock('page_break')} className="rounded border border-gray-300 bg-white px-2 py-1 text-[10px] text-gray-600 hover:bg-gray-100" title="Add page break">Break</button>
-          <span className="w-px h-5 bg-gray-200" />
-          <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-[10px] font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50">
-            {isSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save
-          </button>
-          <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1 rounded bg-gray-900 px-2 py-1 text-[10px] font-medium text-white hover:bg-gray-800 disabled:opacity-50">
-            {isExportingPdf ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} PDF
-          </button>
-          {canClose && onClose && (
-            <button type="button" onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><X size={14} /></button>
-          )}
-        </div>
+        {canClose && onClose && (
+          <button type="button" onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"><X size={14} /></button>
+        )}
+      </div>
+
+      {/* Toolbar — same gray bar style as the A4 editor */}
+      <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0">
+        <button type="button" onClick={() => addBlock('paragraph')} className="p-1.5 rounded text-gray-600 hover:bg-gray-200" title="Absatz hinzufügen"><Plus size={16} /></button>
+        <button type="button" onClick={() => addBlock('table')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Tabelle hinzufügen">Tabelle</button>
+        <button type="button" onClick={() => addBlock('page_break')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Seitenumbruch">Umbruch</button>
+        <span className="w-px h-5 bg-gray-300 mx-0.5" />
+        <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Speichern">
+          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
+        </button>
+        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50" title="Als PDF herunterladen">
+          {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} PDF
+        </button>
       </div>
 
       {/* Warnings banner */}
@@ -937,8 +947,8 @@ export default function NativeDocxEditor({
         </button>
       )}
 
-      {/* Document area -- full width, A4 pages */}
-      <div className="min-h-0 flex-1 overflow-auto bg-gray-200 p-4" onClick={(e) => { if (e.target === e.currentTarget) setSelectedBlock(null); }}>
+      {/* Document area -- full width, A4 pages on the same gray canvas as the A4 editor */}
+      <div className="min-h-0 flex-1 overflow-auto bg-[#e5e7eb] p-4" onClick={(e) => { if (e.target === e.currentTarget) setSelectedBlock(null); }}>
         <div ref={previewRef} className="mx-auto flex w-[210mm] flex-col gap-6">
           {allPages.map((page) => {
             const { sectionIndex: si, section, pageIndexInSection, totalPagesInSection, globalPageNumber, blocks: pageBlocks } = page;
@@ -948,7 +958,7 @@ export default function NativeDocxEditor({
             return (
               <div
                 key={`${section.id}-page-${pageIndexInSection}`}
-                className="pdf-page relative flex flex-col bg-white rounded-lg shadow-sm"
+                className="pdf-page relative flex flex-col bg-white rounded-sm shadow-sm"
                 style={{
                   paddingTop: `${layout.marginTopMm}mm`,
                   paddingRight: `${layout.marginRightMm}mm`,

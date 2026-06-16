@@ -27,6 +27,7 @@ from vaf.core.document_formatting import (
     coerce_section,
     estimate_document_length,
     render_markdown,
+    render_section_html,
     render_text,
     save_document_model_as_docx,
 )
@@ -145,7 +146,18 @@ Handles documents of any size using section-by-section generation (no context ov
     
     def _generate_document(self, task: str) -> str:
         """Main document generation logic with section-by-section approach."""
-        
+
+        # Live document-window state (drives the SubAgent document view). Mirrors the
+        # research agent's _rs_state; silently inactive without a session id.
+        self._doc_state = {
+            "title": "", "format": "docx", "docType": "report", "stage": "Planning",
+            "sections": [], "sectionsHtml": [], "placeholders": [],
+            "wordsTarget": 0, "savePath": "", "loop": 0,
+        }
+        self._doc_emit_last = {"hash": None, "at": 0.0}
+        self._doc_cur_idx = -1
+        self._emit_doc_state(force=True)
+
         UI.event("Document Agent", "Analyzing document request...", style="dim")
         
         # ═══════════════════════════════════════════════════════════════════════
@@ -158,25 +170,52 @@ Handles documents of any size using section-by-section generation (no context ov
             return "[ERROR] Could not create document plan. Please provide more details about the document."
         
         UI.event("Document Agent", f"Plan created: {plan['title']} ({len(plan['sections'])} sections)", style="success")
-        
+
+        # Initialise the live document-window state from the plan and emit it.
+        total = len(plan['sections'])
+        self._doc_state.update({
+            "title": plan.get('title', 'Document'),
+            "format": plan.get('format', 'docx'),
+            "docType": plan.get('document_type', 'report'),
+            "stage": "Writing",
+            "sections": [{"title": s.get('title', f'Section {j+1}'), "status": "planned",
+                          "words": 0, "targetWords": 220} for j, s in enumerate(plan['sections'])],
+            "wordsTarget": total * 220,
+        })
+        self._emit_doc_state(force=True)
+
         # ═══════════════════════════════════════════════════════════════════════
         # STEP 2: Generate each section independently (no context overflow!)
         # ═══════════════════════════════════════════════════════════════════════
-        
+
         sections_content: list[DocumentSection] = []
         for i, section in enumerate(plan['sections'], 1):
-            UI.event("Document Agent", f"Generating section {i}/{len(plan['sections'])}: {section['title']}", style="dim")
-            
+            UI.event("Document Agent", f"Generating section {i}/{total}: {section['title']}", style="dim")
+
+            self._doc_cur_idx = i - 1
+            self._doc_state["stage"] = f"Writing {i}/{total}"
+            self._doc_state["sections"][i - 1]["status"] = "writing"
+            self._emit_doc_state(force=True)
+
             content = self._generate_section(
                 document_type=plan['document_type'],
                 document_title=plan['title'],
                 section_title=section['title'],
                 section_description=section['description'],
                 section_index=i,
-                total_sections=len(plan['sections'])
+                total_sections=total
             )
-            
+
             sections_content.append(content)
+
+            # Section done: append its rendered HTML, finalise word count, refresh
+            # placeholders, and emit so the window grows section by section.
+            self._doc_state["sectionsHtml"].append(render_section_html(content))
+            self._doc_state["sections"][i - 1].update(
+                {"status": "done", "words": self._section_word_count(content)}
+            )
+            self._doc_state["placeholders"] = self._resolve_placeholders(task)
+            self._emit_doc_state(force=True)
         
         # ═══════════════════════════════════════════════════════════════════════
         # STEP 3: Assemble final document
@@ -198,6 +237,11 @@ Handles documents of any size using section-by-section generation (no context ov
         filename = plan.get('filename', self._generate_filename(plan['title'], output_format))
         
         file_path = self._save_document(document_model, filename, output_format, plan['document_type'])
+
+        # Final state: the document is saved — show the path and a done stage.
+        self._doc_state["savePath"] = str(file_path)
+        self._doc_state["stage"] = "Done"
+        self._emit_doc_state(force=True)
 
         # Notify Web UI so the Document Editor opens with the created document (same process or subprocess)
         try:
@@ -227,7 +271,138 @@ Handles documents of any size using section-by-section generation (no context ov
             plan,
             estimate_document_length(document_model),
         )
-    
+
+    # ── Live document-window state (SubAgent document view) ────────────────────
+    _PH_SCAN_RE = re.compile(r"\{\{([A-ZÄÖÜ0-9_]+)\}\}")
+
+    def _emit_doc_state(self, force: bool = False) -> None:
+        """Emit the live document state to the WebUI (throttled, hash-guarded).
+        Silently inactive without a session id. Mirrors research's _emit_research_state."""
+        try:
+            import time as _time
+            state = getattr(self, "_doc_state", None)
+            if not state:
+                return
+            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            if not session_id:
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    session_id = get_current_session_id() or ""
+                except Exception:
+                    session_id = ""
+            if not session_id:
+                return
+            now = _time.time()
+            last = getattr(self, "_doc_emit_last", {"hash": None, "at": 0.0})
+            if not force and now - last["at"] < 0.4:
+                return
+            payload = dict(state)
+            payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
+            if not force and payload_hash == last["hash"]:
+                return
+            self._doc_emit_last = {"hash": payload_hash, "at": now}
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().emit_document_state(payload, session_id=session_id)
+        except Exception:
+            pass
+
+    def _on_section_stream(self, text_so_far: str) -> None:
+        """on_progress callback while a section streams: bump the current section's word
+        estimate so the outline bar shows motion (the JSON body isn't shown verbatim)."""
+        idx = getattr(self, "_doc_cur_idx", -1)
+        state = getattr(self, "_doc_state", None)
+        if not state or idx < 0 or idx >= len(state["sections"]):
+            return
+        state["sections"][idx]["words"] = len(re.findall(r"\w+", text_so_far or ""))
+        self._emit_doc_state(force=False)
+
+    @staticmethod
+    def _section_word_count(section: DocumentSection) -> int:
+        text = render_text(DocumentModel(title="", document_type="", sections=[section]))
+        return len(re.findall(r"\w+", text or ""))
+
+    def _resolve_placeholders(self, task: str) -> List[Dict[str, str]]:
+        """Best-effort fill of the `{{NAME}}` placeholders for the window's panel:
+        Chat (task text) → Memory (user identity) → else open. Never raises."""
+        names: List[str] = []
+        seen = set()
+        for html in getattr(self, "_doc_state", {}).get("sectionsHtml", []):
+            for m in self._PH_SCAN_RE.finditer(html):
+                n = m.group(1)
+                if n not in seen:
+                    seen.add(n)
+                    names.append(n)
+        if not names:
+            return []
+        chat = self._extract_chat_values(task)
+        mem = self._memory_identity()
+        out: List[Dict[str, str]] = []
+        for n in names:
+            value, source = "", "open"
+            if n in chat:
+                value, source = chat[n], "chat"
+            else:
+                mv = self._match_identity(n, mem)
+                if mv:
+                    value, source = mv, "memory"
+            out.append({"name": n, "value": value, "source": source})
+        return out
+
+    @staticmethod
+    def _extract_chat_values(task: str) -> Dict[str, str]:
+        """Pull explicit `Label: value` pairs from the task into UPPER_SNAKE keys
+        (deterministic; empty when the task carries no concrete values)."""
+        values: Dict[str, str] = {}
+        for m in re.finditer(r"(?m)^[\-\*\s]*([A-Za-zÄÖÜäöü ]{3,30}?)\s*[:=]\s*(.+?)\s*$", task or ""):
+            key = re.sub(r"\s+", "_", m.group(1).strip()).upper()
+            val = m.group(2).strip().strip('.,;')
+            if key and val and len(val) <= 80:
+                values[key] = val
+        return values
+
+    @staticmethod
+    def _memory_identity() -> Dict[str, str]:
+        """Best-effort user identity from the memory system (sync). Conservative: only
+        a reliably-extractable email and an explicit `Name: …` are returned. {} on any issue."""
+        try:
+            from vaf.memory.rag import run_memory_search_sync
+            blob = run_memory_search_sync("user full name, address, email, phone number", k=6, caller="tool") or ""
+        except Exception:
+            return {}
+        ident: Dict[str, str] = {}
+        em = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", blob)
+        if em:
+            ident["EMAIL"] = em.group(0)
+        nm = re.search(r"(?im)\b(?:name|heißt|heisst)\b[:\s]+([A-ZÄÖÜ][\wäöüß]+(?:\s+[A-ZÄÖÜ][\wäöüß]+){1,2})", blob)
+        if nm:
+            ident["NAME"] = nm.group(1).strip()
+        ad = re.search(r"(?im)\b(?:adresse|wohnhaft|anschrift)\b[:\s]+(.+?)(?:\n|$)", blob)
+        if ad:
+            ident["ADRESSE"] = ad.group(1).strip()[:80]
+        return ident
+
+    @staticmethod
+    def _match_identity(placeholder: str, mem: Dict[str, str]) -> str:
+        """Map a placeholder name to a known identity value when it clearly refers to the
+        user's own party (not the counterparty like KÄUFER/EMPFÄNGER/MIETER). The party is
+        the segment BEFORE the first '_' — matched exactly so VERKÄUFER (which contains the
+        substring 'KÄUFER') is not mistaken for the buyer."""
+        if not mem:
+            return ""
+        party = placeholder.split("_", 1)[0]
+        counterparty = party in (
+            "KÄUFER", "KAEUFER", "EMPFÄNGER", "EMPFAENGER", "MIETER", "AUFTRAGNEHMER", "ABNEHMER",
+        )
+        if counterparty:
+            return ""
+        if "EMAIL" in placeholder and mem.get("EMAIL"):
+            return mem["EMAIL"]
+        if "ADRESSE" in placeholder and mem.get("ADRESSE"):
+            return mem["ADRESSE"]
+        if "NAME" in placeholder and mem.get("NAME"):
+            return mem["NAME"]
+        return ""
+
     def _extract_json_from_response(self, content: str) -> Optional[Dict]:
         """
         Extract and parse JSON from LLM response.
@@ -244,8 +419,7 @@ Handles documents of any size using section-by-section generation (no context ov
             except json.JSONDecodeError:
                 pass
 
-        # 2. Try to find JSON object (non-greedy to get innermost complete object)
-        # Match from first { to matching }
+        # 2. Try to find a balanced JSON object: from first { to matching }
         depth = 0
         start = -1
         for i, c in enumerate(content):
@@ -261,7 +435,61 @@ Handles documents of any size using section-by-section generation (no context ov
                     except json.JSONDecodeError:
                         start = -1
                         continue
+
+        # 3. Lenient repair on the first {...} slice. Small local models routinely
+        # emit trailing commas or get truncated by max_tokens (no closing brace);
+        # repair those and retry rather than failing the whole plan.
+        b = content.find('{')
+        if b >= 0:
+            frag = content[b:]
+            e = frag.rfind('}')
+            slice_ = frag[:e + 1] if e >= 0 else frag
+            for cand in (slice_, self._repair_json(slice_)):
+                if not cand:
+                    continue
+                try:
+                    return json.loads(cand)
+                except json.JSONDecodeError:
+                    continue
         return None
+
+    @staticmethod
+    def _repair_json(s: Optional[str]) -> Optional[str]:
+        """Best-effort repair of common small-model JSON breakages: strip JS-style
+        comments and trailing commas, then close any structures left open by a
+        max_tokens truncation — in the correct nesting order, string-aware."""
+        if not s:
+            return None
+        s = re.sub(r'//[^\n]*', '', s)                 # line comments
+        s = re.sub(r',\s*([}\]])', r'\1', s)           # trailing commas before } or ]
+        stack: List[str] = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in '{[':
+                stack.append(ch)
+            elif ch == '}':
+                if stack and stack[-1] == '{':
+                    stack.pop()
+            elif ch == ']':
+                if stack and stack[-1] == '[':
+                    stack.pop()
+        if in_str:
+            s = s + '"'                                # close a truncated string
+        s = s.rstrip().rstrip(',')                     # a dangling comma after the last value
+        for ch in reversed(stack):                     # close open structures, innermost first
+            s = s + ('}' if ch == '{' else ']')
+        return s
 
     def _validate_and_repair_plan(self, plan: Dict) -> Optional[Dict]:
         """
@@ -288,9 +516,15 @@ Handles documents of any size using section-by-section generation (no context ov
 
     def _create_document_plan(self, task: str) -> Optional[Dict]:
         """
-        Create a structured plan for the document.
-        Uses LLM to analyze task and break it into sections.
+        Create a structured plan for the document. Robust against small local models:
+        tries a rich JSON plan first, then a coder-style plain section-title list
+        (much easier for weak models than nested JSON), and finally a deterministic
+        default — so a usable document is always produced, never "could not plan".
         """
+        fmt = self._infer_format(task)
+        title = self._infer_title(task)
+
+        # 1) Rich structured JSON plan (best when the model can handle it).
         prompt = f"""You are a document planning expert. Analyze this task and create a structured plan.
 
 Task: {task}
@@ -306,46 +540,146 @@ Example structure:
 {{"document_type":"report","title":"My Report","format":"docx","filename":"My_Report.docx","sections":[{{"title":"Introduction","description":"Overview and context"}},{{"title":"Main Content","description":"Detailed analysis"}}]}}
 
 IMPORTANT: Use 5-15 sections for complex documents. Output ONLY the JSON object, no other text."""
-
         try:
-            content = self.query_llm(
+            # generate_text streams locally with an idle timeout and NEVER returns
+            # chain-of-thought; a generous budget lets a reasoning model finish thinking
+            # AND emit the JSON instead of being cut off mid-reasoning (empty content).
+            content = self.sanitize_model_text(self.generate_text(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2048,
-                temperature=0.2
-            )
-            
+                max_tokens=8192,
+                temperature=0.2,
+            ))
             if content:
                 plan = self._extract_json_from_response(content)
                 if plan:
                     repaired = self._validate_and_repair_plan(plan)
                     if repaired:
+                        # Format is decided by the TASK (default docx), not the model's
+                        # whim — small models otherwise pick 'pdf' spuriously (and pdf is
+                        # only a text stub). Honour an explicit request via _infer_format.
+                        repaired['format'] = fmt
+                        if repaired.get('filename'):
+                            repaired['filename'] = re.sub(r'\.[^.]+$', f'.{fmt}', repaired['filename'])
                         return repaired
-            
-            # Retry with simpler prompt if first attempt failed
-            fallback_prompt = f"""Create a document plan as JSON. Task: {task}
-
-Output exactly: {{"document_type":"report","title":"TITLE_HERE","format":"docx","filename":"document.docx","sections":[{{"title":"Section 1","description":"Content for section 1"}},{{"title":"Section 2","description":"Content for section 2"}}]}}
-
-Replace TITLE_HERE and add more sections (5-15 total) based on the task. Output ONLY valid JSON."""
-            content2 = self.query_llm(
-                messages=[{"role": "user", "content": fallback_prompt}],
-                max_tokens=1024,
-                temperature=0.1
-            )
-            if content2:
-                plan = self._extract_json_from_response(content2)
-                if plan:
-                    repaired = self._validate_and_repair_plan(plan)
-                    if repaired:
-                        return repaired
-            
-            UI.warning("LLM did not return valid document plan structure.")
-            return None
-            
         except Exception as e:
-            UI.error(f"Plan creation failed: {e}")
+            UI.warning(f"Document plan (JSON) attempt failed: {e}")
+
+        # 2) Coder-style fallback: ask for plain section titles, one per line. Weak
+        #    models handle a flat list far better than nested JSON.
+        try:
+            lined = self._plan_from_section_lines(task, fmt, title)
+            if lined:
+                UI.event("Document Agent", "Plan built from a section-title list (JSON fallback).", style="dim")
+                return lined
+        except Exception as e:
+            UI.warning(f"Document plan (section list) attempt failed: {e}")
+
+        # 3) Deterministic default — guarantees a usable plan so generation proceeds.
+        UI.warning("Model returned no usable plan; using a default section structure.")
+        return self._default_plan(task, fmt, title)
+
+    def _plan_from_section_lines(self, task: str, fmt: str, title: str) -> Optional[Dict]:
+        """Fallback plan: query for plain section titles (one per line) and build the
+        plan from them. Mirrors how the coder takes its plan as a flat list of steps."""
+        prompt = f"""List the section titles for this document, ONE per line.
+No numbering, no bullets, no extra text — just the titles.
+
+Task: {task}
+
+Give 5 to 10 concise section titles, each on its own line."""
+        content = self.sanitize_model_text(self.generate_text(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            temperature=0.2,
+        ))
+        if not content:
             return None
-    
+        sections: List[Dict[str, str]] = []
+        seen = set()
+        for raw in content.splitlines():
+            s = re.sub(r'^[\s\-\*•\d\.\)]+', '', raw).strip()   # strip bullets/numbering
+            s = s.strip('"\'`#').strip()
+            if not s or len(s) > 120:
+                continue
+            low = s.lower()
+            if low.startswith(('here', 'sure', 'section title', 'the following', 'output', 'titles')):
+                continue
+            if low in seen:
+                continue
+            seen.add(low)
+            sections.append({"title": s, "description": s})
+        if len(sections) < 2:
+            return None
+        return {
+            "document_type": self._infer_doc_type(task),
+            "title": title,
+            "format": fmt,
+            "filename": self._generate_filename(title, fmt),
+            "sections": sections[:15],
+        }
+
+    def _default_plan(self, task: str, fmt: str, title: str) -> Dict:
+        """Deterministic last-resort plan keyed on the inferred document type."""
+        dtype = self._infer_doc_type(task)
+        by_type = {
+            'contract': ["Parties", "Subject Matter", "Obligations", "Compensation",
+                         "Term and Termination", "Final Provisions"],
+            'letter': ["Subject", "Salutation", "Body", "Closing"],
+            'manual': ["Introduction", "Getting Started", "Usage", "Configuration",
+                       "Troubleshooting", "FAQ"],
+            'article': ["Introduction", "Background", "Main Discussion", "Conclusion"],
+            'template': ["Header", "Main Section", "Details", "Footer"],
+        }
+        titles = by_type.get(dtype, ["Summary", "Introduction", "Main Content", "Analysis", "Conclusion"])
+        return {
+            "document_type": dtype,
+            "title": title,
+            "format": fmt,
+            "filename": self._generate_filename(title, fmt),
+            "sections": [{"title": t, "description": t} for t in titles],
+        }
+
+    @staticmethod
+    def _infer_format(task: str) -> str:
+        """Infer the output format from keywords in the task (default docx)."""
+        t = task.lower()
+        if 'pdf' in t:
+            return 'pdf'
+        if 'markdown' in t or '.md' in t:
+            return 'md'
+        if '.txt' in t or 'plain text' in t or 'textdatei' in t:
+            return 'txt'
+        return 'docx'
+
+    @staticmethod
+    def _infer_doc_type(task: str) -> str:
+        """Infer the document type from keywords (EN + DE), default report."""
+        t = task.lower()
+        if any(k in t for k in ('contract', 'vertrag', 'agreement', 'mietvertrag', 'arbeitsvertrag')):
+            return 'contract'
+        if any(k in t for k in ('letter', 'brief', 'anschreiben', 'cover letter')):
+            return 'letter'
+        if any(k in t for k in ('manual', 'handbuch', 'anleitung', 'guide')):
+            return 'manual'
+        if any(k in t for k in ('article', 'artikel', 'blog', 'essay')):
+            return 'article'
+        if any(k in t for k in ('template', 'vorlage', 'formular')):
+            return 'template'
+        return 'report'
+
+    @staticmethod
+    def _infer_title(task: str) -> str:
+        """Derive a readable title from the task by dropping leading imperatives."""
+        t = re.sub(
+            r'^(please\s+|bitte\s+)?(create|generate|write|make|build|erstelle?|schreibe?|generiere?|mach[e]?|bau[e]?)\s+'
+            r'(me\s+|mir\s+)?(an?\s+|eine?[nrs]?\s+|den\s+|die\s+|das\s+)?',
+            '', task.strip(), flags=re.I,
+        ).strip()
+        title = ' '.join(t.split()[:10]).strip(' .,:;')
+        if not title:
+            return 'Document'
+        return title[0].upper() + title[1:]
+
     def _generate_section(
         self,
         document_type: str,
@@ -387,11 +721,14 @@ Style rules:
 - Language: Match the requested document language and context."""
 
         try:
-            content = self.query_llm(
+            # Stream locally with idle timeout, never collect chain-of-thought; generous
+            # budget so a reasoning model finishes thinking AND emits the section JSON.
+            content = self.sanitize_model_text(self.generate_text(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2048,
-                temperature=0.2
-            )
+                max_tokens=8192,
+                temperature=0.2,
+                on_progress=self._on_section_stream,
+            ))
 
             if content:
                 parsed = self._extract_json_from_response(content)
@@ -404,11 +741,11 @@ Section title: {section_title}
 Text:
 {content}
 """
-                repaired_content = self.query_llm(
+                repaired_content = self.sanitize_model_text(self.generate_text(
                     messages=[{"role": "user", "content": fallback_prompt}],
-                    max_tokens=1536,
+                    max_tokens=6144,
                     temperature=0.1,
-                )
+                ))
                 parsed_repaired = self._extract_json_from_response(repaired_content or "")
                 if parsed_repaired:
                     return self._validate_and_repair_section(parsed_repaired, section_title)

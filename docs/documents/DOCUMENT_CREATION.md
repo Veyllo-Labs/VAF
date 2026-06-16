@@ -356,12 +356,16 @@ Result: ✅ Complete 50-page contract
 
 ### Problem: "Could not create document plan"
 
-**Cause:** The LLM did not return valid JSON structure, or the response was corrupted during streaming.
+**Cause:** A weak or local model returned output that was not valid JSON — truncated by the token limit, with trailing commas, or wrapped in prose.
 
-**Solution:** The document agent now uses robust JSON extraction (handles markdown code blocks, nested braces) and a fallback retry with a simpler prompt. If it still fails:
+**Solution:** Plan creation no longer hard-fails. `_create_document_plan` tries three stages in order:
+1. A rich JSON plan, parsed with lenient repair (`_repair_json`) that strips trailing commas and comments and closes any structures left open by a truncation — in the correct nesting order, string-aware.
+2. A coder-style fallback (`_plan_from_section_lines`) that asks only for plain section titles, one per line — far easier for small models than nested JSON; bullets/numbering are stripped.
+3. A deterministic default (`_default_plan`) keyed on the inferred document type, so a usable document is always produced.
+
+If the resulting sections still look too generic:
 - Include explicit structure in your request (e.g., "with sections: introduction, methodology, conclusion")
 - Ensure your API provider (DeepSeek, OpenAI, etc.) is configured correctly
-- Check that streaming does not corrupt JSON responses (see `vaf/tools/base.py` – only metadata chunks are filtered, not content)
 
 ### Problem: Long document requests fail or truncate
 

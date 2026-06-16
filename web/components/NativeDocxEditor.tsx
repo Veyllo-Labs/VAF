@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, ChevronUp, Download, FileText,
-  Italic, List, ListOrdered, Loader2, MessageSquare, Plus, Save, Trash2, Type, Underline, X,
+  Italic, List, ListOrdered, Loader2, MessageSquare, Plus, Printer, Save, Trash2, Type, Underline, X,
 } from 'lucide-react';
 
 import { cn, getApiBase } from '@/lib/utils';
@@ -22,8 +22,6 @@ import {
   flattenNativeDocxText,
   flattenParagraphText,
 } from '@/lib/docxNative';
-
-const html2pdfLoader = () => import('html2pdf.js');
 
 type SelectionRangePayload = { start: number; end: number; documentId: string };
 
@@ -605,6 +603,14 @@ function paragraphWithReplacementText(source: NativeDocxParagraph, text: string)
 
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 72];
 
+// The document is shown in a clean serif (like the Document Viewer / a real Word print);
+// Word's stock body fonts fall back to that serif so the page reads uniform. A font the
+// user explicitly picks (anything else) is still honoured.
+const DOC_BODY_FONT = "'Times New Roman', Times, serif";
+const DEFAULT_DOC_FONTS = new Set(['Arial', 'Calibri', 'Calibri Light', 'Times New Roman', 'Times', '']);
+const runFontFamily = (name?: string): string | undefined =>
+  name && !DEFAULT_DOC_FONTS.has(name) ? name : undefined;
+
 export default function NativeDocxEditor({
   isOpen = true, onClose, canClose = true, filePath, title,
   initialModel = null, onModelChange, onContentChange, onInsertSelection,
@@ -726,56 +732,85 @@ export default function NativeDocxEditor({
     finally { setIsSaving(false); }
   };
 
-  const exportPdf = async () => {
-    if (!previewRef.current || !documentModel) return;
-    setIsExportingPdf(true);
-    try {
-      // Page-by-page rendering avoids html2pdf/html2canvas blank-output edge cases
-      // on very tall/complex root containers.
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const styles = document.createElement('style');
-      styles.textContent = `
-        [data-export-ignore="true"] { display: none !important; }
-        [data-editor-marker="true"] { display: none !important; }
-        [data-editor-block="true"] { border: none !important; background: none !important; }
-        .pdf-page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
-      `;
-      document.head.appendChild(styles);
+  // Native bridge exposed by the desktop window (QtWebEngine). Undefined in a real
+  // browser. render_pdf returns {ok, error?}; mode 'pdf' opens a native save dialog,
+  // mode 'print' opens the rendered PDF in the system viewer to print.
+  const getDesktopApi = () => (window as unknown as {
+    pywebview?: { api?: { render_pdf?: (html: string, name: string, mode: string) => Promise<{ ok?: boolean; error?: string } | unknown> } };
+  }).pywebview?.api;
 
+  // Self-contained HTML of the rendered A4 pages for the desktop PDF bridge. All text
+  // styling lives in inline styles on the nodes (set in DocxBlockPreview), so the
+  // off-screen render is faithful without the app's Tailwind. Editor-only chrome
+  // (selection boxes, toolbars, markers) is stripped.
+  const buildPrintHtml = (): string => {
+    const root = previewRef.current;
+    if (!root) return '';
+    const clone = root.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('[data-export-ignore="true"], [data-editor-marker="true"]').forEach((n) => n.remove());
+    clone.querySelectorAll('[data-editor-block="true"]').forEach((n) => {
+      (n as HTMLElement).removeAttribute('class');
+      (n as HTMLElement).style.cssText = 'padding:0;margin:0;border:none;background:none;';
+    });
+    clone.querySelectorAll<HTMLElement>('.pdf-page').forEach((el) => {
+      el.style.background = '#fff';
+      el.style.boxShadow = 'none';
+      el.style.margin = '0';
+    });
+    const css = `
+      @page { size: A4; margin: 0; }
+      html, body { margin: 0; padding: 0; background: #fff; }
+      * { box-sizing: border-box; }
+      .pdf-page { break-after: page; page-break-after: always; overflow: hidden; }
+      .pdf-page:last-child { break-after: auto; page-break-after: auto; }
+    `;
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${css}</style></head><body>${clone.innerHTML}</body></html>`;
+  };
+
+  // PDF / Print — same approach as the .md (A4) editor: in the desktop app use the
+  // native render_pdf bridge (real save / system-print dialog); in a browser print the
+  // document HTML in a hidden iframe (the browser's own "Save as PDF" / print dialog).
+  // A dialog always appears — no silent blob download that QtWebEngine swallows.
+  const printOrPdf = async (mode: 'pdf' | 'print') => {
+    if (!previewRef.current || !documentModel) return;
+    if (mode === 'pdf') setIsExportingPdf(true);
+    try {
       setSelectedBlock(null);
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       );
+      const html = buildPrintHtml();
+      const name = (title || 'document').replace(/\.[^.]+$/, '') || 'document';
 
-      try {
-        const pages = Array.from(previewRef.current.querySelectorAll<HTMLElement>('.pdf-page'));
-        if (pages.length === 0) return;
+      const desktop = getDesktopApi();
+      if (desktop?.render_pdf) {
+        const res = (await desktop.render_pdf(html, name, mode)) as { ok?: boolean; error?: string } | undefined;
+        if (res && res.ok === false) setError(res.error || 'PDF/Druck nicht verfügbar');
+        return;
+      }
 
-        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-        const fileName = `${(title || 'document').replace(/\.[^.]+$/, '')}.pdf`;
-
-        for (let i = 0; i < pages.length; i += 1) {
-          const page = pages[i];
-          const canvas = await html2canvas(page, {
-            scale: 2,
-            logging: false,
-            backgroundColor: '#ffffff',
-            useCORS: true,
-            scrollX: 0,
-            scrollY: 0,
-          });
-          const imageData = canvas.toDataURL('image/jpeg', 0.98);
-          if (i > 0) pdf.addPage('a4', 'portrait');
-          pdf.addImage(imageData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
-        }
-
-        pdf.save(fileName);
-      } finally { document.head.removeChild(styles); }
-    } finally { setIsExportingPdf(false); }
+      // Browser: print via a temporary off-screen iframe (reliable dialog everywhere).
+      const frame = document.createElement('iframe');
+      frame.setAttribute('aria-hidden', 'true');
+      frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+      document.body.appendChild(frame);
+      const fdoc = frame.contentDocument;
+      if (!fdoc) { frame.remove(); return; }
+      fdoc.open(); fdoc.write(html); fdoc.close();
+      // Wait for layout/fonts so the printed page isn't blank, then clean up after.
+      setTimeout(() => {
+        try { frame.contentWindow?.focus(); frame.contentWindow?.print(); }
+        finally { setTimeout(() => frame.remove(), 1000); }
+      }, 300);
+    } catch (e) {
+      console.error('[NativeDocxEditor] PDF/print failed:', e);
+      setError(e instanceof Error ? `PDF/Druck fehlgeschlagen: ${e.message}` : 'PDF/Druck fehlgeschlagen');
+    } finally {
+      if (mode === 'pdf') setIsExportingPdf(false);
+    }
   };
+  const exportPdf = () => printOrPdf('pdf');
+  const printDocument = () => printOrPdf('print');
 
   const selectedParagraph = useMemo(() => {
     if (!documentModel || !selectedBlock) return null;
@@ -838,6 +873,15 @@ export default function NativeDocxEditor({
       return d;
     });
   };
+
+  // ── Global toolbar formatting: act on the currently selected paragraph (run[0] +
+  //    paragraph props), so all controls live in the top toolbar like Word / the A4 editor. ──
+  const selPara = selectedParagraph ? ensureParagraphHasRun(selectedParagraph) : null;
+  const selRun = selPara?.runs[0] ?? null;
+  const setSelRun = (u: (r: NativeDocxRun) => NativeDocxRun) =>
+    updateSelectedParagraph((p) => { const s = ensureParagraphHasRun(p); return { ...s, runs: s.runs.map((r, i) => i === 0 ? u({ ...r }) : { ...r }) }; });
+  const setSelPara = (patch: Partial<NativeDocxParagraph>) =>
+    updateSelectedParagraph((p) => ({ ...ensureParagraphHasRun(p), ...patch }));
 
   const addBlock = (type: 'paragraph' | 'table' | 'page_break') => {
     updateDocument((d) => {
@@ -920,16 +964,46 @@ export default function NativeDocxEditor({
         )}
       </div>
 
-      {/* Toolbar — same gray bar style as the A4 editor */}
+      {/* Toolbar — global formatting (applies to the selected paragraph) + actions, all at
+          the top like Word / the A4 editor. Click a paragraph to select it, then format here. */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0">
-        <button type="button" onClick={() => addBlock('paragraph')} className="p-1.5 rounded text-gray-600 hover:bg-gray-200" title="Absatz hinzufügen"><Plus size={16} /></button>
+        <ToggleBtn active={!!selRun?.bold} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, bold: !r.bold }))} title="Fett"><Bold size={16} /></ToggleBtn>
+        <ToggleBtn active={!!selRun?.italic} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, italic: !r.italic }))} title="Kursiv"><Italic size={16} /></ToggleBtn>
+        <ToggleBtn active={!!selRun?.underline} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, underline: !r.underline }))} title="Unterstrichen"><Underline size={16} /></ToggleBtn>
+        <Sep />
+        <ToggleBtn active={selPara?.alignment === 'left'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'left' })} title="Links"><AlignLeft size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.alignment === 'center'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'center' })} title="Zentriert"><AlignCenter size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.alignment === 'right'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'right' })} title="Rechts"><AlignRight size={16} /></ToggleBtn>
+        <Sep />
+        <ToggleBtn active={selPara?.list_kind === 'bullet'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'bullet' ? 'none' : 'bullet' })} title="Aufzählung"><List size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.list_kind === 'numbered'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'numbered' ? 'none' : 'numbered' })} title="Nummerierung"><ListOrdered size={16} /></ToggleBtn>
+        <Sep />
+        <select value={selPara?.style_name ?? 'Normal'} disabled={!selectedParagraph} onChange={(e) => setSelPara({ style_name: e.target.value })} className="h-7 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Absatzstil">
+          <option value="Normal">Normal</option>
+          <option value="Title">Title</option>
+          <option value="Heading 1">Heading 1</option>
+          <option value="Heading 2">Heading 2</option>
+          <option value="Heading 3">Heading 3</option>
+        </select>
+        <select value={String(selRun?.font_size_pt ?? 11)} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_size_pt: normalizeFontSize(e.target.value) }))} className="h-7 w-14 rounded border border-gray-200 bg-white px-1 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Schriftgröße">
+          {FONT_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <input value={selRun?.font_name || 'Arial'} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_name: e.target.value }))} className="h-7 w-24 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" placeholder="Schriftart" title="Schriftart" />
+        <Sep />
+        <button type="button" disabled={!selectedBlock || selectedBlock.kind !== 'block'} onClick={deleteSelectedBlock} className="rounded border border-gray-200 bg-white p-1.5 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-white" title="Block löschen"><Trash2 size={16} /></button>
+        {onInsertSelection && <button type="button" disabled={!selectedParagraph} onClick={insertSelectedBlockIntoChat} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title="In den Chat"><MessageSquare size={16} /></button>}
+        <Sep />
+        <button type="button" onClick={() => addBlock('paragraph')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200 inline-flex items-center gap-1" title="Absatz hinzufügen"><Plus size={14} />Absatz</button>
         <button type="button" onClick={() => addBlock('table')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Tabelle hinzufügen">Tabelle</button>
         <button type="button" onClick={() => addBlock('page_break')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Seitenumbruch">Umbruch</button>
-        <span className="w-px h-5 bg-gray-300 mx-0.5" />
+        <span className="ml-auto" />
         <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Speichern">
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
         </button>
-        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50" title="Als PDF herunterladen">
+        <button type="button" onClick={printDocument} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Drucken">
+          <Printer size={14} /> Drucken
+        </button>
+        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50" title="Als PDF speichern">
           {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} PDF
         </button>
       </div>
@@ -983,9 +1057,6 @@ export default function NativeDocxEditor({
                           editableParagraph={selected ? selectedParagraph : null}
                           onParagraphChange={selected ? (np) => updateSelectedParagraph(() => np) : undefined}
                         />
-                        {selected && selectedParagraph && (
-                          <InlineParagraphToolbar paragraph={selectedParagraph} onChange={(np) => updateSelectedParagraph(() => np)} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
-                        )}
                       </InlineEditableBlock>
                     )})}
                   </div>
@@ -1003,9 +1074,6 @@ export default function NativeDocxEditor({
                           editableParagraph={sel ? selectedParagraph : null}
                           onParagraphChange={sel ? (np) => updateSelectedParagraph(() => np) : undefined}
                         />
-                        {sel && block.type === 'paragraph' && selectedParagraph && (
-                          <InlineParagraphToolbar paragraph={selectedParagraph} onChange={(np) => updateSelectedParagraph(() => np)} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
-                        )}
                         {sel && block.type === 'table' && selectedBlockValue?.type === 'table' && (
                           <InlineTableEditor table={selectedBlockValue} onChange={(t) => updateDocument((d) => { d.sections[si].blocks[bi] = t; return d; })} onDelete={deleteSelectedBlock} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
                         )}
@@ -1035,9 +1103,6 @@ export default function NativeDocxEditor({
                           editableParagraph={selected ? selectedParagraph : null}
                           onParagraphChange={selected ? (np) => updateSelectedParagraph(() => np) : undefined}
                         />
-                        {selected && selectedParagraph && (
-                          <InlineParagraphToolbar paragraph={selectedParagraph} onChange={(np) => updateSelectedParagraph(() => np)} onInsertToChat={onInsertSelection ? insertSelectedBlockIntoChat : undefined} />
-                        )}
                       </InlineEditableBlock>
                     )})}
                   </div>
@@ -1066,7 +1131,7 @@ function InlineEditableBlock({ children, selected, onSelect, markIndices = [] }:
       data-editor-block="true"
       onClick={(e) => { e.stopPropagation(); onSelect(); }}
       className={cn(
-        'relative mb-2 rounded-lg px-3 py-2 transition-all cursor-pointer',
+        'relative rounded px-1 py-0.5 transition-all cursor-pointer',
         selected
           ? 'border-2 border-blue-400 bg-blue-50/40'
           : marked
@@ -1086,48 +1151,6 @@ function InlineEditableBlock({ children, selected, onSelect, markIndices = [] }:
   );
 }
 
-/* Inline toolbar for paragraph editing -- appears directly below the paragraph */
-function InlineParagraphToolbar({ paragraph, onChange, onDelete, onInsertToChat }: {
-  paragraph: NativeDocxParagraph;
-  onChange: (p: NativeDocxParagraph) => void;
-  onDelete?: () => void;
-  onInsertToChat?: () => void;
-}) {
-  const safe = ensureParagraphHasRun(paragraph);
-  const run = safe.runs[0];
-  const setRun = (updater: (r: NativeDocxRun) => NativeDocxRun) => onChange({ ...safe, runs: safe.runs.map((r, i) => i === 0 ? updater({ ...r }) : { ...r }) });
-
-  return (
-    <div data-export-ignore="true" className="mt-2 rounded-xl border border-gray-200 bg-white p-3 shadow-lg" onClick={(e) => e.stopPropagation()}>
-      <div className="flex flex-wrap items-center gap-1">
-        <ToggleBtn active={run.bold} onClick={() => setRun((r) => ({ ...r, bold: !r.bold }))} title="Bold"><Bold size={13} /></ToggleBtn>
-        <ToggleBtn active={run.italic} onClick={() => setRun((r) => ({ ...r, italic: !r.italic }))} title="Italic"><Italic size={13} /></ToggleBtn>
-        <ToggleBtn active={run.underline} onClick={() => setRun((r) => ({ ...r, underline: !r.underline }))} title="Underline"><Underline size={13} /></ToggleBtn>
-        <Sep />
-        <ToggleBtn active={safe.alignment === 'left'} onClick={() => onChange({ ...safe, alignment: 'left' })} title="Left"><AlignLeft size={13} /></ToggleBtn>
-        <ToggleBtn active={safe.alignment === 'center'} onClick={() => onChange({ ...safe, alignment: 'center' })} title="Center"><AlignCenter size={13} /></ToggleBtn>
-        <ToggleBtn active={safe.alignment === 'right'} onClick={() => onChange({ ...safe, alignment: 'right' })} title="Right"><AlignRight size={13} /></ToggleBtn>
-        <Sep />
-        <ToggleBtn active={safe.list_kind === 'bullet'} onClick={() => onChange({ ...safe, list_kind: safe.list_kind === 'bullet' ? 'none' : 'bullet' })} title="Bullet list"><List size={13} /></ToggleBtn>
-        <ToggleBtn active={safe.list_kind === 'numbered'} onClick={() => onChange({ ...safe, list_kind: safe.list_kind === 'numbered' ? 'none' : 'numbered' })} title="Numbered list"><ListOrdered size={13} /></ToggleBtn>
-        <Sep />
-        <select value={safe.style_name} onChange={(e) => onChange({ ...safe, style_name: e.target.value })} className="h-7 rounded border border-gray-200 bg-white px-1.5 text-[10px] text-gray-700 focus:outline-none">
-          <option value="Normal">Normal</option>
-          <option value="Title">Title</option>
-          <option value="Heading 1">Heading 1</option>
-          <option value="Heading 2">Heading 2</option>
-          <option value="Heading 3">Heading 3</option>
-        </select>
-        <select value={String(run.font_size_pt ?? 11)} onChange={(e) => setRun((r) => ({ ...r, font_size_pt: normalizeFontSize(e.target.value) }))} className="h-7 w-14 rounded border border-gray-200 bg-white px-1 text-[10px] text-gray-700 focus:outline-none" title="Font size">
-          {FONT_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <input value={run.font_name || 'Arial'} onChange={(e) => setRun((r) => ({ ...r, font_name: e.target.value }))} className="h-7 w-20 rounded border border-gray-200 bg-white px-1.5 text-[10px] text-gray-700 focus:outline-none" placeholder="Font" title="Font name" />
-        {onDelete && <><Sep /><button type="button" onClick={onDelete} className="rounded border border-red-200 bg-red-50 p-1.5 text-red-600 hover:bg-red-100" title="Delete block"><Trash2 size={13} /></button></>}
-        {onInsertToChat && <button type="button" onClick={onInsertToChat} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100" title="Send to chat"><MessageSquare size={13} /></button>}
-      </div>
-    </div>
-  );
-}
 
 function InlineTableEditor({ table, onChange, onDelete, onInsertToChat }: {
   table: NativeDocxTable; onChange: (t: NativeDocxTable) => void; onDelete?: () => void; onInsertToChat?: () => void;
@@ -1182,6 +1205,7 @@ function DocxBlockPreview({
   const editableRun = editableSafe?.runs[0] ?? null;
   const [draftText, setDraftText] = useState(editableRun?.text ?? '');
   const isFocusedRef = useRef(false);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (!isFocusedRef.current) {
@@ -1189,9 +1213,33 @@ function DocxBlockPreview({
     }
   }, [editableSafe?.id, editableRun?.text]);
 
+  // Auto-grow the edit box to the full wrapped text (a paragraph is one long line with no
+  // newlines, so a fixed row count would clip it into a tiny scrollable box).
+  const autosize = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(() => { autosize(taRef.current); }, [draftText]);
+
   if (block.type === 'paragraph') {
-    const Tag = block.style_name === 'Title' || block.style_name === 'Heading 1' ? 'h1' : block.style_name === 'Heading 2' ? 'h2' : block.style_name === 'Heading 3' ? 'h3' : 'p';
-    const isHeading = Tag !== 'p';
+    // Style by the paragraph's Word style name so the editor matches the saved .docx and
+    // the Document Viewer (the "original" look): the Title is large with a thin blue rule;
+    // Heading 1/2/3 are blue, no rule, decreasing sizes; body is a clean dark serif. The
+    // template's per-run colour is ignored (as the Viewer does) so the body stays uniform.
+    const styleName = block.style_name;
+    const isTitle = styleName === 'Title';
+    const isH1 = styleName === 'Heading 1';
+    const isH2 = styleName === 'Heading 2';
+    const isH3 = styleName === 'Heading 3';
+    const isHeading = isTitle || isH1 || isH2 || isH3;
+    const Tag = isTitle || isH1 ? 'h1' : isH2 ? 'h2' : isH3 ? 'h3' : 'p';
+    const blockStyle: React.CSSProperties =
+      isTitle ? { color: '#1f3864', fontSize: '22pt', fontWeight: 700, lineHeight: 1.15, margin: '0 0 12pt', paddingBottom: '5pt', borderBottom: '1.5px solid #4472c4' }
+      : isH1 ? { color: '#2f5496', fontSize: '16pt', fontWeight: 700, lineHeight: 1.2, margin: '14pt 0 4pt' }
+      : isH2 ? { color: '#2f5496', fontSize: '13pt', fontWeight: 700, lineHeight: 1.25, margin: '12pt 0 3pt' }
+      : isH3 ? { color: '#2f5496', fontSize: '11.5pt', fontWeight: 700, lineHeight: 1.3, margin: '10pt 0 3pt' }
+      : { color: '#1f2328', fontSize: '11pt', fontWeight: 400, lineHeight: 1.4, margin: '0 0 6pt' };
     if (editableSafe && editableRun && onParagraphChange) {
       const commitDraft = () => {
         if (draftText === editableRun.text) return;
@@ -1203,32 +1251,36 @@ function DocxBlockPreview({
 
       return (
         <textarea
+          ref={(el) => { taRef.current = el; autosize(el); }}
           data-export-ignore="true"
           value={draftText}
           onClick={(e) => e.stopPropagation()}
           onFocus={() => { isFocusedRef.current = true; }}
-          onChange={(e) => setDraftText(e.target.value)}
+          onChange={(e) => { setDraftText(e.target.value); autosize(e.currentTarget); }}
           onBlur={() => { isFocusedRef.current = false; commitDraft(); }}
-          className="w-full resize-none rounded-lg border border-gray-200 bg-white/90 px-0 py-0 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-0"
+          className="block w-full resize-none overflow-hidden rounded-lg border border-gray-200 bg-white/90 px-0 py-0 text-sm text-gray-900 focus:border-blue-400 focus:outline-none focus:ring-0"
           style={{
             textAlign: editableSafe.alignment as any,
+            // Match the rendered document look so editing a paragraph doesn't change it.
+            fontFamily: runFontFamily(editableRun.font_name) ?? DOC_BODY_FONT,
+            color: blockStyle.color,
             fontWeight: isHeading ? 700 : editableRun.bold ? 700 : 400,
             fontStyle: editableRun.italic ? 'italic' : undefined,
             textDecoration: editableRun.underline ? 'underline' : undefined,
-            fontFamily: editableRun.font_name || undefined,
-            fontSize: editableRun.font_size_pt ? `${editableRun.font_size_pt}pt` : (isHeading ? (Tag === 'h1' ? '1.5em' : Tag === 'h2' ? '1.25em' : '1.1em') : undefined),
-            lineHeight: isHeading ? '1.3' : '1.65',
-            minHeight: isHeading ? '2.8em' : '3.3em',
+            fontSize: !isHeading && editableRun.font_size_pt && editableRun.font_size_pt !== 11
+              ? `${editableRun.font_size_pt}pt`
+              : (blockStyle.fontSize as string),
+            lineHeight: blockStyle.lineHeight as number,
           }}
-          rows={Math.max(2, Math.min(12, (draftText.match(/\n/g) || []).length + 2))}
+          rows={1}
         />
       );
     }
     return (
-      <Tag style={{ textAlign: block.alignment as any, margin: 0, fontWeight: isHeading ? 700 : 400, fontSize: isHeading ? (Tag === 'h1' ? '1.5em' : Tag === 'h2' ? '1.25em' : '1.1em') : undefined, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-        {block.list_kind !== 'none' && <span className="mr-2 text-gray-400">{block.list_kind === 'bullet' ? '•' : '1.'}</span>}
+      <Tag style={{ textAlign: block.alignment as any, fontFamily: DOC_BODY_FONT, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', ...blockStyle }}>
+        {block.list_kind !== 'none' && <span style={{ marginRight: '0.55em', color: blockStyle.color }}>{block.list_kind === 'bullet' ? '•' : '1.'}</span>}
         {block.runs.map((run) => (
-          <span key={run.id} style={{ fontWeight: run.bold ? 700 : undefined, fontStyle: run.italic ? 'italic' : undefined, textDecoration: run.underline ? 'underline' : undefined, fontFamily: run.font_name || undefined, fontSize: run.font_size_pt ? `${run.font_size_pt}pt` : undefined, color: run.color ? `#${run.color.replace('#', '')}` : undefined }}>
+          <span key={run.id} style={{ fontWeight: run.bold ? 700 : undefined, fontStyle: run.italic ? 'italic' : undefined, textDecoration: run.underline ? 'underline' : undefined, fontFamily: runFontFamily(run.font_name), fontSize: run.font_size_pt && run.font_size_pt !== 11 ? `${run.font_size_pt}pt` : undefined }}>
             {run.text || '\u00A0'}
           </span>
         ))}
@@ -1263,9 +1315,9 @@ function DocxBlockPreview({
   return <div className="rounded border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-500">{(block as any).label || 'Unsupported block'}</div>;
 }
 
-function ToggleBtn({ active, onClick, title, children }: { active: boolean; onClick: () => void; title: string; children: React.ReactNode }) {
+function ToggleBtn({ active, onClick, title, children, disabled }: { active: boolean; onClick: () => void; title: string; children: React.ReactNode; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} title={title} className={cn('rounded border p-1.5 transition-colors', active ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-100')}>
+    <button type="button" onClick={onClick} title={title} disabled={disabled} className={cn('rounded border p-1.5 transition-colors disabled:opacity-40 disabled:cursor-default disabled:hover:bg-white', active ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-100')}>
       {children}
     </button>
   );

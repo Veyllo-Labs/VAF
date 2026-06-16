@@ -267,48 +267,31 @@ function forceSplitIfSingleTallPage(doc: Document): void {
     }
     if (blocks.length < 2) return;
 
-    const heights = blocks.map((el) => measureBlockHeight(win, el));
-    const useHeights = heights.some((h) => h >= 6);
-
     const container = doc.createElement('div');
     container.className = 'a4-pages';
     container.setAttribute('contenteditable', 'true');
 
-    if (!useHeights) {
-        const approxChars = (targetPage.innerText || '').trim().length;
-        const targetPages = Math.min(18, Math.max(2, Math.ceil(approxChars / 2000)));
-        const perPage = Math.max(1, Math.ceil(blocks.length / targetPages));
-        for (let i = 0; i < blocks.length; i += perPage) {
-            const pg = doc.createElement('div');
-            pg.className = 'a4-page';
-            pg.setAttribute('contenteditable', 'true');
-            applyA4PageBoxLock(pg);
-            for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
-                pg.appendChild(blocks[j]);
-            }
-            container.appendChild(pg);
+    // Height-greedy packing with a measured-or-estimated height per block (the old
+    // count-based split for the not-yet-measured case ignored heights and left
+    // large dead space).
+    let curPage = doc.createElement('div');
+    curPage.className = 'a4-page';
+    curPage.setAttribute('contenteditable', 'true');
+    applyA4PageBoxLock(curPage);
+    container.appendChild(curPage);
+    let curH = 0;
+    for (const el of blocks) {
+        const h = Math.max(8, estimateBlockHeight(win, el));
+        if (curH > 0 && curH + h > limitPx) {
+            curPage = doc.createElement('div');
+            curPage.className = 'a4-page';
+            curPage.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(curPage);
+            container.appendChild(curPage);
+            curH = 0;
         }
-    } else {
-        let curPage = doc.createElement('div');
-        curPage.className = 'a4-page';
-        curPage.setAttribute('contenteditable', 'true');
-        applyA4PageBoxLock(curPage);
-        container.appendChild(curPage);
-        let curH = 0;
-        for (let i = 0; i < blocks.length; i++) {
-            const el = blocks[i];
-            const h = Math.max(8, heights[i]);
-            if (curH > 0 && curH + h > limitPx) {
-                curPage = doc.createElement('div');
-                curPage.className = 'a4-page';
-                curPage.setAttribute('contenteditable', 'true');
-                applyA4PageBoxLock(curPage);
-                container.appendChild(curPage);
-                curH = 0;
-            }
-            curPage.appendChild(el);
-            curH += h;
-        }
+        curPage.appendChild(el);
+        curH += h;
     }
 
     if (container.children.length > 1) {
@@ -361,21 +344,33 @@ function ensureMultipageFromBlockCountOnly(doc: Document): void {
     const blocks = Array.from(sp.childNodes).filter((n): n is HTMLElement => n.nodeType === 1);
     const chars = (sp.innerText || '').trim().length;
     if (blocks.length < 2 || chars < 900) return;
-    const desiredPages = Math.min(28, Math.max(2, Math.ceil(chars / 1300)));
-    let perPage = Math.max(1, Math.ceil(blocks.length / desiredPages));
-    if (perPage >= blocks.length) perPage = Math.max(1, Math.floor(blocks.length / 2));
+    const win = doc.defaultView;
+    const limit = getA4UsableContentHeightPx(doc, sp) || Math.round((297 - 50) * 96 / 25.4);
+    // Height-greedy packing (NOT by block count): fill each page to the A4 content
+    // height before starting a new one. Uses real measured heights; falls back to a
+    // text-length estimate when the browser hasn't laid the block out yet, so we
+    // never leave huge dead space (the old count-based split) nor collapse to one page.
     const container = doc.createElement('div');
     container.className = 'a4-pages';
     container.setAttribute('contenteditable', 'true');
-    for (let i = 0; i < blocks.length; i += perPage) {
-        const pg = doc.createElement('div');
-        pg.className = 'a4-page';
-        pg.setAttribute('contenteditable', 'true');
-        applyA4PageBoxLock(pg);
-        for (let j = i; j < Math.min(i + perPage, blocks.length); j++) {
-            pg.appendChild(blocks[j]);
+    let pg = doc.createElement('div');
+    pg.className = 'a4-page';
+    pg.setAttribute('contenteditable', 'true');
+    applyA4PageBoxLock(pg);
+    container.appendChild(pg);
+    let curH = 0;
+    for (const el of blocks) {
+        const h = win ? estimateBlockHeight(win, el) : estimateBlockHeightFromText(el);
+        if (curH > 0 && curH + h > limit) {
+            pg = doc.createElement('div');
+            pg.className = 'a4-page';
+            pg.setAttribute('contenteditable', 'true');
+            applyA4PageBoxLock(pg);
+            container.appendChild(pg);
+            curH = 0;
         }
-        container.appendChild(pg);
+        pg.appendChild(el);
+        curH += h;
     }
     if (container.children.length > 1) {
         sp.parentNode?.replaceChild(container, sp);
@@ -587,6 +582,23 @@ function measureBlockHeight(win: Window, el: HTMLElement): number {
     // Embedded report CSS (flex/%) can make offsetHeight match the clipped page; scrollHeight keeps real content height.
     const h = Math.max(el.offsetHeight, el.scrollHeight, el.getBoundingClientRect().height);
     return h + mt + mb;
+}
+
+/** Rough height from text length when the browser hasn't laid the block out yet
+ *  (~70 chars per line at the A4 content width, ~24px line height; headings add a row). */
+function estimateBlockHeightFromText(el: HTMLElement): number {
+    const len = (el.textContent || '').length;
+    const tag = el.tagName.toLowerCase();
+    const headingPad = /^h[1-6]$/.test(tag) ? 28 : 0;
+    const listPad = (tag === 'ul' || tag === 'ol') ? 12 : 0;
+    return headingPad + listPad + Math.max(26, Math.ceil(len / 70) * 24) + 12;
+}
+
+/** Measured height, or a text-length estimate when layout isn't ready (height ~0).
+ *  Keeps height-greedy pagination dense even on an early pass. */
+function estimateBlockHeight(win: Window, el: HTMLElement): number {
+    const m = measureBlockHeight(win, el);
+    return m >= 4 ? m : estimateBlockHeightFromText(el);
 }
 
 /** Pure text/inline paragraph that may be split across pages (no nested blocks/media). */

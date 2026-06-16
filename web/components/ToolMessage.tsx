@@ -169,9 +169,17 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 if (!r.ok) return;
                 const d = await r.json();
                 const units: SupervisorUnit[] = Array.isArray(d.units) ? d.units : [];
+                // Match precisely by task id (from an async delegation marker) when present.
+                // The agent-type fallback is for SYNC sub-agents that block this tool call —
+                // so only apply it while THIS bubble is still running. Otherwise a completed
+                // call (e.g. one bounced by the plan gate, which carries no task id) would
+                // adopt a concurrently-running unit of the same type and falsely show as
+                // "running" with that unit's watchdog.
                 const match = (subAgentTaskId
                     ? units.find((u) => u.task_id === subAgentTaskId)
-                    : units.find((u) => (u.agent_type || '').toLowerCase() === name.toLowerCase())) || null;
+                    : (status === 'running'
+                        ? units.find((u) => (u.agent_type || '').toLowerCase() === name.toLowerCase())
+                        : undefined)) || null;
                 if (stopped) return;
                 setLiveUnit(match);
                 if (match) sawUnit = true;
@@ -184,7 +192,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
         poll();
         id = setInterval(poll, 2000);
         return () => { stopped = true; if (id) clearInterval(id); };
-    }, [isSubAgent, name, subAgentTaskId]);
+    }, [isSubAgent, name, subAgentTaskId, status]);
 
     const killUnit = async () => {
         if (!liveUnit?.task_id) return;

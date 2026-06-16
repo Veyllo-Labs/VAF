@@ -1455,6 +1455,19 @@ function VAFDashboardContent() {
             wordsTarget: number;
             loop: number;
         } | null;
+        // Document view: streamed by the document agent as `document_state`
+        document: {
+            title: string;
+            format: string;
+            docType: string;
+            stage: string;
+            sections: Array<{ title: string; status: string; words: number; targetWords: number }>;
+            sectionsHtml: string[];
+            placeholders: Array<{ name: string; value: string; source: string }>;
+            wordsTarget: number;
+            savePath: string;
+            loop: number;
+        } | null;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1471,6 +1484,7 @@ function VAFDashboardContent() {
         browserUrl: "",
         coder: null,
         research: null,
+        document: null,
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -2184,6 +2198,7 @@ function VAFDashboardContent() {
                             consoleLines: [],
                             coder: null,
                             research: null,
+                            document: null,
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -3002,6 +3017,27 @@ function VAFDashboardContent() {
                             sources: Array.isArray(data.sources) ? data.sources : (prev.research?.sources ?? []),
                             wordsTarget: typeof data.wordsTarget === 'number' ? data.wordsTarget : (prev.research?.wordsTarget ?? 0),
                             loop: typeof data.loop === 'number' ? data.loop : (prev.research?.loop ?? 0),
+                        },
+                    }));
+                }
+                else if (data.type === 'document_state') {
+                    // Live document state: sections, growing section html, placeholders.
+                    // Powers the paper-style document view in SubAgentWindow.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        document: {
+                            title: data.title ?? prev.document?.title ?? '',
+                            format: data.format ?? prev.document?.format ?? 'docx',
+                            docType: data.docType ?? prev.document?.docType ?? 'report',
+                            stage: data.stage ?? prev.document?.stage ?? '',
+                            sections: Array.isArray(data.sections) ? data.sections : (prev.document?.sections ?? []),
+                            sectionsHtml: Array.isArray(data.sectionsHtml) ? data.sectionsHtml : (prev.document?.sectionsHtml ?? []),
+                            placeholders: Array.isArray(data.placeholders) ? data.placeholders : (prev.document?.placeholders ?? []),
+                            wordsTarget: typeof data.wordsTarget === 'number' ? data.wordsTarget : (prev.document?.wordsTarget ?? 0),
+                            savePath: data.savePath ?? prev.document?.savePath ?? '',
+                            loop: typeof data.loop === 'number' ? data.loop : (prev.document?.loop ?? 0),
                         },
                     }));
                 }
@@ -5796,7 +5832,7 @@ function VAFDashboardContent() {
                                     // viewers/editors take render priority over the SubAgentWindow,
                                     // so when one of them is open (e.g. the Document Editor after a
                                     // research run) the panel must drop back to the classic width.
-                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.browserFrame)
+                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.browserFrame)
                                         && !documentEditorState.isOpen && !documentViewerState.isOpen
                                         && !codeViewerState.isOpen && !htmlViewerState.isOpen
                                         ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
@@ -5881,6 +5917,7 @@ function VAFDashboardContent() {
                                     browserUrl={subAgentState.browserUrl}
                                     coder={subAgentState.coder}
                                     research={subAgentState.research}
+                                    document={subAgentState.document}
                                 />
                             )}
                         </div>

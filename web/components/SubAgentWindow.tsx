@@ -1,7 +1,7 @@
 'use client';
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, GitBranch, Moon, Printer } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, GitBranch, Moon, Printer, Search, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -12,6 +12,20 @@ export type ResearchViewState = {
     sectionsHtml: string[];
     sources: Array<{ url: string; title: string; domain: string }>;
     wordsTarget: number;
+    loop: number;
+};
+
+/** Live document state streamed by the document agent (`document_state` event). */
+export type DocumentViewState = {
+    title: string;
+    format: string;       // docx | pdf | md | txt
+    docType: string;      // contract | report | letter | …
+    stage: string;
+    sections: Array<{ title: string; status: string; words: number; targetWords: number }>;
+    sectionsHtml: string[];
+    placeholders: Array<{ name: string; value: string; source: string }>;  // source: memory|chat|auto|open
+    wordsTarget: number;
+    savePath: string;
     loop: number;
 };
 
@@ -53,6 +67,7 @@ export type SubAgentWindowProps = {
     browserUrl?: string;     // current page URL
     coder?: CoderViewState | null;  // enables the VS-Code view (coding agent only)
     research?: ResearchViewState | null;  // enables the paper view (research agent only)
+    document?: DocumentViewState | null;  // enables the document view (document agent only)
     [key: string]: any;
 };
 
@@ -207,6 +222,23 @@ const escapeHtml = (s: string) =>
 const buildResearchHeaderHtml = (topic: string, metaLine: string) =>
     `<div class="rpt-label">Research Report</div><h1>${escapeHtml(topic)}</h1><div class="rpt-meta">${escapeHtml(metaLine)}</div>`;
 
+// Document-agent paper: teal accent + placeholder chips (instead of citations).
+const DOCUMENT_PAPER_CSS = `
+.vaf-paper .doc-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #0f766e; }
+.vaf-paper .ph { font-size: 11.5px; color: #0f766e; background: #ccfbf1; border: 1px solid #99f6e4; border-radius: 4px; padding: 0 4px; font-family: Consolas, monospace; }
+.vaf-paper.vaf-doc .vaf-typing-caret { background: #0d9488; }
+.vaf-paper.vaf-doc .searching-note .spin { color: #0d9488; }
+`;
+
+const buildDocHeaderHtml = (title: string, docType: string, metaLine: string) =>
+    `<div class="doc-label">${escapeHtml(docType)}</div><h1>${escapeHtml(title)}</h1><div class="rpt-meta">${escapeHtml(metaLine)}</div>`;
+
+/** Highlights `{{PLACEHOLDER}}` tokens as teal chips (text nodes only, never tags). */
+const decoratePlaceholders = (html: string) =>
+    html.split(/(<[^>]+>)/).map(part =>
+        part.startsWith('<') ? part : part.replace(/\{\{([A-ZÄÖÜ0-9_]+)\}\}/g, '<span class="ph">{{$1}}</span>')
+    ).join('');
+
 /** Renders [n] citation markers as the mockup's superscript chips (text nodes only,
  *  never inside tags/attributes). The numbers reference the global source list. */
 const decorateCitations = (html: string) =>
@@ -220,13 +252,17 @@ const decorateCitations = (html: string) =>
  * prints each sheet as one A4 page. The iframe isolates the print from the
  * app shell (whose overflow containers would clip every page after the first).
  */
-function printResearchReport(topic: string, metaLine: string, sectionsHtml: string[]) {
-    const fullHtml = buildResearchHeaderHtml(topic, metaLine) + decorateCitations(sectionsHtml.join(''));
+function printResearchReport(topic: string, metaLine: string, sectionsHtml: string[],
+    opts?: { headerHtml?: string; decorate?: (h: string) => string; extraCss?: string }) {
+    const decorate = opts?.decorate ?? decorateCitations;
+    const header = opts?.headerHtml ?? buildResearchHeaderHtml(topic, metaLine);
+    const fullHtml = header + decorate(sectionsHtml.join(''));
     const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(topic)}</title><style>
 @page { size: A4; margin: 0; }
 html, body { margin: 0; padding: 0; background: #ffffff; }
 ${A4_PAGE_CSS}
 ${RESEARCH_PAPER_CSS}
+${opts?.extraCss || ''}
 .vaf-a4-page { page-break-after: always; }
 .vaf-a4-page:last-child { page-break-after: auto; }
 </style></head><body>
@@ -265,7 +301,7 @@ ${RESEARCH_PAPER_CSS}
  * last sheet re-render per typing tick; finished sheets reuse a frozen copy
  * (with `column-fill: auto`, appended content never reflows earlier columns).
  */
-function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: {
+function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow, headerHtml, decorate = decorateCitations, paperClass = '' }: {
     topic: string;
     metaLine: string;
     sectionsHtml: string[];
@@ -273,6 +309,13 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: 
      *  last text — never part of the print document. */
     noticeHtml?: string;
     onGrow?: () => void;
+    /** Header HTML; defaults to the research report header. The document view passes
+     *  its own (title + doc type). */
+    headerHtml?: string;
+    /** Text-node decorator: citations (research) or placeholder chips (document). */
+    decorate?: (html: string) => string;
+    /** Extra class on the flow (e.g. `vaf-doc` for the teal caret). */
+    paperClass?: string;
 }) {
     const measureRef = useRef<HTMLDivElement>(null);
     const wrapRef = useRef<HTMLDivElement>(null);
@@ -328,8 +371,8 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: 
     }, [animatingIdx, bodyText]);
 
     // ── flow html: stable prefix + live typing tail ──
-    const headerHtml = buildResearchHeaderHtml(topic, metaLine);
-    const stableHtml = headerHtml + decorateCitations(
+    const headerHtmlResolved = headerHtml ?? buildResearchHeaderHtml(topic, metaLine);
+    const stableHtml = headerHtmlResolved + decorate(
         sectionsHtml.slice(0, animatingIdx < 0 ? sectionsHtml.length : animatingIdx).join('')
     );
     const typingHtml = animatingIdx >= 0
@@ -374,7 +417,7 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: 
             <div
                 ref={measureRef}
                 aria-hidden
-                className="vaf-a4-flow vaf-paper"
+                className={`vaf-a4-flow vaf-paper ${paperClass}`}
                 style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: 0 }}
                 dangerouslySetInnerHTML={{ __html: liveHtml }}
             />
@@ -389,7 +432,7 @@ function A4ResearchPaper({ topic, metaLine, sectionsHtml, noticeHtml, onGrow }: 
                             >
                                 <div className="vaf-a4-clip">
                                     <div
-                                        className="vaf-a4-flow vaf-paper"
+                                        className={`vaf-a4-flow vaf-paper ${paperClass}`}
                                         style={{ transform: `translateX(-${i * A4_FLOW_STEP}px)` }}
                                         dangerouslySetInnerHTML={{ __html: html }}
                                     />
@@ -435,6 +478,7 @@ export default function SubAgentWindow({
     browserUrl,
     coder,
     research,
+    document,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -566,7 +610,257 @@ export default function SubAgentWindow({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [research?.sectionsHtml?.length]);
 
+    // ── Document view (document agent only) ───────────────────────────────
+    // Show the document window as soon as the FIRST state arrives — even during the
+    // (slow) planning phase when no sections exist yet — so the user sees the custom
+    // window with a "Planning…" placeholder instead of the generic startup console.
+    const hasDocumentData = !!(document && (document.sections?.length || document.stage));
+    const documentViewerRef = useRef<HTMLDivElement>(null);
+    const keepDocumentViewerPinned = () => {
+        if (documentViewerRef.current) {
+            documentViewerRef.current.scrollTop = documentViewerRef.current.scrollHeight;
+        }
+    };
+    useEffect(() => {
+        keepDocumentViewerPinned();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [document?.sectionsHtml?.length]);
+
+    // Follow the work: scroll the Sektionen list to the section being written and the
+    // Activity feed to the newest line whenever the document state advances.
+    const documentOutlineRef = useRef<HTMLDivElement>(null);
+    const documentActivityRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        documentOutlineRef.current?.querySelector('[data-doc-active="1"]')?.scrollIntoView({ block: 'nearest' });
+        if (documentActivityRef.current) documentActivityRef.current.scrollTop = documentActivityRef.current.scrollHeight;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [document?.sections, document?.stage, document?.savePath]);
+
     if (!isOpen && mode === 'overlay') return null;
+
+    if (mode === 'dock' && hasDocumentData && document) {
+        // ── Document view for the document agent: A4 paper growing section by
+        // section, placeholders pre-filled from memory/chat, status bar. ──
+        const doneCount = document.sections.filter(s => s.status === 'done').length;
+        const wordsTotal = document.sections.reduce((sum, s) => sum + (s.words || 0), 0);
+        const isLive = inferredPresence === 'online';
+        const fmt = (document.format || 'docx').toUpperCase();
+        const docTypeLabel = (document.docType || 'document').replace(/^\w/, c => c.toUpperCase());
+        const docMetaLine = `${doneCount}/${document.sections.length} sections · ${wordsTotal.toLocaleString()} words · ${document.placeholders.length} placeholders`;
+        const docHeaderHtml = buildDocHeaderHtml(document.title || 'Document', docTypeLabel, docMetaLine);
+        const filledCount = document.placeholders.filter(p => p.source !== 'open').length;
+        const writingSec = document.sections.find(s => s.status === 'writing');
+        const docNoticeHtml = !isLive ? '' : writingSec
+            ? `<div class="pending-note"><div class="searching-note"><span class="spin">&#9998;</span>Writing &quot;${escapeHtml(writingSec.title)}&quot;…</div></div>`
+            : (document.sectionsHtml.length === 0
+                ? '<div class="pending-note"><div class="searching-note"><span class="spin">&#9998;</span>Planning sections…</div></div>'
+                : '');
+        const phChip = (source: string): { cls: string; label: string } => ({
+            memory: { cls: 'bg-teal-100 text-teal-700', label: 'Memory' },
+            chat: { cls: 'bg-blue-100 text-blue-700', label: 'Chat' },
+            auto: { cls: 'bg-amber-100 text-amber-700', label: 'Auto' },
+        }[source] ?? { cls: 'bg-gray-100 text-gray-400', label: 'offen' });
+        const N = document.sections.length;
+        // Activity feed derived from the live document state, so it advances with each
+        // section (the raw sub-agent stdout goes quiet during long LLM generation).
+        const docActivity: string[] = [];
+        if (N > 0) docActivity.push(`Plan: ${docTypeLabel} · ${N} sections · ${fmt}`);
+        document.sections.forEach((s, i) => {
+            if (s.status === 'done') docActivity.push(`[${i + 1}/${N}] ${s.title}: done — ${s.words} words`);
+            else if (s.status === 'writing') docActivity.push(`[${i + 1}/${N}] ${s.title}: writing…`);
+        });
+        if (N === 0 && document.stage) docActivity.push(`${document.stage}…`);
+        if (document.savePath) docActivity.push(`Saved: ${document.savePath.split(/[\\/]/).pop()}`);
+
+        return (
+            <div
+                className={cn(
+                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isOpen}
+            >
+                <style>{A4_PAGE_CSS + RESEARCH_PAPER_CSS + DOCUMENT_PAPER_CSS}</style>
+                <div className="flex h-full w-full flex-col">
+                    {/* Header */}
+                    <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-700">
+                                <FileCode size={14} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Document Agent'}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className="truncate">{document.title || displayStatus}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2">
+                            <span className="rounded-md bg-teal-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-teal-700">{fmt}</span>
+                            <span className="flex items-center gap-1.5 rounded-full bg-teal-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-teal-700">
+                                {isLive && (/writ/i.test(document.stage)
+                                    ? <Pencil size={9} className="animate-spin" />
+                                    : <Loader2 size={9} className="animate-spin" />)}
+                                {document.stage}
+                            </span>
+                            <button
+                                onClick={() => printResearchReport(document.title, docMetaLine, document.sectionsHtml, { headerHtml: docHeaderHtml, decorate: decoratePlaceholders, extraCss: DOCUMENT_PAPER_CSS })}
+                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                                aria-label="Print document (A4)"
+                                title="Print document (A4)"
+                            >
+                                <Printer size={14} />
+                            </button>
+                            <button
+                                onClick={onClose}
+                                className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                                aria-label="Close"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex min-h-0 flex-1">
+                        {/* ── Paper document viewer ── */}
+                        <div ref={documentViewerRef} className="min-w-0 flex-1 overflow-y-auto bg-[#e9eaee] px-7 py-6">
+                            <A4ResearchPaper
+                                topic={document.title}
+                                metaLine={docMetaLine}
+                                sectionsHtml={document.sectionsHtml}
+                                noticeHtml={docNoticeHtml}
+                                onGrow={keepDocumentViewerPinned}
+                                headerHtml={docHeaderHtml}
+                                decorate={decoratePlaceholders}
+                                paperClass="vaf-doc"
+                            />
+                        </div>
+
+                        {/* ── Sidebar: Sections / Placeholders / Activity ── */}
+                        <div className="flex w-[33%] min-w-[280px] max-w-[380px] flex-none flex-col border-l border-gray-200 bg-white">
+                            {/* Sections */}
+                            <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                                    Sektionen
+                                    <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
+                                        {doneCount}/{document.sections.length} fertig
+                                    </span>
+                                </div>
+                                <div ref={documentOutlineRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-2">
+                                    {document.sections.map((s, i) => (
+                                        <div
+                                            key={i}
+                                            data-doc-active={s.status === 'writing' ? '1' : undefined}
+                                            className={cn(
+                                                'flex items-start gap-2 rounded-lg border px-2.5 py-1.5',
+                                                s.status === 'writing' && 'border-teal-200 bg-white ring-1 ring-teal-50',
+                                                s.status === 'done' && 'border-gray-100 bg-gray-50',
+                                                s.status === 'planned' && 'border-gray-100 bg-white'
+                                            )}
+                                        >
+                                            <span className={cn(
+                                                'mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full text-[8px] font-bold',
+                                                s.status === 'done' && 'bg-emerald-100 text-emerald-600',
+                                                s.status === 'writing' && 'bg-teal-100 text-teal-600',
+                                                s.status === 'planned' && 'bg-gray-100 text-gray-400'
+                                            )}>
+                                                {s.status === 'done' && <CheckCircle2 size={9} />}
+                                                {s.status === 'writing' && <Pencil size={9} className="animate-spin" />}
+                                                {s.status === 'planned' && (i + 1)}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block text-[11px] font-semibold leading-tight text-gray-800">{i + 1}. {s.title}</span>
+                                                <span className="mt-0.5 flex items-center gap-1.5 text-[9px] text-gray-400">
+                                                    <span className="inline-block h-[3px] w-16 overflow-hidden rounded-full bg-gray-100">
+                                                        <span
+                                                            className="block h-full rounded-full bg-teal-400 transition-all"
+                                                            style={{ width: `${Math.min(100, (s.words / Math.max(1, s.targetWords)) * 100)}%` }}
+                                                        />
+                                                    </span>
+                                                    {s.status === 'done' ? `${s.words} Wörter`
+                                                        : s.status === 'writing' ? 'schreibt…'
+                                                        : 'geplant'}
+                                                </span>
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Placeholders */}
+                            <div className="flex min-h-0 flex-[1.5] flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
+                                    Platzhalter
+                                    <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
+                                        {filledCount}/{document.placeholders.length} gefüllt
+                                    </span>
+                                </div>
+                                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
+                                    {document.placeholders.length === 0 && (
+                                        <div className="px-2 py-3 text-[10px] text-gray-300">Noch keine Platzhalter.</div>
+                                    )}
+                                    {document.placeholders.map((p, i) => {
+                                        const chip = phChip(p.source);
+                                        const open = p.source === 'open';
+                                        return (
+                                            <div
+                                                key={`${p.name}-${i}`}
+                                                className={cn('mb-1 flex items-baseline gap-2 rounded-lg border px-2 py-1.5',
+                                                    open ? 'border-gray-100' : 'border-teal-100 bg-teal-50/40')}
+                                            >
+                                                <span className="flex-none font-mono text-[10px] text-teal-700">{`{{${p.name}}}`}</span>
+                                                <span className={cn('min-w-0 flex-1 truncate text-[11px]', open ? 'italic text-gray-400' : 'text-gray-800')}>
+                                                    {open ? 'im Chat ergänzen' : p.value}
+                                                </span>
+                                                <span className={cn('flex-none rounded px-1.5 py-px text-[8.5px] font-bold uppercase tracking-wide', chip.cls)}>{chip.label}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Activity — derived from the live document state so it keeps
+                                advancing even while the sub-agent stdout is quiet. */}
+                            <div className="flex min-h-0 flex-[0.7] flex-col">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
+                                <div
+                                    ref={documentActivityRef}
+                                    className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 font-mono text-[10px] leading-relaxed text-gray-500"
+                                >
+                                    {docActivity.map((line, index) => (
+                                        <div key={`${index}-${line.slice(0, 24)}`} className="break-all">{line}</div>
+                                    ))}
+                                    {docActivity.length === 0 && (
+                                        <div className="text-gray-300">Waiting for output…</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ── Status bar ── */}
+                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10px] text-[#c8d0e8]">
+                        <div className="flex h-full items-center bg-teal-600 px-3 font-bold text-white">VAF</div>
+                        <div className="flex h-full items-center px-2.5">Format: {fmt}</div>
+                        <div className="flex h-full items-center px-2.5">Section {Math.min(doneCount + (writingSec ? 1 : 0), document.sections.length)}/{document.sections.length}</div>
+                        <div className="flex h-full items-center gap-1.5 px-2.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            {wordsTotal.toLocaleString()} Wörter
+                        </div>
+                        <div className="flex h-full items-center px-2.5">{filledCount}/{document.placeholders.length} gefüllt</div>
+                        {document.savePath && (
+                            <div className="ml-auto flex h-full max-w-[40%] items-center truncate px-2.5 font-mono text-[9px] text-[#8b93b0]" title={document.savePath}>{document.savePath}</div>
+                        )}
+                        <div className={cn("flex h-full items-center gap-1.5 px-3", !document.savePath && "ml-auto")}>
+                            <span className={cn('h-1.5 w-1.5 rounded-full', presenceTone)} />
+                            {presenceLabel}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (mode === 'dock' && hasResearchData && research) {
         const doneCount = research.sections.filter(s => s.status === 'done').length;
@@ -611,7 +905,11 @@ export default function SubAgentWindow({
                         </div>
                         <div className="flex flex-none items-center gap-2">
                             <span className="flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-violet-700">
-                                {isLive && <Loader2 size={9} className="animate-spin" />}
+                                {isLive && (/search/i.test(research.stage)
+                                    ? <Search size={9} className="animate-spin" />
+                                    : /summar|writ/i.test(research.stage)
+                                        ? <Pencil size={9} className="animate-spin" />
+                                        : <Loader2 size={9} className="animate-spin" />)}
                                 {research.stage}
                             </span>
                             <button
@@ -676,7 +974,8 @@ export default function SubAgentWindow({
                                                 s.status === 'planned' && 'bg-gray-100 text-gray-400'
                                             )}>
                                                 {s.status === 'done' && <CheckCircle2 size={9} />}
-                                                {(s.status === 'writing' || s.status === 'searching') && <Loader2 size={9} className="animate-spin" />}
+                                                {s.status === 'searching' && <Search size={9} className="animate-spin" />}
+                                                {s.status === 'writing' && <Pencil size={9} className="animate-spin" />}
                                                 {s.status === 'error' && <X size={9} />}
                                                 {s.status === 'planned' && (i + 1)}
                                             </span>

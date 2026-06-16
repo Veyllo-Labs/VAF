@@ -192,7 +192,7 @@ class BaseTool(ABC):
         if not model:
             # Fallback: Try to get default based on provider
             if provider == "openai": model = "gpt-4o"
-            elif provider == "anthropic": model = "claude-3-5-sonnet-20240620"
+            elif provider == "anthropic": model = "claude-sonnet-4-6"
             elif provider == "google": model = "gemini-1.5-pro"
             
             if not model:
@@ -234,7 +234,7 @@ class BaseTool(ABC):
                 err_str = str(e).lower()
                 # Self-Healing: If Invalid Model (400) or Model Not Found (404), try fallback
                 if "400" in err_str or "404" in err_str or "invalid model" in err_str:
-                    fallback = "gpt-4o" if provider == "openai" else ("claude-3-5-sonnet-20240620" if provider == "anthropic" else "gemini-1.5-pro")
+                    fallback = "gpt-4o" if provider == "openai" else ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-1.5-pro")
                     if fallback and fallback != model:
                         print(f"[WARN] Tool {self.name}: API Error with model '{model}'. Retrying with fallback '{fallback}'...")
                         _fut2 = _executor.submit(_execute_query, fallback)
@@ -300,6 +300,119 @@ class BaseTool(ABC):
             return None
         except Exception:
             return None
+
+    def _stream_local_completion(self, messages, max_tokens: int, temperature: float = 0.2,
+                                 idle_timeout: int = 75, on_progress=None) -> str:
+        """Stream a completion from the LOCAL llama server with an IDLE timeout.
+
+        Same proven mechanism the research agent uses for sections: a reasoning model
+        may think as long as tokens keep flowing (reasoning deltas keep the connection
+        alive = progress) but its chain-of-thought is NEVER collected — only `content`
+        is returned. A fixed total timeout would kill legitimate long reasoning and leave
+        the orphaned request occupying the single server slot. Returns '' on any failure.
+        """
+        import requests
+        import json
+        from vaf.core.config import Config
+        body = {
+            "model": Config.get("model", "") or "user-model",
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        parts = []
+        try:
+            with requests.post(
+                "http://127.0.0.1:8080/v1/chat/completions",
+                json=body, stream=True, timeout=(10, idle_timeout),
+            ) as resp:
+                resp.raise_for_status()
+                for raw in resp.iter_lines():
+                    line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+                    if not line or not line.startswith("data:"):
+                        continue
+                    d = line[5:].strip()
+                    if d == "[DONE]":
+                        break
+                    try:
+                        delta = (json.loads(d).get("choices") or [{}])[0].get("delta") or {}
+                    except Exception:
+                        continue
+                    piece = delta.get("content") or ""
+                    if piece:
+                        parts.append(piece)
+                        if on_progress:
+                            try:
+                                on_progress("".join(parts))
+                            except Exception:
+                                pass
+                    # reasoning_content deltas keep the connection alive but are not collected.
+        except Exception as e:
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log("backend", f"{self.name} stream ended: {type(e).__name__}: {str(e)[:120]}")
+            except Exception:
+                pass
+        return "".join(parts).strip()
+
+    def generate_text(self, messages, max_tokens: int, temperature: float = 0.2,
+                      idle_timeout: int = 75, api_timeout: int = 240, on_progress=None) -> str:
+        """Provider-aware generation that NEVER returns chain-of-thought.
+
+        Local provider streams (reasoning models may think as long as tokens flow); API
+        providers use `query_llm(allow_reasoning_fallback=False)` under a wall-clock guard.
+        Returns '' on failure/timeout so the caller runs its own fallback. Use a GENEROUS
+        `max_tokens` (e.g. 8192): a reasoning model needs room to finish thinking AND emit
+        the answer — a tight budget cuts it off mid-reasoning, leaving empty content.
+        """
+        from vaf.core.config import Config
+        if (Config.get("provider", "local") or "local").strip().lower() == "local":
+            return self._stream_local_completion(messages, max_tokens, temperature,
+                                                 max(15, idle_timeout), on_progress)
+        import threading
+        holder = {"content": ""}
+
+        def _worker():
+            try:
+                holder["content"] = self.query_llm(
+                    messages=messages, max_tokens=max_tokens, temperature=temperature,
+                    allow_reasoning_fallback=False,
+                ) or ""
+            except Exception:
+                holder["content"] = ""
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout=max(10, api_timeout))
+        if t.is_alive():
+            return ""
+        return str(holder.get("content") or "").strip()
+
+    @staticmethod
+    def sanitize_model_text(raw: str) -> str:
+        """Strip <think>…</think> blocks and markdown fences, and reject output that is
+        pure chain-of-thought (returns '' so the caller's fallback fires). Mirrors the
+        research agent's reasoning-leak guard so a reasoning model's thoughts never end up
+        in generated content. JSON/structured output (starts with '{' or '[') is kept."""
+        if not raw:
+            return ""
+        import re as _re
+        text = _re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
+        text = _re.sub(r'^```[a-zA-Z]*\s*', '', text)
+        text = _re.sub(r'\s*```\s*$', '', text).strip()
+        if not text:
+            return ""
+        if text[0] in '{[':
+            return text  # structured output — not chain-of-thought
+        low = text.lower()
+        reasoning_markers = (
+            'thinking process', 'okay,', 'okay ', 'let me', "let's", 'alright',
+            'the user', 'we need', 'i need ', 'hmm', '1. **analyze',
+        )
+        if any(low.startswith(mk) for mk in reasoning_markers):
+            return ""
+        return text
 
     def get_description_with_examples(self) -> str:
         """Return description with optional input_examples appended as text.

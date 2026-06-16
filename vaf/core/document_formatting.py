@@ -376,6 +376,34 @@ def render_markdown(model: DocumentModel) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
+def _html_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def render_section_html(section: DocumentSection) -> str:
+    """Render ONE section to an HTML fragment for the live document viewer.
+
+    Mirrors render_markdown's block handling (paragraph / bullet_list /
+    numbered_list). Placeholders like ``{{NAME}}`` are kept verbatim (the frontend
+    highlights them); text is HTML-escaped, structure is minimal."""
+    level = max(2, min(6, section.heading_level))
+    parts: list[str] = [f"<h{level}>{_html_escape(sanitize_inline_text(section.title))}</h{level}>"]
+    for block in section.blocks:
+        if block.type == "paragraph":
+            txt = _html_escape(sanitize_inline_text(block.text))
+            if txt:
+                parts.append(f"<p>{txt}</p>")
+        elif block.type == "bullet_list":
+            items = "".join(f"<li>{_html_escape(sanitize_inline_text(it))}</li>" for it in block.items if it)
+            if items:
+                parts.append(f"<ul>{items}</ul>")
+        elif block.type == "numbered_list":
+            items = "".join(f"<li>{_html_escape(sanitize_inline_text(it))}</li>" for it in block.items if it)
+            if items:
+                parts.append(f"<ol>{items}</ol>")
+    return "".join(parts)
+
+
 def render_text(model: DocumentModel) -> str:
     """Render the canonical model to plain text."""
 

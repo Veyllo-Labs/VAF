@@ -530,7 +530,7 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
     ):
         _defaults = {
             "openai": "gpt-4o",
-            "anthropic": "claude-3-5-sonnet-20241022",
+            "anthropic": "claude-sonnet-4-6",
             "deepseek": "deepseek-v4-flash",
             "google": "gemini-1.5-flash",
             "openrouter": "anthropic/claude-3.5-sonnet",

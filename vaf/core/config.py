@@ -63,7 +63,7 @@ class Config:
         
         # API Model Selection per Provider
         "api_model_openai": "gpt-4o",
-        "api_model_anthropic": "claude-3-5-sonnet-20241022",
+        "api_model_anthropic": "claude-sonnet-4-6",
         "api_model_deepseek": "deepseek-v4-flash",  # deepseek-chat deprecated 2026-07-24
         "api_model_google": "gemini-1.5-flash",  # Free tier, fast & capable
         "api_model_openrouter": "anthropic/claude-3.5-sonnet",
@@ -148,6 +148,16 @@ class Config:
                 # "done" proceeds anyway so the agent can never get stuck waiting.
                 "team_await_enabled": True,                    # global kill-switch
                 "team_await_max_blocks": 3,                    # bounces before proceeding anyway
+
+                # Anti-spin guard (main agent): a weak model can churn the bookkeeping tools
+                # (update_working_memory / update_intent / add_task) over and over — re-planning
+                # the same task with slightly varying text — without ever calling the tool that
+                # does the actual work. The redundant-call block needs EXACT args and the emergency
+                # breaker needs <5s, so neither catches this slow near-duplicate planning spin. We
+                # count CONSECUTIVE bookkeeping calls (any other tool resets it): nudge at the
+                # threshold, then disable tools for one turn so the model must act or answer.
+                "anti_spin_enabled": True,                     # global kill-switch
+                "anti_spin_max_planning_calls": 4,             # consecutive plan/intent calls before nudging
 
                 # Out-of-order drift nudge: when the agent marks a later task done while an earlier
                 # one is still pending, update_working_memory appends a soft "did you skip it?" hint

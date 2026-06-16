@@ -205,8 +205,9 @@ In addition to the IPC queue, Sub-Agents synchronize their status with the **Mai
 2. Main Agent's `_process_subagent_result` reads result.
 3. **Result validation** — direct sub-agent calls only (see [Context Management](../memory/CONTEXT_MANAGEMENT.md)): An LLM judges whether the result fulfills the user's intent. If not (`</false>`), a retry instruction is injected and the Main Agent calls the sub-agent again. Max 20 retries; then the agent is instructed to inform the user of the actual status. (Sub-agents *inside a workflow* use the separate opt-in per-step validation described under [Workflow Integration](#per-step-output-validation-opt-in).)
 4. Automatically updates `team_state.json`:
-   - `status`: `completed`
-   - `result_summary`: First 500 chars of result
+   - `status`: `completed` (or `failed`)
+   - `result_summary`: first 500 chars of result
+   - a completion timestamp. The entry then renders in the System Prompt's team section as `done HH:MM` (or `failed HH:MM`) with its live "Doing:" line dropped, so the Main Agent can see the sub-agent has stopped instead of believing it is still running. A finished entry lingers for `TEAM_DONE_PRUNE_TURNS` (3) main-agent turns — counted down once per user turn by `MainPersistenceManager.tick_team_state()` — then it is removed from the team list. A stuck entry that never reports completion is still pruned by the `TEAM_STATE_TTL_SECONDS` wall-clock safety net.
 
 **Clarification Flow:**
 Sub-Agents can now request help instead of failing blindly:

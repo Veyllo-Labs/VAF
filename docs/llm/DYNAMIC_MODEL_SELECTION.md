@@ -269,7 +269,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 | Provider | Vision support | Recommended model |
 |----------|---------------|-------------------|
 | OpenAI | ✅ | `gpt-4o` |
-| Anthropic | ✅ all Claude 3+ | `claude-3-5-sonnet-20241022` |
+| Anthropic | ✅ all Claude 3+ | `claude-sonnet-4-6` |
 | Google | ✅ all Gemini | `gemini-2.0-flash` |
 | OpenRouter | ✅ varies | `openai/gpt-4o` |
 | DeepSeek | ❌ | — |

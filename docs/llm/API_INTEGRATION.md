@@ -6,7 +6,7 @@ VAF now supports multiple AI providers through API integration, allowing you to 
 
 - **Local** - llama-server (default, runs locally)
 - **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
-- **Anthropic** - Claude 3.5 Sonnet, Claude 3 Opus/Sonnet/Haiku
+- **Anthropic** - Claude Sonnet 4.6, Claude Opus 4.8, Claude Haiku 4.5 (native Messages API: tool use, streaming, adaptive thinking, prompt caching)
 - **DeepSeek** - DeepSeek V4 Flash, DeepSeek V4 Pro
 - **Google AI Studio** - Gemini 1.5 Pro/Flash, Gemini 1.0 Pro
 - **OpenRouter** - Multi-provider access (Claude, GPT-4, Llama, etc.)
@@ -66,7 +66,7 @@ Each provider has default models, but you can customize:
 {
   "provider": "openai",
   "api_model_openai": "gpt-4o",
-  "api_model_anthropic": "claude-3-5-sonnet-20241022",
+  "api_model_anthropic": "claude-sonnet-4-6",
   "api_model_deepseek": "deepseek-v4-flash",
   "api_model_google": "gemini-1.5-pro",
   "api_model_openrouter": "anthropic/claude-3.5-sonnet"
@@ -176,7 +176,7 @@ All API providers support **streaming responses** for real-time output.
 Providers that support multimodal (image) input:
 
 - ✅ **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
-- ✅ **Anthropic** (`claude-3*`, `claude-sonnet-4*`) — converted to `source.base64` format
+- ✅ **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) — converted to `source.base64` format
 - ✅ **Google** (`gemini-1.5-pro`, `gemini-2.0-flash`, etc.) — converted to `inline_data` parts
 - ✅ **OpenRouter** — provider-dependent (model must support vision)
 - ❌ **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
@@ -213,7 +213,7 @@ Execution is sequential to preserve tool gating and interactive prompts.
 
 Provider context limits are respected:
 - **GPT-4o**: ~128K tokens
-- **Claude 3.5 Sonnet**: ~200K tokens
+- **Claude Sonnet/Opus 4.x**: ~1M tokens (Claude Haiku 4.5: ~200K)
 - **Gemini 1.5 Pro**: ~2M tokens
 - **DeepSeek V4**: ~1M tokens
 
@@ -283,9 +283,20 @@ ls -l ~/.vaf/config.json   # expect -rw------- (600)
 ### Anthropic (Claude)
 
 **Models:**
-- `claude-3-5-sonnet-20241022` - Best balance (recommended)
-- `claude-3-5-haiku-20241022` - Fast, cheaper
-- `claude-3-opus-20240229` - Most capable
+- `claude-sonnet-4-6` - Best balance of speed, intelligence and cost (recommended, default)
+- `claude-opus-4-8` - Most capable Opus model, for demanding agentic work
+- `claude-haiku-4-5` - Fast, cheaper, for simple tasks
+
+VAF calls Anthropic through the native Messages API (official SDK): tool use, streaming,
+and adaptive thinking. Two optional config flags (`~/.vaf/config.json`):
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `anthropic_thinking` | `true` | Adaptive (extended) thinking on supported models (Sonnet 4.6, Opus 4.6/4.7/4.8, Fable). Reasoning is shown wrapped in `<think>…</think>` like DeepSeek. Set `false` to disable. |
+| `anthropic_prompt_cache` | `true` | Caches the system prompt prefix (`cache_control: ephemeral`) to cut cost on multi-turn / tool loops. Note: VAF's system prompt contains volatile parts (date etc.), so the cache hit rate may be limited until the prefix is stable. |
+
+Sampling note: `temperature` is omitted automatically when thinking is active or on models
+that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request would 400.
 
 **Get API Key:** https://console.anthropic.com/
 

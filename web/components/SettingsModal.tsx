@@ -279,7 +279,7 @@ const CATEGORIES = [
 
 const PROVIDERS = [
     { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o' },
-    { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-3-5-sonnet-20241022' },
+    { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-6', staticModels: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5'] },
     { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', staticModels: ['deepseek-v4-flash', 'deepseek-v4-0324', 'deepseek-auto'] },
     { id: 'google', label: 'Google', defaultModel: 'gemini-1.5-flash-latest' },
     { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },

@@ -271,7 +271,7 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 | Provider | Recommended model |
 |---|---|
 | OpenAI | `gpt-4o` or `gpt-4o-mini` |
-| Anthropic | `claude-3-5-sonnet-20241022` or newer |
+| Anthropic | `claude-sonnet-4-6` or newer |
 | DeepSeek | `deepseek-v4-flash` |
 | Local (Ollama) | `llama3.1:70b` or `qwen2.5:32b` minimum |
 

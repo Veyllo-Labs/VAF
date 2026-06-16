@@ -207,7 +207,13 @@ class OpenAIProvider(BaseAIProvider):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AnthropicProvider(BaseAIProvider):
-    """Provider for Anthropic Claude models."""
+    """Provider for Anthropic Claude models (native Messages API)."""
+
+    # Models that support adaptive thinking (substring match on the lower-cased id).
+    # Excludes Haiku 4.5 (no adaptive thinking) and legacy claude-3.x.
+    _THINKING_MODELS = ("sonnet-4-6", "opus-4-6", "opus-4-7", "opus-4-8", "fable", "mythos")
+    # Models that reject sampling params (temperature/top_p/top_k) — 400 if sent.
+    _NO_SAMPLING_MODELS = ("opus-4-7", "opus-4-8", "fable", "mythos")
 
     def __init__(self, api_key: str):
         super().__init__("anthropic", api_key)
@@ -242,73 +248,198 @@ class AnthropicProvider(BaseAIProvider):
                     })
         return result
 
+    @classmethod
+    def _supports_thinking(cls, model: str) -> bool:
+        m = (model or "").lower()
+        return any(p in m for p in cls._THINKING_MODELS)
+
+    @classmethod
+    def _rejects_sampling(cls, model: str) -> bool:
+        m = (model or "").lower()
+        return any(p in m for p in cls._NO_SAMPLING_MODELS)
+
+    def _convert_messages_to_anthropic(self, messages: List[Dict]) -> List[Dict]:
+        """Convert VAF's OpenAI-format history (already system-stripped) to native
+        Anthropic message blocks.
+
+        - assistant + tool_calls  -> content list: optional text block + tool_use blocks
+          (arguments JSON-parsed; defensive fallback {}).
+        - assistant + _anthropic_blocks -> replayed VERBATIM (preserves thinking blocks +
+          signatures so a thinking-enabled tool loop doesn't 400 on the next turn).
+        - role:"tool"             -> user turn with a tool_result block; consecutive results
+          are merged into ONE user message (Anthropic parallel-tool pattern).
+        - plain user/assistant    -> _convert_content (keeps image conversion).
+        Empty plain-assistant turns are dropped (Anthropic rejects empty content).
+        """
+        out: List[Dict] = []
+        for m in messages:
+            role = m.get("role")
+
+            if role == "assistant":
+                raw_blocks = m.get("_anthropic_blocks")
+                if raw_blocks:
+                    out.append({"role": "assistant", "content": raw_blocks})
+                    continue
+
+                tool_calls = m.get("tool_calls")
+                if tool_calls:
+                    blocks: List[Dict] = []
+                    text = m.get("content")
+                    if isinstance(text, str) and text.strip():
+                        blocks.append({"type": "text", "text": text})
+                    for tc in tool_calls:
+                        fn = tc.get("function", {}) or {}
+                        args = fn.get("arguments", "{}")
+                        try:
+                            parsed = json.loads(args) if isinstance(args, str) else (args or {})
+                        except Exception:
+                            parsed = {}
+                        blocks.append({
+                            "type": "tool_use",
+                            "id": tc.get("id") or f"toolu_{os.urandom(4).hex()}",
+                            "name": fn.get("name", ""),
+                            "input": parsed,
+                        })
+                    out.append({"role": "assistant", "content": blocks})
+                else:
+                    converted = self._convert_content(m.get("content", ""))
+                    # Drop empty assistant turns — Anthropic rejects empty content.
+                    if isinstance(converted, str) and not converted.strip():
+                        continue
+                    if isinstance(converted, list) and not converted:
+                        continue
+                    out.append({"role": "assistant", "content": converted})
+
+            elif role == "tool":
+                block = {
+                    "type": "tool_result",
+                    "tool_use_id": m.get("tool_call_id", ""),
+                    "content": str(m.get("content", "")),
+                }
+                prev = out[-1] if out else None
+                if (
+                    prev and prev.get("role") == "user"
+                    and isinstance(prev.get("content"), list)
+                    and prev["content"]
+                    and isinstance(prev["content"][0], dict)
+                    and prev["content"][0].get("type") == "tool_result"
+                ):
+                    prev["content"].append(block)
+                else:
+                    out.append({"role": "user", "content": [block]})
+
+            else:  # user (and any unexpected role) -> user text/multimodal
+                out.append({"role": "user", "content": self._convert_content(m.get("content", ""))})
+
+        return out
+
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
             yield "[Error] Anthropic SDK missing."
             return
 
-        # Convert format: extract system message, convert multimodal content blocks
+        # 1. Consolidate system messages: leading system turns -> one top-level system;
+        #    mid-run system nudges -> in-place user turns (reuses the shared helper).
+        consolidated = consolidate_system_messages(messages)
         system_msg = ""
-        filtered_messages = []
-        for m in messages:
-            if m["role"] == "system":
-                system_msg = m["content"] if isinstance(m["content"], str) else ""
+        rest: List[Dict] = []
+        for m in consolidated:
+            if m.get("role") == "system":
+                c = m.get("content")
+                system_msg = c if isinstance(c, str) else ""
             else:
-                converted_content = self._convert_content(m["content"])
-                filtered_messages.append({**m, "content": converted_content})
+                rest.append(m)
+
+        # 2. Convert remaining messages (tool_calls/role:tool -> tool_use/tool_result).
+        anthropic_messages = self._convert_messages_to_anthropic(rest)
 
         try:
             kwargs = {
                 "model": model,
-                "messages": filtered_messages,
+                "messages": anthropic_messages,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": stream,
             }
+
+            # 3. System prompt + optional prompt caching (auto-caches the stable prefix).
             if system_msg:
-                kwargs["system"] = system_msg
+                use_cache = Config.get("anthropic_prompt_cache", True)
+                use_cache = use_cache if isinstance(use_cache, bool) else \
+                    str(use_cache).strip().lower() in ("1", "true", "yes", "on")
+                if use_cache:
+                    kwargs["system"] = [{
+                        "type": "text", "text": system_msg,
+                        "cache_control": {"type": "ephemeral"},
+                    }]
+                else:
+                    kwargs["system"] = system_msg
+
+            # 4. Adaptive thinking (config-gated, supported models only).
+            thinking_on = Config.get("anthropic_thinking", True)
+            thinking_on = thinking_on if isinstance(thinking_on, bool) else \
+                str(thinking_on).strip().lower() in ("1", "true", "yes", "on")
+            thinking_active = thinking_on and self._supports_thinking(model)
+            if thinking_active:
+                kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+
+            # 5. Sampling: omit temperature when thinking is on (requires temp=1) or the
+            #    model rejects sampling params (Opus 4.7/4.8, Fable/Mythos -> 400).
+            if not thinking_active and not self._rejects_sampling(model):
+                kwargs["temperature"] = temperature
+
+            # 6. Tools (OpenAI -> Anthropic schema).
             if tools:
-                # Convert OpenAI tools to Anthropic format
                 anthropic_tools = []
                 for t in tools:
-                    if t["type"] == "function":
+                    if t.get("type") == "function":
                         func = t["function"]
                         anthropic_tools.append({
                             "name": func["name"],
                             "description": func.get("description", ""),
-                            "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+                            "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
                         })
-                kwargs["tools"] = anthropic_tools
+                if anthropic_tools:
+                    kwargs["tools"] = anthropic_tools
+                    if tool_choice in ("required", "any"):
+                        kwargs["tool_choice"] = {"type": "any"}
+                    elif tool_choice == "none":
+                        kwargs["tool_choice"] = {"type": "none"}
+                    elif isinstance(tool_choice, dict):
+                        fn = tool_choice.get("function", {})
+                        if fn.get("name"):
+                            kwargs["tool_choice"] = {"type": "tool", "name": fn["name"]}
 
             if stream:
+                in_think = False
                 with self.client.messages.stream(**kwargs) as response:
-                    for text in response.text_stream:
-                        yield text
-                    
-                    # Finalize usage stats
+                    for event in response:
+                        if event.type != "content_block_delta":
+                            continue
+                        delta = event.delta
+                        dtype = getattr(delta, "type", None)
+                        if dtype == "thinking_delta":
+                            if not in_think:
+                                in_think = True
+                                yield "<think>"
+                            yield delta.thinking
+                        elif dtype == "text_delta":
+                            if in_think:
+                                in_think = False
+                                yield "</think>\n\n"
+                            yield delta.text
+                    if in_think:
+                        yield "</think>"
+
                     final_msg = response.get_final_message()
-                    self.usage["input_tokens"] += final_msg.usage.input_tokens
-                    self.usage["output_tokens"] += final_msg.usage.output_tokens
-                    self.last_request_usage["input_tokens"] = final_msg.usage.input_tokens
-                    self.last_request_usage["output_tokens"] = final_msg.usage.output_tokens
-                    
-                    # Handle tool use if any
-                    for tool_use in response.get_final_message().content:
-                        if hasattr(tool_use, 'type') and tool_use.type == "tool_use":
-                            yield json.dumps({"tool_use": tool_use.model_dump()})
+                    yield from self._emit_final(final_msg, thinking_active)
             else:
                 response = self.client.messages.create(**kwargs)
                 for content_block in response.content:
-                    if content_block.type == "text":
+                    if content_block.type == "thinking":
+                        yield "<think>" + getattr(content_block, "thinking", "") + "</think>\n\n"
+                    elif content_block.type == "text":
                         yield content_block.text
-                    elif content_block.type == "tool_use":
-                        yield json.dumps({"tool_use": content_block.model_dump()})
-                
-                self.usage["input_tokens"] += response.usage.input_tokens
-                self.usage["output_tokens"] += response.usage.output_tokens
-                self.last_request_usage["input_tokens"] = response.usage.input_tokens
-                self.last_request_usage["output_tokens"] = response.usage.output_tokens
-                
+                yield from self._emit_final(response, thinking_active)
+
         except Exception as e:
             err_str = str(e)
             UI.error(f"Anthropic Provider Error: {err_str}")
@@ -318,6 +449,50 @@ class AnthropicProvider(BaseAIProvider):
             except Exception:
                 pass
             yield f"[API Error from anthropic: {err_str}]"
+
+    def _emit_final(self, final_msg, thinking_active: bool) -> Generator[str, None, None]:
+        """Shared finalize step for streaming and non-streaming: usage, stop_reason,
+        tool_use payloads, and raw-block side-channel for thinking-loop replay."""
+        # Usage
+        try:
+            self.usage["input_tokens"] += final_msg.usage.input_tokens
+            self.usage["output_tokens"] += final_msg.usage.output_tokens
+            self.last_request_usage["input_tokens"] = final_msg.usage.input_tokens
+            self.last_request_usage["output_tokens"] = final_msg.usage.output_tokens
+        except Exception:
+            pass
+
+        stop_reason = getattr(final_msg, "stop_reason", None)
+        if stop_reason == "refusal":
+            details = getattr(final_msg, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            yield (
+                "[Anthropic declined this request for safety reasons"
+                + (f" (category: {category})" if category else "")
+                + ".]"
+            )
+            return
+
+        # Tool use: emit each call (drives VAF's tool execution) and, when a thinking
+        # block is present, the raw assistant blocks so the next turn can replay them
+        # verbatim (else Anthropic 400s "thinking blocks must be preserved").
+        content_blocks = getattr(final_msg, "content", []) or []
+        has_tool_use = any(getattr(b, "type", None) == "tool_use" for b in content_blocks)
+        has_thinking = any(getattr(b, "type", None) == "thinking" for b in content_blocks)
+        for b in content_blocks:
+            if getattr(b, "type", None) == "tool_use":
+                yield json.dumps({"tool_use": b.model_dump()})
+        if has_tool_use and thinking_active and has_thinking:
+            try:
+                raw = [b.model_dump() for b in content_blocks]
+                yield json.dumps({"_anthropic_blocks": raw})
+            except Exception:
+                pass
+
+        if stop_reason == "pause_turn":
+            # Server-tool pause: VAF declares no server tools here, so this is rare.
+            # Surface a hint rather than silently ending.
+            yield json.dumps({"finish_reason": "pause_turn"})
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GOOGLE GEMINI PROVIDER
@@ -504,7 +679,7 @@ class APIBackendManager:
         # Determine model
         default_models = {
             "openai": "gpt-4o",
-            "anthropic": "claude-3-5-sonnet-20241022",
+            "anthropic": "claude-sonnet-4-6",
             "deepseek": "deepseek-v4-flash",
             "google": "gemini-1.5-flash",
             "openrouter": "anthropic/claude-3.5-sonnet",
@@ -583,7 +758,12 @@ class APIBackendManager:
         ("o1",              200_000),
         ("o3",              200_000),
         ("o4",              200_000),
-        # Anthropic – all current models share 200 K
+        # Anthropic — Claude 4 family (Sonnet/Opus/Fable/Mythos) is 1M; Haiku 4.5 + legacy 3.x = 200K
+        ("claude-haiku-4",  200_000),
+        ("claude-sonnet-4",1_000_000),
+        ("claude-opus-4",  1_000_000),
+        ("claude-fable",   1_000_000),
+        ("claude-mythos",  1_000_000),
         ("claude",          200_000),
         # Google
         ("gemini-2.5",    1_048_576),
@@ -661,7 +841,7 @@ class APIBackendManager:
         """Legacy static list for UI dropdowns (can be extended to use providers)."""
         models = {
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-            "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+            "anthropic": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
             "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-auto"],
             "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
             "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],

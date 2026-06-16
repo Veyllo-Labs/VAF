@@ -154,6 +154,13 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     }, [result]);
     const [liveUnit, setLiveUnit] = useState<SupervisorUnit | null>(null);
     const [killing, setKilling] = useState(false);
+    // An async sub-agent delegates instantly, so the tool call's own duration is ~0.0s.
+    // Capture the supervised unit's real runtime while it is alive, then keep showing it
+    // after the unit is gone — otherwise the bubble would read a misleading "(0.0s)".
+    const lastRuntimeRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (liveUnit?.runtime_s != null) lastRuntimeRef.current = liveUnit.runtime_s;
+    }, [liveUnit?.runtime_s]);
 
     useEffect(() => {
         if (!isSubAgent) { setLiveUnit(null); return; }
@@ -301,7 +308,9 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                  headerStatus === 'completed' ? 'Completed' : 'Failed'}
                                 {liveUnit && liveUnit.runtime_s != null
                                     ? ` (${fmtDuration(liveUnit.runtime_s)})`
-                                    : (endTime && startTime ? ` (${((endTime - startTime) / 1000).toFixed(1)}s)` : '')}
+                                    : lastRuntimeRef.current != null
+                                        ? ` (${fmtDuration(lastRuntimeRef.current)})`
+                                        : (endTime && startTime ? ` (${((endTime - startTime) / 1000).toFixed(1)}s)` : '')}
                             </span>
                         </div>
                     </div>

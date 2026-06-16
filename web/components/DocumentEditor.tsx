@@ -153,344 +153,37 @@ function getTextNodesInOrder(root: Node): { node: Text; start: number; end: numb
     return result;
 }
 
-/** Page geometry at 96dpi. A4 = 210×297mm, 25mm margins.
- *  PAGE_CONTENT_PX = inner content height (247mm); PADDING_PX = 25mm page padding;
- *  PAGE_FULL_PX = full A4 page height (297mm). */
-const PAGE_CONTENT_PX = Math.round((297 - 50) * 96 / 25.4); // 934
-const PADDING_PX = Math.round(25 * 96 / 25.4);              // 94
-const PAGE_FULL_PX = Math.round(297 * 96 / 25.4);           // 1122
-
-/** Text-level blocks whose TEXT may be split across a page boundary (Paged.js
- *  textBreak). Splitting + later merging round-trips losslessly via normalize().
- *  DIV is included so a leaf `<div>` (inline content only) also paginates. */
-const TEXT_SPLIT_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'DIV']);
-/** Container blocks split only at CHILD boundaries (li/list-item), never mid-item,
- *  so child count is preserved across split/merge (no unbounded growth). */
-const CHILD_SPLIT_TAGS = new Set(['UL', 'OL']);
-/** Transparent structural wrappers that are unwrapped into their block children, so
- *  content authored as `<div class="report">…</div>` (docx/HTML exports) paginates
- *  block-by-block instead of being treated as one giant unsplittable element. */
-const WRAPPER_TAGS = new Set(['DIV', 'SECTION', 'ARTICLE', 'MAIN', 'HEADER', 'FOOTER', 'ASIDE']);
-/** Block-level tags used to decide whether a wrapper is structural (contains blocks). */
-const BLOCK_LEVEL_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'TABLE', 'BLOCKQUOTE', 'PRE', 'DIV', 'SECTION', 'ARTICLE', 'FIGURE', 'HR']);
-
-/** A wrapper is unwrapped only when it actually holds block-level children (so a
- *  leaf `<div>` with inline content stays a block and is text-split instead). */
-function isStructuralWrapper(el: HTMLElement): boolean {
-    if (!WRAPPER_TAGS.has(el.tagName)) return false;
-    return Array.from(el.children).some((c) => BLOCK_LEVEL_TAGS.has(c.tagName));
-}
-
-/** Bottom Y (viewport px) of a page's usable content area. */
-function pageLimitBottom(page: HTMLElement): number {
-    return page.getBoundingClientRect().top + PADDING_PX + PAGE_CONTENT_PX;
-}
-
-function firstTextNode(el: HTMLElement): Text | null {
-    const t = getTextNodesInOrder(el);
-    return t.length ? t[0].node : null;
-}
-
-function appendPage(root: HTMLElement, doc: Document): HTMLElement {
-    const page = doc.createElement('div');
-    page.className = 'a4-page';
-    root.appendChild(page);
-    return page;
-}
-
-/** Binary-search the character offset in `block` where text crosses `limitBottom`
- *  (Paged.js `textBreak`), backing up to the nearest word boundary. */
-function findTextBreak(block: HTMLElement, limitBottom: number, doc: Document): { node: Text; offset: number } | null {
-    const texts = getTextNodesInOrder(block);
-    if (texts.length === 0) return null;
-    const range = doc.createRange();
-    for (const { node } of texts) {
-        const len = (node.textContent || '').length;
-        range.setStart(node, 0);
-        range.setEnd(node, len);
-        if (range.getBoundingClientRect().bottom <= limitBottom + 1) continue; // node fits above limit
-        // This text node crosses the limit: find the last char that still fits.
-        let lo = 0, hi = len, ans = 0;
-        while (lo <= hi) {
-            const mid = (lo + hi) >> 1;
-            range.setStart(node, 0);
-            range.setEnd(node, mid);
-            if (range.getBoundingClientRect().bottom <= limitBottom + 1) { ans = mid; lo = mid + 1; }
-            else hi = mid - 1;
-        }
-        if (ans <= 0) return { node, offset: 0 };            // not even the first char fits
-        const txt = node.textContent || '';
-        const sp = txt.lastIndexOf(' ', ans);                // break at a word boundary
-        const brk = sp > 0 ? sp + 1 : ans;
-        if (brk >= len) return null;                         // nothing left to move
-        return { node, offset: brk };
-    }
-    return null;
-}
-
-/** Split a text-level block at `bp`: extract the tail into a shallow clone of the
- *  block (Range.extractContents clones any crossed ancestors), marked data-vaf-cont. */
-function splitTextBlock(block: HTMLElement, bp: { node: Text; offset: number }, doc: Document): HTMLElement {
-    const range = doc.createRange();
-    range.setStart(bp.node, bp.offset);
-    range.setEnd(block, block.childNodes.length);
-    const frag = range.extractContents();
-    const tail = block.cloneNode(false) as HTMLElement;
-    tail.removeAttribute('id');
-    tail.setAttribute('data-vaf-cont', '1');
-    tail.appendChild(frag);
-    return tail;
-}
-
-/** Index of the first child of `block` whose bottom overflows `limitBottom`, or -1. */
-function findChildBreak(block: HTMLElement, limitBottom: number): number {
-    const kids = Array.from(block.children);
-    for (let i = 0; i < kids.length; i++) {
-        if (kids[i].getBoundingClientRect().bottom > limitBottom + 1) return i;
-    }
-    return -1;
-}
-
-/** Move children from `idx` onward into a shallow clone (data-vaf-cont). */
-function splitChildrenBlock(block: HTMLElement, idx: number, doc: Document): HTMLElement {
-    const tail = block.cloneNode(false) as HTMLElement;
-    tail.removeAttribute('id');
-    tail.setAttribute('data-vaf-cont', '1');
-    const kids = Array.from(block.children);
-    for (let i = idx; i < kids.length; i++) tail.appendChild(kids[i]);
-    return tail;
-}
-
-/** Recursively collect leaf blocks from a container, unwrapping structural wrappers
- *  and merging continuation fragments back into their head block. */
-function collectBlocks(container: HTMLElement, blocks: HTMLElement[], doc: Document): void {
-    for (const node of Array.from(container.childNodes)) {
-        if (node.nodeType === Node.TEXT_NODE) {
-            if (!(node.textContent || '').trim()) continue;           // ignore inter-block whitespace
-            const p = doc.createElement('p');
-            p.appendChild(node.cloneNode(true));
-            blocks.push(p);
-            continue;
-        }
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        const el = node as HTMLElement;
-        const prev = blocks[blocks.length - 1];
-        if (el.getAttribute('data-vaf-cont') === '1' && prev && prev.tagName === el.tagName) {
-            while (el.firstChild) prev.appendChild(el.firstChild);
-            if (TEXT_SPLIT_TAGS.has(prev.tagName)) prev.normalize();
-            continue;
-        }
-        if (isStructuralWrapper(el)) { collectBlocks(el, blocks, doc); continue; } // unwrap
-        el.removeAttribute('data-vaf-cont');
-        blocks.push(el);
-    }
-}
-
-/** Collect all leaf blocks from every page in document order (wrappers unwrapped,
- *  continuation fragments merged) so each pass re-splits from a clean flow. Detaches
- *  everything (root is cleared); the returned element references stay valid. */
-function flattenBlocks(root: HTMLElement, doc: Document): HTMLElement[] {
-    const blocks: HTMLElement[] = [];
-    for (const pg of Array.from(root.querySelectorAll('.a4-page'))) collectBlocks(pg as HTMLElement, blocks, doc);
-    root.innerHTML = '';
-    return blocks;
-}
-
-/** Remove empty trailing pages left after distribution. */
-function trimEmptyPages(root: HTMLElement): void {
-    const pages = Array.from(root.querySelectorAll('.a4-page'));
-    for (let i = pages.length - 1; i >= 1; i--) {
-        const pg = pages[i] as HTMLElement;
-        if (pg.children.length === 0 && !(pg.textContent || '').trim()) pg.remove();
-        else break;
-    }
-}
-
-/** Save the caret as a global character offset over the editing root. */
-function saveCaretOffset(doc: Document, root: HTMLElement): number | null {
-    const sel = doc.getSelection();
-    if (!sel || sel.rangeCount === 0) return null;
-    const r = sel.getRangeAt(0);
-    if (!root.contains(r.startContainer)) return null;
-    const pre = doc.createRange();
-    pre.selectNodeContents(root);
-    try { pre.setEnd(r.startContainer, r.startOffset); } catch { return null; }
-    return pre.toString().length;
-}
-
-/** Restore the caret to a previously saved global character offset. */
-function restoreCaretOffset(doc: Document, root: HTMLElement, offset: number | null): void {
-    if (offset == null) return;
-    const texts = getTextNodesInOrder(root);
-    if (texts.length === 0) return;
-    let target = texts[texts.length - 1];
-    let local = (target.node.textContent || '').length;
-    for (const t of texts) {
-        if (offset <= t.end) { target = t; local = offset - t.start; break; }
-    }
-    local = Math.max(0, Math.min(local, (target.node.textContent || '').length));
-    const sel = doc.getSelection();
-    if (!sel) return;
-    const r = doc.createRange();
-    try {
-        r.setStart(target.node, local);
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-        (target.node.parentElement?.closest('.a4-page') as HTMLElement | null)?.scrollIntoView?.({ block: 'nearest' });
-    } catch { /* ignore */ }
-}
-
-/** True if any page overflows its content area, or content can be pulled back from a
- *  following page (e.g. after a deletion). Lets the chunker skip work — and avoid a
- *  caret jump — when the current layout is already correct (steady state / typing
- *  inside a non-overflowing page). */
-function needsRepaginate(root: HTMLElement): boolean {
-    const pages = Array.from(root.querySelectorAll('.a4-page')) as HTMLElement[];
-    if (pages.length === 0) return true;
-    for (let i = 0; i < pages.length; i++) {
-        const pg = pages[i];
-        const limit = pageLimitBottom(pg);
-        const last = pg.lastElementChild as HTMLElement | null;
-        const lastBottom = last ? last.getBoundingClientRect().bottom : pg.getBoundingClientRect().top + PADDING_PX;
-        if (lastBottom > limit + 1) return true;                     // overflow → must reflow
-        if (i < pages.length - 1) {
-            const first = pages[i + 1].firstElementChild as HTMLElement | null;
-            if (first) {
-                const h = first.getBoundingClientRect().height;
-                if (h > 0 && h <= (limit - lastBottom) + 1) return true; // next block now fits here → pull back
-            }
-        }
-    }
-    return false;
-}
-
-/**
- * Paged.js-style fixed-box pagination, made live + caret-preserving. The editing
- * root `.a4-pages` holds fixed 297mm `.a4-page` boxes (overflow:hidden — they never
- * grow). This distributes the content into the boxes: each block is appended to the
- * current page; on overflow a text block is split at the line boundary (findTextBreak
- * + Range.extractContents), a list at a child boundary, and the remainder flows onto a
- * NEW page (cascading). Empty pages are trimmed and the caret is restored by global
- * character offset. ALL measurement is against LIVE attached boxes (never detached).
- */
-function paginateIntoFixedPages(doc: Document): void {
-    const win = doc.defaultView;
-    const root = doc.querySelector('.a4-pages') as HTMLElement | null;
-    if (!win || !root) return;
-    if (!needsRepaginate(root)) return;
-
-    const caret = saveCaretOffset(doc, root);
-    const queue = flattenBlocks(root, doc);
-    if (queue.length === 0) { appendPage(root, doc); return; }
-
-    let page = appendPage(root, doc);
-    let qi = 0;
-    let guard = 0;
-    while (qi < queue.length && guard++ < 20000) {
-        const block = queue[qi];
-        page.appendChild(block);
-        const limit = pageLimitBottom(page);
-        if (block.getBoundingClientRect().bottom <= limit + 1) { qi++; continue; }
-
-        const isFirst = page.children.length === 1;
-        let tail: HTMLElement | null = null;
-        if (TEXT_SPLIT_TAGS.has(block.tagName)) {
-            const bp = findTextBreak(block, limit, doc);
-            if (bp && !(bp.node === firstTextNode(block) && bp.offset === 0)) tail = splitTextBlock(block, bp, doc);
-        } else if (CHILD_SPLIT_TAGS.has(block.tagName)) {
-            const idx = findChildBreak(block, limit);
-            if (idx > 0) tail = splitChildrenBlock(block, idx, doc);
-        }
-
-        if (tail) {
-            page = appendPage(root, doc);
-            queue.splice(qi + 1, 0, tail);   // the tail is the first block of the new page
-            qi++;
-            continue;
-        }
-        if (isFirst) {
-            // Block alone and taller than a page (giant image / unsplittable table):
-            // leave it (clipped on screen, revealed in print); next block starts fresh.
-            page = appendPage(root, doc);
-            qi++;
-            continue;
-        }
-        // Move the whole block onto a fresh page and re-evaluate it there.
-        page.removeChild(block);
-        page = appendPage(root, doc);
-    }
-
-    trimEmptyPages(root);
-    restoreCaretOffset(doc, root, caret);
-}
-
-/** Serialize the editor content as a clean continuous flow for save/print/PDF:
- *  strip the page-box wrappers and merge continuation fragments back into their head
- *  block. Operates on CLONES — the live editor DOM is untouched. Highlight spans are
- *  preserved (they are re-applied on load just like before). */
-function serializeFlow(root: HTMLElement): string {
-    const doc = root.ownerDocument;
-    const container = doc.createElement('div');
-    const pages = Array.from(root.querySelectorAll('.a4-page'));
-    for (const pg of pages) {
-        for (const child of Array.from(pg.children)) {
-            const el = child as HTMLElement;
-            const clone = el.cloneNode(true) as HTMLElement;
-            clone.removeAttribute('data-vaf-cont');
-            const prev = container.lastElementChild as HTMLElement | null;
-            if (el.getAttribute('data-vaf-cont') === '1' && prev && prev.tagName === clone.tagName) {
-                while (clone.firstChild) prev.appendChild(clone.firstChild);
-                if (TEXT_SPLIT_TAGS.has(prev.tagName)) prev.normalize();
-            } else {
-                container.appendChild(clone);
-            }
-        }
-    }
-    return container.innerHTML;
-}
-
-/** Injected in document head. The editor renders strictly separated, FIXED-size A4
- *  page boxes (`.a4-page`, height:297mm, overflow:hidden — they never grow). The
- *  chunker (`paginateIntoFixedPages`) distributes content into them and reflows on
- *  overflow. Print maps each fixed box directly to one physical page (WYSIWYG). */
+/** Injected in document head. The .md / HTML editor is ONE continuous A4-width sheet
+ *  that grows naturally ("infinitely" long) — no JS pagination (real pagination lives in
+ *  the native .docx editor now). Print uses native CSS paged media so the browser
+ *  fragments the flow across physical A4 pages line-by-line (no dead space). */
 const A4_EDITOR_STYLE = `
-                html, body, .a4-pages, .a4-page, .a4-page * { box-sizing: border-box !important; }
+                html, body, body * { box-sizing: border-box !important; }
                 html, body { scrollbar-width: none !important; -ms-overflow-style: none !important; }
                 html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
-                html, body { width: 100% !important; margin: 0 !important; padding: 0 !important;
-                    background: #e5e7eb !important; }
+                html { width: 100% !important; margin: 0 !important; padding: 0 !important; background: #e5e7eb !important; }
 
-                /* Editing root: one contentEditable region holding the page boxes,
-                   centered on the gray canvas. */
-                .a4-pages { display: block !important; width: 100% !important; padding: 16px 0 !important;
-                    margin: 0 !important; outline: none !important; }
-
-                /* Each page is a fixed A4 sheet. height + overflow:hidden guarantee it
-                   never grows; the 25mm padding are the page margins. */
-                .a4-page {
-                    position: relative !important;
-                    width: 210mm !important; height: 297mm !important;
-                    margin: 0 auto 28px auto !important; padding: 25mm !important;
-                    background: #ffffff !important; box-shadow: 0 2px 10px rgba(0,0,0,0.22) !important;
-                    overflow: hidden !important; outline: none !important;
+                /* body IS the continuous A4-width sheet, centered on a gray canvas. */
+                html body {
+                    width: 210mm !important; max-width: 210mm !important;
+                    margin: 16px auto !important; padding: 25mm !important;
+                    background: #ffffff !important; box-shadow: 0 2px 10px rgba(0,0,0,0.18) !important;
+                    min-height: 297mm !important; overflow: visible !important; outline: none !important;
                 }
-                .a4-page > *:first-child { margin-top: 0 !important; }
-                .a4-page > * { max-width: 100% !important; }
+                html body > * { max-width: 100% !important; }
+                html body > *:first-child { margin-top: 0 !important; }
 
-                /* Print: each fixed box becomes exactly one physical page. After a
-                   settled chunk pass no box overflows, so nothing is clipped → the PDF
-                   is pixel-faithful to the editor (real margins, no dead space). */
-                @page { size: A4; margin: 0; }
+                /* Print: native paged media. Paragraphs fragment line-by-line across pages
+                   (NO break-inside:avoid on <p>) -> no dead space in the PDF. */
+                @page { size: A4; margin: 25mm; }
                 @media print {
-                    html, body { background: #ffffff !important; }
-                    .a4-pages { padding: 0 !important; }
-                    .a4-page {
-                        margin: 0 !important; box-shadow: none !important;
-                        height: auto !important; min-height: 297mm !important;
-                        overflow: visible !important; break-after: page !important; page-break-after: always !important;
-                    }
-                    .a4-page:last-child { break-after: auto !important; page-break-after: auto !important; }
+                    html { background: #ffffff !important; }
+                    html body { width: auto !important; max-width: none !important; margin: 0 !important;
+                        padding: 0 !important; box-shadow: none !important; min-height: 0 !important; }
+                    body h1, body h2, body h3, body h4, body h5, body h6,
+                    body li, body tr, body img, body figure, body blockquote, body pre { break-inside: avoid !important; }
+                    body h1, body h2, body h3 { break-after: avoid !important; }
+                    body thead { display: table-header-group !important; }
                 }
             `;
 
@@ -702,8 +395,6 @@ function LegacyDocumentEditor({
     }, [onClose]);
     /** When true, the last content update came from the iframe (user typing). Skip rewriting iframe to avoid focus loss. */
     const contentFromIframeRef = useRef(false);
-    /** While pagination moves DOM nodes, `input` can fire — syncing would re-enter useEffect and can exceed React update depth. */
-    const paginatingIframeRef = useRef(false);
     /** Saved selection when user clicks toolbar (so we can restore and execCommand). */
     const savedSelectionRef = useRef<{ doc: Document; range: Range } | null>(null);
     const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
@@ -840,56 +531,31 @@ function LegacyDocumentEditor({
             `<!DOCTYPE html><html><head><meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
         );
         doc.close();
-        // Build the fixed-page editing root: all content starts on page 1; the chunker
-        // distributes it into fixed 297mm boxes and reflows on overflow.
-        doc.body.innerHTML = '';
-        const pagesRoot = doc.createElement('div');
-        pagesRoot.className = 'a4-pages';
-        const firstPage = doc.createElement('div');
-        firstPage.className = 'a4-page';
-        firstPage.innerHTML = bodyInner;
-        pagesRoot.appendChild(firstPage);
-        doc.body.appendChild(pagesRoot);
-        pagesRoot.contentEditable = 'true';
-        (pagesRoot.style as CSSStyleDeclaration).outline = 'none';
+        // The body itself IS the continuous, editable A4-width sheet — no JS pagination.
+        doc.body.innerHTML = bodyInner;
         ensureA4EditorStyles(doc);
+        doc.body.contentEditable = 'true';
+        doc.body.style.outline = 'none';
 
-        // One guarded pagination pass: distributes content into the fixed pages and
-        // resizes the iframe to the full stacked height. Guarded so the input events
-        // the DOM moves emit don't re-enter React / get persisted as edits.
-        const runPaginatePass = () => {
-            paginatingIframeRef.current = true;
-            try { ensureA4EditorStyles(doc); paginateIntoFixedPages(doc); }
-            finally { paginatingIframeRef.current = false; resizeEditorIframe(iframeRef.current); }
-        };
-        const schedulePaginate = () => requestAnimationFrame(() => requestAnimationFrame(runPaginatePass));
-        schedulePaginate();
-        // Retry passes catch async layout settling (webfonts, late images, the iframe
-        // not yet sized on first paint). needsRepaginate() makes each a no-op once the
-        // layout is already correct, so these are cheap and never cause churn.
-        const lateTimers = [120, 400, 800, 1500].map((ms) => window.setTimeout(runPaginatePass, ms));
-        try { doc.fonts?.ready?.then(() => runPaginatePass()).catch(() => { /* ignore */ }); } catch { /* ignore */ }
+        // Size the iframe to the content once layout settles (and after webfonts/images),
+        // so the outer panel scrolls through the one long sheet.
+        const sizeIframe = () => resizeEditorIframe(iframeRef.current);
+        requestAnimationFrame(() => requestAnimationFrame(sizeIframe));
+        const lateTimers = [120, 400, 800, 1500].map((ms) => window.setTimeout(sizeIframe, ms));
+        try { doc.fonts?.ready?.then(sizeIframe).catch(() => { /* ignore */ }); } catch { /* ignore */ }
 
         const focusBodyOnMouseDown = (e: MouseEvent) => {
-            if (pagesRoot.contains(e.target as Node)) pagesRoot.focus();
+            if (doc.body.contains(e.target as Node)) doc.body.focus();
         };
         doc.body.addEventListener('mousedown', focusBodyOnMouseDown);
         const captureContent = () => {
-            if (paginatingIframeRef.current) return;
             contentFromIframeRef.current = true;
-            const html = serializeFlow(pagesRoot);   // clean continuous flow (no page boxes / cont markers)
+            const html = doc.body.innerHTML;   // body IS the flow — no decorations to strip
             setContent(html);
             onContentChangeRef.current?.(html);
+            sizeIframe();
         };
-        pagesRoot.addEventListener('input', captureContent);
-        // Debounced re-pagination after edits: this is what reflows overflow onto the
-        // next fixed page (and pulls content back on delete). 120ms keeps typing fluid.
-        let breakTimer: ReturnType<typeof setTimeout> | null = null;
-        const debouncedPaginate = () => {
-            if (breakTimer) clearTimeout(breakTimer);
-            breakTimer = setTimeout(schedulePaginate, 120);
-        };
-        pagesRoot.addEventListener('input', debouncedPaginate);
+        doc.body.addEventListener('input', captureContent);
         const handleMouseUp = () => {
             const fn = onInsertSelectionRef.current;
             if (!fn) return;
@@ -899,7 +565,7 @@ function LegacyDocumentEditor({
                 const r = sel.getRangeAt(0);
                 const text = r.toString().trim();
                 if (!text) return;
-                const root = pagesRoot as Node;
+                const root = doc.body as Node;
                 if (!root.contains(r.startContainer) || !root.contains(r.endContainer)) return;
                 const startRange = doc.createRange();
                 startRange.selectNodeContents(root);
@@ -923,17 +589,15 @@ function LegacyDocumentEditor({
                 updateSelectionFormat();
             }, 50);
         };
-        pagesRoot.addEventListener('mouseup', handleMouseUp);
+        doc.body.addEventListener('mouseup', handleMouseUp);
         doc.addEventListener('selectionchange', handleSelectionChange);
 
         return () => {
             if (selectionChangeTimeoutId) clearTimeout(selectionChangeTimeoutId);
-            if (breakTimer) clearTimeout(breakTimer);
             lateTimers.forEach((t) => clearTimeout(t));
             doc.body.removeEventListener('mousedown', focusBodyOnMouseDown);
-            pagesRoot.removeEventListener('input', captureContent);
-            pagesRoot.removeEventListener('input', debouncedPaginate);
-            pagesRoot.removeEventListener('mouseup', handleMouseUp);
+            doc.body.removeEventListener('input', captureContent);
+            doc.body.removeEventListener('mouseup', handleMouseUp);
             doc.removeEventListener('selectionchange', handleSelectionChange);
         };
     }, [content, isOpen, updateSelectionFormat]);
@@ -960,7 +624,7 @@ function LegacyDocumentEditor({
         if (!iframeRef.current || !content || !isOpen) return;
         const doc = iframeRef.current.contentDocument;
         if (!doc?.body) return;
-        const root = doc.querySelector('.a4-pages') as HTMLElement | null;
+        const root = doc.body as HTMLElement;
         if (!root) return;
         const rangesForEditor = (insertedSelections || [])
             .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i }))
@@ -1045,10 +709,10 @@ function LegacyDocumentEditor({
         } };
     }).pywebview?.api;
     const printBaseName = () => (displayFile || 'document').replace(/\.[^.]+$/, '') || 'document';
-    // Full rendered HTML of the editor iframe (head A4 styles + fixed page boxes) —
-    // the desktop bridge renders this off-screen and prints it to PDF. The fixed boxes
-    // ARE the pages: the @media print rules map each `.a4-page` to one physical page
-    // (height:auto, break-after:page), so the PDF is pixel-faithful to the editor.
+    // Full rendered HTML of the editor iframe (head A4 styles + continuous body) — the
+    // desktop bridge renders this off-screen and prints it to PDF. The body is one
+    // continuous A4-width flow; the @page / break-inside rules let the browser fragment
+    // it across physical A4 pages line-by-line (no dead space).
     const editorPrintHtml = () => {
         const d = iframeRef.current?.contentDocument;
         if (!d?.documentElement) return '';
@@ -1104,8 +768,7 @@ function LegacyDocumentEditor({
             wrapper.appendChild(style);
             const contentDiv = document.createElement('div');
             contentDiv.className = 'pdf-export-page';
-            const flowRoot = body.querySelector('.a4-pages') as HTMLElement | null;
-            contentDiv.innerHTML = flowRoot ? serializeFlow(flowRoot) : body.innerHTML;
+            contentDiv.innerHTML = body.innerHTML;   // body IS the continuous flow
             wrapper.appendChild(contentDiv);
             document.body.appendChild(wrapper);
             try {
@@ -1164,8 +827,7 @@ function LegacyDocumentEditor({
         const doc = iframeRef.current?.contentDocument;
         const win = iframeRef.current?.contentWindow;
         if (!doc || !win) return;
-        const pagesRoot = doc.querySelector('.a4-pages') as HTMLElement | null;
-        (pagesRoot ?? doc.body).focus();
+        doc.body.focus();
         const sel = doc.getSelection();
         if (sel && savedSelectionRef.current?.doc === doc) {
             sel.removeAllRanges();
@@ -1174,17 +836,10 @@ function LegacyDocumentEditor({
         try {
             doc.execCommand(command, false, value ?? '');
             contentFromIframeRef.current = true;
-            const html = pagesRoot ? serializeFlow(pagesRoot) : doc.body.innerHTML;
+            const html = doc.body.innerHTML;
             setContent(html);
             onContentChangeRef.current?.(html);
-            // List/format commands can change block heights → reflow the fixed pages.
-            if (pagesRoot) {
-                paginatingIframeRef.current = true;
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                    try { paginateIntoFixedPages(doc); }
-                    finally { paginatingIframeRef.current = false; resizeEditorIframe(iframeRef.current); }
-                }));
-            }
+            resizeEditorIframe(iframeRef.current);
             setTimeout(() => updateSelectionFormat(), 0);
         } finally {
             savedSelectionRef.current = null;

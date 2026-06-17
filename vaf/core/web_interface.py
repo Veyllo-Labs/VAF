@@ -465,6 +465,22 @@ class WebInterfaceManager:
             return
         self._push_session_update(session_id, payload)
 
+    def emit_librarian_state(self, state: dict, session_id: str = None):
+        """Emit the librarian agent's live state (filesystem map, storage, search).
+
+        Feeds the read-only explorer view of the SubAgent window: a disk-usage style
+        listing of folders with sizes, storage/drive gauges (local disk + Google Drive),
+        the biggest-folders list and an activity feed. Sent by the librarian agent when
+        it starts a task and when it finishes. The librarian only reads, never writes.
+        """
+        payload = {"type": "librarian_state", **(state or {})}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_coder_state(self, state: dict, session_id: str = None):
         """Emit the coder's project state (file tree, git, progress) to the WebUI.
 

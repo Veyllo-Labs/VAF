@@ -1468,6 +1468,29 @@ function VAFDashboardContent() {
             savePath: string;
             loop: number;
         } | null;
+        // Librarian read-only explorer view: streamed by the librarian agent as `librarian_state`
+        librarian: {
+            root: string;
+            stage: string;
+            readOnly: boolean;
+            totalSize: number;
+            totalFiles: number;
+            totalFolders: number;
+            entries: Array<{ name: string; type: string; sizeBytes: number; items?: number; gd?: boolean }>;
+            topFolders: Array<{ name: string; sizeBytes: number }>;
+            drives: Array<{ name: string; kind: 'disk' | 'home' | 'cloud'; usedBytes: number; totalBytes: number; connected?: boolean }>;
+            search: { query: string; hits?: number | null } | null;
+            activity: Array<{ cls: string; text: string }>;
+            currentFolder: {
+                path: string;
+                name: string;
+                fileCount: number;
+                folderCount: number;
+                totalSize: number;
+                types: Array<{ type: string; count: number }>;
+                entries: Array<{ name: string; type: string; isDir: boolean; sizeBytes: number; items?: number; modified: string; match?: boolean }>;
+            } | null;
+        } | null;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1485,6 +1508,7 @@ function VAFDashboardContent() {
         coder: null,
         research: null,
         document: null,
+        librarian: null,
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -2962,7 +2986,7 @@ function VAFDashboardContent() {
                             nextPresence !== 'error' &&
                             (statusLower.includes('running') || statusLower.includes('pending')));
                     // Custom-view tasks open only once their custom data arrived
-                    const hasCustomData = !!(prev.coder || prev.research || prev.browserFrame);
+                    const hasCustomData = !!(prev.coder || prev.research || prev.librarian || prev.browserFrame);
                     const shouldOpen = isRunning && !subAgentUserClosedRef.current
                         && (!subAgentCustomViewRef.current || hasCustomData);
                     return {
@@ -3038,6 +3062,30 @@ function VAFDashboardContent() {
                             wordsTarget: typeof data.wordsTarget === 'number' ? data.wordsTarget : (prev.document?.wordsTarget ?? 0),
                             savePath: data.savePath ?? prev.document?.savePath ?? '',
                             loop: typeof data.loop === 'number' ? data.loop : (prev.document?.loop ?? 0),
+                        },
+                    }));
+                }
+                else if (data.type === 'librarian_state') {
+                    // Live read-only state from the librarian agent: filesystem map,
+                    // folder sizes, storage/drives, Google Drive, optional search.
+                    // Powers the explorer view in SubAgentWindow.
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        librarian: {
+                            root: data.root ?? prev.librarian?.root ?? '~',
+                            stage: data.stage ?? prev.librarian?.stage ?? '',
+                            readOnly: typeof data.readOnly === 'boolean' ? data.readOnly : (prev.librarian?.readOnly ?? true),
+                            totalSize: typeof data.totalSize === 'number' ? data.totalSize : (prev.librarian?.totalSize ?? 0),
+                            totalFiles: typeof data.totalFiles === 'number' ? data.totalFiles : (prev.librarian?.totalFiles ?? 0),
+                            totalFolders: typeof data.totalFolders === 'number' ? data.totalFolders : (prev.librarian?.totalFolders ?? 0),
+                            entries: Array.isArray(data.entries) ? data.entries : (prev.librarian?.entries ?? []),
+                            topFolders: Array.isArray(data.topFolders) ? data.topFolders : (prev.librarian?.topFolders ?? []),
+                            drives: Array.isArray(data.drives) ? data.drives : (prev.librarian?.drives ?? []),
+                            search: data.search ?? prev.librarian?.search ?? null,
+                            activity: Array.isArray(data.activity) ? data.activity : (prev.librarian?.activity ?? []),
+                            currentFolder: data.currentFolder ?? prev.librarian?.currentFolder ?? null,
                         },
                     }));
                 }
@@ -5832,7 +5880,7 @@ function VAFDashboardContent() {
                                     // viewers/editors take render priority over the SubAgentWindow,
                                     // so when one of them is open (e.g. the Document Editor after a
                                     // research run) the panel must drop back to the classic width.
-                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.browserFrame)
+                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame)
                                         && !documentEditorState.isOpen && !documentViewerState.isOpen
                                         && !codeViewerState.isOpen && !htmlViewerState.isOpen
                                         ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
@@ -5918,6 +5966,7 @@ function VAFDashboardContent() {
                                     coder={subAgentState.coder}
                                     research={subAgentState.research}
                                     document={subAgentState.document}
+                                    librarian={subAgentState.librarian}
                                 />
                             )}
                         </div>

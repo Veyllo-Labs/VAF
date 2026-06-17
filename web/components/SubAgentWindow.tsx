@@ -1,7 +1,7 @@
 'use client';
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, GitBranch, Moon, Printer, Search, Pencil } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -27,6 +27,33 @@ export type DocumentViewState = {
     wordsTarget: number;
     savePath: string;
     loop: number;
+};
+
+/** Live read-only state streamed by the librarian agent (`librarian_state` event).
+ *  The librarian only reads — file system, folder sizes, storage and Google Drive. */
+export type LibrarianViewState = {
+    root: string;
+    stage: string;            // scanning | done
+    readOnly: boolean;
+    totalSize: number;        // bytes
+    totalFiles: number;
+    totalFolders: number;
+    entries: Array<{ name: string; type: string; sizeBytes: number; items?: number; gd?: boolean }>;
+    topFolders: Array<{ name: string; sizeBytes: number }>;
+    drives: Array<{ name: string; kind: 'disk' | 'home' | 'cloud'; usedBytes: number; totalBytes: number; connected?: boolean }>;
+    search: { query: string; hits?: number | null } | null;
+    activity: Array<{ cls: string; text: string }>;
+    // Set when the agent is browsing/searching a concrete folder → the explorer opens it
+    // and lists its files; null → the disk-usage overview is shown.
+    currentFolder: {
+        path: string;
+        name: string;
+        fileCount: number;
+        folderCount: number;
+        totalSize: number;
+        types: Array<{ type: string; count: number }>;
+        entries: Array<{ name: string; type: string; isDir: boolean; sizeBytes: number; items?: number; modified: string; match?: boolean }>;
+    } | null;
 };
 
 /** Live project state streamed by the coding agent (`coder_state` event). */
@@ -68,6 +95,7 @@ export type SubAgentWindowProps = {
     coder?: CoderViewState | null;  // enables the VS-Code view (coding agent only)
     research?: ResearchViewState | null;  // enables the paper view (research agent only)
     document?: DocumentViewState | null;  // enables the document view (document agent only)
+    librarian?: LibrarianViewState | null;  // enables the read-only explorer view (librarian agent only)
     [key: string]: any;
 };
 
@@ -479,6 +507,7 @@ export default function SubAgentWindow({
     coder,
     research,
     document,
+    librarian,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -635,6 +664,15 @@ export default function SubAgentWindow({
         if (documentActivityRef.current) documentActivityRef.current.scrollTop = documentActivityRef.current.scrollHeight;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [document?.sections, document?.stage, document?.savePath]);
+
+    // Librarian read-only explorer view (file system / storage / Google Drive)
+    const hasLibrarianData = !!(librarian && (librarian.entries?.length || librarian.stage));
+    const librarianViewerRef = useRef<HTMLDivElement>(null);
+    const librarianActivityRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (librarianActivityRef.current) librarianActivityRef.current.scrollTop = librarianActivityRef.current.scrollHeight;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [librarian?.activity?.length, librarian?.entries?.length, librarian?.stage]);
 
     if (!isOpen && mode === 'overlay') return null;
 
@@ -1064,6 +1102,349 @@ export default function SubAgentWindow({
                             <span className={cn('h-1.5 w-1.5 rounded-full', presenceTone)} />
                             {presenceLabel}
                         </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (mode === 'dock' && hasLibrarianData && librarian && librarian.currentFolder) {
+        // ── Folder-browse view: the librarian opened a concrete folder; list its files
+        // like a file manager and highlight search matches (read-only). ──
+        const lib = librarian;
+        const cf = lib.currentFolder!;
+        const fmtBytes = (b: number): string => {
+            if (!b || b < 0) return '0 B';
+            const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let n = b;
+            while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+            return `${i <= 1 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+        };
+        const isLive = inferredPresence === 'online';
+        const query = lib.search?.query || null;
+        const hitCount = cf.entries.filter(e => e.match).length;
+        const matches = cf.entries.filter(e => e.match);
+        const TYPE_STYLE: Record<string, { bg: string; fg: string; bar: string }> = {
+            folder: { bg: 'bg-orange-50', fg: 'text-orange-700', bar: 'bg-orange-500' },
+            pdf: { bg: 'bg-red-50', fg: 'text-red-600', bar: 'bg-red-500' },
+            image: { bg: 'bg-blue-50', fg: 'text-blue-600', bar: 'bg-blue-500' },
+            video: { bg: 'bg-violet-50', fg: 'text-violet-600', bar: 'bg-violet-500' },
+            doc: { bg: 'bg-teal-50', fg: 'text-teal-600', bar: 'bg-teal-500' },
+            data: { bg: 'bg-emerald-50', fg: 'text-emerald-600', bar: 'bg-emerald-500' },
+            arch: { bg: 'bg-slate-100', fg: 'text-slate-500', bar: 'bg-slate-400' },
+            exe: { bg: 'bg-slate-100', fg: 'text-slate-600', bar: 'bg-slate-500' },
+            txt: { bg: 'bg-gray-100', fg: 'text-gray-500', bar: 'bg-gray-400' },
+        };
+        const TYPE_LABEL: Record<string, string> = { folder: 'Ordner', pdf: 'PDF', image: 'Bilder', video: 'Video', doc: 'Docs', data: 'Daten', arch: 'Archiv', exe: 'Apps', txt: 'Text' };
+        const iconFor = (t: string, isDir: boolean) => isDir ? Folder : t === 'image' ? ImageIcon : t === 'video' ? Film : t === 'arch' ? Archive : FileText;
+        const styleFor = (t: string) => TYPE_STYLE[t] ?? TYPE_STYLE.txt;
+        const crumbs = cf.path.split(/[\\/]/).filter(Boolean);
+        const maxType = Math.max(1, ...cf.types.map(t => t.count));
+        return (
+            <div
+                className={cn(
+                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isOpen}
+            >
+                <div className="flex h-full w-full flex-col">
+                    {/* Header */}
+                    <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-orange-600">
+                                <FolderOpen size={14} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className="truncate">{query ? <>Durchsucht: <span className="font-mono">{cf.name}</span> nach <span className="font-mono">{query}</span></> : <>Öffnet: <span className="font-mono">{cf.name}</span></>}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2">
+                            <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
+                            <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
+                                {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
+                                {lib.stage === 'done' ? 'Fertig' : (query ? 'Searching' : 'Liest')}{query ? ` · ${hitCount} Treffer` : ''}
+                            </span>
+                            <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
+                        </div>
+                    </div>
+
+                    <div className="flex min-h-0 flex-1">
+                        {/* ── Explorer: opened folder, files listed ── */}
+                        <div className="flex min-w-0 flex-1 flex-col bg-[#e9eaee]">
+                            {/* toolbar: back + breadcrumb + search */}
+                            <div className="flex h-10 flex-none items-center gap-2 border-b border-gray-200 bg-[#f7f8fa] px-3.5">
+                                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Übersicht"><ChevronLeft size={13} /></span>
+                                <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-gray-500">
+                                    <span className="rounded px-1.5 py-0.5">~</span>
+                                    {crumbs.slice(-3).map((c, i, arr) => (
+                                        <span key={i} className="flex items-center gap-1">
+                                            <span className="text-gray-300">/</span>
+                                            {i === arr.length - 1
+                                                ? <span className="flex items-center gap-1 rounded bg-orange-50 px-1.5 py-0.5 font-bold text-orange-700"><Folder size={10} />{c}</span>
+                                                : <span className="truncate px-1 py-0.5">{c}</span>}
+                                        </span>
+                                    ))}
+                                </div>
+                                {query && (
+                                    <span className="ml-auto flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700">
+                                        <Search size={11} className="text-gray-400" />
+                                        <span className="font-mono text-orange-700">{query}</span>
+                                        <span className="rounded-full bg-orange-50 px-1.5 text-[10px] font-bold text-orange-700">{hitCount}</span>
+                                    </span>
+                                )}
+                            </div>
+                            {/* folder banner */}
+                            <div className="flex flex-none items-center gap-2.5 px-4 pb-2 pt-2.5">
+                                <div className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-orange-50 text-orange-700"><FolderOpen size={15} /></div>
+                                <div className="min-w-0">
+                                    <div className="text-[14px] font-bold text-gray-900">{cf.name}</div>
+                                    <div className="text-[10.5px] text-gray-400">{cf.fileCount.toLocaleString('de-DE')} Dateien · {cf.folderCount} Unterordner · {fmtBytes(cf.totalSize)}</div>
+                                </div>
+                                <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
+                                    {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
+                                    {lib.stage === 'done' ? 'gelesen' : 'liest Ordner'}
+                                </div>
+                            </div>
+                            {/* file listing */}
+                            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+                                <div className="sticky top-0 flex items-center gap-3 border-b border-gray-200 bg-[#e9eaee] px-3 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-gray-400">
+                                    <span className="flex-1">Name</span><span className="w-[74px] text-right">Größe</span><span className="w-[88px] text-right">Geändert</span>
+                                </div>
+                                {cf.entries.map((e, i) => {
+                                    const Icon = iconFor(e.type, e.isDir);
+                                    const ts = styleFor(e.isDir ? 'folder' : e.type);
+                                    return (
+                                        <div key={`${e.name}-${i}`} className={cn("flex items-center gap-3 border-b border-[#e0e1e6] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]")}>
+                                            <span className={cn("flex h-5 w-5 flex-none items-center justify-center rounded-md", ts.bg, ts.fg)}><Icon size={12} /></span>
+                                            <span className={cn("min-w-0 flex-1 truncate text-[12.5px] text-gray-800", e.isDir && "font-semibold")}>{e.name}</span>
+                                            {e.match && <span className="flex-none rounded bg-orange-100 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-orange-700">Treffer</span>}
+                                            <span className="w-[74px] flex-none text-right text-[11px] tabular-nums text-gray-600">{e.isDir ? (e.items != null ? `${e.items} El.` : '—') : fmtBytes(e.sizeBytes)}</span>
+                                            <span className="w-[88px] flex-none text-right text-[10.5px] tabular-nums text-gray-400">{e.modified}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* ── Sidebar: current folder / matches / activity ── */}
+                        <div className="flex w-[33%] min-w-[300px] max-w-[380px] flex-none flex-col border-l border-gray-200 bg-white">
+                            <div className="flex flex-none flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aktueller Ordner</div>
+                                <div className="px-3.5 pb-3 pt-0.5">
+                                    <div className="mb-2 break-all font-mono text-[11px] text-orange-700">{cf.path}</div>
+                                    <div className="mb-2.5 flex gap-4">
+                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.fileCount.toLocaleString('de-DE')}</div><div className="text-[9px] text-gray-400">Dateien</div></div>
+                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.folderCount}</div><div className="text-[9px] text-gray-400">Unterordner</div></div>
+                                        <div><div className="text-[16px] font-bold text-gray-900">{fmtBytes(cf.totalSize)}</div><div className="text-[9px] text-gray-400">Größe</div></div>
+                                    </div>
+                                    <div className="flex flex-col gap-1.5">
+                                        {cf.types.map((t, i) => (
+                                            <div key={i} className="flex items-center gap-2 text-[11px]">
+                                                <span className="w-12 flex-none text-gray-500">{TYPE_LABEL[t.type] ?? t.type}</span>
+                                                <span className="h-[5px] flex-1 overflow-hidden rounded-full bg-gray-100"><span className={cn("block h-full rounded-full", styleFor(t.type).bar)} style={{ width: `${Math.round(t.count / maxType * 100)}%` }} /></span>
+                                                <span className="w-7 flex-none text-right text-gray-400">{t.count}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Treffer{query && <span className="ml-1.5 font-mono lowercase tracking-normal text-orange-700">{query}</span>}<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{matches.length}</span></div>
+                                <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3 pt-0.5">
+                                    {matches.length === 0
+                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">{query ? 'Noch keine Treffer in diesem Ordner.' : 'Keine aktive Suche.'}</div>
+                                        : matches.map((m, i) => {
+                                            const Icon = iconFor(m.type, false); const ts = styleFor(m.type);
+                                            return (
+                                                <div key={i} className="flex items-center gap-2 rounded-lg border border-orange-100 bg-orange-50/60 px-2.5 py-1.5">
+                                                    <span className={cn("flex h-4 w-4 flex-none items-center justify-center rounded", ts.bg, ts.fg)}><Icon size={10} /></span>
+                                                    <span className="min-w-0 flex-1 truncate text-[11px] text-gray-800">{m.name}</span>
+                                                    <span className="flex-none text-[10px] tabular-nums text-gray-400">{fmtBytes(m.sizeBytes)}</span>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            </div>
+                            <div className="flex h-[28%] min-h-[110px] flex-none flex-col">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
+                                <div ref={librarianActivityRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 font-mono text-[10px] leading-relaxed text-gray-500">
+                                    {lib.activity.map((a, i) => (
+                                        <div key={i}><span className={cn(a.cls === 'ok' && 'text-emerald-600', a.cls === 'info' && 'text-blue-600', a.cls === 'warn' && 'text-amber-600', a.cls === 'scan' && 'text-orange-700')}>{a.text}</span></div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Statusbar */}
+                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
+                        <div className="flex h-full items-center gap-1.5 bg-orange-600 px-2.5 font-bold text-white">VAF</div>
+                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> NUR LESEN</div>
+                        <div className="flex h-full items-center gap-1.5 px-2.5 font-mono">{cf.path}</div>
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{cf.fileCount.toLocaleString('de-DE')} Dateien</div>
+                        {query && <div className="flex h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 font-semibold text-[#fcd9b6]">{hitCount} Treffer</div>}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (mode === 'dock' && hasLibrarianData && librarian) {
+        // ── Read-only explorer view for the librarian agent: filesystem map as a
+        // disk-usage listing, storage/Google-Drive gauges, biggest folders, activity. ──
+        const lib = librarian;
+        const fmtBytes = (b: number): string => {
+            if (!b || b < 0) return '0 B';
+            const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let n = b;
+            while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+            return `${i <= 1 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+        };
+        const isLive = inferredPresence === 'online';
+        const maxEntry = Math.max(1, ...lib.entries.map(e => e.sizeBytes || 0));
+        const maxTop = Math.max(1, ...lib.topFolders.map(f => f.sizeBytes || 0));
+        const hasCloud = lib.drives.some(d => d.kind === 'cloud');
+        return (
+            <div
+                className={cn(
+                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isOpen}
+            >
+                <div className="flex h-full w-full flex-col">
+                    {/* Header */}
+                    <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-orange-600">
+                                <FolderOpen size={14} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className="truncate">Analysiert: Speicher &amp; Dateien · <span className="font-mono">{lib.root || '~'}</span></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2">
+                            <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
+                            <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
+                                {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
+                                {lib.stage === 'done' ? 'Fertig' : 'Scanning'}{lib.totalFiles ? ` · ${lib.totalFiles.toLocaleString('de-DE')} Dateien` : ''}
+                            </span>
+                            <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
+                        </div>
+                    </div>
+
+                    <div className="flex min-h-0 flex-1">
+                        {/* ── Explorer (filesystem map / disk usage) ── */}
+                        <div className="flex min-w-0 flex-1 flex-col bg-[#e9eaee]">
+                            <div className="flex h-9 flex-none items-center gap-2 border-b border-gray-200 bg-[#f7f8fa] px-4">
+                                <Folder size={12} className="text-gray-400" />
+                                <span className="font-mono text-[11px] text-gray-600">{lib.root || '~'}</span>
+                                {lib.search?.query && (
+                                    <span className="ml-auto flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700">
+                                        <Search size={11} className="text-gray-400" />
+                                        <span className="font-mono text-orange-700">{lib.search.query}</span>
+                                        {typeof lib.search.hits === 'number' && <span className="text-[10px] text-gray-400">{lib.search.hits} Treffer</span>}
+                                    </span>
+                                )}
+                            </div>
+                            <div ref={librarianViewerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
+                                <div className="mb-2.5 flex items-baseline gap-2.5">
+                                    <div className="text-[22px] font-bold text-gray-900">{fmtBytes(lib.totalSize)}</div>
+                                    <div className="text-[11px] text-gray-400">{lib.totalFiles.toLocaleString('de-DE')} Dateien · {lib.totalFolders.toLocaleString('de-DE')} Ordner gescannt</div>
+                                    <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
+                                        {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
+                                        {lib.stage === 'done' ? 'Map bereit' : 'Map wird aufgebaut'}
+                                    </div>
+                                </div>
+                                <div className="flex flex-col gap-[3px]">
+                                    {lib.entries.map((e, i) => {
+                                        const big = (e.sizeBytes || 0) >= maxEntry * 0.5;
+                                        return (
+                                            <div key={`${e.name}-${i}`} className={cn("flex items-center gap-2.5 rounded-lg border bg-white px-2.5 py-1.5", big ? "border-orange-200 ring-1 ring-orange-50" : "border-gray-100")}>
+                                                <span className="flex h-5 w-5 flex-none items-center justify-center rounded-md bg-orange-50 text-orange-700"><Folder size={12} /></span>
+                                                <span className="truncate text-[12.5px] font-semibold text-gray-800">{e.name}</span>
+                                                {e.gd && <span className="flex-none rounded bg-blue-50 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-blue-600">Drive</span>}
+                                                {typeof e.items === 'number' && <span className="flex-none text-[10px] text-gray-400">{e.items.toLocaleString('de-DE')} Dateien</span>}
+                                                <span className="flex-1" />
+                                                <span className="h-[5px] w-40 flex-none overflow-hidden rounded-full bg-gray-100"><span className="block h-full rounded-full bg-orange-500" style={{ width: `${Math.round((e.sizeBytes || 0) / maxEntry * 100)}%` }} /></span>
+                                                <span className="w-16 flex-none text-right text-[11.5px] font-bold tabular-nums text-gray-700">{fmtBytes(e.sizeBytes)}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ── Sidebar: drives / biggest folders / activity ── */}
+                        <div className="flex w-[34%] min-w-[300px] max-w-[400px] flex-none flex-col border-l border-gray-200 bg-white">
+                            <div className="flex flex-none flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Datenträger &amp; Cloud<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{lib.drives.length} Quellen</span></div>
+                                <div className="flex flex-col gap-2.5 px-3.5 pb-3 pt-1">
+                                    {lib.drives.map((d, i) => {
+                                        const pct = d.totalBytes > 0 ? Math.round(d.usedBytes / d.totalBytes * 100) : 0;
+                                        const tone = pct >= 90 ? 'bg-red-500' : pct >= 75 ? 'bg-amber-500' : 'bg-emerald-500';
+                                        const Icon = d.kind === 'cloud' ? Cloud : d.kind === 'home' ? Folder : HardDrive;
+                                        const cloudNoQuota = d.kind === 'cloud' && d.totalBytes === 0;
+                                        return (
+                                            <div key={`${d.name}-${i}`}>
+                                                <div className="mb-1 flex items-baseline gap-2">
+                                                    <span className="flex items-center gap-1.5 text-[11.5px] font-semibold text-gray-800"><Icon size={12} className={d.kind === 'cloud' ? 'text-blue-500' : 'text-gray-500'} />{d.name}</span>
+                                                    {cloudNoQuota
+                                                        ? <span className="ml-auto text-[10px] text-emerald-600">verbunden</span>
+                                                        : <span className="ml-auto text-[10px] text-gray-400">{fmtBytes(Math.max(0, d.totalBytes - d.usedBytes))} frei</span>}
+                                                </div>
+                                                {!cloudNoQuota && (
+                                                    <>
+                                                        <span className="block h-[7px] overflow-hidden rounded-full bg-gray-100"><span className={cn("block h-full rounded-full", tone)} style={{ width: `${pct}%` }} /></span>
+                                                        <div className="mt-1 text-[10.5px] tabular-nums text-gray-500">{fmtBytes(d.usedBytes)} / {fmtBytes(d.totalBytes)} · {pct}% belegt</div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Größte Ordner<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">Top {lib.topFolders.length}</span></div>
+                                <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3 pt-0.5">
+                                    {lib.topFolders.map((f, i) => (
+                                        <div key={`${f.name}-${i}`} className="flex items-center gap-2.5 rounded-lg border border-gray-100 px-2.5 py-1.5">
+                                            <span className="w-4 flex-none text-center text-[10px] font-bold text-gray-400">{i + 1}</span>
+                                            <span className="min-w-0 flex-1 truncate text-[11.5px] text-gray-700">{f.name}</span>
+                                            <span className="h-1 w-14 flex-none overflow-hidden rounded bg-gray-100"><span className="block h-full bg-orange-500" style={{ width: `${Math.round((f.sizeBytes || 0) / maxTop * 100)}%` }} /></span>
+                                            <span className="w-14 flex-none text-right text-[10.5px] font-bold tabular-nums text-gray-700">{fmtBytes(f.sizeBytes)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex h-[32%] min-h-[120px] flex-none flex-col">
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
+                                <div ref={librarianActivityRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 font-mono text-[10px] leading-relaxed text-gray-500">
+                                    {lib.activity.map((a, i) => (
+                                        <div key={i}>
+                                            <span className={cn(a.cls === 'ok' && 'text-emerald-600', a.cls === 'info' && 'text-blue-600', a.cls === 'warn' && 'text-amber-600', a.cls === 'scan' && 'text-orange-700')}>{a.text}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Statusbar */}
+                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
+                        <div className="flex h-full items-center gap-1.5 bg-orange-600 px-2.5 font-bold text-white">VAF</div>
+                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> NUR LESEN</div>
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{lib.totalFiles.toLocaleString('de-DE')} Dateien · {lib.totalFolders.toLocaleString('de-DE')} Ordner</div>
+                        <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {fmtBytes(lib.totalSize)}</div>
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 md:flex">Lokal{hasCloud ? ' · Google Drive' : ''}</div>
+                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5 font-mono">{lib.root || '~'} (lesend)</div>
                     </div>
                 </div>
             </div>

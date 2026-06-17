@@ -235,6 +235,13 @@ You have access to this filesystem map for fast navigation:
         # FAST PATH: Try to handle simple tasks DIRECTLY (no LLM needed)
         # ═══════════════════════════════════════════════════════════════════════
         
+        # The librarian only reads — surface its live state (filesystem map, storage,
+        # search) to the read-only explorer window in the WebUI (best-effort, no-op
+        # without a session / WebUI; never affects the task result). Clear any folder
+        # browsed by a previous task so the overview shows until this task opens a folder.
+        self._browse_path = None
+        self._emit_librarian_state(task, stage="scanning")
+
         # Try direct execution first (no animation needed for fast path)
         direct_result = self._try_direct_execution(task)
         if direct_result:
@@ -249,13 +256,16 @@ You have access to this filesystem map for fast navigation:
                 time.sleep(0.3)
             finally:
                 live.stop()
+            self._emit_librarian_state(task, stage="done", result=direct_result)
             return direct_result
         
         # ═══════════════════════════════════════════════════════════════════════
         # MAP-REDUCE PATH: Huge content - use Chunking & Summarization
         # ═══════════════════════════════════════════════════════════════════════
         if len(task) > 15000:
-            return self._summarize_chunks(task)
+            _res = self._summarize_chunks(task)
+            self._emit_librarian_state(task, stage="done", result=_res)
+            return _res
         
         # ═══════════════════════════════════════════════════════════════════════
         # SLOW PATH: Complex task - use LLM reasoning
@@ -268,8 +278,230 @@ You have access to this filesystem map for fast navigation:
             self._read_hint_for_llm = None
 
         # LLM path has its own animation
-        return self._execute_with_llm(task)
+        _res = self._execute_with_llm(task)
+        self._emit_librarian_state(task, stage="done", result=_res)
+        return _res
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # READ-ONLY LIVE STATE → WebUI explorer window (best-effort, never alters output)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _fmt_bytes_short(self, num_bytes) -> str:
+        """Human-readable size for activity/log text."""
+        try:
+            b = float(num_bytes)
+        except Exception:
+            return "0 B"
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if b < 1024 or unit == "TB":
+                return f"{b:.0f} {unit}" if unit in ("B", "KB") else f"{b:.1f} {unit}"
+            b /= 1024
+        return f"{b:.1f} TB"
+
+    def _ext_type(self, name: str) -> str:
+        """Map a file name to a coarse type for the explorer icon (matches the frontend)."""
+        ext = (os.path.splitext(name)[1] or "").lower().lstrip(".")
+        if ext == "pdf":
+            return "pdf"
+        if ext in ("png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "tif", "tiff", "heic", "ico"):
+            return "image"
+        if ext in ("mp4", "mov", "mkv", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg"):
+            return "video"
+        if ext in ("doc", "docx", "odt", "rtf", "ppt", "pptx", "xls", "xlsx", "ods", "odp", "md"):
+            return "doc"
+        if ext in ("csv", "json", "xml", "sql", "db", "sqlite", "parquet", "tsv", "yaml", "yml"):
+            return "data"
+        if ext in ("zip", "tar", "gz", "rar", "7z", "bz2", "xz", "tgz"):
+            return "arch"
+        if ext in ("exe", "msi", "appimage", "deb", "rpm", "dmg", "apk", "bin", "app"):
+            return "exe"
+        return "txt"
+
+    def _build_librarian_state(self, task: str, result: Optional[str] = None) -> dict:
+        """Assemble the read-only librarian window state (filesystem map, storage,
+        biggest folders, optional search) from the structured filesystem map and disk
+        usage. Side-effect-free; used only to feed the WebUI explorer view."""
+        entries: List[dict] = []
+        total_size = 0
+        total_files = 0
+        total_folders = 0
+        try:
+            fmap = self.fs_map.build_map(depth=1) or {}
+            for name, data in (fmap.get("locations") or {}).items():
+                sz = int(data.get("size_bytes", 0) or 0)
+                files = int(data.get("total_files", 0) or 0)
+                entries.append({"name": name, "type": "folder", "sizeBytes": sz, "items": files})
+                total_size += sz
+                total_files += files
+                total_folders += int(data.get("folder_count", 0) or 0)
+            entries.sort(key=lambda e: e["sizeBytes"], reverse=True)
+        except Exception:
+            pass
+
+        top_folders = [{"name": e["name"], "sizeBytes": e["sizeBytes"]} for e in entries[:10]]
+
+        # Storage: local disk + home always; Google Drive only if actually connected
+        # (we never fake a quota — just surface it as a connected source).
+        drives: List[dict] = []
+        try:
+            import shutil as _shutil
+            du = _shutil.disk_usage(str(self.home))
+            drives.append({"name": "/", "kind": "disk", "usedBytes": int(du.used), "totalBytes": int(du.total)})
+            drives.append({"name": "~/ (Home)", "kind": "home", "usedBytes": int(total_size), "totalBytes": int(du.total)})
+        except Exception:
+            pass
+        try:
+            from vaf.tools.cloud_storage import _get_username, _get_cloud_accounts
+            for a in (_get_cloud_accounts(_get_username()) or []):
+                if (a.get("provider") or "").lower() in ("google_drive", "googledrive", "gdrive", "google"):
+                    drives.append({"name": a.get("label") or "Google Drive", "kind": "cloud",
+                                   "usedBytes": 0, "totalBytes": 0, "connected": True})
+                    break
+        except Exception:
+            pass
+
+        # Search context: file searches drive the match highlighting. Detect an explicit
+        # file type ("alle PDFs", "*.pdf", "pdf files") first, else fall back to a free term.
+        search = None
+        try:
+            tl = (task or "").lower()
+            is_search = any(k in tl for k in ("find", "search", "suche", "finde", "locate", "schick", "send"))
+            ext_m = re.search(r"\b(pdfs?|jpe?gs?|pngs?|gifs?|txts?|docx?|xlsx?|pptx?|csvs?|jsons?|zips?|mp3s?|mp4s?|movs?)\b", tl)
+            query = None
+            if ext_m:
+                query = "*." + re.sub(r"s$", "", ext_m.group(1))
+            elif is_search:
+                query = self._extract_search_term(task) or None
+            if query:
+                hits = None
+                if result:
+                    hits = sum(1 for ln in result.splitlines()
+                               if ("/" in ln or "\\" in ln) and "." in ln) or None
+                search = {"query": query, "hits": hits}
+        except Exception:
+            pass
+
+        activity: List[dict] = []
+        try:
+            activity.append({"cls": "scan", "text": f"Filesystem-Map: {total_folders} Ordner, {total_files} Dateien"})
+            if top_folders:
+                activity.append({"cls": "ok", "text": f"Größte: {top_folders[0]['name']} ({self._fmt_bytes_short(top_folders[0]['sizeBytes'])})"})
+            if any(d.get("kind") == "cloud" for d in drives):
+                activity.append({"cls": "info", "text": "Google Drive verbunden"})
+            if search:
+                txt = f"Suche: {search['query']}"
+                if search.get("hits"):
+                    txt += f" -> {search['hits']} Treffer"
+                activity.append({"cls": "scan", "text": txt})
+            activity.append({"cls": "warn", "text": "read-only - es wird nichts geändert oder erstellt"})
+        except Exception:
+            pass
+
+        # When the task operates inside a concrete folder, open it for the explorer:
+        # scan its direct entries (read-only) so the UI lists the files like a file
+        # manager and highlights search matches. Falls back to the overview on any error.
+        current_folder = None
+        try:
+            bp = getattr(self, "_browse_path", None)
+            if bp and os.path.isdir(bp):
+                import datetime as _dt
+                q = (search or {}).get("query") if search else None
+                ext_q = name_q = None
+                if q:
+                    qs = q.strip()
+                    if qs.startswith("*.") or qs.startswith("."):
+                        ext_q = qs.lstrip("*").lstrip(".").lower()
+                    else:
+                        name_q = qs.lower()
+
+                def _is_match(nm: str, is_dir: bool) -> bool:
+                    if is_dir:
+                        return False
+                    low = nm.lower()
+                    if ext_q:
+                        return low.endswith("." + ext_q)
+                    if name_q:
+                        return name_q in low
+                    return False
+
+                items: List[dict] = []
+                f_count = d_count = tot = hit_n = 0
+                type_counts: dict = {}
+                with os.scandir(bp) as it:
+                    for de in it:
+                        try:
+                            is_dir = de.is_dir(follow_symlinks=False)
+                            st = de.stat(follow_symlinks=False)
+                            sz = 0 if is_dir else int(st.st_size)
+                            etype = "folder" if is_dir else self._ext_type(de.name)
+                            try:
+                                mod = _dt.datetime.fromtimestamp(st.st_mtime).strftime("%d.%m.%Y")
+                            except Exception:
+                                mod = ""
+                            m = _is_match(de.name, is_dir)
+                            items.append({"name": de.name, "type": etype, "isDir": is_dir,
+                                          "sizeBytes": sz, "modified": mod, "match": m})
+                            type_counts[etype] = type_counts.get(etype, 0) + 1
+                            if is_dir:
+                                d_count += 1
+                            else:
+                                f_count += 1
+                                tot += sz
+                            if m:
+                                hit_n += 1
+                        except Exception:
+                            continue
+                # matches first, then folders, then files by size — so hits stay visible
+                items.sort(key=lambda e: (not e["match"], not e["isDir"], -(e["sizeBytes"] or 0), e["name"].lower()))
+                current_folder = {
+                    "path": bp,
+                    "name": os.path.basename(bp.rstrip("/\\")) or bp,
+                    "fileCount": int(f_count),
+                    "folderCount": int(d_count),
+                    "totalSize": int(tot),
+                    "types": [{"type": t, "count": c} for t, c in sorted(type_counts.items(), key=lambda kv: -kv[1])],
+                    "entries": items[:80],
+                }
+                if search is not None:
+                    search = {"query": search.get("query"), "hits": hit_n or search.get("hits")}
+        except Exception:
+            current_folder = None
+
+        return {
+            "root": "~",
+            "readOnly": True,
+            "totalSize": int(total_size),
+            "totalFiles": int(total_files),
+            "totalFolders": int(total_folders),
+            "entries": entries,
+            "topFolders": top_folders,
+            "drives": drives,
+            "search": search,
+            "activity": activity,
+            "currentFolder": current_folder,
+        }
+
+    def _emit_librarian_state(self, task: str, stage: str = "scanning", result: Optional[str] = None) -> None:
+        """Push the read-only librarian state to the WebUI explorer window. Best-effort:
+        resolves the session id like the document agent, never raises, and never changes
+        the librarian's return value."""
+        try:
+            session_id = os.environ.get("VAF_SESSION_ID", "").strip()
+            if not session_id:
+                try:
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    session_id = get_current_session_id() or ""
+                except Exception:
+                    session_id = ""
+            if not session_id:
+                return
+            state = self._build_librarian_state(task, result=result)
+            state["stage"] = stage
+            from vaf.core.web_interface import get_web_interface
+            get_web_interface().emit_librarian_state(state, session_id=session_id)
+        except Exception:
+            pass
+
     def _summarize_chunks(self, task: str) -> str:
         """
         Handle excessively large inputs by chunking and summarizing iteratively (Map-Reduce).
@@ -470,6 +702,14 @@ Remove duplicates and ensure smooth flow.
         
         # Extract path from task
         path = self._extract_path(task)
+
+        # Remember the folder this task operates inside so the WebUI explorer can open it
+        # and list its files (size/count/list/find all flow through here; storage/drive
+        # queries returned earlier and leave this None → overview stays).
+        try:
+            self._browse_path = str(path)
+        except Exception:
+            pass
 
         # ─────────────────────────────────────────────────────────────────────
         # PATTERN: Folder size ("how big", "size of", "wie groß", "ordnergröße")

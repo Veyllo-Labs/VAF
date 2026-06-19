@@ -420,6 +420,20 @@ class WebInterfaceManager:
             return
         self._push_session_update(session_id, payload)
 
+    def emit_browser_state(self, state: dict, session_id: str = None):
+        """Emit the browser agent's structured live state (task, step, action plan,
+        visited URLs, vision) for the browser window dock in the WebUI. The screenshot
+        itself stays on the separate browser_frame_update stream. Like the frame emit,
+        this runs inside the browser-use asyncio loop in a subprocess, so bridge it
+        off-thread to the main process."""
+        payload = {"type": "browser_state", **(state or {})}
+        if _in_subagent_subprocess():
+            if session_id:
+                payload["sessionId"] = session_id
+            _BRIDGE_POOL.submit(_post_to_parent, payload)
+            return
+        self._push_session_update(session_id, payload)
+
     def emit_coder_code(self, file: str, code: str, session_id: str = None):
         """Emit the code currently being written (live editor feed).
 

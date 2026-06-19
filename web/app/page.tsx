@@ -1491,6 +1491,17 @@ function VAFDashboardContent() {
                 entries: Array<{ name: string; type: string; isDir: boolean; sizeBytes: number; items?: number; modified: string; match?: boolean }>;
             } | null;
         } | null;
+        // Browser agent live window: streamed as `browser_state` (+ the browserFrame screenshot)
+        browser: {
+            task: string;
+            url: string;
+            status: string;
+            step: number;
+            maxSteps: number;
+            vision: string;
+            actions: Array<{ verb: string; text: string; status: string }>;
+            history: string[];
+        } | null;
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
@@ -1509,6 +1520,7 @@ function VAFDashboardContent() {
         research: null,
         document: null,
         librarian: null,
+        browser: null,
     });
 
     // Document Editor: one state entry per session (like Viewer); includes content so unsaved edits survive chat switch.
@@ -3086,6 +3098,26 @@ function VAFDashboardContent() {
                             search: data.search ?? prev.librarian?.search ?? null,
                             activity: Array.isArray(data.activity) ? data.activity : (prev.librarian?.activity ?? []),
                             currentFolder: data.currentFolder ?? prev.librarian?.currentFolder ?? null,
+                        },
+                    }));
+                }
+                else if (data.type === 'browser_state') {
+                    // Live structured state from the browser agent: task, step, action plan,
+                    // visited URLs, vision. Powers the dock of the browser window (the
+                    // screenshot arrives separately as browser_frame_update).
+                    if (data.sessionId && activeSessionId && data.sessionId !== activeSessionId) return;
+                    if (!subAgentUserClosedRef.current) openSubAgentWindow(false);
+                    setSubAgentState(prev => ({
+                        ...prev,
+                        browser: {
+                            task: data.task ?? prev.browser?.task ?? '',
+                            url: data.url ?? prev.browser?.url ?? '',
+                            status: data.status ?? prev.browser?.status ?? 'running',
+                            step: typeof data.step === 'number' ? data.step : (prev.browser?.step ?? 0),
+                            maxSteps: typeof data.maxSteps === 'number' ? data.maxSteps : (prev.browser?.maxSteps ?? 0),
+                            vision: data.vision ?? prev.browser?.vision ?? 'auto',
+                            actions: Array.isArray(data.actions) ? data.actions : (prev.browser?.actions ?? []),
+                            history: Array.isArray(data.history) ? data.history : (prev.browser?.history ?? []),
                         },
                     }));
                 }
@@ -5880,7 +5912,7 @@ function VAFDashboardContent() {
                                     // viewers/editors take render priority over the SubAgentWindow,
                                     // so when one of them is open (e.g. the Document Editor after a
                                     // research run) the panel must drop back to the classic width.
-                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame)
+                                    ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame || subAgentState.browser)
                                         && !documentEditorState.isOpen && !documentViewerState.isOpen
                                         && !codeViewerState.isOpen && !htmlViewerState.isOpen
                                         ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
@@ -5967,6 +5999,7 @@ function VAFDashboardContent() {
                                     research={subAgentState.research}
                                     document={subAgentState.document}
                                     librarian={subAgentState.librarian}
+                                    browser={subAgentState.browser}
                                 />
                             )}
                         </div>

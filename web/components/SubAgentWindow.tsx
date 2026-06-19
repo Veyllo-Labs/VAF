@@ -1,7 +1,7 @@
 'use client';
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
-import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
+import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** Live research state streamed by the research agent (`research_state` event). */
@@ -68,6 +68,19 @@ export type CoderViewState = {
     projectPath: string;
 };
 
+/** Live state streamed by the browser agent (`browser_state` event) for the browser
+ *  window's dock; the screenshot itself arrives separately as browserFrame/browserUrl. */
+export type BrowserViewState = {
+    task: string;
+    url: string;
+    status: string;          // running | done
+    step: number;
+    maxSteps: number;
+    vision: string;          // aus | auto | aktiv
+    actions: Array<{ verb: string; text: string; status: string }>;  // verb: nav|click|type|read|scroll
+    history: string[];       // visited URLs, in order
+};
+
 export type SubAgentWindowProps = {
     isOpen: boolean;
     onClose: () => void;
@@ -96,6 +109,7 @@ export type SubAgentWindowProps = {
     research?: ResearchViewState | null;  // enables the paper view (research agent only)
     document?: DocumentViewState | null;  // enables the document view (document agent only)
     librarian?: LibrarianViewState | null;  // enables the read-only explorer view (librarian agent only)
+    browser?: BrowserViewState | null;  // enables the live browser window (browser agent only)
     [key: string]: any;
 };
 
@@ -508,6 +522,7 @@ export default function SubAgentWindow({
     research,
     document,
     librarian,
+    browser,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -673,6 +688,16 @@ export default function SubAgentWindow({
         if (librarianActivityRef.current) librarianActivityRef.current.scrollTop = librarianActivityRef.current.scrollHeight;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [librarian?.activity?.length, librarian?.entries?.length, librarian?.stage]);
+
+    // Browser window: auto-scroll the action plan and the activity log to the newest entry
+    const browserActionsRef = useRef<HTMLDivElement>(null);
+    const browserActivityRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (browserActionsRef.current) browserActionsRef.current.scrollTop = browserActionsRef.current.scrollHeight;
+    }, [browser?.actions?.length, browser?.step]);
+    useEffect(() => {
+        if (browserActivityRef.current) browserActivityRef.current.scrollTop = browserActivityRef.current.scrollHeight;
+    }, [consoleLines.length]);
 
     if (!isOpen && mode === 'overlay') return null;
 
@@ -1805,6 +1830,133 @@ export default function SubAgentWindow({
                             <span className={cn('h-1.5 w-1.5 rounded-full', presenceTone)} />
                             {presenceLabel}
                         </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // Browser agent window: full-width live browser (chrome + widescreen screenshot) with a
+    // bottom dock (task / action plan / visited URLs / activity). The numbered element boxes
+    // come from the screenshot itself (browser-use highlights them).
+    const hasBrowserData = !!(browserFrame || browser);
+    if (mode === 'dock' && hasBrowserData) {
+        const b = browser;
+        const isLive = inferredPresence === 'online';
+        const verbLabel: Record<string, string> = { nav: 'Navigate', click: 'Click', type: 'Type', read: 'Read', scroll: 'Scroll' };
+        const verbStyle: Record<string, string> = { nav: 'bg-sky-50 text-sky-700', click: 'bg-amber-50 text-amber-700', type: 'bg-indigo-50 text-indigo-700', read: 'bg-teal-50 text-teal-700', scroll: 'bg-gray-100 text-gray-500' };
+        const activeAction = b?.actions?.find(a => a.status === 'active') || (b?.actions?.length ? b.actions[b.actions.length - 1] : null);
+        const url = browserUrl || b?.url || '';
+        const stepTxt = b && b.maxSteps ? `Schritt ${b.step}/${b.maxSteps}` : (b?.step ? `Schritt ${b.step}` : '');
+        const shortUrl = (u: string) => (u || 'about:blank').replace(/^https?:\/\//, '');
+        return (
+            <div
+                className={cn(
+                    "relative h-full w-full overflow-hidden rounded-2xl border border-gray-200 bg-[#F7F8FA] transition-all duration-300 ease-out",
+                    isOpen ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isOpen}
+            >
+                <div className="flex h-full w-full flex-col">
+                    {/* Header */}
+                    <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <div className="flex h-7 w-7 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-sky-600"><Globe size={14} /></div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Browser Agent'}</div>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                    <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
+                                    <span className="truncate">{b?.task ? `Surft autonom: ${b.task}` : (displayStatus || 'Browser')}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2">
+                            {isLive && <span className="flex items-center gap-1.5 rounded-md bg-red-50 px-2 py-1 text-[9px] font-extrabold uppercase tracking-wider text-red-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> LIVE</span>}
+                            <span className="flex items-center gap-1.5 rounded-full bg-sky-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-sky-700">
+                                {isLive && b?.status !== 'done' && <Loader2 size={9} className="animate-spin" />}
+                                {stepTxt || 'Browser'}{activeAction ? ` · ${verbLabel[activeAction.verb] ?? activeAction.verb}` : ''}
+                            </span>
+                            <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
+                        </div>
+                    </div>
+
+                    <div className="flex min-h-0 flex-1 flex-col">
+                        {/* Browser: chrome + widescreen screenshot (letterboxed) */}
+                        <div className="flex min-h-0 flex-1 flex-col bg-[#1e2430]">
+                            <div className="flex h-10 flex-none items-center gap-2 border-b border-black/40 bg-[#2a313f] px-3">
+                                <div className="flex gap-0.5">
+                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] hover:bg-[#384151]"><ChevronLeft size={14} /></span>
+                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] opacity-40"><ChevronRight size={14} /></span>
+                                    <span className="flex h-6 w-6 items-center justify-center rounded-md text-[#9aa4b5] hover:bg-[#384151]"><RotateCw size={12} /></span>
+                                </div>
+                                <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-lg border border-black/40 bg-[#1b202b] px-3">
+                                    <Lock size={10} className="flex-none text-emerald-400" />
+                                    <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-[#c7cedb]">{url || 'about:blank'}</span>
+                                    {isLive && b?.status !== 'done' && <Loader2 size={11} className="flex-none animate-spin text-sky-400" />}
+                                </div>
+                                <span className="flex-none rounded bg-[#384151] px-2 py-1 text-[9px] text-[#9aa4b5]">1 Tab</span>
+                            </div>
+                            <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
+                                {browserFrame
+                                    ? <img src={`data:image/jpeg;base64,${browserFrame}`} alt="Browser live view" draggable={false} className="max-h-full max-w-full rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.35)]" />
+                                    : <div className="flex items-center gap-2 text-[12px] text-[#9aa4b5]"><Loader2 size={14} className="animate-spin" /> Browser startet…</div>}
+                            </div>
+                        </div>
+
+                        {/* Bottom dock: Aufgabe · Aktionen · Verlauf · Activity */}
+                        <div className="flex h-[266px] flex-none border-t border-gray-200 bg-white">
+                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.15 }}>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aufgabe</div>
+                                <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+                                    <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-sky-900"><span className="mb-1 block text-[8.5px] font-extrabold uppercase tracking-wider text-sky-600">Ziel</span>{b?.task || '—'}</div>
+                                </div>
+                            </div>
+                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.75 }}>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aktionen<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.maxSteps ? `${b.step}/${b.maxSteps}` : (b?.actions?.length ?? 0)}</span></div>
+                                <div ref={browserActionsRef} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2.5 pb-3">
+                                    {(b?.actions ?? []).length === 0
+                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">Wartet auf den ersten Schritt…</div>
+                                        : b!.actions.map((a, i) => (
+                                            <div key={i} className={cn("flex items-start gap-2 rounded-lg border px-2 py-1.5", a.status === 'active' ? "border-sky-200 bg-sky-50/60" : "border-gray-100")}>
+                                                <span className={cn("mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full", a.status === 'active' ? "bg-sky-100 text-sky-700" : "bg-emerald-50 text-emerald-600")}>{a.status === 'active' ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle2 size={10} />}</span>
+                                                <div className="min-w-0 flex-1">
+                                                    <span className={cn("mr-1.5 rounded px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide", verbStyle[a.verb] ?? 'bg-gray-100 text-gray-500')}>{verbLabel[a.verb] ?? a.verb}</span>
+                                                    <span className="text-[11px] text-gray-700">{a.text}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                </div>
+                            </div>
+                            <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.1 }}>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Verlauf<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.history?.length ?? 0}</span></div>
+                                <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
+                                    {(b?.history ?? []).length === 0
+                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">—</div>
+                                        : b!.history.map((h, i) => (
+                                            <div key={i} className={cn("flex items-center gap-2 rounded px-2 py-1 text-[11px]", i === b!.history.length - 1 && "bg-sky-50")}>
+                                                <Globe size={11} className="flex-none text-gray-400" />
+                                                <span className={cn("min-w-0 flex-1 truncate font-mono", i === b!.history.length - 1 ? "text-sky-700" : "text-gray-500")}>{shortUrl(h)}</span>
+                                            </div>
+                                        ))}
+                                </div>
+                            </div>
+                            <div className="flex min-w-0 flex-col" style={{ flex: 1.15 }}>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
+                                <div ref={browserActivityRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-3 font-mono text-[10px] leading-relaxed text-gray-500">
+                                    {consoleLines.slice(-40).map((line, i) => <div key={i} className="whitespace-pre-wrap break-words">{line}</div>)}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Statusbar */}
+                    <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
+                        <div className="flex h-full items-center gap-1.5 bg-sky-600 px-2.5 font-bold text-white">VAF</div>
+                        <div className="flex h-full items-center gap-1.5 px-2.5 font-mono">{shortUrl(url).slice(0, 48)}</div>
+                        {stepTxt && <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{stepTxt}</div>}
+                        {activeAction && <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {verbLabel[activeAction.verb] ?? activeAction.verb}</div>}
+                        <div className="hidden h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 text-[#bfe3ff] md:flex">Vision: {b?.vision ?? 'auto'}</div>
+                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">{b?.status === 'done' ? 'fertig' : 'läuft'}</div>
                     </div>
                 </div>
             </div>

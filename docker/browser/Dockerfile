@@ -1,7 +1,11 @@
 # VAF Browser Container
 # ======================
-# Runs headless Chromium with Chrome DevTools Protocol (CDP) on port 9222.
+# Runs Chromium with Chrome DevTools Protocol (CDP) on port 9222.
 # VAF connects to it via ws://localhost:9222 — no Chromium on the host needed.
+#
+# Stealth: Chromium runs HEADED under a virtual X display (Xvfb) instead of
+# --headless=new. Real headed Chrome leaks far fewer automation tells (the new
+# headless mode is still detectable), so this is the stronger anti-bot baseline.
 #
 # Build (automatic via docker compose):
 #   docker compose -f docker-compose.memory.yml build vaf-browser
@@ -12,16 +16,24 @@
 
 FROM debian:bookworm-slim
 
-# Install Chromium + minimal system fonts (needed for JS-heavy pages)
+# Install Chromium + Xvfb (virtual display for headed mode) + a fuller font set.
+# A realistic font list matters for fingerprinting, so we ship more than the bare
+# minimum (liberation/dejavu/noto) without pulling the whole desktop.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-sandbox \
+    xvfb \
     fonts-liberation \
     fonts-dejavu-core \
+    fonts-noto-core \
+    fonts-noto-color-emoji \
     libatk-bridge2.0-0 \
     libnss3 \
     libxss1 \
+    libgbm1 \
+    libasound2 \
     ca-certificates \
+    tzdata \
     curl \
     socat \
     && rm -rf /var/lib/apt/lists/*

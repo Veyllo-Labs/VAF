@@ -1,50 +1,89 @@
 #!/bin/sh
 # VAF Browser Container Entrypoint
 #
-# Chrome 112+ ignores --remote-debugging-address=0.0.0.0 as a security measure
-# and binds CDP to 127.0.0.1 only. Docker port mapping routes to the container's
-# eth0 IP, not to its 127.0.0.1 — so the port would be unreachable from the host.
+# Chromium runs HEADED under a virtual X display (Xvfb) instead of --headless=new:
+# real headed Chrome leaks far fewer automation tells, so it is the stronger
+# anti-bot baseline.
 #
-# Fix: Chromium listens on 127.0.0.1:9223 (internal), socat proxies
-#      0.0.0.0:9222 → 127.0.0.1:9223, Docker maps host:9222 → container:9222.
+# Chrome 112+ binds the remote-debugging port to 127.0.0.1 only (security), so
+# Chromium listens on 127.0.0.1:9223 and socat exposes 0.0.0.0:9222 -> 9223
+# (Docker maps host:9222 -> container:9222).
 
 set -e
 
-# Start Chromium on internal port 9223
-/usr/lib/chromium/chromium \
-    --headless=new \
+CHROMIUM=/usr/lib/chromium/chromium
+
+# ── Virtual display (headed mode) ───────────────────────────────────────────
+export DISPLAY=:99
+Xvfb :99 -screen 0 1920x1080x24 -ac -nolisten tcp >/tmp/xvfb.log 2>&1 &
+# Wait until the X server socket is ready (no extra x11-utils dependency needed).
+i=0
+while [ $i -lt 60 ] && [ ! -e /tmp/.X11-unix/X99 ]; do
+    i=$((i + 1)); sleep 0.1
+done
+echo "Xvfb ready on :99"
+
+# ── Version-matched User-Agent ──────────────────────────────────────────────
+# A UA whose Chrome version differs from the actual binary is itself a fingerprint
+# tell, so derive it from the installed Chromium at runtime (headed UA has no
+# "HeadlessChrome" marker). The JS supplement reads navigator.userAgent to keep
+# navigator.userAgentData consistent with this string.
+CHROME_VER="$("$CHROMIUM" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+[ -z "$CHROME_VER" ] && CHROME_VER="124.0.0.0"
+USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VER} Safari/537.36"
+
+# ── Optional proxy (VAF_BROWSER_PROXY=http://user:pass@host:port | socks5://…) ─
+# Proxy is a launch-time setting, so it must be applied here (we connect via CDP
+# afterwards and cannot change it). When proxied, also stop WebRTC from leaking
+# the real local IP around the proxy.
+PROXY_ARGS=""
+if [ -n "$VAF_BROWSER_PROXY" ]; then
+    PROXY_ARGS="--proxy-server=$VAF_BROWSER_PROXY --force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+    echo "Browser proxy: enabled"
+fi
+
+echo "Chromium $CHROME_VER (headed under Xvfb)"
+echo "UA: $USER_AGENT"
+
+# ── Launch headed Chromium on internal port 9223 ────────────────────────────
+"$CHROMIUM" \
     --no-sandbox \
     --disable-dev-shm-usage \
     --remote-debugging-port=9223 \
-    --window-size=1280,800 \
+    --disable-blink-features=AutomationControlled \
+    --user-agent="$USER_AGENT" \
+    --lang=en-US \
+    --accept-lang=en-US,en \
+    --window-position=0,0 \
+    --window-size=1920,1080 \
     --disable-extensions \
     --disable-background-networking \
     --disable-default-apps \
     --disable-sync \
     --disable-translate \
-    --hide-scrollbars \
     --metrics-recording-only \
     --mute-audio \
     --no-first-run \
+    --no-default-browser-check \
     --safebrowsing-disable-auto-update \
-    --disable-http2 \
     --disable-quic \
-    --disable-gpu \
-    --disable-gpu-sandbox \
-    --disable-software-rasterizer \
+    --use-gl=angle \
+    --use-angle=swiftshader \
+    --enable-unsafe-swiftshader \
+    $PROXY_ARGS \
     about:blank &
 
 # Wait until Chromium CDP is ready
 echo "Waiting for Chromium CDP on 127.0.0.1:9223..."
-for i in $(seq 1 30); do
+i=0
+while [ $i -lt 60 ]; do
     if curl -sf http://127.0.0.1:9223/json/version > /dev/null 2>&1; then
         echo "Chromium ready."
         break
     fi
-    sleep 0.5
+    i=$((i + 1)); sleep 0.5
 done
 
-# Proxy 0.0.0.0:9222 → 127.0.0.1:9223
-# This makes the CDP reachable via Docker's port mapping from the host.
+# Proxy 0.0.0.0:9222 → 127.0.0.1:9223 so CDP is reachable via Docker port mapping.
 echo "Starting socat proxy 0.0.0.0:9222 -> 127.0.0.1:9223"
 exec socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223

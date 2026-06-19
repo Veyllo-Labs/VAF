@@ -227,6 +227,17 @@ services:
       dockerfile: Dockerfile
     container_name: vaf-browser
     restart: unless-stopped
+    # Headed Chromium under Xvfb needs more shared memory than headless to avoid
+    # renderer crashes on heavy pages.
+    shm_size: "1gb"
+    environment:
+      # Timezone the browser reports (keep it consistent with the locale; the
+      # browser_agent overrides this per-session via CDP when a proxy is used).
+      TZ: "${VAF_BROWSER_TZ:-Europe/Berlin}"
+      # Optional upstream proxy for the browser (http://user:pass@host:port or
+      # socks5://...). Empty = direct connection. When set, the entrypoint adds
+      # --proxy-server and WebRTC leak protection.
+      VAF_BROWSER_PROXY: "${VAF_BROWSER_PROXY:-}"
     ports:
       - "127.0.0.1:${BROWSER_CDP_PORT:-9222}:9222"
     networks:
@@ -236,7 +247,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
     deploy:
       resources:
         limits:

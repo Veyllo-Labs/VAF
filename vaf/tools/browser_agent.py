@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import queue as _queue
+import random
 import threading
 from typing import Any, Optional
 
@@ -750,6 +751,9 @@ class BrowserAgentTool(BaseTool):
             session_kwargs["allowed_domains"] = allowed_domains
         if session_file and os.path.exists(session_file):
             session_kwargs["storage_state"] = session_file
+        # Humanize cadence: a slower, per-run-randomized pause between actions instead
+        # of browser-use's default 0.1s (instant actions are a behavioural bot tell).
+        session_kwargs["wait_between_actions"] = round(random.uniform(0.6, 1.2), 2)
 
         # ── Session ID (needed for stop-check and WebUI broadcast) ───────────
         try:
@@ -760,24 +764,32 @@ class BrowserAgentTool(BaseTool):
 
         browser = BrowserSession(**session_kwargs)
 
-        # ── Stealth: inject anti-bot evasions via CDP init script ────────────
-        # The JS payload is vendored directly in _stealth_payload.js (no runtime
-        # dependency on playwright-stealth). This eliminates supply-chain risk:
-        # the script is reviewed once at vendor time and never changes without
-        # an explicit VAF code review.
-        #
-        # Source: playwright-stealth 2.0.3 (MIT) — Mattwmaster58
-        # SHA-256: 5601b9ccfd7d97c538daec0d097dfc7939faa73ad41c9a20a579269111709e32
-        # Patches: navigator.webdriver, chrome runtime, WebGL vendor,
-        #          hardware concurrency, plugins, user-agent data, permissions.
+        # ── Stealth: inject ONLY the VAF supplement via a CDP init script ────
+        # Our browser is a real HEADED Chromium (under Xvfb, see docker/browser/)
+        # launched with --disable-blink-features=AutomationControlled and a
+        # version-matched UA, so it is already clean on navigator.webdriver,
+        # platform, plugins, window.chrome and userAgentData. We deliberately do
+        # NOT inject the vendored playwright-stealth payload anymore: it spoofs
+        # platform to Win32 (inconsistent with our Linux UA) and pollutes
+        # navigator, both of which bot detectors (e.g. rebrowser) flag. The
+        # supplement only fixes the software-WebGL "SwiftShader" renderer and
+        # adds subtle canvas/audio noise, without ever touching navigator.
         try:
-            _stealth_js_path = os.path.join(os.path.dirname(__file__), "_stealth_payload.js")
-            with open(_stealth_js_path, "r", encoding="utf-8") as _f:
-                _stealth_js = _f.read()
             await browser.start()
-            await browser._cdp_add_init_script(_stealth_js)
+            _supp = os.path.join(os.path.dirname(__file__), "_stealth_supplement.js")
+            with open(_supp, "r", encoding="utf-8") as _f:
+                await browser._cdp_add_init_script(_f.read())
         except Exception:
-            pass  # stealth file missing or CDP not ready — degrade gracefully
+            pass  # CDP not ready — degrade gracefully
+
+        # Humanize cadence: a short randomized "think time" between steps so the
+        # agent doesn't act with machine-perfect timing (helps behavioural scoring
+        # such as reCAPTCHA v3). Best-effort — never breaks the run.
+        async def _human_step_pause(*_a, **_k):
+            try:
+                await asyncio.sleep(random.uniform(0.3, 1.2))
+            except Exception:
+                pass
 
         agent = Agent(
             task=task,
@@ -788,6 +800,7 @@ class BrowserAgentTool(BaseTool):
             use_vision=False,       # screenshots go only through describe_page_visually action
             enable_planning=False,
             use_thinking=False,
+            register_new_step_callback=_human_step_pause,
         )
 
         # ── Browser-use log capture ────────────────────────────────────────────

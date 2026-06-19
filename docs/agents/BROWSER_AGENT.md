@@ -22,7 +22,8 @@ BrowserAgentTool          (vaf/tools/browser_agent.py)
     │           WebSocket → browser_frame_update → WebUI
     ▼
 vaf-browser               (Docker container)
-    └── Chromium --headless=new --remote-debugging-port=9222
+    └── Chromium (HEADED, under Xvfb) --remote-debugging-port=9223
+            └── socat 9222 → 9223   (CDP reachable via Docker port map)
 ```
 
 **Chromium runs in a dedicated Docker container** (`vaf-browser`). VAF connects to it via the [Chrome DevTools Protocol (CDP)](https://chromedevtools.github.io/devtools-protocol/) over a local WebSocket. No browser is ever installed on the host machine.
@@ -408,23 +409,48 @@ Make sure the CDP port is not exposed publicly — restrict access at the firewa
 
 ---
 
+## Anti-Bot Detection
+
+VAF hardens the browser so a vanilla automated browser's obvious tells are removed. The robust, hard-to-bypass parts live in how Chromium is launched (`docker/browser/entrypoint.sh`), not in fragile JavaScript:
+
+- **Headed Chromium under Xvfb** — not `--headless`. The new headless mode still has subtle, detectable tells; a real headed browser does not.
+- **`--disable-blink-features=AutomationControlled`** — `navigator.webdriver` is natively `false` (no detectable JS redefine).
+- **Version-matched User-Agent** — derived at startup from the actual Chromium version, with no "HeadlessChrome" marker; consistent with `navigator.platform = "Linux x86_64"`.
+- **HTTP/2 kept on**, realistic window size (1920×1080), `en-US` locale.
+- **Fingerprint supplement** (`vaf/tools/_stealth_supplement.js`, injected via CDP at connect time): replaces the software-renderer "SwiftShader" WebGL string with a realistic Linux/Mesa value and adds subtle, seeded canvas/audio noise. It **never** touches `navigator` (own-property pollution is itself a tell, so playwright-stealth is intentionally **not** injected).
+- **Behavioural cadence** — randomized pauses between actions and a short per-step "think time" instead of machine-perfect timing.
+
+This passes common bot-detection checks (`navigator.webdriver`, headless UA, WebGL, plugins, `window.chrome`). **Honest limits:** it does not match TLS JA3/JA4 fingerprints or fully spoof WebRTC, so aggressive managed WAFs (Cloudflare-managed, Kasada, Akamai) can still block, and a flagged/datacenter IP remains the hard limit — use a residential proxy for those.
+
+### Proxy and timezone
+
+The browser can route through an upstream proxy. Both are optional environment variables on the `vaf-browser` container (default: direct connection):
+
+```bash
+# .env  (or the environment before `docker compose ... up`)
+VAF_BROWSER_PROXY=http://user:pass@host:8080      # or socks5://host:1080  (empty = direct)
+VAF_BROWSER_TZ=America/New_York                    # match the proxy region (default: Europe/Berlin)
+```
+
+When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC leak protection (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`) so the real IP does not leak around the proxy. Set `VAF_BROWSER_TZ` to a timezone consistent with the proxy's exit region (a timezone that contradicts the IP is a tell).
+
+---
+
 ## Docker Container Details
 
 **Image:** built from `docker/browser/Dockerfile`  
-**Base:** `debian:bookworm-slim` + Chromium from Debian repos  
+**Base:** `debian:bookworm-slim` + Chromium + Xvfb from Debian repos  
 **Container name:** `vaf-browser`  
-**Internal port:** `9222` (CDP)  
-**Memory limit:** 2 GB  
+**Internal port:** `9223` (CDP), exposed as `9222` via socat  
+**Memory limit:** 2 GB (`shm_size: 1gb`)  
 **User:** non-root (`browser:browser`)  
 **Health check:** `curl http://localhost:9222/json/version` every 10 seconds
 
-The container runs a single persistent Chromium process. browser-use opens new tabs per task and cleans them up on completion.
+The container runs a single persistent Chromium process **headed under a virtual X display (Xvfb)** — not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). browser-use opens new tabs per task and cleans them up on completion.
 
 **Default behaviour:** each task starts with a clean browser profile — no cookies, no login state.
 
 **Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/{session}.json` after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
-
-**Chrome flags applied:** `--disable-http2 --disable-quic` (forces HTTP/1.1, bypasses HTTP/2 fingerprinting used by Cloudflare Bot Management).
 
 ### Rebuild after Dockerfile changes
 
@@ -466,17 +492,17 @@ The task was too complex for the step budget, or the site uses techniques that d
 
 ### `ERR_HTTP2_PROTOCOL_ERROR` on certain sites
 
-Some sites (e.g. Cloudflare Bot Management) terminate the HTTP/2 connection when they detect a headless browser fingerprint — Chromium reports this as `ERR_HTTP2_PROTOCOL_ERROR`. This is a network-layer bot detection, not a CAPTCHA.
+A site may terminate the connection when it detects an automated browser fingerprint — Chromium reports this as `ERR_HTTP2_PROTOCOL_ERROR`. This is a network-layer bot detection, not a CAPTCHA.
 
-VAF's browser container launches Chromium with `--disable-http2 --disable-quic`, which forces HTTP/1.1 and bypasses HTTP/2 fingerprinting. This is applied automatically — no action needed.
+The container keeps **HTTP/2 enabled** (real Chrome uses it; disabling it is itself a fingerprint tell), and relies on the headed + fingerprint hardening described in [Anti-Bot Detection](#anti-bot-detection) to avoid being flagged in the first place. QUIC is left off because UDP through Docker NAT is unreliable; it is tunable in `docker/browser/entrypoint.sh`.
 
-If you still see this error, the site may be doing TLS fingerprinting (JA3) — a separate, deeper layer of detection.
+If you still see this error, the site is likely doing TLS fingerprinting (JA3) — a deeper layer that a non-patched Chromium cannot defeat; a residential proxy (see [Anti-Bot Detection](#anti-bot-detection)) is the practical lever there.
 
 ### CAPTCHA / bot detection
 
-VAF injects a stealth script (`vaf/tools/_stealth_payload.js`) that masks common headless browser signals (navigator.webdriver, WebGL vendor, etc.), which reduces detection on most sites.
+See [Anti-Bot Detection](#anti-bot-detection) for the full hardening (headed Chromium, automation-flag removal, version-matched UA, and the fingerprint supplement). This makes the browser pass common detection checks; a vanilla automated browser does not.
 
-When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session trust — the stealth script and HTTP/1.1 bypass help here.
+When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_visually`) to understand the challenge visually. For image-based CAPTCHAs (reCAPTCHA v2 "click all traffic lights"), a vision-capable model (Anthropic, GPT-4o, Gemini) can attempt to solve them. Behavioral CAPTCHAs (reCAPTCHA v3, Cloudflare Turnstile) depend on browser fingerprint and session/IP trust — the hardening helps, but a flagged IP remains the hard limit.
 
 ---
 
@@ -502,5 +528,7 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 | [web/components/SubAgentWindow.tsx](../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) — standalone runs |
 | [web/components/BrowserLiveTile.tsx](../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
 | [web/app/page.tsx](../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
-| [docker/browser/Dockerfile](../docker/browser/Dockerfile) | Browser container image definition |
-| [docker-compose.memory.yml](../docker-compose.memory.yml) | `vaf-browser` service definition (search for `vaf-browser`) |
+| [vaf/tools/_stealth_supplement.js](../vaf/tools/_stealth_supplement.js) | Fingerprint supplement injected via CDP (WebGL renderer realism + canvas/audio noise) |
+| [docker/browser/Dockerfile](../docker/browser/Dockerfile) | Browser container image definition (Chromium + Xvfb) |
+| [docker/browser/entrypoint.sh](../docker/browser/entrypoint.sh) | Headed Chromium launch under Xvfb + anti-detection flags + optional proxy |
+| [docker-compose.memory.yml](../docker-compose.memory.yml) | `vaf-browser` service definition (`VAF_BROWSER_PROXY` / `VAF_BROWSER_TZ` env) |

@@ -10,6 +10,7 @@ from vaf.cli.ui import UI
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
+from vaf.tools._browser_headers import browser_headers
 
 
 def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
@@ -20,11 +21,9 @@ def _search_google(query: str, max_results: int) -> tuple[list, str | None]:
     try:
         # Google expects spaces as + in query string: "wie wird das wetter" -> wie+wird+das+wetter
         url = "https://www.google.com/search?q=" + quote_plus(query)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-        }
+        # Full, consistent browser header set (keep the German Accept-Language for
+        # German-language results).
+        headers = browser_headers(accept_language="de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
         r = requests.get(url, timeout=8, headers=headers)
         if r.status_code != 200:
             return ([], "error")
@@ -174,9 +173,7 @@ def _search_duckduckgo(query: str, max_results: int) -> list:
     try:
         import time
         s = requests.Session()
-        s.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        })
+        s.headers.update(browser_headers())
         # DDG may return 202 (bot challenge) under rate limiting — retry up to 3x with 4s wait
         r = None
         for attempt in range(3):

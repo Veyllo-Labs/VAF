@@ -7,7 +7,6 @@ import re
 import os
 import json
 import time
-import random
 import hashlib
 import urllib3
 from typing import Dict, Any, List, Optional
@@ -17,13 +16,8 @@ from pathlib import Path
 from vaf.tools.base import BaseTool
 from vaf.core.config import Config
 
-# Constants
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-]
+# Browser-like request headers come from vaf.tools._browser_headers.browser_headers()
+# (imported where used) — a full, consistent set, not just a rotated User-Agent.
 DOMAIN_LAST_FETCH: Dict[str, float] = {}
 MIN_DELAY = 1.0 
 
@@ -118,7 +112,10 @@ class WebFetchTool(BaseTool):
         else:
             try:
                 import requests
-                headers = {"User-Agent": kwargs.get("user_agent") or random.choice(USER_AGENTS), "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+                from vaf.tools._browser_headers import browser_headers
+                # Full, consistent browser header set (not just UA + Accept) — a thin
+                # header set is itself a bot tell. Honours a caller-supplied user_agent.
+                headers = browser_headers(user_agent=kwargs.get("user_agent"))
                 try:
                     res = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
                 except requests.exceptions.SSLError:

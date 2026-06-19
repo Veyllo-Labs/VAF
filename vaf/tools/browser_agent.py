@@ -801,7 +801,7 @@ class BrowserAgentTool(BaseTool):
         stop_screenshots = asyncio.Event()
 
         screenshot_task = asyncio.create_task(
-            self._screenshot_loop(browser, _session_id, stop_screenshots, log_queue)
+            self._screenshot_loop(browser, _session_id, stop_screenshots, log_queue, agent, task, max_steps)
         )
         stop_monitor_task = asyncio.create_task(
             self._stop_monitor(_session_id, agent, agent_task, stop_screenshots)
@@ -885,11 +885,107 @@ class BrowserAgentTool(BaseTool):
     # ── Live screenshot loop ──────────────────────────────────────────────────
 
     @staticmethod
+    def _build_browser_state(agent, task: str, url: str, max_steps: int) -> dict:
+        """Derive the browser window's dock state (task, step, action plan, visited URLs,
+        vision) from the browser-use agent history. Best-effort and defensive across
+        browser-use versions; never raises and never disturbs the run."""
+        def _verb(name: str) -> str:
+            n = (name or "").lower()
+            if any(k in n for k in ("go_to_url", "open_tab", "search_google", "navigate", "go_back")):
+                return "nav"
+            if "click" in n:
+                return "click"
+            if any(k in n for k in ("input_text", "type", "fill", "send_keys")):
+                return "type"
+            if "scroll" in n:
+                return "scroll"
+            return "read"  # extract_content / done / get_* / wait / default
+
+        def _atext(name: str, params) -> str:
+            label = (name or "").replace("_", " ").strip() or "Aktion"
+            try:
+                if isinstance(params, dict):
+                    if params.get("url"):
+                        return f"Öffne {params['url']}"
+                    if params.get("query"):
+                        return f"Suche „{params['query']}\""
+                    if "index" in params:
+                        return f"{label} [{params['index']}]"
+                    if params.get("text"):
+                        return f"Tippe „{str(params['text'])[:40]}\""
+            except Exception:
+                pass
+            return label[:1].upper() + label[1:]
+
+        actions: list = []
+        history_urls: list = []
+        step_n = 0
+        vision = "auto"
+        try:
+            hist = getattr(agent, "history", None) or getattr(getattr(agent, "state", None), "history", None)
+            steps = getattr(hist, "history", None) or []
+            step_n = getattr(getattr(agent, "state", None), "n_steps", 0) or len(steps)
+            try:
+                raw_urls = hist.urls() if hasattr(hist, "urls") else []
+            except Exception:
+                raw_urls = []
+            for u in (raw_urls or []):
+                if u and u != "about:blank" and (not history_urls or history_urls[-1] != u):
+                    history_urls.append(u)
+            recent = list(steps)[-30:]
+            for i, h in enumerate(recent):
+                mo = getattr(h, "model_output", None)
+                acts = getattr(mo, "action", None) or []
+                first = acts[0] if acts else None
+                name, params = "", {}
+                if first is not None:
+                    try:
+                        dumped = first.model_dump(exclude_none=True)
+                    except Exception:
+                        try:
+                            dumped = first.dict(exclude_none=True)
+                        except Exception:
+                            dumped = {}
+                    if dumped:
+                        name, params = next(iter(dumped.items()))
+                text = ""
+                cs = getattr(mo, "current_state", None)
+                ng = getattr(cs, "next_goal", None) if cs else None
+                if isinstance(ng, str) and ng.strip():
+                    text = ng.strip()
+                if not text:
+                    text = _atext(name, params)
+                if len(text) > 160:
+                    text = text[:157] + "…"
+                actions.append({"verb": _verb(name), "text": text,
+                                "status": "active" if i == len(recent) - 1 else "done"})
+                if "describe" in (name or "").lower() or "captcha" in (name or "").lower():
+                    vision = "aktiv"
+        except Exception:
+            pass
+
+        if not history_urls and url:
+            history_urls = [url]
+        return {
+            "task": task or "",
+            "url": url or (history_urls[-1] if history_urls else ""),
+            "status": "running",
+            "step": int(step_n or len(actions)),
+            "maxSteps": int(max_steps or 0),
+            "vision": vision,
+            "actions": actions,
+            "history": history_urls[-20:],
+        }
+
+    @staticmethod
     async def _screenshot_loop(
         browser_session,
         session_id: Optional[str],
         stop_event: asyncio.Event,
         log_queue: Optional[_queue.Queue] = None,
+        agent=None,
+        task: str = "",
+        max_steps: int = 0,
     ) -> None:
         """
         Every ~1.5 s:
@@ -932,6 +1028,16 @@ class BrowserAgentTool(BaseTool):
                 if _frame_count <= 2 or _frame_count % 5 == 0:
                     _slog.info("[BrowserFrames] emitted frame #%d session=%s (%d bytes) url=%s",
                                _frame_count, session_id, len(shot), url[:80])
+                # Structured dock state (task / step / action plan / history) — best-effort,
+                # must never disturb the frame stream or the browser run.
+                try:
+                    if agent is not None:
+                        wi.emit_browser_state(
+                            BrowserAgentTool._build_browser_state(agent, task, url, max_steps),
+                            session_id,
+                        )
+                except Exception:
+                    pass
             except Exception as _e:
                 _slog.warning("[BrowserFrames] screenshot/emit failed session=%s: %s", session_id, _e)
 

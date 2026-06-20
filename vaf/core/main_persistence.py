@@ -293,7 +293,7 @@ class MainPersistenceManager:
 
     @staticmethod
     def _format_wm_list(entries: List) -> str:
-        """Format notes/plan list for prompt display: 'YYYY-MM-DD HH:MM - text' or '(ohne Datum) - text'."""
+        """Format notes/plan list for prompt display: 'YYYY-MM-DD HH:MM - text' or '(no date) - text'."""
         lines = []
         for entry in entries:
             if isinstance(entry, dict) and "text" in entry:
@@ -304,12 +304,12 @@ class MainPersistenceManager:
                         dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
                         lines.append(f"{dt.strftime('%Y-%m-%d %H:%M')} - {text}")
                     except (ValueError, TypeError):
-                        lines.append(f"(ohne Datum) - {text}")
+                        lines.append(f"(no date) - {text}")
                 else:
-                    lines.append(f"(ohne Datum) - {text}")
+                    lines.append(f"(no date) - {text}")
             else:
-                lines.append(f"(ohne Datum) - {entry}")
-        return "\n".join(lines) if lines else "(leer)"
+                lines.append(f"(no date) - {entry}")
+        return "\n".join(lines) if lines else "(empty)"
 
     @staticmethod
     def _parse_iso_to_ts(iso_str: Any) -> float:
@@ -493,7 +493,7 @@ class MainPersistenceManager:
         lines = []
         for i, t in enumerate(tasks):
             if not isinstance(t, dict):
-                lines.append(f"[{i}] (ohne Datum) [pending] {t}")
+                lines.append(f"[{i}] (no date) [pending] {t}")
                 continue
             text = t.get("text", "")
             status = (t.get("status") or "pending").lower()
@@ -503,10 +503,10 @@ class MainPersistenceManager:
                     dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                     lines.append(f"[{i}] {dt.strftime('%Y-%m-%d %H:%M')} [{status}] {text}")
                 except (ValueError, TypeError):
-                    lines.append(f"[{i}] (ohne Datum) [{status}] {text}")
+                    lines.append(f"[{i}] (no date) [{status}] {text}")
             else:
-                lines.append(f"[{i}] (ohne Datum) [{status}] {text}")
-        return "\n".join(lines) if lines else "(leer)"
+                lines.append(f"[{i}] (no date) [{status}] {text}")
+        return "\n".join(lines) if lines else "(empty)"
 
     @staticmethod
     def _current_step(tasks: List) -> Optional[tuple]:

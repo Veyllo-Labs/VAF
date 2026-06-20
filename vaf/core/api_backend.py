@@ -103,24 +103,48 @@ class OpenAIProvider(BaseAIProvider):
             self.client = None
             logger.error("OpenAI SDK not installed. Please run: pip install openai")
 
+    @staticmethod
+    def _is_reasoning_model(model: str) -> bool:
+        """OpenAI reasoning models (o1/o3/o4 series, gpt-5 family) reject `max_tokens`
+        and a non-default `temperature` (only the default 1 is allowed). They require
+        `max_completion_tokens` instead. Detect them so we can gate those params.
+
+        Matches the o-series only at the start of the bare model name (after any
+        `provider/` prefix) so `gpt-4o` / `gpt-4o-mini` are NOT misdetected.
+        """
+        m = (model or "").lower()
+        if "gpt-5" in m:
+            return True
+        name = m.rsplit("/", 1)[-1]  # strip openrouter-style "openai/" prefix
+        return name.startswith(("o1", "o3", "o4"))
+
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
             yield "[Error] OpenAI SDK missing."
             return
 
         try:
+            reasoning_model = self._is_reasoning_model(model)
             # Prepare arguments
             kwargs = {
                 "model": model,
                 "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
                 "stream": stream,
             }
+            if reasoning_model:
+                # o-series / gpt-5: use max_completion_tokens; omit temperature (only the
+                # default is accepted). Sending max_tokens or temperature here -> HTTP 400.
+                kwargs["max_completion_tokens"] = max_tokens
+            else:
+                kwargs["max_tokens"] = max_tokens
+                kwargs["temperature"] = temperature
             if tools:
                 kwargs["tools"] = tools
-                kwargs["parallel_tool_calls"] = True  # Allow multiple tools in one response
-                
+                if not reasoning_model:
+                    # parallel_tool_calls isn't accepted by all reasoning models; the
+                    # server-side default already allows parallel calls, so just omit it.
+                    kwargs["parallel_tool_calls"] = True
+
                 # tool_choice: 'auto' (default), 'none', 'required', or specific function
                 if tool_choice:
                     kwargs["tool_choice"] = tool_choice

@@ -253,6 +253,12 @@ class Agent:
         self._allow_once_tools = set()
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
         self._anti_spin_streak = 0  # consecutive bookkeeping (plan/intent) calls; anti-spin guard
+        # Task-stuck guard (complement to anti-spin): a weak model can finish a step's work but never
+        # call mark_task_done, so the pending-task auto-continue keeps forcing it to "keep going" — it
+        # redoes the same step until the hard cap and leaves it unmarked for the next run. Track
+        # consecutive auto-continues on the SAME step; escalate, then auto-complete it to break the loop.
+        self._autocontinue_step_sig = None  # signature (idx, text) of the step the auto-continue last fired on
+        self._autocontinue_stuck = 0        # consecutive auto-continues on that same step without progress
         self._noninteractive = os.environ.get("VAF_NONINTERACTIVE", "").strip() in ("1", "true", "yes")
         self._event_sink = None  # optional callable(dict)
         
@@ -479,6 +485,40 @@ class Agent:
             return (None, False)
         except Exception:
             return (None, False)
+
+    def _task_stuck_step(self, idx: int, text: str) -> str:
+        """Pending-task verification (single-nudge; decouples loop termination from the model's
+        bookkeeping). The auto-continue only fires on a final TEXT answer, so a model that finished a
+        step but never called mark_task_done lands here. Rather than force-loop until the list is
+        empty (which makes weak models redo a done step to the hard cap and carry it unmarked into the
+        next run), we VERIFY once and then trust the model. Tracks CONSECUTIVE no-progress finals on
+        the SAME step; returns:
+          'nudge'    — first time: ask the model to confirm the step done or actually continue,
+          'autodone' — it answered again without progress on the same step: trust it, the caller
+                       auto-confirms the step (marks it done) and advances/ends — no loop,
+          'continue' — only when the guard is disabled (legacy force-loop behaviour).
+        The streak resets on real progress (a different step). Config-gated via task_stuck_guard_enabled
+        / task_stuck_nudge_turns (default 1) / task_stuck_autodone_turns (default 2). Mirrors
+        _anti_spin_step's shape."""
+        try:
+            from vaf.core.config import Config
+            sig = (idx, (text or "").strip().lower()[:80])
+            if sig == getattr(self, "_autocontinue_step_sig", None):
+                self._autocontinue_stuck = getattr(self, "_autocontinue_stuck", 0) + 1
+            else:
+                self._autocontinue_step_sig = sig
+                self._autocontinue_stuck = 1
+            if not bool(Config.get("task_stuck_guard_enabled", True)):
+                return "continue"
+            autodone_at = max(2, int(Config.get("task_stuck_autodone_turns", 2) or 2))
+            nudge_at = max(1, int(Config.get("task_stuck_nudge_turns", 1) or 1))
+            if self._autocontinue_stuck >= autodone_at:
+                return "autodone"
+            if self._autocontinue_stuck >= nudge_at:
+                return "nudge"
+            return "continue"
+        except Exception:
+            return "continue"
 
     def _plan_gate_decision(self, name, tool_instance):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
@@ -5689,6 +5729,8 @@ class Agent:
         SOFT_LIMIT_TOOL_TURNS = 50   # Inject goal-reminder, agent continues
         MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
         _hard_stop_injected = False   # True after hard-stop user message was injected once
+        self._autocontinue_step_sig = None  # reset the task-stuck guard at the start of each run
+        self._autocontinue_stuck = 0
         _ww_reactive_injected = set()  # tools whose learned know-how was already re-fed on error this turn
 
         while empty_retry_count < MAX_EMPTY_RETRIES:
@@ -7965,31 +8007,70 @@ class Agent:
                     _step = self.main_persistence._current_step(_wm.get("tasks", []))
                     if _step is not None:
                         _idx, _text, _done, _total = _step
-                        tool_turn_count += 1  # share the existing soft(50)/hard(75) budget
-                        self.history.append({
-                            "role": "system",
-                            "content": (
-                                "[System: You still have pending tasks — do NOT stop yet. Work the next "
-                                "step NOW by calling the needed tools.\n"
-                                f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish it, then call "
-                                f"update_working_memory(mark_task_done={_idx}). Only stop when every task "
-                                "is done or you have a genuine question that requires the user.]"
-                            ),
-                        })
-                        UI.event(
-                            "System",
-                            f"Pending tasks remain — auto-continuing (step {_done + 1}/{_total}, "
-                            f"turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP}).",
-                            style="dim",
-                        )
-                        try:
-                            append_domain_log(
-                                "backend",
-                                f"autocontinue step={_done + 1}/{_total} turn={tool_turn_count}",
+                        # ── Pending-task verification (single-nudge; see _task_stuck_step) ───
+                        # The auto-continue only fires on a FINAL TEXT answer (no tool calls). Instead
+                        # of force-looping until the list is empty (which makes a weak model redo a done
+                        # step to the hard cap and carry it unmarked into the next run), verify ONCE: ask
+                        # the model to confirm the step done or actually continue. If it answers again
+                        # without progress on the same step, trust it — auto-confirm the step and move on.
+                        _stuck = self._task_stuck_step(_idx, _text)
+                        if _stuck == "autodone":
+                            try:
+                                self.main_persistence.update_working_memory(mark_task_done=_idx)
+                            except Exception:
+                                pass
+                            try:
+                                append_domain_log("backend", f"[TASK_VERIFY] step idx={_idx} auto-confirmed done (no progress after verification)")
+                            except Exception:
+                                pass
+                            UI.event("System", f"Step {_done + 1}/{_total} auto-confirmed done (model gave no further progress after the verification nudge).", style="warning")
+                            self._autocontinue_step_sig = None
+                            self._autocontinue_stuck = 0
+                            _wm = self.main_persistence.get_working_memory()
+                            _step = self.main_persistence._current_step(_wm.get("tasks", []))
+                            if _step is None:
+                                # All tasks resolved -> let the model's final answer stand; end the turn.
+                                pass
+                            else:
+                                _idx, _text, _done, _total = _step
+
+                        if _step is not None:
+                            tool_turn_count += 1  # share the existing soft(50)/hard(75) budget
+                            if _stuck == "nudge":
+                                # One-shot verification: let a genuinely-finished model just confirm and
+                                # stop; push a stopped-early model to actually do the open step.
+                                _ac_content = (
+                                    "[System: You gave a final answer, but a step is still marked open — "
+                                    "verify it before stopping.\n"
+                                    f">> OPEN STEP {_done + 1}/{_total}: \"{_text}\"\n"
+                                    f"- If you ALREADY completed it, confirm now: update_working_memory(mark_task_done={_idx}) "
+                                    "(or mark_all_done=true for all remaining) — then you may stop.\n"
+                                    "- If real work is still left for it, do it now.\n"
+                                    "Do NOT repeat work you have already done.]"
+                                )
+                            else:
+                                _ac_content = (
+                                    "[System: You still have pending tasks — do NOT stop yet. Work the next "
+                                    "step NOW by calling the needed tools.\n"
+                                    f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish it, then call "
+                                    f"update_working_memory(mark_task_done={_idx}). Only stop when every task "
+                                    "is done or you have a genuine question that requires the user.]"
+                                )
+                            self.history.append({"role": "system", "content": _ac_content})
+                            UI.event(
+                                "System",
+                                f"Pending tasks remain — auto-continuing (step {_done + 1}/{_total}, "
+                                f"turn {tool_turn_count}/{MAX_TOOL_TURNS_PER_STEP}).",
+                                style="dim",
                             )
-                        except Exception:
-                            pass
-                        continue
+                            try:
+                                append_domain_log(
+                                    "backend",
+                                    f"autocontinue step={_done + 1}/{_total} turn={tool_turn_count} stuck={self._autocontinue_stuck}",
+                                )
+                            except Exception:
+                                pass
+                            continue
             except Exception as _ac_e:
                 try:
                     append_domain_log("backend", f"autocontinue_skip {type(_ac_e).__name__}: {_ac_e}")

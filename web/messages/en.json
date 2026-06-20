@@ -139,6 +139,8 @@
   },
   "settings": {
     "title": "Settings",
+    "searchPlaceholder": "Search settings…",
+    "searchNoResults": "No matching settings",
     "redirecting": "Redirecting…",
     "redirectingToSettings": "Redirecting to settings…",
     "loadingVisualization": "Loading visualization…",

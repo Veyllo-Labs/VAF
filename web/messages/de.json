@@ -139,6 +139,8 @@
   },
   "settings": {
     "title": "Einstellungen",
+    "searchPlaceholder": "Einstellungen durchsuchen…",
+    "searchNoResults": "Keine passenden Einstellungen",
     "redirecting": "Weiterleitung…",
     "redirectingToSettings": "Weiterleitung zu den Einstellungen…",
     "loadingVisualization": "Visualisierung wird geladen…",

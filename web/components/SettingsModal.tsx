@@ -347,6 +347,41 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const setUiLocale = useLocaleStore((s) => s.setLocale);
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [activeTab, setActiveTab] = useState('general');
+    const [settingsSearch, setSettingsSearch] = useState('');
+    // Searchable index of settings: every accessible category (jumps to its top) plus each of its
+    // sections (jumps + scrolls), all localized via the same translation hooks the UI uses.
+    const settingsSearchEntries: { tab: string; label: string; sectionSlug?: string }[] = (() => {
+        const out: { tab: string; label: string; sectionSlug?: string }[] = [];
+        const accessible = (tab: string) => { const c = CATEGORIES.find(x => x.id === tab); return !!c && !(c.adminOnly && currentUser?.role !== 'admin'); };
+        CATEGORIES.forEach(c => { if (accessible(c.id)) out.push({ tab: c.id, label: tTabs(c.labelKey) }); });
+        const addSecs = (tab: string, titles: string[]) => { if (accessible(tab)) titles.forEach(label => out.push({ tab, label, sectionSlug: slugifySection(label) })); };
+        addSecs('general', [tGeneral('apiKeys'), tGeneral('webSearch'), tGeneral('centralCredentials')]);
+        addSecs('persona', [tPersona('identity'), tPersona('soul'), tPersona('longTermMemory')]);
+        addSecs('ai', [tAi('provider'), tAi('localModelSettings'), tAi('visionModel')]);
+        addSecs('voice', [tVoice('stt'), tVoice('tts')]);
+        addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
+        addSecs('advanced', [tAdvanced('subAgents'), tAdvanced('attachments'), tAdvanced('thinker'), tAdvanced('system')]);
+        addSecs('automations', [tAutomations('scheduled')]);
+        addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
+        addSecs('about', [tAbout('principles'), tAbout('credits')]);
+        return out;
+    })();
+    const settingsSearchQuery = settingsSearch.trim().toLowerCase();
+    const settingsSearchResults = settingsSearchQuery
+        ? settingsSearchEntries.filter(e => {
+            const c = CATEGORIES.find(x => x.id === e.tab);
+            const catLabel = c ? tTabs(c.labelKey).toLowerCase() : '';
+            return e.label.toLowerCase().includes(settingsSearchQuery) || (!!e.sectionSlug && catLabel.includes(settingsSearchQuery));
+        })
+        : [];
+    const goToSearchResult = (e: { tab: string; sectionSlug?: string }) => {
+        setActiveTab(e.tab);
+        setSettingsSearch('');
+        if (e.sectionSlug) {
+            const slug = e.sectionSlug;
+            setTimeout(() => document.getElementById(slug)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        }
+    };
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
     const [hfDownloadRepo, setHfDownloadRepo] = useState('');
@@ -1360,27 +1395,70 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                 {/* Sidebar */}
                 <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1">
-                    <div className="px-3 mb-4">
+                    <div className="px-3 mb-3">
                         <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">{t('settings.title')}</h2>
                     </div>
 
-                    {CATEGORIES.map(cat => {
-                        if (cat.adminOnly && currentUser?.role !== 'admin') return null;
-                        return (
-                        <button
-                            key={cat.id}
-                            onClick={() => setActiveTab(cat.id)}
-                            className={cn(
-                                "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all",
-                                activeTab === cat.id
-                                    ? "bg-gray-900 text-white shadow-md"
-                                    : "text-gray-600 hover:bg-gray-200/50"
+                    {/* Settings search — filter to matching sections/categories and jump to them */}
+                    <div className="px-1 mb-2">
+                        <div className="relative">
+                            <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input
+                                type="text"
+                                value={settingsSearch}
+                                onChange={(e) => setSettingsSearch(e.target.value)}
+                                placeholder={t('settings.searchPlaceholder')}
+                                className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-7 text-sm text-gray-700 placeholder:text-gray-400 focus:border-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-300"
+                            />
+                            {settingsSearch && (
+                                <button type="button" onClick={() => setSettingsSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                                    <X size={14} />
+                                </button>
                             )}
-                        >
-                            <cat.icon size={18} />
-                            {tTabs(cat.labelKey)}
-                        </button>
-                    )})}
+                        </div>
+                    </div>
+
+                    {settingsSearchQuery ? (
+                        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+                            {settingsSearchResults.length === 0 ? (
+                                <div className="px-3 py-2 text-sm text-gray-400">{t('settings.searchNoResults')}</div>
+                            ) : settingsSearchResults.map((e, i) => {
+                                const c = CATEGORIES.find(x => x.id === e.tab);
+                                const catLabel = c ? tTabs(c.labelKey) : '';
+                                return (
+                                    <button
+                                        key={`${e.tab}-${e.label}-${i}`}
+                                        onClick={() => goToSearchResult(e)}
+                                        className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left text-gray-600 transition-all hover:bg-gray-200/50"
+                                    >
+                                        <span className="flex items-center gap-2 text-sm font-medium">
+                                            {c && <c.icon size={15} className="text-gray-400" />}
+                                            {e.label}
+                                        </span>
+                                        {e.sectionSlug && <span className="pl-[23px] text-[11px] text-gray-400">{catLabel}</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        CATEGORIES.map(cat => {
+                            if (cat.adminOnly && currentUser?.role !== 'admin') return null;
+                            return (
+                            <button
+                                key={cat.id}
+                                onClick={() => setActiveTab(cat.id)}
+                                className={cn(
+                                    "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all",
+                                    activeTab === cat.id
+                                        ? "bg-gray-900 text-white shadow-md"
+                                        : "text-gray-600 hover:bg-gray-200/50"
+                                )}
+                            >
+                                <cat.icon size={18} />
+                                {tTabs(cat.labelKey)}
+                            </button>
+                        )})
+                    )}
 
                     {/* Connection-Indikator – über dem Trennstrich */}
                     <div
@@ -5360,8 +5438,10 @@ const Switch = ({ label, description, checked, onChange }: SwitchProps) => (
     </div>
 );
 
+/** Stable DOM id for a section from its (localized) title — used as the scroll target by search. */
+const slugifySection = (s: string) => 'setting-sec-' + s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
 const Section = ({ title, children }: { title: string, children: React.ReactNode }) => (
-    <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100">
+    <div id={slugifySection(title)} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
         <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-4">{title}</h3>
         {children}
     </div>

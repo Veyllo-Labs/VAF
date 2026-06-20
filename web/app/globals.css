@@ -138,6 +138,48 @@
   84%  { transform: scale(1.11) translate(0.85px,  0.4px);  }
   100% { transform: scale(1)    translate(0px,     0px);    }
 }
+/* ── Chat message / thinking / tool status animations (see the GPU-leak rule above:
+   every keyframe here is transform/opacity ONLY, so the infinite ones never repaint). ── */
+@keyframes chatThinkDot {
+  0%, 100% { transform: translateY(0) scale(1);     opacity: .3; }
+  50%      { transform: translateY(-2px) scale(1.2); opacity: 1; }
+}
+@keyframes chatShimmer {
+  0%   { transform: translateX(-130%); }
+  100% { transform: translateX(130%); }
+}
+@keyframes chatCheckPop {
+  0%   { transform: scale(0.2);  opacity: 0; }
+  55%  { transform: scale(1.28); opacity: 1; }
+  78%  { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
+@keyframes chatSuccessFlash {
+  0%   { transform: scale(0.55); opacity: .55; }
+  70%  { transform: scale(1.5);  opacity: 0; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+/* indeterminate progress sweep on a running tool card (mockup .bar) — transform-only */
+@keyframes chatIndet {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(360%); }
+}
+/* light sweep used while the thinking panel is active — a translateX overlay (no repaint) */
+.chat-shimmer-overlay {
+  position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(100deg, transparent 28%, rgba(255,255,255,0.5) 50%, transparent 72%);
+  transform: translateX(-130%);
+  animation: chatShimmer 1.9s ease-in-out infinite;
+}
+/* the 3 "thinking" dots — nudged ~+5px right of the label (matching the mockup) */
+.chat-think-dots { display: inline-flex; gap: 3px; margin-left: 5px; }
+.chat-think-dots > span {
+  width: 4px; height: 4px; border-radius: 50%; background: currentColor;
+  animation: chatThinkDot 1.1s ease-in-out infinite;
+}
+.chat-think-dots > span:nth-child(2) { animation-delay: .18s; }
+.chat-think-dots > span:nth-child(3) { animation-delay: .36s; }
+
 /* ── Agent character emotions (ported 1:1 from the showcase). Applied to the avatar dot to
    give the living dot expressive states in the Whare Wananga training stage. ── */
 @keyframes emoSurprised {

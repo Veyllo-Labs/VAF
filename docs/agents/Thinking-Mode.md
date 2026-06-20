@@ -25,6 +25,12 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 
 ## Background requests, handoff & no re-processing
 
+**Notes/todos are actionable by default.** The prompt treats every automation note or todo as a task
+the user *deliberately saved* — the agent must act on it (e.g. research + a concrete suggestion) or ask
+ONE specific question; it must never dismiss a note as "just venting/a complaint", and it only concludes
+"Nothing actionable" when the lists are genuinely empty. (Note: a small local model may still judge
+conservatively — a stronger `thinking_model` improves this.)
+
 When the agent asks the user something (via `ask_user`) it is recorded as a **request** with a status
 lifecycle, so the background run and the main agent stay coordinated and nothing is asked or done twice:
 

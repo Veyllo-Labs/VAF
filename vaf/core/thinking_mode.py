@@ -1238,6 +1238,14 @@ def _run_thinking_for_user(
     from vaf.core.last_interaction import get_last_interaction
     from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
+    # The local admin is normalized to None for idle-tracking, but their actual data (automation
+    # notes/todos, RAG, sessions) lives under the real local_admin_scope_id — where the Web UI / main
+    # agent write. Resolve to that real scope so every DATA read (the agent's tools, the deterministic
+    # workspace/automation injection, RAG) reads the same store the user sees. _key() still maps it
+    # back to "default", so the thinking-mode bookkeeping (locks/cooldown/...) is unchanged.
+    if user_scope_id is None:
+        user_scope_id = get_local_admin_scope_id()
+
     scope_key = _key(user_scope_id)
     run_status = "success"
     run_summary = "Thinking run completed."

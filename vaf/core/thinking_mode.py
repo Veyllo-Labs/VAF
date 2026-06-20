@@ -143,6 +143,44 @@ def _minutes_since_last_run(user_scope_id: Optional[str]) -> float:
         return float("inf")
 
 
+# --- Monotonic per-user run counter (drives the "recently asked" window for thinking_requests) ---
+RUN_SEQ_FILENAME = "thinking_run_seq.json"
+
+
+def _run_seq_path() -> Path:
+    return Platform.data_dir() / RUN_SEQ_FILENAME
+
+
+def _load_run_seq() -> Dict[str, int]:
+    p = _run_seq_path()
+    if not p.exists():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def next_run_seq(user_scope_id: Optional[str]) -> int:
+    """Increment and return this user's monotonic thinking-run sequence number (called at run start)."""
+    key = _key(user_scope_id)
+    data = _load_run_seq()
+    seq = int(data.get(key, 0)) + 1
+    data[key] = seq
+    try:
+        with open(_run_seq_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+    return seq
+
+
+def current_run_seq(user_scope_id: Optional[str]) -> int:
+    """Current thinking-run sequence number for this user (0 if none yet)."""
+    return int(_load_run_seq().get(_key(user_scope_id), 0))
+
+
 # --- Declined questions: prevent repeating questions the user already refused ---
 
 def _declined_path() -> Path:
@@ -250,8 +288,10 @@ def set_waiting_for_reply(
     username: str,
     display_name: str = "",
     question_text: str = "",
+    request_id: Optional[str] = None,
 ) -> None:
-    """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min."""
+    """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min.
+    request_id links to the thinking_requests entry so the main agent can pick up the proposal and update its status."""
     key = _key(user_scope_id)
     data = _load_waiting()
     data[key] = {
@@ -260,6 +300,7 @@ def set_waiting_for_reply(
         "username": (username or "").strip() or "admin",
         "display_name": (display_name or username or "admin").strip() or "admin",
         "question_text": (question_text or "")[:500],
+        "request_id": (request_id or "").strip() or None,
     }
     _save_waiting(data)
 
@@ -925,6 +966,7 @@ Call these tools now:
 - `list_automation_todos` — open todos?
 - `list_automation_notes` — notes to process?
 - `list_automations` — what exists? anything obviously missing?
+- `memory_search` — actively recall what the user is currently working on / recently cared about, so you can judge what is genuinely helpful right now. (Read-only: never write to memory.)
 
 ### Step 2: DECIDE (fast-exit rules)
 Apply these rules IN ORDER:
@@ -939,19 +981,24 @@ Apply these rules IN ORDER:
   → Call `thinking_done` with summary "Nothing actionable." — DONE. Don't waste more turns.
 
 **IF** there's a trivial todo (e.g. "check X", "test Y"):
-  → Complete it immediately, mark done, call `thinking_done` — DONE.
+  → Complete it immediately, mark it done (`update_automation_todo done=true`), call `thinking_done` — DONE.
 
 **IF** there's a note with a clear action item:
-  → Process it (create automation, update todo, etc.), call `thinking_done` — DONE.
+  → Process it (create automation, update todo, etc.), THEN clear the note so it does not re-surface
+    next run: `delete_automation_note(note_id=...)`. Then `thinking_done` — DONE.
 
 **IF** an automation is obviously missing and you're confident about what to create:
   → Create it, call `thinking_done` with summary — DONE.
 
+IMPORTANT — never re-do a handled item: every note/todo carries an `id`. Once you have acted on it,
+mark the todo done or delete/clear the note; if you ask the user about it, pass its id to ask_user
+(below) so the system clears it on confirm. A done todo / handled note disappears from your next run.
+
 **IF** you need the user's decision on something concrete and specific:
-  → main_messenger configured (see User Identity): send ONE message with exactly that messenger tool.
-  → NO main_messenger configured: do NOT try any send_* tool. Write the question as the plain text of your reply — it is delivered to the user's Web UI chat automatically — then call `thinking_done`.
-  → NEVER contact the user via send_mail and NEVER invent contact addresses.
-  → The system handles waiting for the reply.
+  → Call `ask_user(message="<one clean, specific question or proposal>", proposed_action="<short note of what you'd do if they agree>", source_note_id="<id if the question is about a note>", source_todo_id="<id if about a todo>")`. Put ONLY the final user-facing text in `message` — no reasoning, no "I should…", no tool talk. This delivers the message, tracks it, and waits for the reply; the MAIN agent carries out `proposed_action` once the user confirms, and the linked note/todo is marked handled so it never comes back.
+  → If a main_messenger is configured (see User Identity) you may instead send via that messenger tool.
+  → NEVER write the question as plain assistant text, NEVER use send_mail, NEVER invent contact addresses.
+  → The system handles waiting for the reply. Then call `thinking_done`.
 
 **IF** a tool call fails:
   → Log it silently. Try the next thing. Do NOT send error details to the user.
@@ -967,9 +1014,9 @@ Only send a message to the user if ALL of these are true:
 - You haven't asked this before (check declined questions + recent activity)
 - It genuinely helps the user (not just "filling" the thinking run)
 
-Channel rules: use the main_messenger tool if one is configured; otherwise plain
-reply text reaches the user's Web UI automatically. E-mail is NEVER a channel
-for contacting the user from a background run.
+Channel rules: contact the user with the `ask_user` tool — its `message` is delivered to the Web UI
+and tracked as a request. If a main_messenger is configured you may use that messenger tool instead.
+Never write the question as plain assistant text; e-mail is NEVER a channel for a background run.
 
 ## INTEL GATHERING (Pre-Computation)
 If the conversation history shows a clear, specific, and recurring interest (e.g. a specific DHL package, a stock price, or an upcoming event), you are allowed to:
@@ -1028,78 +1075,53 @@ def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
     return removed
 
 
+def emit_message_to_web_ui(user_scope_id: Optional[str], content: str) -> Optional[str]:
+    """Push a clean, final agent message to the user's latest Web UI chat session (used by the
+    `ask_user` tool). Returns the session id, or None if it could not be delivered. This NEVER inspects
+    or emits raw assistant chain-of-thought — the caller passes the exact, user-facing text."""
+    content = (content or "").strip()
+    if not content:
+        return None
+    try:
+        from vaf.core.web_interface import get_web_interface
+        from vaf.core.session import SessionManager
+        wi = get_web_interface()
+        sm = SessionManager()
+        all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
+        web_sessions = [
+            s for s in all_sessions
+            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+        ]
+        if not wi or not web_sessions:
+            return None
+        sid = web_sessions[0]["id"]
+        # Persist + stream as a new bubble (survives a chat refresh).
+        try:
+            _sess = sm.load(sid)
+            _sess.add_message("assistant", content)
+            sm.save(_sess)
+        except Exception:
+            pass
+        wi.emit_agent_message_append(content=content, session_id=sid, role="assistant")
+        wi.emit_session_unread(sid)
+        logger.info("Thinking Mode: ask_user message emitted to Web UI session %s", sid)
+        return sid
+    except Exception as _e:
+        logger.debug("Thinking Mode: Web UI emit failed: %s", _e)
+        return None
+
+
 def _try_emit_to_web_ui_and_wait(
     run_history: List[Dict[str, Any]],
     user_scope_id: Optional[str],
     username: str,
     display_name: str,
 ) -> bool:
-    """
-    When no messenger is configured, check if the agent produced a text message
-    intended for the user in the last thinking turn (a question or proposal, but
-    without calling a send_* tool).  If so, push it to the user's latest Web UI
-    session and set waiting_for_reply so the thinking loop pauses for a reply.
-
-    Returns True if a message was emitted, False otherwise.
-    """
-    if not run_history:
-        return False
-    # If thinking_done was already called, any remaining text is the internal summary — never emit it
-    if _history_has_thinking_done(run_history):
-        return False
-    # Find the last assistant message that has text content but NO send_* tool call
-    for msg in reversed(run_history):
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
-            continue
-        tool_calls = msg.get("tool_calls") or []
-        tool_names = {(tc.get("function") or {}).get("name") or tc.get("name") or "" for tc in tool_calls}
-        # Skip if a messenger send tool was already called (handled elsewhere)
-        if tool_names & _SENT_TOOLS:
-            return False
-        # Skip internal-only tools (thinking_done, thinking_note_add, save_thinking_suggestion, …)
-        content = (msg.get("content") or "").strip()
-        if not content:
-            return False
-        # Only emit if the message looks like it's directed at the user
-        # (contains a question mark or is short enough to be a conversational reply)
-        import re as _re
-        has_question = "?" in content
-        is_conversational = len(content) < 600  # skip long internal monologues
-        if not (has_question or is_conversational):
-            return False
-        # Push to latest Web UI session
-        try:
-            from vaf.core.web_interface import get_web_interface
-            from vaf.core.session import SessionManager
-            wi = get_web_interface()
-            sm = SessionManager()
-            all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
-            web_sessions = [
-                s for s in all_sessions
-                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
-            ]
-            if not wi or not web_sessions:
-                return False
-            sid = web_sessions[0]["id"]
-            # APPEND as its own new bubble — emit_agent_message streams an
-            # agent_message_update that merges into / overwrites the last assistant
-            # bubble (observed: this proactive question overwrote a research agent's
-            # final reply). Persist it too, so it survives a chat refresh (the append
-            # handler reloads from history and would otherwise lose the live-only text).
-            try:
-                _sess = sm.load(sid)
-                _sess.add_message("assistant", content)
-                sm.save(_sess)
-            except Exception:
-                pass
-            wi.emit_agent_message_append(content=content, session_id=sid, role="assistant")
-            wi.emit_session_unread(sid)
-            set_waiting_for_reply(user_scope_id, username, display_name=display_name, question_text=content)
-            logger.info("Thinking Mode: question emitted to Web UI session %s", sid)
-            return True
-        except Exception as _e:
-            logger.debug("Thinking Mode: Web UI emit failed: %s", _e)
-            return False
+    """Deprecated no-op. The background run now contacts the user ONLY via the explicit `ask_user`
+    tool, which emits a clean message and sets waiting_for_reply itself. The old behaviour scraped the
+    last assistant text and pushed it to the Web UI when it had a '?' or was < 600 chars — that leaked
+    chain-of-thought into the chat (observed: "Based on my analysis… Let me send him a message…").
+    Kept as a stub so the call site stays stable; always returns False."""
     return False
 
 # Phase-based prompts for thinking mode turns 1+ (turn 0 uses THINKING_PROMPT)
@@ -1250,10 +1272,14 @@ def _run_thinking_for_user(
     run_status = "success"
     run_summary = "Thinking run completed."
     max_duration_minutes = int(Config.get("thinking_max_duration_minutes", 30) or 30)
+    # Bump the per-user run counter so ask_user can stamp requests with the current run sequence
+    # (drives the "recently asked" window so the agent does not re-ask within ~6 runs).
+    next_run_seq(user_scope_id)
     # So Agent._load_tools() sees thinking mode and registers thinking_done / thinking_note_add tools
     os.environ["VAF_THINKING_MODE"] = "1"
     # Pass scope_key to thinking_note_add tool via env (tool reads VAF_THINKING_SCOPE_ID)
     os.environ["VAF_THINKING_SCOPE_ID"] = scope_key
+    os.environ["VAF_THINKING_RUN_ID"] = run_id
 
     # 🚀 COST EFFICIENCY: Use specific provider/model for thinking if configured
     t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
@@ -1363,6 +1389,18 @@ def _run_thinking_for_user(
             declined_prompt = _get_declined_questions_prompt(user_scope_id)
             if declined_prompt:
                 notice += "\n\n" + declined_prompt
+            # Requests you already raised recently (asked/confirmed/done/declined) so you do NOT re-ask
+            # within the recency window (default 6 runs).
+            try:
+                from vaf.core import thinking_requests as _treq
+                _recent = int(Config.get("thinking_recent_request_runs", 6) or 6)
+                _req_prompt = _treq.recent_requests_prompt(
+                    user_scope_id, current_run_seq=current_run_seq(user_scope_id), within_runs=_recent,
+                )
+                if _req_prompt:
+                    notice += "\n\n" + _req_prompt
+            except Exception as _req_err:
+                logger.debug("Could not load recent thinking requests: %s", _req_err)
             try:
                 from vaf.core.thinking_notes import build_notes_prompt
                 notes_prompt = build_notes_prompt(scope_key)

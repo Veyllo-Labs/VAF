@@ -1375,13 +1375,24 @@ class Agent:
                             instance.name in MAIN_AGENT_EXCLUDED_TOOLS or 
                             getattr(instance, 'coder_only', False)
                         )
-                        # Thinking mode: no Git (VAF is the user's project, not for the agent to inspect or change)
-                        # and no memory_save (thinking should read context but never write to long-term memory)
+                        # Thinking-mode tool policy (read context + propose — do not mutate/act directly):
+                        #  - no Git (VAF is the user's project), no memory_save (read memory, don't write),
+                        #  - no update_user_identity (propose profile changes via save_thinking_suggestion),
+                        #  - no set_timer / direct user-facing scheduled actions (propose via ask_user; the
+                        #    main agent carries it out after the user confirms).
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
-                            if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save"):
+                            if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
+                                                 "update_user_identity", "set_timer"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
+                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                                continue
+                            self.tools[instance.name] = instance
+                            continue
+                        # ask_user: ONLY in thinking mode — the explicit, tracked channel to contact the
+                        # user (a clean message; the chain-of-thought never leaks; status is tracked).
+                        if instance.name == "ask_user":
                             if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
                                 continue
                             self.tools[instance.name] = instance
@@ -5258,24 +5269,56 @@ class Agent:
         self.context_manager.decay_state()
 
         # 🔒 NUDGE KILLER & CONTEXT SYNC: Clear background waiting status on ANY user interaction
+        # Finalize a background request the PREVIOUS turn confirmed (it has now been handled) -> done.
+        _fin = getattr(self, "_thinking_request_to_finish", None)
+        if _fin:
+            try:
+                from vaf.core import thinking_requests as _treq
+                _treq.update_request_status(_fin[0], _fin[1], "done")
+            except Exception:
+                pass
+            self._thinking_request_to_finish = None
         if user_input and not skip_input:
             try:
-                from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply
+                from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply, _is_refusal
                 _scope = getattr(self, "_current_user_scope_id", None)
-                
-                # If we were waiting for a reply, store the original question as context
-                # so the Main Agent understands vague replies (e.g. "Yes, why?").
-                # We do NOT modify user_input here — that would embed [Context: ...] into
-                # self.history and make it visible in the WebUI chat bubbles on reload.
-                # Instead we stash it on the instance; _prepare_messages() will inject it
-                # as a system message that the LLM sees but history never stores.
+
+                # If we were waiting for a reply, store the original question as context so the Main
+                # Agent understands vague replies (e.g. "Yes, why?"). We do NOT modify user_input here —
+                # _prepare_messages() injects it as a system message the LLM sees but history never stores.
                 waiting = get_waiting_for_reply(_scope)
                 if waiting and (waiting.get("question_text") or "").strip():
                     q_text = waiting["question_text"].strip()
+                    # If this was a tracked background request (ask_user), let the Main Agent carry out
+                    # the proposal and advance its status: asked -> confirmed/declined (-> done next turn).
+                    _action = ""
+                    _req_id = (waiting.get("request_id") or "").strip() or None
+                    if _req_id:
+                        try:
+                            from vaf.core import thinking_requests as _treq
+                            _req = _treq.get_request(_scope, _req_id)
+                            _action = (_req or {}).get("proposed_action") or ""
+                            if _is_refusal(user_input):
+                                _treq.update_request_status(_scope, _req_id, "declined")
+                            else:
+                                _treq.update_request_status(_scope, _req_id, "confirmed")
+                                self._thinking_request_to_finish = (_scope, _req_id)
+                                # Proposal stems from a note/todo -> mark it handled so it stops
+                                # re-surfacing in future background runs (the user agreed; it's handled).
+                                try:
+                                    from vaf.core import automation_planner as _ap
+                                    if (_req or {}).get("source_note_id"):
+                                        _ap.set_note_handled(_scope, _req["source_note_id"], True)
+                                    if (_req or {}).get("source_todo_id"):
+                                        _ap.update_todo(_scope, _req["source_todo_id"], done=True)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
                     self._thinking_reply_context = (
-                        f"[Context: You reached out to the user during a background thinking pass "
-                        f"with the following message: \"{q_text}\" — "
-                        f"the user's reply follows immediately after this system note.]"
+                        f"[Context: During a background pass you reached out to the user with: \"{q_text}\"."
+                        f"{_carry} The user's reply follows immediately after this system note.]"
                     )
                 else:
                     self._thinking_reply_context = None
@@ -5728,6 +5771,11 @@ class Agent:
         tool_turn_count = 0
         SOFT_LIMIT_TOOL_TURNS = 50   # Inject goal-reminder, agent continues
         MAX_TOOL_TURNS_PER_STEP = 75  # Hard kill (or user-inform + ask-to-continue)
+        # A BACKGROUND thinking run must not churn the way the main chat may — it is a short
+        # gather/decide/act pass, so cap it far tighter (default 15) to stop tool-spin loops.
+        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+            MAX_TOOL_TURNS_PER_STEP = max(2, int(Config.get("thinking_max_tool_turns", 15) or 15))
+            SOFT_LIMIT_TOOL_TURNS = max(1, MAX_TOOL_TURNS_PER_STEP - 3)
         _hard_stop_injected = False   # True after hard-stop user message was injected once
         self._autocontinue_step_sig = None  # reset the task-stuck guard at the start of each run
         self._autocontinue_stuck = 0

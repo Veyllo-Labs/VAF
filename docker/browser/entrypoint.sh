@@ -15,10 +15,23 @@ CHROMIUM=/usr/lib/chromium/chromium
 
 # ── Virtual display (headed mode) ───────────────────────────────────────────
 export DISPLAY=:99
+# Remove a stale lock/socket left by a previous (crashed) run — otherwise Xvfb aborts with
+# "Server is already active for display 99", the leftover socket makes the readiness check below
+# pass anyway, and Chromium then launches against a dead display ("Missing X server"). This bit us
+# on container restarts where /tmp survived.
+rm -f /tmp/.X99-lock 2>/dev/null || true
+rm -f /tmp/.X11-unix/X99 2>/dev/null || true
+
 Xvfb :99 -screen 0 1920x1080x24 -ac -nolisten tcp >/tmp/xvfb.log 2>&1 &
-# Wait until the X server socket is ready (no extra x11-utils dependency needed).
+XVFB_PID=$!
+# Wait until the X server is genuinely up: the socket must exist AND the Xvfb process must still be
+# alive (a stale socket alone is not enough — see above). Bail out loudly if Xvfb dies.
 i=0
-while [ $i -lt 60 ] && [ ! -e /tmp/.X11-unix/X99 ]; do
+while [ $i -lt 100 ]; do
+    if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+        echo "Xvfb failed to start:"; cat /tmp/xvfb.log 2>/dev/null; exit 1
+    fi
+    [ -e /tmp/.X11-unix/X99 ] && break
     i=$((i + 1)); sleep 0.1
 done
 echo "Xvfb ready on :99"

@@ -478,6 +478,16 @@ docker logs vaf-browser
 docker compose -f docker-compose.memory.yml restart vaf-browser
 ```
 
+### Container is `(unhealthy)` / logs show `Missing X server or $DISPLAY`
+
+Chromium runs headed under Xvfb (display `:99`). If a previous run crashed without cleaning up, a stale `/tmp/.X99-lock` survives a restart and Xvfb aborts with `Server is already active for display 99`. The leftover socket then makes startup *look* ready while Chromium actually has no display (`Missing X server or $DISPLAY` → exit), so socat reports `Connection refused` on CDP and the healthcheck flips the container to `(unhealthy)`.
+
+The entrypoint (`docker/browser/entrypoint.sh`) removes the stale lock/socket on start and waits for Xvfb to be genuinely alive, so this self-heals on the next start. If you still hit it, recreate the container so it gets a clean `/tmp`:
+
+```bash
+docker compose -f docker-compose.memory.yml up -d --force-recreate vaf-browser
+```
+
 ### Agent keeps failing steps / `VAFLLMBridge: cannot parse`
 
 The configured LLM is not producing valid structured JSON. Switch to a larger model or an API provider. See [LLM model recommendation](#llm-model-recommendation) above.

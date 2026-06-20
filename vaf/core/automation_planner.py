@@ -45,11 +45,17 @@ def _save_json(path: Path, data: List[Any]) -> None:
 
 # --- Notes ---
 
-def list_notes(user_scope_id: Optional[str] = None) -> List[dict]:
-    """Return all notes for the user. Each note: id, title (optional), content, created_at."""
+def list_notes(user_scope_id: Optional[str] = None, include_handled: bool = False) -> List[dict]:
+    """Return notes for the user. Each note: id, title (optional), content, created_at, handled.
+    By default HANDLED notes are excluded so a note that was already processed does not re-surface
+    (e.g. in the thinking-run gather) and effectively disappears from the list. Pass
+    include_handled=True for an audit/full view."""
     path = _notes_path(user_scope_id)
     raw = _load_json(path, [])
-    return [n for n in raw if isinstance(n, dict) and n.get("id")]
+    notes = [n for n in raw if isinstance(n, dict) and n.get("id")]
+    if not include_handled:
+        notes = [n for n in notes if not bool(n.get("handled"))]
+    return notes
 
 
 def add_note(
@@ -65,10 +71,25 @@ def add_note(
         "title": (title or "").strip() or None,
         "content": (content or "").strip(),
         "created_at": datetime.now().isoformat(),
+        "handled": False,
     }
     notes.append(note)
     _save_json(path, notes)
     return note
+
+
+def set_note_handled(user_scope_id: Optional[str], note_id: str, handled: bool = True) -> bool:
+    """Mark a note handled (so it stops re-surfacing) or un-handle it. Returns True if found.
+    Used to stop a processed note from being re-processed every run; reversible (handled=False)."""
+    path = _notes_path(user_scope_id)
+    notes = _load_json(path, [])
+    for n in notes:
+        if isinstance(n, dict) and n.get("id") == note_id:
+            n["handled"] = bool(handled)
+            n["handled_at"] = datetime.now().isoformat() if handled else None
+            _save_json(path, notes)
+            return True
+    return False
 
 
 def delete_note(user_scope_id: Optional[str], note_id: str) -> bool:

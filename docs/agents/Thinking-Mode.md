@@ -7,8 +7,8 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 ## Overview
 
 - **When it runs:** After `thinking_idle_minutes` of no activity across ALL linked channels (Web UI, Telegram, WhatsApp, etc.).
-- **What it does:** One run = multiple agent turns with full tool access (except `memory_save` and Git tools). The agent must call `thinking_done` when finished.
-- **Max 1 Message & History Sync:** The agent may send at most one message per run. **New:** Any question asked by the Thinking Agent is automatically persisted to the user's main chat history. This ensures that when the user replies, the normal agent has the full context of what was asked.
+- **What it does:** One run = a short multi-turn gather→decide→act pass. The agent reads context (incl. memory) but runs with **background-safe** limits: no `memory_save`/Git, and no direct `update_user_identity`/`set_timer` (those are *proposed*, not applied — see [Background requests](#background-requests-handoff--no-re-processing)). The per-turn tool-cycle budget is far tighter than the main chat (`thinking_max_tool_turns`, default 15) to prevent tool-spin. The agent must call `thinking_done` when finished.
+- **Contacting the user (`ask_user`):** The agent reaches the user with the explicit **`ask_user`** tool — a clean, user-facing `message` (so chain-of-thought can no longer leak into the chat) + an optional `proposed_action`. The message is delivered, **tracked as a request**, and the run waits for the reply. At most one message per run. Any question is persisted to the user's main chat history so the main agent has full context when they reply.
 - **Outbound channel guard:** before the run starts, `_filter_thinking_send_tools()` removes every `send_*` tool that does not match the user's configured `main_messenger` (User Identity). Without a configured messenger ALL send tools are removed — the agent writes its question as plain reply text, which the Web UI fallback (`_maybe_emit_web_question`) delivers to the user's latest web session. `send_mail` is never available in a background run: e-mail is not a `main_messenger` value, and an unguarded run once tried to mail a hallucinated address (`mert@example.com`). The prompt carries the same rule, the registry filter enforces it.
 - **Per user:** Idle is tracked per logical user (handling all UUID/username aliases). One run at a time per user (serialized by lock). Cooldown between runs: `thinking_cooldown_minutes` (default 60 min).
 - **Dead-session cap:** A non-admin scope ID that has been silent longer than `thinking_max_idle_age_hours` (default 7 days) is treated as a dead/orphan session, not an idle user, and is skipped. Without this, stale web-session scope IDs left in `last_interaction.json` are each seen as a separate idle user and generate a phantom run every cooldown window indefinitely. The local admin is exempt so a genuinely long-away admin still runs.
@@ -20,6 +20,29 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Output:** Runs are logged to `logs/vaf_think_YYYY-MM-DD.log` (human-readable) and to JSON run logs. Messages sent to the user are also mirrored in the Web UI / main chat history.
 - **Workspace (MVP):** Runs can persist artifacts to a per-user Thinking Workspace (`Platform.data_dir()/workspaces/<scope_key>/`). Externally visible actions should be prepared as **handoffs** for approval first.
 - **Working memory bridge:** `update_working_memory` is still the fast scratchpad. In Thinking Mode, updates are mirrored to workspace snapshots (`working_memory/latest.json` + timestamped history) for auditability.
+
+---
+
+## Background requests, handoff & no re-processing
+
+When the agent asks the user something (via `ask_user`) it is recorded as a **request** with a status
+lifecycle, so the background run and the main agent stay coordinated and nothing is asked or done twice:
+
+- **Lifecycle:** `asked` → `confirmed` / `declined` → `done`. Stored per user in
+  `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`).
+- **Handoff to the main agent:** the request is linked to `waiting_for_reply`. When the user replies in
+  chat, `chat_step` loads the request, injects its `proposed_action` as context ("if they confirm, carry
+  it out now"), and advances the status — refusal → `declined`, agreement → `confirmed` → `done` once
+  handled. So the **main agent carries out** what the background agent proposed.
+- **Don't re-ask:** every run injects the requests raised in the last `thinking_recent_request_runs`
+  runs (default 6) with their status, so the agent does not repeat a question it already asked, follows
+  up on `confirmed` ones, and never re-proposes a `declined` one.
+- **Processed notes/todos disappear:** automation **todos** marked `done` and automation **notes**
+  marked `handled` are filtered out of the gather **and** the user's list (`list_notes` excludes handled
+  by default), so a processed item never re-surfaces and the agent cannot loop on it. If a question
+  stems from a note/todo, pass `source_note_id`/`source_todo_id` to `ask_user`; on confirm the linked
+  note is marked handled / todo marked done **automatically** — even if the model forgets to clear it
+  (`automation_planner.set_note_handled`).
 
 ---
 
@@ -43,6 +66,8 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_quiet_hours_enabled` | `false` | Do not run during quiet hours (local time) |
 | `thinking_quiet_hours_start` / `_end` | `"23:00"` / `"07:00"` | Quiet period (HH:MM, 24h); overnight span supported |
 | `thinking_startup_grace_seconds` | `300` | Seconds to skip thinking-mode checks after VAF starts. Prevents idle triggers immediately on startup. |
+| `thinking_max_tool_turns` | `15` | Hard cap on tool-result cycles per background turn (the main chat uses 75). Stops weak models from tool-spinning in the background. |
+| `thinking_recent_request_runs` | `6` | A question/proposal counts as "recently asked" for this many runs, so the agent does not re-ask it. |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
 
@@ -87,7 +112,7 @@ The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propos
 To prevent runaway API usage (e.g. the model repeatedly calling `thinking_done` or the same tool with the same arguments), the following safeguards apply:
 
 - **`thinking_done` hard break:** When the model calls `thinking_done`, the agent’s internal tool loop exits immediately. No further API request is made for that turn; the tool result is written to history and the run ends. Implemented in `vaf/core/agent.py` (chat_step tool loop).
-- **Max tool turns per step:** A single user turn (or one thinking-mode turn) is limited to **15** tool-result cycles. If the model keeps calling tools without producing a final answer, the run stops after the 15th cycle and a clear message is returned. Enforced in the same chat_step tool loop in `vaf/core/agent.py`.
+- **Max tool turns per step:** A background thinking turn is capped at `thinking_max_tool_turns` (default **15**) tool-result cycles; the main chat uses a higher cap (75). If the model keeps calling tools without finishing, the run stops at the cap. Enforced in the chat_step tool loop in `vaf/core/agent.py` — this tighter background cap stops the tool-spin observed on weak local models.
 - **Redundant tool call block:** If the model calls the same tool again with the same arguments (already executed in context), that call is blocked and the internal retry counter is incremented so the run can hit the empty/fallback stop logic sooner.
 - **Logging:** When any of these triggers, `[LOOP_PROTECTION]` is written to `logs/backend_YYYY-MM-DD.log` (and visible in run summaries). Examples: `thinking_done detected - breaking loop`, `Exceeded 15 tool turns`, `blocked redundant tool call`.
 
@@ -101,10 +126,13 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 
 | Tool | Status | Reason |
 |------|--------|--------|
+| `ask_user` | **Only in Thinking Mode** | The single, tracked channel to contact the user (clean `message`; no chain-of-thought leak); records a request |
 | `thinking_done` | **Only in Thinking Mode** | Signals end of the run |
 | `thinking_note_add` | **Only in Thinking Mode** | Saves persistent notes for next run |
 | `save_thinking_suggestion` | **Only in Thinking Mode** | Proposes user-profile updates for review in Settings |
 | `memory_save` | ❌ Excluded | Thinking should read memory, not write to it |
+| `update_user_identity` | ❌ Excluded | Do not mutate the profile in the background — propose via `save_thinking_suggestion` |
+| `set_timer` | ❌ Excluded | Do not schedule user-facing actions directly — propose via `ask_user`; the main agent sets it on confirm |
 | `git_add_commit` / `git_status` / `git_log` | ❌ Excluded | VAF is the user's project, not the agent's |
 
 ---
@@ -208,6 +236,8 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
 | `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
+| `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`confirmed`/`done`/`declined`) from `ask_user` |
+| `thinking_run_seq.json` | Per-user monotonic run counter (drives the "recently asked" window) |
 | `workspaces/<scope_key>/` | Per-user Thinking Workspace (tasks, workspace files, handoffs, archives) |
 | `last_interaction.json` | Last activity per user; used for idle detection |
 
@@ -226,6 +256,11 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | Declined questions | `vaf/core/thinking_mode.py` | `_declined_path()`, `_save_declined_entry()`, `_is_refusal()`, `_get_declined_questions_prompt()` |
 | Waiting for reply | `vaf/core/thinking_mode.py` | `set_waiting_for_reply()`, `clear_waiting_for_reply()`, `get_waiting_for_reply()` |
 | Persistent notes | `vaf/core/thinking_notes.py` | `add_note()`, `get_notes()`, `build_notes_prompt()` |
+| Background requests | `vaf/core/thinking_requests.py` | `add_request()`, `update_request_status()`, `list_requests()`, `recent_requests_prompt()` |
+| Run counter | `vaf/core/thinking_mode.py` | `next_run_seq()`, `current_run_seq()` |
+| `ask_user` tool | `vaf/tools/ask_user.py` | `AskUserTool` — tracked user contact + request creation (Thinking Mode only) |
+| Notes handled flag | `vaf/core/automation_planner.py` | `set_note_handled()`, `list_notes(include_handled=False)` |
+| Main-agent pickup | `vaf/core/agent.py` | `chat_step()` — loads the request, carries out `proposed_action`, advances status |
 | `thinking_done` tool | `vaf/tools/thinking_done.py` | `ThinkingDoneTool` |
 | `thinking_note_add` tool | `vaf/tools/thinking_note_add.py` | `ThinkingNoteAddTool` |
 | `save_thinking_suggestion` tool | `vaf/tools/thinking_suggestion.py` | Proposes profile updates; stored via `vaf/core/thinking_suggestions.py` |

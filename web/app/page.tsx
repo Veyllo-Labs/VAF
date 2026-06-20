@@ -15,6 +15,7 @@ import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
+import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActionsTimeline';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -517,14 +518,24 @@ const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boo
 };
 
 // Component: Thinking Accordion
-// Open while incomplete, auto-close when complete
-const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isComplete?: boolean }) => {
+// Open while incomplete, auto-close when complete.
+// Measured think durations live in a module-level cache keyed per assistant message, so the value
+// survives the inline→timeline remount of the first thinking block (else it would lose its time).
+const thinkDurationCache = new Map<string | number, number>();
+const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought: string; isComplete?: boolean; durationKey?: string | number }) => {
     const [isOpen, setIsOpen] = useState(!isComplete);
     const openedAtRef = useRef<number>(Date.now());
     const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const MIN_OPEN_MS = 800;
     const CLOSE_DELAY_MS = 400;
+    // Measured think duration: captured once when streaming finishes (only when we saw it live,
+    // so history-loaded turns — mounted already complete — show no bogus time).
+    const startRef = useRef<number>(Date.now());
+    const wasLiveRef = useRef<boolean>(!isComplete);
+    const [durationSec, setDurationSec] = useState<number | null>(
+        () => (durationKey != null ? thinkDurationCache.get(durationKey) ?? null : null)
+    );
 
     // Auto-update when isComplete changes
     useEffect(() => {
@@ -534,9 +545,22 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
                 closeTimeoutRef.current = null;
             }
             openedAtRef.current = Date.now();
+            wasLiveRef.current = true;
             setIsOpen(true);
             return;
         }
+
+        // streaming just finished — record how long the thinking ran (and cache it so the value
+        // survives the remount when this block moves from inline into the grouped timeline)
+        setDurationSec(prev => {
+            if (prev !== null) return prev;
+            if (wasLiveRef.current) {
+                const sec = (Date.now() - startRef.current) / 1000;
+                if (durationKey != null) thinkDurationCache.set(durationKey, sec);
+                return sec;
+            }
+            return durationKey != null ? thinkDurationCache.get(durationKey) ?? null : null;
+        });
 
         const elapsed = Date.now() - openedAtRef.current;
         const delay = Math.max(MIN_OPEN_MS - elapsed, 0) + CLOSE_DELAY_MS;
@@ -563,7 +587,11 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
     if (!thought) return null;
 
     return (
-        <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50/50 overflow-hidden w-full max-w-[95%] shadow-sm">
+        <div className={cn(
+            "relative w-full max-w-[95%] overflow-hidden rounded-[13px] border bg-gradient-to-b from-[#fcfcfd] to-[#f8fafc] transition-colors",
+            !isComplete ? "border-[#ede9fe]" : "border-gray-200"
+        )}>
+            {!isComplete && <span className="chat-shimmer-overlay" aria-hidden />}
             <button
                 type="button"
                 onClick={() => {
@@ -577,23 +605,28 @@ const ThinkingDetails = ({ thought, isComplete = true }: { thought: string; isCo
                     }
                     setIsOpen(next);
                 }}
-                className="w-full px-4 py-2.5 flex items-center justify-between text-[11px] uppercase tracking-wide font-semibold text-gray-500 hover:bg-gray-100 transition-colors"
+                className="relative flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-[#3b3f4a] transition-colors hover:bg-black/[0.03]"
             >
-                <span className="flex items-center gap-2">
-                    {!isComplete ? (
-                        <Loader2 size={14} className="animate-spin text-gray-500" />
-                    ) : (
-                        <Activity size={14} />
-                    )}
-                    {!isComplete ? "Thinking..." : "Thinking Process"}
-                </span>
-                <ChevronRight size={14} className={cn("text-gray-400 transition-transform duration-200", isOpen && "rotate-90")} />
+                {!isComplete ? (
+                    <>
+                        <span>Thinking</span>
+                        <span className="chat-think-dots" style={{ color: '#7c3aed' }} aria-hidden><span /><span /><span /></span>
+                    </>
+                ) : (
+                    <>
+                        <span>Thinking Process</span>
+                        {durationSec !== null && (
+                            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-600">{durationSec.toFixed(1)}s</span>
+                        )}
+                    </>
+                )}
+                <ChevronRight size={13} className={cn("ml-auto text-gray-400 transition-transform duration-300", isOpen && "rotate-90")} />
             </button>
             <div
                 ref={scrollRef}
                 className={cn(
-                    "text-xs text-slate-600 font-mono leading-relaxed border-t border-gray-200 bg-white/50 overflow-y-auto transition-all duration-300 ease-out",
-                    isOpen ? "max-h-[500px] opacity-100 px-4 py-3" : "max-h-0 opacity-0 px-0 py-0 border-t-transparent"
+                    "overflow-y-auto font-mono text-[12.5px] leading-relaxed text-slate-500 transition-all duration-300 ease-out",
+                    isOpen ? "max-h-[400px] px-3.5 pb-3 pt-0 opacity-100" : "max-h-0 px-0 py-0 opacity-0"
                 )}
             >
                 {thought}
@@ -1355,6 +1388,10 @@ function VAFDashboardContent() {
     // collapsed, long ones stayed open, and the streaming reply collapsed mid-stream. We only persist
     // the user's manual EXPAND choices, keyed by the stable message timestamp.
     const [expandedBotMsgs, setExpandedBotMsgs] = useState<Set<number>>(new Set());
+    // Manual expand/collapse overrides for the per-turn actions-timeline, keyed by the assistant
+    // message timestamp (stable, mirrors expandedBotMsgs). No entry → use the natural state
+    // (expanded while the turn runs, collapsed once it answers / for history).
+    const [timelineExpand, setTimelineExpand] = useState<Map<number, boolean>>(new Map());
     const BOT_COLLAPSE_THRESHOLD = 800; // chars — shorter replies stay fully visible
     const BOT_COLLAPSED_PREVIEW = 300;  // chars shown when collapsed
     // Reset offset when session changes so we always start at the bottom.
@@ -5058,6 +5095,52 @@ function VAFDashboardContent() {
                                         }
                                         return -1;
                                     })();
+                                    // Group each turn's tool rows under that turn's assistant, so they render as ONE
+                                    // collapsible actions-timeline (thinking first, then the tools) instead of loose
+                                    // rows. A "turn" is the span between user messages and is AGENTIC: it can hold
+                                    // several assistant messages (think → tool → think → tool → … → answer). All of a
+                                    // turn's thinking blocks + tools become ONE timeline, anchored on the turn's FIRST
+                                    // assistant (stable while the turn streams, so nothing remounts), with the FINAL
+                                    // answer rendered below. SAFE FALLBACK: a turn is grouped only if it has ≥1 tool and
+                                    // no non-final assistant carries visible answer text (else we'd hide content) — any
+                                    // other turn keeps today's per-row rendering.
+                                    type TurnTl = { actions: { kind: 'think' | 'tool'; msg: typeof visibleMessages[number] }[]; answerMsg: typeof visibleMessages[number] };
+                                    const turnTimeline = new Map<number, TurnTl>(); // key: visibleMessages idx of the turn's first assistant (anchor)
+                                    const consumedVmIdx = new Set<number>();        // tools + non-anchor assistants shown inside a timeline
+                                    (() => {
+                                        const vm = visibleMessages;
+                                        const ans = (m: typeof vm[number]) => stripToolCallsJSON(parseContent(m.content).answer).trim();
+                                        const flush = (s: number, e: number) => {
+                                            const assistants: number[] = [];
+                                            let toolCount = 0;
+                                            for (let k = s; k < e; k++) {
+                                                if (vm[k].role === 'assistant') assistants.push(k);
+                                                else if (vm[k].role === 'tool') toolCount++;
+                                            }
+                                            if (toolCount < 1 || assistants.length < 1) return;
+                                            const anchor = assistants[0];
+                                            const answerIdx = assistants[assistants.length - 1];
+                                            // would grouping drop a real intermediate answer? then don't group this turn.
+                                            for (const a of assistants) { if (a !== answerIdx && ans(vm[a]) !== '') return; }
+                                            const actions: TurnTl['actions'] = [];
+                                            for (let k = s; k < e; k++) {
+                                                if (vm[k].role === 'assistant') {
+                                                    if ((parseContent(vm[k].content).thought ?? '').trim() !== '') actions.push({ kind: 'think', msg: vm[k] });
+                                                } else if (vm[k].role === 'tool') {
+                                                    actions.push({ kind: 'tool', msg: vm[k] });
+                                                }
+                                            }
+                                            turnTimeline.set(anchor, { actions, answerMsg: vm[answerIdx] });
+                                            for (let k = s; k < e; k++) {
+                                                if (k !== anchor && (vm[k].role === 'tool' || vm[k].role === 'assistant')) consumedVmIdx.add(k);
+                                            }
+                                        };
+                                        let segStart = 0;
+                                        for (let k = 0; k < vm.length; k++) {
+                                            if (vm[k].role === 'user' && k > segStart) { flush(segStart, k); segStart = k; }
+                                        }
+                                        flush(segStart, vm.length);
+                                    })();
                                     return visibleMessages.map((msg, i) => {
                                         const trueIndex = messages.indexOf(msg);
                                         const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
@@ -5127,6 +5210,10 @@ function VAFDashboardContent() {
                                                     // continuously-animating line; the full trace stays in the logs/terminal.
                                                     if (msg.role === 'system') return null;
 
+                                                    // Consumed into its turn's grouped actions-timeline (a tool, or a non-anchor
+                                                    // assistant whose thinking is shown in the rail) → don't render the loose row.
+                                                    if (consumedVmIdx.has(i)) return null;
+
                                                     // API empty error: show as system log (no bot bubble) for consistency
                                                     const apiEmptyErrorText = 'API returned empty responses repeatedly. Please try again.';
                                                     const isApiEmptyError = msg.role === 'assistant' && msg.content && (
@@ -5148,7 +5235,7 @@ function VAFDashboardContent() {
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolLower);
                                                         const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
-                                                            <div className={cn("flex justify-center", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                            <div className={cn("flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
@@ -5199,13 +5286,27 @@ function VAFDashboardContent() {
                                                         );
                                                     }
 
-                                                    const { thought, answer, action, isThinkingComplete, isActionComplete } = parseContent(msg.content);
                                                     const isBot = msg.role === 'assistant';
-                                                    // Use trueIndex (position in full messages array) — visibleMessages may be a subset
-                                                    const isLastMessage = trueIndex === messages.length - 1;
+                                                    // Agentic turns group into ONE timeline anchored on the turn's FIRST assistant; the
+                                                    // visible ANSWER + Action then come from the turn's FINAL assistant (answerMsg), while
+                                                    // each step's thinking is shown per-dot in the rail. Non-grouped reads from itself.
+                                                    const turnTl = isBot ? turnTimeline.get(i) : undefined;
+                                                    const hasTimeline = !!turnTl;
+                                                    const answerMsg = turnTl ? turnTl.answerMsg : msg;
+                                                    const parsedSelf = parseContent(msg.content);
+                                                    const parsedAns = hasTimeline ? parseContent(answerMsg.content) : parsedSelf;
+                                                    const thought = parsedSelf.thought;
+                                                    const answer = parsedAns.answer;
+                                                    const action = parsedAns.action;
+                                                    const isThinkingComplete = parsedSelf.isThinkingComplete;
+                                                    const isActionComplete = parsedAns.isActionComplete;
+                                                    // Use trueIndex (position in full messages array) — visibleMessages may be a subset.
+                                                    // For a grouped turn the answer streams into answerMsg (the turn's last assistant).
+                                                    const answerTrueIndex = hasTimeline ? messages.indexOf(answerMsg) : trueIndex;
+                                                    const isLastMessage = answerTrueIndex === messages.length - 1;
                                                     // Simple: thinking is done when the </think> tag is found (isThinkingComplete)
                                                     // For non-last messages, always treat as complete
-                                                    const thinkingDone = !isLastMessage || isThinkingComplete;
+                                                    const thinkingDone = trueIndex !== messages.length - 1 || isThinkingComplete;
                                                     const actionDone = !isLastMessage || isActionComplete;
                                                     // For user messages: don't show attachment content in bubble (strip --- FILE: ... --- blocks); keep chips from msg.files or parsed from content after reload
                                                     const attachmentStripped = !isBot ? stripAttachmentBlocks(msg.content) : null;
@@ -5222,14 +5323,73 @@ function VAFDashboardContent() {
                                                         : !!((cleanAnswer && cleanAnswer.trim() !== '') || parseWorkflowAsync(answer));
                                                     // When there is nothing to show (no bubble, no thinking), don't render the row at all (no avatar, no timestamp, no empty space)
                                                     const hasVisibleContent = isBot
-                                                        // keep visible when there's a think tag at all (even after reload when thought may be empty)
-                                                        ? (hasBubbleContent || !!(thought && thought.trim() !== '') || !!(action && action.trim() !== '') || msg.content.includes('<think>'))
+                                                        // grouped anchor always renders (it owns the turn's timeline); otherwise keep visible
+                                                        // when there's a think tag at all (even after reload when thought may be empty)
+                                                        ? (hasTimeline || hasBubbleContent || !!(thought && thought.trim() !== '') || !!(action && action.trim() !== '') || msg.content.includes('<think>'))
                                                         : hasBubbleContent;
                                                     if (!hasVisibleContent) return null;
 
+                                                    // ── Per-turn actions-timeline (anchor = first assistant). Build the ordered rail items
+                                                    //    (each step's thinking + each tool) + the collapse state. hasTimeline / answerMsg are
+                                                    //    computed above; non-grouped messages keep the plain inline rendering.
+                                                    const isLatestBot = isBot && (hasTimeline ? answerTrueIndex === lastBotTrueIndex : trueIndex === lastBotTrueIndex);
+                                                    const liveThinking = hasTimeline
+                                                        ? (answerMsg.content.includes('<think>') && !parsedAns.isThinkingComplete)
+                                                        : (msg.content.includes('<think>') && !isThinkingComplete);
+                                                    const botAvatarMode: AvatarMode = (isLatestBot && !loading)
+                                                        ? (agentReaction ? agentReaction
+                                                            : gateRequest ? 'permission'
+                                                            : !isGenerating ? 'idle'
+                                                            : liveThinking ? 'thinking'
+                                                            : 'talking')
+                                                        : 'idle';
+                                                    const botAvatarDim = !(isLatestBot && !loading);
+                                                    // expanded while the latest turn is still running (no answer yet); collapsed once it
+                                                    // answers and for all history — a manual click overrides either way.
+                                                    const timelineNaturalExpanded = isLatestBot && isGenerating && !hasBubbleContent;
+                                                    const tlManual = timelineExpand.get(msg.timestamp);
+                                                    const timelineExpanded = tlManual !== undefined ? tlManual : timelineNaturalExpanded;
+                                                    const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {
+                                                        const m = act.msg;
+                                                        const mIdx = messages.indexOf(m);
+                                                        if (act.kind === 'think') {
+                                                            const pc = parseContent(m.content);
+                                                            const tdone = mIdx !== messages.length - 1 || pc.isThinkingComplete;
+                                                            return {
+                                                                key: `tl-think-${mIdx}`,
+                                                                kind: 'think' as const,
+                                                                state: (tdone ? 'done' : 'pending') as TimelineAction['state'],
+                                                                node: <ThinkingDetails thought={pc.thought ?? ''} isComplete={tdone} durationKey={m.timestamp} />,
+                                                            };
+                                                        }
+                                                        const tln = (m.toolName || '').toLowerCase();
+                                                        const isSub = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(tln);
+                                                        const st = m.toolStatus || 'completed';
+                                                        return {
+                                                            key: `tl-tool-${mIdx}`,
+                                                            kind: 'tool' as const,
+                                                            state: (st === 'running' ? 'pending' : st === 'error' ? 'error' : 'done') as TimelineAction['state'],
+                                                            node: (
+                                                                <div className={cn("max-w-[95%] rounded-lg transition-[outline] duration-150", stopHovered && m.toolStatus === 'running' ? "outline outline-2 outline-red-400/60" : "")}>
+                                                                    <ToolMessage
+                                                                        id={m.toolId || `tool-${mIdx}`}
+                                                                        name={m.toolName || 'Unknown Tool'}
+                                                                        status={m.toolStatus || 'completed'}
+                                                                        result={m.content}
+                                                                        args={m.toolArgs}
+                                                                        startTime={m.toolStartTime}
+                                                                        endTime={m.toolEndTime}
+                                                                        onToggleScroll={preserveChatScroll}
+                                                                        onToggle={isSub ? (nextExpanded: boolean) => { if (nextExpanded) openSubAgentWindow(true); else closeSubAgentWindow(true); } : undefined}
+                                                                    />
+                                                                </div>
+                                                            ),
+                                                        };
+                                                    }) : [];
+
                                                     const bubbleContent = (
                                                         <>
-                                                            {isBot && thought && <ThinkingDetails thought={thought} isComplete={thinkingDone} />}
+                                                            {isBot && thought && !hasTimeline && <div className="mb-3"><ThinkingDetails thought={thought} isComplete={thinkingDone} durationKey={msg.timestamp} /></div>}
 
                                                             {isBot && action && <ActionDetails action={action} isComplete={actionDone} />}
 
@@ -5437,22 +5597,34 @@ function VAFDashboardContent() {
                                                         </>
                                                     );
 
-                                                    const isLatestBot = isBot && trueIndex === lastBotTrueIndex;
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "justify-center" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
+                                                                hasTimeline ? (
+                                                                    <div className={cn(
+                                                                        "w-full max-w-[85%] rounded-2xl transition-all duration-300",
+                                                                        isLatestBot && stopHovered && isGenerating
+                                                                            ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]"
+                                                                            : ""
+                                                                    )}>
+                                                                        <TurnActionsTimeline
+                                                                            actions={timelineActions}
+                                                                            avatarMode={botAvatarMode}
+                                                                            avatarDim={botAvatarDim}
+                                                                            isLive={isLatestBot && isGenerating}
+                                                                            expanded={timelineExpanded}
+                                                                            onToggle={() => setTimelineExpand(prev => {
+                                                                                const next = new Map(prev);
+                                                                                next.set(msg.timestamp, !timelineExpanded);
+                                                                                return next;
+                                                                            })}
+                                                                        >
+                                                                            {bubbleContent}
+                                                                        </TurnActionsTimeline>
+                                                                    </div>
+                                                                ) : (
                                                                 <div className="w-full max-w-[85%] flex gap-4">
-                                                                    {isLatestBot && !loading ? (
-                                                                        <AgentAvatar mode={(() => {
-                                                                            if (agentReaction) return agentReaction;      // flash latest tool outcome (success/error)
-                                                                            if (gateRequest) return 'permission';         // risky-tool confirmation pending → "?"
-                                                                            if (!isGenerating) return 'idle';
-                                                                            if (msg.content.includes('<think>') && !isThinkingComplete) return 'thinking';
-                                                                            return 'talking';
-                                                                        })()} />
-                                                                    ) : (
-                                                                        <AgentAvatar mode="idle" dim />
-                                                                    )}
+                                                                    <AgentAvatar mode={botAvatarMode} dim={botAvatarDim} />
                                                                     <div className={cn(
                                                                         "flex flex-col flex-1 min-w-0 shrink-0 items-start w-full rounded-2xl transition-all duration-300",
                                                                         isLatestBot && stopHovered && isGenerating
@@ -5462,6 +5634,7 @@ function VAFDashboardContent() {
                                                                         {bubbleContent}
                                                                     </div>
                                                                 </div>
+                                                                )
                                                             ) : (
                                                                 <div className={cn("flex flex-col", "max-w-[75%] items-end shrink-0")}>
                                                                     {bubbleContent}

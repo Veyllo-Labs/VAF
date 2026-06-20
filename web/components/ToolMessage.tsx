@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertCircle, Terminal, ChevronDown, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
+import { Check, AlertCircle, Terminal, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
 /** A sub-agent (librarian/research/document/coding/browser) — these run as supervised units. */
@@ -23,6 +23,15 @@ function fmtDuration(s?: number | null): string {
     const m = Math.floor(s / 60);
     const sec = Math.round(s % 60);
     return `${m}m ${sec}s`;
+}
+
+/** Short right-aligned result counter (mockup ".stat"): line count, else KB, else a neutral label. */
+function resultStat(result?: string): string {
+    if (!result || !result.trim()) return 'Fertig';
+    const lines = result.trim().split('\n').filter(l => l.trim()).length;
+    if (lines > 1) return `${lines} Zeilen`;
+    if (result.length >= 1024) return `${(result.length / 1024).toFixed(1)} KB`;
+    return 'Fertig';
 }
 
 export interface ToolMessageProps {
@@ -246,8 +255,17 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     // reads as completed, but the actual work is still going).
     const headerStatus: 'running' | 'completed' | 'error' = liveUnit ? 'running' : visualStatus;
 
+    // Right-aligned status/result label (mockup ".stat"): "läuft…" while running, the sub-agent
+    // runtime, or a result counter once done. Keeps the existing duration logic, just presented
+    // like the mockup instead of a "(0.0s)" subtitle.
+    const rt = liveUnit?.runtime_s ?? lastRuntimeRef.current ?? (endTime && startTime ? (endTime - startTime) / 1000 : null);
+    const statText =
+        headerStatus === 'running'   ? (rt != null ? `läuft… ${fmtDuration(rt)}` : 'läuft…')
+        : headerStatus === 'error'   ? 'Fehler'
+        : (isSubAgent && rt != null  ? fmtDuration(rt) : resultStat(result));
+
     return (
-        <div className="w-full my-2">
+        <div className="w-full">
             <style>{`
                 @keyframes agentDotPulse {
                     0%,100% { transform: scale(1);    opacity: 1; }
@@ -256,16 +274,27 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
             `}</style>
 
             <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
                 className={cn(
-                    "tool-message-card overflow-hidden rounded-lg border bg-white shadow-sm transition-colors border-border",
-                    status === 'error' ? "border-destructive/50" : ""
+                    "tool-message-card relative overflow-hidden rounded-[11px] border bg-white transition-colors",
+                    headerStatus === 'running' ? "border-[#dbe6ff]"
+                        : headerStatus === 'error' ? "border-destructive/50"
+                        : "border-border"
                 )}
             >
-                {/* Header */}
+                {/* success flash over the whole card on completion (mockup .resultflash) */}
+                {visualStatus === 'completed' && (
+                    <span
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 rounded-[11px]"
+                        style={{ boxShadow: '0 0 0 2px rgba(22,163,74,0.5)', animation: 'chatSuccessFlash 0.7s ease-out forwards' }}
+                    />
+                )}
+
+                {/* Header — single row: dot · name · arg · result-counter (mockup .th) */}
                 <div
-                    className="flex items-center justify-between p-3 cursor-pointer hover:bg-accent/50 transition-colors"
+                    className="flex items-center gap-[9px] px-[11px] py-2 cursor-pointer hover:bg-accent/40 transition-colors"
                     onClick={() => {
                         const nextExpanded = !isExpanded;
                         if (onToggle) onToggle(nextExpanded);
@@ -276,50 +305,49 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                         }
                     }}
                 >
-                    <div className="flex items-center gap-3">
-                        <div className="relative flex h-8 w-8 items-center justify-center rounded-full border bg-muted/50 shrink-0">
-                            {headerStatus === 'running' && (
-                                <span
-                                    data-agent-tool-dot
-                                    className="rounded-full"
-                                    style={{
-                                        width: 12, height: 12,
-                                        backgroundColor: '#000000',
-                                        boxShadow: '0 0 8px 3px rgba(0,0,0,0.3)',
-                                        animation: 'agentDotPulse 1.1s ease-in-out infinite',
-                                    }}
-                                />
-                            )}
-                            {headerStatus === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                            {headerStatus === 'error'     && <AlertCircle className="h-4 w-4 text-destructive" />}
-                        </div>
-
-                        <div className="flex flex-col min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-sm font-medium leading-none truncate pr-2">{name}</span>
-                                {wfBadge && (
-                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border leading-none ${wfBadge.color}`}>
-                                        {wfBadge.label}
-                                    </span>
-                                )}
-                            </div>
-                            <span className="text-xs text-muted-foreground truncate">
-                                {headerStatus === 'running'   ? 'Running…' :
-                                 headerStatus === 'completed' ? 'Completed' : 'Failed'}
-                                {liveUnit && liveUnit.runtime_s != null
-                                    ? ` (${fmtDuration(liveUnit.runtime_s)})`
-                                    : lastRuntimeRef.current != null
-                                        ? ` (${fmtDuration(lastRuntimeRef.current)})`
-                                        : (endTime && startTime ? ` (${((endTime - startTime) / 1000).toFixed(1)}s)` : '')}
+                    <span className={cn(
+                        "relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border transition-colors",
+                        headerStatus === 'completed' ? "border-green-200 bg-green-50" : "border-border bg-muted/50"
+                    )}>
+                        {headerStatus === 'running' && (
+                            <span data-agent-tool-dot className="rounded-full"
+                                style={{ width: 7, height: 7, backgroundColor: '#000000', animation: 'agentDotPulse 1.2s ease-in-out infinite' }} />
+                        )}
+                        {headerStatus === 'completed' && (
+                            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-green-500"
+                                style={{ animation: 'chatCheckPop 0.5s cubic-bezier(.34,1.56,.64,1) both' }}>
+                                <Check className="h-3 w-3 text-white" strokeWidth={3} />
                             </span>
-                        </div>
-                    </div>
+                        )}
+                        {headerStatus === 'error' && <AlertCircle className="h-[15px] w-[15px] text-destructive" />}
+                    </span>
 
-                    <div className="flex items-center gap-1">
-                        <button className="rounded-md p-1 hover:bg-background text-muted-foreground">
-                            {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                        </button>
-                    </div>
+                    <span className="shrink-0 text-[12.5px] font-semibold leading-none text-[#2b303b]">{name}</span>
+                    {wfBadge && (
+                        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${wfBadge.color}`}>
+                            {wfBadge.label}
+                        </span>
+                    )}
+                    {animInput && (
+                        <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground/70">{animInput}</span>
+                    )}
+                    <span className={cn(
+                        "ml-auto shrink-0 text-[11px]",
+                        headerStatus === 'completed' ? "font-semibold text-green-600"
+                            : headerStatus === 'error' ? "text-destructive"
+                            : "text-muted-foreground"
+                    )}>
+                        {statText}
+                    </span>
+                    <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-transform duration-200", isExpanded && "rotate-90")} />
+                </div>
+
+                {/* indeterminate progress bar while running (mockup .bar) */}
+                <div className={cn("h-[2px] overflow-hidden", headerStatus === 'running' ? "bg-[#eef3ff]" : "bg-transparent")}>
+                    {headerStatus === 'running' && (
+                        <span className="block h-full w-2/5"
+                            style={{ background: 'linear-gradient(90deg,transparent,#1d4ed8,transparent)', animation: 'chatIndet 1.1s ease-in-out infinite' }} />
+                    )}
                 </div>
 
                 {/* Details */}

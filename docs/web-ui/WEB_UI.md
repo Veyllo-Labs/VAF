@@ -94,8 +94,14 @@ Singleton pattern manager that:
 
 **Thinking Details**:
 - Extracted from `<think>...</think>` tags
-- Collapsible accordion UI
+- Collapsible accordion UI; a subtle shimmer + animated dots while the model is still thinking, collapsing to a compact header with a measured **duration pill** (e.g. `Thinking Process · 2.4s`) once done. The duration is measured live and cached per message (keyed by timestamp) so it survives the inline→timeline remount.
 - Monospace font for technical content
+
+**Actions Timeline** (`web/components/TurnActionsTimeline.tsx`):
+- A turn's thinking blocks and tool calls are grouped into **one** collapsible timeline anchored on the turn's first assistant message (stable while streaming, so cards never remount). The final answer renders below it.
+- A left **rail** with one dot per action — solid black = thinking, hollow ring = a running/failed tool, solid gray = a completed tool — grows down as steps arrive. The living **white-dot avatar** walks down to sit centred on the active step's dot and returns to the top when the group collapses.
+- While the turn runs the timeline is **expanded**; when the agent starts answering it **collapses** to a borderless circle-row ("N actions") that re-expands on click. Past turns (and reloads) render collapsed by default.
+- Grouping is additive with safe fallbacks: only turns with ≥1 tool group; anything ambiguous keeps the per-row rendering. Tool rows persist across reload via the session cache (the server stores only a per-turn tool summary, not the individual cards).
 
 **Long reply collapse**:
 - A bot answer longer than ~800 chars collapses to a ~300-char preview with a "Show full response" toggle — but **only once a newer user message exists** (i.e. it is a *past* answer). The current/streaming answer and short replies are never collapsed.
@@ -551,8 +557,9 @@ The Web UI runs alongside the CLI interface:
 
 ### Tool Message
 
-- **Status**: Dynamic border color (Blue=Running, Green=Success, Red=Error)
-- **Collapsible**: Details (args/result) are collapsible to save space
+- **Compact header (single row)**: status dot (black pulsing dot while running → green check on success → red alert on error), tool name, the main argument, and a right-aligned **result counter** (`läuft…` while running; line/size count or sub-agent runtime once done).
+- **Status**: Dynamic border color (Blue=Running, Green=Success, Red=Error), an indeterminate progress bar while running, and a brief success flash on completion.
+- **Collapsible**: Details (args/result/output) are collapsible to save space; the open/close logic is unchanged (sub-agent tool cards still open the docked panel).
 - **Live Updates**: Updates in real-time as tool execution progresses
 
 ### Sidebar

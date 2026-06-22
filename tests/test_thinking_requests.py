@@ -87,6 +87,57 @@ def test_ask_user_tool_creates_request_and_waiting(monkeypatch, tmp_path):
     assert "Erinnerung" in (waiting.get("question_text") or "")
 
 
+def test_thinking_done_message_delivers_and_tracks(monkeypatch, tmp_path):
+    """thinking_done(message=...) is the fallback channel: when a weak model composes the question but
+    never calls ask_user, putting the text in thinking_done still records a tracked request, links the
+    source note, and sets waiting_for_reply (Web UI delivery stubbed)."""
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+    import vaf.core.thinking_mode as tm
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+
+    from vaf.tools.thinking_done import ThinkingDoneTool
+    scope = "user-td"
+    out = ThinkingDoneTool().run(
+        summary="looked at the heat note",
+        message="Soll ich dir eine Erinnerung einrichten, deine Wohnung kühl zu halten?",
+        proposed_action="create cooling reminder automation",
+        source_note_id="note-heat",
+        user_scope_id=scope,
+    )
+    reqs = tr.list_requests(scope, status="asked")
+    assert len(reqs) == 1
+    assert reqs[0]["source_note_id"] == "note-heat"
+    assert reqs[0]["proposed_action"] == "create cooling reminder automation"
+    assert reqs[0]["id"] in out and "looked at the heat note" in out
+    waiting = tm.get_waiting_for_reply(scope)
+    assert waiting and waiting.get("request_id") == reqs[0]["id"]
+
+
+def test_thinking_done_does_not_double_send_after_ask_user(monkeypatch, tmp_path):
+    """If ask_user already raised a request this run, a trailing thinking_done(message=...) must NOT send
+    a second message (the run_has_open_request guard)."""
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+    import vaf.core.thinking_mode as tm
+    sent = []
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: (sent.append(content), "sid-1")[1])
+
+    from vaf.tools.ask_user import AskUserTool
+    from vaf.tools.thinking_done import ThinkingDoneTool
+    scope = "user-dbl"
+    AskUserTool().run(message="Erste Frage?", user_scope_id=scope)
+    assert len(tr.list_requests(scope, status="asked")) == 1
+    out = ThinkingDoneTool().run(message="Zweite Frage?", user_scope_id=scope)
+    assert len(tr.list_requests(scope)) == 1           # still only the ask_user request
+    assert "already delivered" in out
+    assert sent == ["Erste Frage?"]                    # the second message was suppressed
+
+
 def test_handled_note_disappears_from_list(monkeypatch, tmp_path):
     """A note marked handled is hidden from list_notes by default (so it stops re-surfacing in the
     thinking gather and the user's list), but is still visible with include_handled=True."""

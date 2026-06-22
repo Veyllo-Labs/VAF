@@ -1,14 +1,12 @@
 # About VAF (Veyllo Agentic Framework)
 
-VAF is a private, self-evolving agentic framework designed to run 100% locally on your own hardware. We believe that true AI intelligence should not come at the cost of your privacy. VAF is built to respect your data, adapt to your unique workflows, and grow alongside you as a digital extension of your own productivity.
+VAF is an agentic framework that runs locally on your own hardware. It works with local GGUF models and with external AI providers, and keeps data within your environment unless you connect an external service.
 
-### Our Core Principles:
+## Core principles
 
-*   **Absolute Privacy by Design:** Your data never leaves your local network. With zero cloud dependencies and no third-party tracking, VAF ensures you maintain 100% sovereignty over your digital footprint.
-*   **Local-First Orchestration:** VAF operates entirely within your environment. It seamlessly integrates with your local devices and services, providing high-performance intelligence without ever compromising your security.
-*   **Multi-User & Team Support:** Share VAF securely with your household or team. Each user gets their own isolated environment—personal memory, preferences, and tasks—so everyone can work, delegate, and scale productivity without interfering with others.
-*   **Cognitive Long-Term Memory:** Unlike static databases, VAF’s memory system is dynamic. It doesn't just store information—it learns from every interaction. By recognizing patterns and understanding context, VAF proactively suggests next steps and evolves its reasoning based on your long-term goals.
-*   **Autonomous Productivity Engine:** Beyond simple task tracking, VAF is a workflow orchestrator. From intuitive daily planning to executing complex multi-step automations, VAF adapts to your personal rhythm to keep you focused on what truly matters.
-*   **Extensible & Hybrid Intelligence:** While VAF is local-first, it is fully extensible. We provide a robust API layer that allows you to connect to external AI providers (such as OpenAI, Anthropic, or Groq). Whether you prefer the absolute privacy of local models or the raw power of the cloud, VAF gives you the freedom to choose.
-
-
+- **Local-first:** VAF runs on your own machine. There is no required cloud dependency; with the local provider, requests are not sent to external services.
+- **Privacy:** No third-party tracking is built in. Data stays in your local environment unless you configure an external provider or integration.
+- **Multi-user support:** Multiple users can share one instance. Each user gets an isolated scope — separate memory, preferences, and tasks. See [USER_ISOLATION.md](../security/USER_ISOLATION.md).
+- **Long-term memory:** VAF stores information in a vector-backed memory system and retrieves it across sessions. See [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md).
+- **Automation:** VAF can run scheduled tasks and multi-step workflows. See [AUTOMATIONS.md](AUTOMATIONS.md).
+- **Extensible and hybrid:** VAF supports local models and external API providers (OpenAI, Anthropic, Google, DeepSeek, OpenRouter). You can add your own tools and embed VAF as a library — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [EMBEDDING.md](../EMBEDDING.md).

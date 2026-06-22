@@ -1,10 +1,10 @@
 # Sub-Agent File Path Extraction
 
-## 📋 Overview
+## Overview
 
 Automatische Extraktion von Dateipfaden aus Sub-Agent Results, damit der Main Agent sofort auf generierte Dateien zugreifen kann.
 
-## 🎯 Problem
+## Problem
 
 **Vorher:**
 ```
@@ -31,7 +31,7 @@ User: "Kannst du die Datei ansehen?"
 Agent: ✅ read_file("C:\Users\...\research_report.html")
 ```
 
-## 🔧 Implementation
+## Implementation
 
 ### 1. Automatische Extraktion (`vaf/core/agent.py`)
 
@@ -82,7 +82,7 @@ the path is already in the conversation context!
 """
 ```
 
-## 📊 Supported Patterns
+## Supported Patterns
 
 ### Erkannte Schlüsselwörter:
 - **English:** "Saved to", "Output", "File", "Path"
@@ -101,7 +101,7 @@ the path is already in the conversation context!
 - ✅ Linux: `/home/user/file.html`
 - ✅ macOS: `/Users/user/file.html`
 
-## 🎯 Use Cases
+## Use Cases
 
 ### Use Case 1: Coding Sub-Agent → Datei direkt lesen
 
@@ -143,7 +143,7 @@ System Message:
 💡 TIP: read_file('/home/user/report.pdf')
 ```
 
-## 🧪 Testing
+## Testing
 
 Run the project test suite for sub-agent result handling (no standalone `test_file_path_extraction.py` in this repository).
 
@@ -155,7 +155,7 @@ Run the project test suite for sub-agent result handling (no standalone `test_fi
 - ✅ No File Path (negative test)
 - ✅ System Message Generation
 
-## 📈 Benefits
+## Benefits
 
 ### Before:
 - ❌ Agent fragt nach Dateipfad (obwohl er schon da ist)
@@ -167,7 +167,7 @@ Run the project test suite for sub-agent result handling (no standalone `test_fi
 - ✅ Direkte Nutzung von `read_file` oder `librarian_agent`
 - ✅ Eine Interaktion reicht
 
-## 🔍 Implementation Details
+## Implementation Details
 
 ### Regex Pattern
 ```python
@@ -189,14 +189,14 @@ cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
 - Trimmt Whitespace
 - Limitiert auf erste 3 Dateien
 
-## 🚀 Related Features
+## Related Features
 
 - **Document Reading:** See `docs/documents/DOCUMENT_READING.md`
 - **Research Workflows:** See `docs/agents/RESEARCH_AND_DOCUMENT_WORKFLOWS.md`
 - **Sub-Agent IPC:** See `docs/agents/SUBAGENT_IPC.md`
 - **Librarian Configuration:** See `docs/documents/LIBRARIAN_CONFIGURATION.md`
 
-## 📝 Notes
+## Notes
 
 - Paths werden **nicht validiert** (Existenz-Check erfolgt beim Lesen)
 - Limit auf **3 Dateien** im System Message (um Context zu schonen)

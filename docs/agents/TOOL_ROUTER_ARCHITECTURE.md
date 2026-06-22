@@ -294,6 +294,7 @@ VAF tools declare a centralized contract directly on the class. All fields have 
 4. **Permission gate** — if `permission_level == "dangerous"`, the user is prompted (once / always / cancel). `side_effect_class == "irreversible"` adds a warning line to the prompt.
 5. **`permission_level == "system"`** — bypasses the legacy confirmation gate entirely. Previously documented but never evaluated; now implemented.
 6. **Legacy trust gates** — existing risky-tool checks run as fallback for tools that predate the contract system.
+7. **Input validation & repair** — immediately before dispatch, the model-supplied arguments are validated against the tool's `parameters` schema and common weak-model shape mistakes are repaired (bare string for an array, stringified array, `null` on an optional field, single-key placeholder). Runs on the raw model arguments, before runtime kwargs are injected. If arguments still violate the schema after repair, the tool is not run and a localized `Tool Error: invalid arguments for '<tool>': <detail>` is returned. See [TOOL_INPUT_REPAIR.md](TOOL_INPUT_REPAIR.md).
 
 ### Examples
 
@@ -357,6 +358,15 @@ class BashTool(BaseTool):
 | `context_tools` | Internal Coder context management |
 
 The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. The Coder loads them separately from `vaf/tools/`.
+
+`_load_tools()` discovers tools from four sources, in order:
+
+1. **In-tree** — a `pkgutil` scan of the `vaf/tools/` package (the built-in tools).
+2. **Custom tools** — user-uploaded tools from the data directory, via `custom_tools_registry` (`_load_custom_tools()`).
+3. **Entry-point tools** — third-party pip packages that register under the `vaf.tools` entry-point group (`_load_entry_point_tools()`); see [EMBEDDING.md](../EMBEDDING.md).
+4. **MCP tools** — servers from `mcp_servers.json`, registered as native tools (`_load_mcp_tools()`); see [MCP_INTEGRATION.md](MCP_INTEGRATION.md).
+
+For how tools fit into the wider framework (the tool contract and the public boundary), see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
 

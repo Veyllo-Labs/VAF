@@ -4,6 +4,8 @@ VAF speaks the [Model Context Protocol](https://modelcontextprotocol.io). MCP se
 **tools layered on VAF's native tool system**, not as a replacement for it: the in-process native
 tools stay the core, and MCP servers plug in as tools. There are two ways to reach an MCP server.
 
+MCP is one of VAF's tool-discovery paths; for the full list and how tools fit the framework, see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md) and [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Two paths
 
 | | `mcp_call` (raw) | Registered native tools |

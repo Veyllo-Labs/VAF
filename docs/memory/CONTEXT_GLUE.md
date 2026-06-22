@@ -2,7 +2,7 @@
 
 This document describes VAF's solution to the **Context Overflow Problem** in long-running agentic workflows. We call this architecture **"Context Glue"** (technically: *High-Density Dynamic State Tracking with Injection*).
 
-## 🛑 The Problem: Context Amnesia vs. Overflow
+## The Problem: Context Amnesia vs. Overflow
 
 When an LLM agent works on a complex project (e.g., building a website step-by-step), it faces a dilemma:
 
@@ -11,7 +11,7 @@ When an LLM agent works on a complex project (e.g., building a website step-by-s
 2.  **Clear Context:** We wipe the history after each task.
     *   *Result:* **Amnesia**. The agent forgets what file it just created ("I don't see any files").
 
-## 💡 The Solution: Context Glue
+## The Solution: Context Glue
 
 "Context Glue" is a mechanism that extracts critical **facts** from the conversation stream *before* they are deleted, stores them in a structured state object, and **re-injects** them into every future prompt.
 
@@ -23,7 +23,7 @@ It "glues" independent tasks together, allowing the agent to have infinite long-
 graph TD
     User[User Input] --> ToolExec[Tool Execution]
     
-    subgraph "Seamless Compression Cycle"
+    subgraph "Compression Cycle"
         ToolExec -->|Raw Output (Huge)| Extractor[Fact Extractor]
         Extractor -->|Extracted Facts| StateDB[(State Context)]
         Extractor -->|Pruned Output| History[Short-Term History]

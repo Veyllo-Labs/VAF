@@ -132,7 +132,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     *   **Completed-Task Glue:** `_build_completed_info()` summarises previously finished tasks and injects them into the new system prompt (prevents "Context Amnesia" without polluting the window).
     *   **Existing-Files Injection:** `create_fresh_context_for_task()` scans `base_dir` and injects a file list into the task system prompt. Infrastructure entries are excluded: hidden files (`.`-prefix), `.git/`, `.vaf/`, `PARTIAL_*` backups, and named infra files (`.gitignore`, `.gitattributes`, `.editorconfig`, `.env.example`). When no code files exist, the note reads: *"The project directory is empty — call `write_file` to create the first file."*
 
-### ⚠️ Critical: Context Switch + Tool Result Ordering
+### Critical: Context Switch + Tool Result Ordering
 
 `switch_to_task_context()` calls `sync_legacy_vars()` which **reassigns the local `history` variable** to the new task context's history. This means any code that runs *after* the context switch and appends to `history` will write into the **new** task context, not the one where the tool was called.
 

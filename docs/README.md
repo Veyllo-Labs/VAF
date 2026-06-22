@@ -6,6 +6,10 @@ This directory contains comprehensive documentation for the Veyllo Agentic Frame
 
 Docs are grouped into category folders. Full index by category:
 
+### overview — architecture & building on VAF
+- [ARCHITECTURE.md](ARCHITECTURE.md) — What VAF is: the framework/harness layering (engine, framework surface, product) and the public boundary (stable vs internal).
+- [EMBEDDING.md](EMBEDDING.md) — Install VAF as a slim library and build on it: `from vaf import Agent`, config, writing tools, shipping tools as pip packages.
+
 ### setup/ — install, services, deployment
 - [LINUX_SETUP.md](setup/LINUX_SETUP.md) — Linux setup and troubleshooting.
 - [WINDOWS_SETUP.md](setup/WINDOWS_SETUP.md) — Windows-specific setup.
@@ -38,6 +42,7 @@ Docs are grouped into category folders. Full index by category:
 
 ### agents/ — tools, sub-agents, workflows, reasoning
 - [TOOL_ROUTER_ARCHITECTURE.md](agents/TOOL_ROUTER_ARCHITECTURE.md) — Tool router and per-turn scoping.
+- [TOOL_INPUT_REPAIR.md](agents/TOOL_INPUT_REPAIR.md) — Validating and repairing model-supplied tool arguments before dispatch.
 - [TOOL_SUPERVISION.md](agents/TOOL_SUPERVISION.md) — Tool supervision/safety.
 - [ACTION_TAG.md](agents/ACTION_TAG.md) — The `<Action>` declaration tag.
 - [CODER_ARCHITECTURE.md](agents/CODER_ARCHITECTURE.md) — Coder sub-agent design.

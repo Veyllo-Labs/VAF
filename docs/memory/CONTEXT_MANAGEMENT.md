@@ -161,7 +161,7 @@ Unlike local models where VAF uses a local tokenizer, API providers (OpenAI, Dee
 2. **Context Bar (Web UI)**: The context bar reflects the effective context fill. In API mode the displayed total is the maximum of the last request usage and a history-based estimate (so loading an old session shows the correct fill before any new request). Estimates use weighted ratios: 2.8 chars/token for code (e.g. messages containing ```), 3.6 for plain text; tool schemas (local/server) use 3.0. When a local server is available, the breakdown (system / history / tools) can use the server’s `/tokenize` endpoint for precision.
 3. **Session-Scoped Display**: Context updates (`context_status`) are sent only to the Web UI tab that has that session open (`_push_session_update(session_id, ...)`), so multiple tabs do not see each other’s token stats.
 4. **Dynamic Context Windows**: When an API backend is active, VAF automatically adjusts the context limit (`n_ctx`) to **128,000 tokens** (unless manually set higher). This prevents premature compression and allows full use of modern "Long Context" models.
-5. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend transparently requests a continuation, stitching the parts together seamlessly for the user.
+5. **Transparent Continuation**: If a response is cut off due to the output token limit (`finish_reason: length`), VAF's API backend automatically requests a continuation and concatenates the parts so the user receives the complete response.
 6. **Limit tracks the real window**: the compression / overflow limit is re-derived from the configured `n_ctx` every turn (`get_token_usage`) and the context manager is re-synced (logged `[CTX-LIMIT]`). A manager built before `n_ctx` was raised can therefore never pin compression to the 32 768 floor while the model and server actually run at, e.g., 128 000 (which had caused premature "Compressing…/CRITICAL OVERFLOW" at a fraction of the real window).
 7. **Compression never grows**: if the summary (context summary + resume block) would come out *larger* than the input (observed: 30 725 → 43 754 tokens, which then tripped the overflow), it is dropped and only the system turn + recent messages are kept — always smaller than the input. The full history is archived for `/restore`.
 
@@ -180,9 +180,9 @@ The Context Manager dynamically adjusts its behavior based on the configured con
 | **API Boost (≤ 128k)**  | **85%** | **100 msgs**  | **Standard API Mode.** Preserves ~50 full turns raw. |
 | **Ultra (> 128k)**      | **90%** | **200 msgs**  | Maximum retention for Gemini 1.5 Pro / Claude 3.5. |
 
-### Seamless Tool Compression
+### Tool Output Compression
 
-To prevent the context window from being flooded by large tool outputs (which would trigger aggressive history pruning), VAF implements **Seamless Compression**. Certain tools have their output pruned *before* entering the chat history, while key facts are extracted into the permanent State Context.
+To prevent the context window from being flooded by large tool outputs (which would trigger aggressive history pruning), VAF implements **tool-output compression**. Certain tools have their output pruned *before* entering the chat history, while key facts are extracted into the permanent State Context.
 
 **Supported Tools:**
 - **Filesystem:** `read_file`, `list_files`, `github_get_file`, `github_list_repos`
@@ -288,7 +288,7 @@ To maintain maximum "depth" and accuracy in very long sessions (especially when 
 
 1. **Leverage the 128k Boost:** Ensure your `provider` is set to an API service. VAF automatically boosts the internal `n_ctx` to 128,000, allowing the system to keep up to **100 messages** raw before compression even starts.
 2. **Use `checkpoint_context` for Milestones:** If you are working on a massive multi-step task (e.g., building a full app), use the `checkpoint_context` tool after completing a major phase. This archives the "noise" of implementation details while keeping your plan and high-level progress in the "Stable Progress Glue".
-3. **Trust Seamless Compression:** Don't worry about reading large files or listing many emails. VAF prunes these automatically. If you need the model to "remember" a specific detail from a large output, simply acknowledge it in chat (e.g., "I see the error on line 452")—this saves the fact into the State Context.
+3. **Tool Output Compression:** Large outputs (file contents, long email lists) are pruned automatically before entering the history. If you need the model to retain a specific detail from a large output, acknowledge it in chat (e.g., "I see the error on line 452")—this saves the fact into the State Context.
 4. **Prefer `memory_save` for Permanent Facts:** For information that should survive even across different chat sessions (e.g., your birthday, server IP addresses, specific project paths), use the `memory_save` tool. This moves data from transient chat context into the permanent RAG database.
 
 

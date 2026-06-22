@@ -20,7 +20,7 @@ Run VAF and open settings:
 ```bash
 vaf run
 # Press 's' for settings
-# Select "🌐 AI Provider: LOCAL"
+# Select "AI Provider: LOCAL"
 ```
 
 Choose your provider and enter API key when prompted.
@@ -85,7 +85,7 @@ Example use cases:
 
 ### Configuration
 
-1. Open Settings → "🔧 Sub-Agent Provider"
+1. Open Settings → "Sub-Agent Provider"
 2. Choose provider for sub-agents:
    - **Inherit** - Use same provider as main agent (default)
    - **Local** - Always use local model for sub-agents
@@ -254,7 +254,7 @@ API request timed out for openai
 
 ## Security Considerations
 
-⚠️ **Important Security Notes:**
+**Important Security Notes:**
 
 1. **Base64 is NOT encryption** - API keys in `config.json` are Base64-encoded (obfuscation), not encrypted.
 2. **Owner-only config** - VAF writes `config.json` with `0600` permissions automatically where the OS supports it, so other local users cannot read it. On Windows, ensure only the running user can read `~/.vaf/`.
@@ -322,8 +322,6 @@ that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request woul
 **Important:** Use `-latest` suffix for Gemini 1.5 models!
 
 **Get API Key:** https://makersuite.google.com/app/apikey
-
-**See also:** `docs/GOOGLE_GEMINI_MODELS.md` for detailed model info
 
 ### OpenRouter
 

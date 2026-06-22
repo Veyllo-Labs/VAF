@@ -76,10 +76,17 @@ def _resolve_folder_alias(path_str: str) -> str:
     
     # Check if path starts with or contains a folder alias
     for alias, alias_path in folder_aliases.items():
-        # Check if path starts with alias (e.g., "Desktop\file.txt")
-        if path_str.startswith(alias) or path_str.startswith(alias.capitalize()):
+        # Check if path starts with the alias AT A PATH BOUNDARY (the alias alone,
+        # or the alias followed by a separator). Without the boundary check a bare
+        # filename like "Documentsfile.txt" would be misrouted into ~/Documents/.
+        _matched = None
+        for _cand in (alias, alias.capitalize()):
+            if path_str == _cand or path_str.startswith(_cand + "/") or path_str.startswith(_cand + "\\"):
+                _matched = _cand
+                break
+        if _matched:
             # Replace alias with actual path
-            remaining = path_str[len(alias):].lstrip('\\/')
+            remaining = path_str[len(_matched):].lstrip('\\/')
             
             # Special handling for Desktop: check if writable, fallback to Documents
             if alias.lower() == "desktop":

@@ -4,7 +4,7 @@ Security is paramount when allowing an AI to execute code. VAF uses **Docker Con
 
 ---
 
-## 🔒 Security Model
+## Security Model
 
 **Docker is REQUIRED for code execution.** There is NO fallback to host execution.
 
@@ -33,9 +33,9 @@ See [`SANDBOX_MODULES.md`](SANDBOX_MODULES.md) for the full module reference and
 
 ---
 
-## 🚀 Smart Auto-Start
+## Smart Auto-Start
 
-VAF tries to make sandboxing seamless:
+VAF automates sandbox startup:
 1. **Detection:** Before running code, VAF checks if the Docker Daemon is running.
 2. **Auto-Start:** If Docker is installed but stopped, VAF attempts to launch it automatically:
    - **macOS:** Launches `Docker.app`.
@@ -45,7 +45,7 @@ VAF tries to make sandboxing seamless:
 
 ---
 
-## ⚠️ No Fallback (By Design)
+## No Fallback (By Design)
 
 If Docker is **not installed** or **cannot be started**:
 - Code execution is **BLOCKED** (not degraded to host)

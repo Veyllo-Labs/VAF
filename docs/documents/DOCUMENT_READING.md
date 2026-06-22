@@ -2,7 +2,7 @@
 
 ## Overview
 
-The VAF Librarian Agent now supports reading multiple document formats including PDF, Word, Excel, and PowerPoint files. This enhancement allows users to extract text content from various document types seamlessly.
+The VAF Librarian Agent supports reading multiple document formats including PDF, Word, Excel, and PowerPoint files, extracting text content from each.
 
 ### Key Features
 
@@ -781,6 +781,6 @@ Librarian Agent:
 
 ## Conclusion
 
-The VAF document reading enhancement makes it easy to work with various file formats. The Librarian Agent can now seamlessly read and extract content from PDFs, Word documents, Excel spreadsheets, and PowerPoint presentations, making VAF a powerful tool for document analysis and information retrieval.
+The Librarian Agent reads and extracts content from PDF, Word, Excel, and PowerPoint files for document analysis and retrieval.
 
 For questions or issues, please refer to the main README or open an issue on the project repository.

@@ -1,19 +1,19 @@
-# 🚀 Python Sandbox - Module Reference
+# Python Sandbox - Module Reference
 
 This file documents the common standard-library modules that are expected to work in sandbox snippets.
 
 > Runtime note: VAF executes `python_sandbox` in a dedicated Docker-based sandbox.  
 > The exact import policy is enforced by the runtime image and sandbox guardrails, not by this markdown file.
 
-## ✨ Newly Added:
+## Newly Added:
 
-### ⏰ Time & Performance
+### Time & Performance
 - **`time`** - Timestamps, performance measurement
   ```python
   time.time()  # → 1769448216.053
   ```
 
-### 🔒 Cryptography & Encoding (safe, no network)
+### Cryptography & Encoding (safe, no network)
 - **`hashlib`** - Hashing (SHA-256, MD5, etc.)
   ```python
   hashlib.sha256(b'Hello').hexdigest()  # → 185f8db32271...
@@ -34,7 +34,7 @@ This file documents the common standard-library modules that are expected to wor
   secrets.token_hex(8)  # → '044c504a816efc2e'
   ```
 
-### 📝 String & Text Processing
+### String & Text Processing
 - **`string`** - String constants (ascii_letters, punctuation, etc.)
   ```python
   string.ascii_uppercase  # → 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -46,7 +46,7 @@ This file documents the common standard-library modules that are expected to wor
   textwrap.shorten('This is a very long text', width=15)  # → 'This is a [...]'
   ```
 
-### 🧮 Algorithms
+### Algorithms
 - **`heapq`** - Heap operations (Priority Queue)
   ```python
   heapq.nlargest(3, [1, 9, 2, 8, 3, 7])  # → [9, 8, 7]
@@ -57,7 +57,7 @@ This file documents the common standard-library modules that are expected to wor
   bisect.bisect_left([1, 2, 4, 5], 3)  # → 2
   ```
 
-### 📋 Utilities
+### Utilities
 - **`copy`** - Shallow/Deep Copy
   ```python
   copy.copy([1, 2, 3])              # Shallow copy
@@ -66,7 +66,7 @@ This file documents the common standard-library modules that are expected to wor
 
 ---
 
-## 📦 Complete List of Available Modules:
+## Complete List of Available Modules:
 
 ### **Math & Science**
 - `math` - Mathematical functions (sqrt, sin, cos, etc.)
@@ -107,7 +107,7 @@ All standard Python builtins: `print`, `len`, `sum`, `map`, `filter`, `sorted`, 
 
 ---
 
-## 💡 Examples:
+## Examples:
 
 ```python
 # 1. Simple Expressions (Auto-Evaluation)
@@ -143,7 +143,7 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 
 ---
 
-## 🔒 Security
+## Security
 
 > **Important distinction:** The sandbox enforces security at the **Docker container level**, not at the Python import level. Standard-library modules like `subprocess`, `socket`, and `os` are importable inside the sandbox — what prevents abuse is the Docker container's process namespace, network policy, and resource limits, not a module blocklist.
 
@@ -172,7 +172,7 @@ For architecture and isolation details, see [`SANDBOXING.md`](SANDBOXING.md).
 
 ---
 
-## 🎯 Use Cases
+## Use Cases
 
 1. **Mathematical Calculations**: `math.factorial(10)`
 2. **Data Processing**: JSON parsing, Regex, Collections

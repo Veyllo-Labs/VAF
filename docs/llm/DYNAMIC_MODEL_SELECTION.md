@@ -63,7 +63,7 @@ Select "🤖 API Model" to:
 
 ## Features
 
-### ✅ Real-Time Model Lists
+### Real-Time Model Lists
 
 Models are fetched **directly from the API** when you configure a provider:
 
@@ -77,7 +77,7 @@ GET https://generativelanguage.googleapis.com/v1beta/models?key=...
 → Returns: gemini-1.5-pro-latest, gemini-1.5-flash-latest, ...
 ```
 
-### ✅ Custom Model Support
+### Custom Model Support
 
 New model released? Just enter the ID:
 ```
@@ -88,7 +88,7 @@ Enter custom model ID: gpt-4o-2025-01-15
 ✓ Model set to: gpt-4o-2025-01-15
 ```
 
-### ✅ Current Model Indicator
+### Current Model Indicator
 
 Your current model is marked:
 ```
@@ -99,7 +99,7 @@ Select Model:
     ...
 ```
 
-### ✅ Fallback to Static Lists
+### Fallback to Static Lists
 
 If API fetch fails (network issue, rate limit), VAF falls back to a curated static list:
 
@@ -212,11 +212,11 @@ Enter API key: sk-or-...
 
 ## Benefits
 
-### 🎯 Always Up-to-Date
+### Always Up-to-Date
 
 No need to update VAF when providers release new models. Models are fetched directly from the API.
 
-### 🚀 New Models Available Immediately
+### New Models Available Immediately
 
 Released today? Available today:
 ```
@@ -224,7 +224,7 @@ Released today? Available today:
 Settings → API Model → Enter custom model ID: gpt-4.5
 ```
 
-### 🔍 Discover Models You Didn't Know Existed
+### Discover Models You Didn't Know Existed
 
 OpenRouter has 100+ models. Dynamic fetching shows them all:
 ```
@@ -234,7 +234,7 @@ OpenRouter has 100+ models. Dynamic fetching shows them all:
 ... and many more!
 ```
 
-### 💡 Smart Filtering
+### Smart Filtering
 
 Only relevant models shown:
 - OpenAI: Chat models only (no embeddings/audio)

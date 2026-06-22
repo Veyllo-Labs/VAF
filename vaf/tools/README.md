@@ -25,6 +25,8 @@ VAF uses an **automatic plugin system**:
 3. **JSON Schema**: Tools define their parameters using JSON Schema
 4. **In-Process Execution**: Tools run in the same Python process (very fast, <1ms latency)
 
+The `parameters` schema is validated at dispatch: common weak-model shape mistakes (a bare string for an array field, a stringified array, `null` on an optional field) are repaired before `run()` is called, and `content` / `code` fields are passed through verbatim. See [../../docs/agents/TOOL_INPUT_REPAIR.md](../../docs/agents/TOOL_INPUT_REPAIR.md).
+
 ### Tool Structure
 
 ```python

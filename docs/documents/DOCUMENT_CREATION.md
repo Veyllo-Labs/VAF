@@ -2,7 +2,7 @@
 
 ## Overview
 
-VAF includes a powerful **document creation system** that generates structured documents of any size without context overflow. The system uses **section-by-section generation** similar to the research agent, allowing output of 500K+ tokens even with an 8K context window.
+VAF includes a **document creation system** that generates structured documents of any size without context overflow. The system uses **section-by-section generation** similar to the research agent, allowing output of 500K+ tokens even with an 8K context window.
 
 ## Key Features
 

@@ -161,7 +161,7 @@ To turn these Dummy UIs into functional features, the following backend logic is
 
 ## 4. User Experience (UX) Summary
 
-The goal is to provide **Enterprise-Grade Security** for a **Local Tool**.
+The goal is a security model suitable for a local application.
 
 1.  **Admin** opens Settings on their PC, enables "Local Network", creates a user `colleague`.
 2.  **Colleague** opens `http://192.168.1.X:3000` on their iPad.

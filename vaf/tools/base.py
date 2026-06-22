@@ -59,7 +59,10 @@ class BaseTool(ABC):
     # Useful for: file operations, shell commands, code-specific tools
     coder_only: bool = False
 
-    # JSON Schema for parameters (optional but recommended)
+    # JSON Schema for parameters (optional but recommended).
+    # Validated at dispatch: common weak-model shape mistakes are repaired before
+    # run() is called; `content` / `code` fields are passed through verbatim.
+    # See docs/agents/TOOL_INPUT_REPAIR.md.
     parameters: Dict[str, Any] = {
         "type": "object",
         "properties": {},

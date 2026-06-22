@@ -161,11 +161,11 @@ into the **renderer** process — the JS heap stays tiny (~10 MB) while the OS R
 **7 GB** to exactly these causes; the rules below keep it bounded (~1.5 GB, self-reclaiming):
 
 - **Chromium flags** (`QTWEBENGINE_CHROMIUM_FLAGS` in `desktop_window.py`):
-  - ❌ Do **not** add `--disable-frame-rate-limit` or `--disable-gpu-vsync`. Uncapping the
+  - Do **not** add `--disable-frame-rate-limit` or `--disable-gpu-vsync`. Uncapping the
     framerate (especially on a large high-Hz display, e.g. 5120×1440 @ 240 Hz) makes the
     in-process GPU pile up tiles at ~40 MB/s. Keep vsync on + the default ~60 fps cap.
-  - ❌ Do **not** add `--enable-accelerated-2d-canvas` (GPU-backs `<canvas>` buffers).
-  - ✅ `--aggressive-cache-discard`, `--renderer-process-limit=1`, `--disk-cache-size`,
+  - Do **not** add `--enable-accelerated-2d-canvas` (GPU-backs `<canvas>` buffers).
+  - Keep `--aggressive-cache-discard`, `--renderer-process-limit=1`, `--disk-cache-size`,
     `--js-flags=--max-old-space-size=1024` are kept for RAM containment.
 - **Frontend animation rule:** continuously-running (infinite) animations may animate
   **only `transform` / `opacity`** (compositor-only). Never continuously animate

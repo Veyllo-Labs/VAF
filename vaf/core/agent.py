@@ -192,9 +192,15 @@ class Agent:
     # Defaults handled by Config, but fallback here
     DEFAULT_FILENAME = "VQ-1_Instruct-q4_k_m.gguf"
     
-    def __init__(self, verbose=False, register_signals=True):
+    def __init__(self, verbose=False, register_signals=True, config_overrides=None):
         self.verbose = verbose
         self.config = Config.load()
+        # Programmatic config injection for embedding VAF as a library.
+        # Merges on top of the on-disk config without writing ~/.vaf/config.json,
+        # so each Agent instance can carry its own provider/model/api_key/n_ctx.
+        # Default None -> behaviour is byte-identical to before.
+        if config_overrides:
+            self.config = {**self.config, **config_overrides}
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.models_dir = os.path.join(self.base_dir, "models")
         
@@ -1448,6 +1454,11 @@ class Agent:
         # level (get_tools handler) not here, so the agent always has the full set.
         self._load_custom_tools()
 
+        # ── Entry-point tools (external tools shipped by third-party pip packages) ─────────────
+        # Discovered via the "vaf.tools" entry-point group so a developer can
+        # `pip install` a package that extends VAF without touching the core.
+        self._load_entry_point_tools()
+
         # ── MCP tools (external servers from mcp_servers.json, registered as native tools) ──────
         self._load_mcp_tools()
 
@@ -1498,6 +1509,54 @@ class Agent:
                 self.tools[instance.name] = instance
             except Exception as exc:
                 print(f"[ERROR] Failed to load custom tool '{tool_name}': {exc}")
+
+    def _load_entry_point_tools(self) -> None:
+        """
+        Discover external tools published by third-party pip packages via the
+        ``vaf.tools`` entry-point group, and register each into self.tools.
+
+        This lets developers ship tools as installable packages, e.g. in their
+        pyproject.toml / setup.py::
+
+            [options.entry_points]
+            vaf.tools =
+                my_tool = my_pkg.tools:MyTool
+
+        Each entry point must resolve to a BaseTool subclass. Same filtering as
+        custom tools: coder_only=True is skipped (entry-point tools target the
+        main agent). Defensive throughout — a broken package never breaks
+        startup, and an empty group is a clean no-op.
+        """
+        try:
+            from importlib.metadata import entry_points
+            from vaf.tools.base import BaseTool
+        except Exception as exc:
+            print(f"[WARN] entry-point tool discovery unavailable: {exc}")
+            return
+
+        try:
+            eps = entry_points(group="vaf.tools")
+        except TypeError:
+            # Selectable-API fallback: the group= keyword was added in 3.10.
+            # The project floor is 3.10, but stay defensive on older interpreters.
+            eps = entry_points().get("vaf.tools", [])
+        except Exception as exc:
+            print(f"[WARN] could not query 'vaf.tools' entry points: {exc}")
+            return
+
+        for ep in eps:
+            try:
+                cls = ep.load()
+                if not (isinstance(cls, type) and issubclass(cls, BaseTool)):
+                    print(f"[WARN] entry-point tool '{ep.name}' is not a BaseTool subclass; skipped")
+                    continue
+                instance = cls()
+                # Entry-point tools target the main agent; skip coder-only ones.
+                if getattr(instance, "coder_only", False):
+                    continue
+                self.tools[instance.name] = instance
+            except Exception as exc:
+                print(f"[ERROR] Failed to load entry-point tool '{getattr(ep, 'name', ep)}': {exc}")
 
     def _load_mcp_tools(self) -> None:
         """Discover the tools of the MCP servers in mcp_servers.json and register each as a native
@@ -8449,6 +8508,28 @@ class Agent:
         try:
             if name in self.tools:
                 tool_args = dict(args) if args else {}
+                # --- Input validation & repair (before runtime-kwarg injection) ---
+                # Validate model-supplied args against the tool's declared schema and
+                # repair common weak-model shape mistakes (bare string for an array,
+                # stringified array, null on an optional field, single-key placeholder).
+                # Runs on raw model args only; injected runtime kwargs are added below.
+                # Fully defensive: any failure here is a no-op and dispatch proceeds.
+                _ti_errors = []
+                try:
+                    from vaf.core.tool_input_repair import repair_tool_input
+                    tool_args, _ti_applied, _ti_errors = repair_tool_input(
+                        getattr(self.tools[name], "parameters", None), tool_args
+                    )
+                    if _ti_applied:
+                        try:
+                            from vaf.core.log_helper import log_timeline_event as _lte
+                            _lte('tool_input_repaired', tool=name,
+                                 model=getattr(self, 'model_display_name', None),
+                                 repairs=_ti_applied)
+                        except Exception:
+                            pass
+                except Exception:
+                    _ti_errors = []
                 if name in ("memory_save", "memory_search"):
                     scope_id = getattr(self, "_current_user_scope_id", None)
                     tool_args["user_scope_id"] = scope_id
@@ -8541,7 +8622,13 @@ class Agent:
                 # here would abandon them mid-work (zombie) while they're still making progress.
                 # Run them directly; they handle their own Stop + internal limits.
                 from vaf.core.bounded_run import SELF_SUPERVISED_TOOLS as _SELF_SUPERVISED
-                if name in _SELF_SUPERVISED:
+                if _ti_errors:
+                    # Args still violate the tool's declared schema after repair:
+                    # return a localized error to the model instead of dispatching
+                    # with invalid input. Keep the "Tool Error:" prefix so is_err and
+                    # the Whare Wananga reactive-retry keep recognising it unchanged.
+                    result = "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(_ti_errors))
+                elif name in _SELF_SUPERVISED:
                     result = self.tools[name].run(**tool_args)
                 else:
                     # Bounded execution: never let a single in-process tool block the worker
@@ -8709,63 +8796,6 @@ class Agent:
             return summary
         except Exception as e:
             return f"Error: {e}"
-
-    BLOCKED_DIRS = ["Windows", "Program Files", "Program Files (x86)", "System32", ".git", ".ssh", "node_modules"]
-
-    def is_safe_path(self, path):
-        # Implementation of safe path check
-        try:
-             abs_path = os.path.abspath(os.path.expanduser(path))
-             for blocked in self.BLOCKED_DIRS:
-                 if blocked in abs_path:
-                     return False, f"Access denied: {blocked}"
-             return True, abs_path
-        except:
-             return False, "Invalid path"
-
-    def list_files(self, path="."):
-        safe, res = self.is_safe_path(path)
-        if not safe: return res
-        try:
-            items = os.listdir(res)
-            output = ""
-            for item in items:
-                item_path = os.path.join(res, item)
-                if os.path.isdir(item_path):
-                    output += f"[DIR]  {item}\n"
-                else:
-                    output += f"[FILE] {item}\n"
-            return output if output else "Empty"
-        except Exception as e: return str(e)
-
-    def read_file(self, path):
-        safe, res = self.is_safe_path(path)
-        if not safe: return res
-        try:
-            with open(res, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(2000)
-                if len(content) == 2000: content += "\n...[Truncated]..."
-                return content
-        except Exception as e: return str(e)
-
-    def write_file(self, path, content):
-        safe, res = self.is_safe_path(path)
-        if not safe: return res
-        try:
-            with open(res, 'w', encoding='utf-8') as f:
-                f.write(content)
-            return f"Written to {res}"
-        except Exception as e: return str(e)
-
-    def move_file(self, src, dst):
-        safe_src, res_src = self.is_safe_path(src)
-        if not safe_src: return res_src
-        safe_dst, res_dst = self.is_safe_path(dst)
-        if not safe_dst: return res_dst
-        try:
-            shutil.move(res_src, res_dst)
-            return f"Moved {src} to {dst}"
-        except Exception as e: return str(e)
 
     def _strip_tool_calls_text(self, response_text: str) -> str:
         """

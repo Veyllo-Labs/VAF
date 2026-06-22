@@ -47,12 +47,12 @@ CONTAINER ID   IMAGE                      PORTS                          NAMES
 ...            vaf-sandbox                                                vaf-sandbox
 ```
 
-> **Sicherheit:** Alle Ports sind an `127.0.0.1` gebunden — nur lokal erreichbar, nicht im LAN oder Internet. Falls `0.0.0.0` angezeigt wird, sind die Ports auf allen Netzwerk-Interfaces offen. In diesem Fall `docker-compose.memory.yml` prüfen und sicherstellen dass alle Port-Mappings das Format `127.0.0.1:PORT:PORT` verwenden.
+> **Security:** All ports are bound to `127.0.0.1` — reachable only locally, not on the LAN or the internet. If `0.0.0.0` is shown, the ports are open on all network interfaces; in that case check `docker-compose.memory.yml` and make sure every port mapping uses the `127.0.0.1:PORT:PORT` format.
 >
-> **Netzwerk-Isolation:** Jeder Container ist nur in dem Docker-Netzwerk das er braucht:
+> **Network isolation:** Each container joins only the Docker network it needs:
 > - `vaf-network`: postgres, redis, tts, stt, gotenberg
-> - `vaf-sandbox-network`: sandbox (kein Zugriff auf postgres/redis)
-> - `vaf-browser-network`: vaf-browser (kein Zugriff auf postgres/redis — SSRF-Schutz)
+> - `vaf-sandbox-network`: sandbox (no access to postgres/redis)
+> - `vaf-browser-network`: vaf-browser (no access to postgres/redis — SSRF protection)
 
 ### Stop Services
 

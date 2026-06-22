@@ -1,4 +1,4 @@
-# 🧠 VAF Soul System Specification
+# VAF Soul System Specification
 
 **Version:** 1.0.0  
 **Status:** Production  

@@ -170,7 +170,12 @@ class SendMailTool(BaseTool):
         body = (kwargs.get("body") or "").strip()
         confirm_high_risk = bool(kwargs.get("confirm_high_risk", False))
         attachment_paths = kwargs.get("attachment_paths") or []
-        if not isinstance(attachment_paths, list):
+        # A single path passed as a bare string must be wrapped, not dropped
+        # (the central input-repair layer normally does this upstream; this is a
+        # non-lossy local guard for direct callers / if repair is unavailable).
+        if isinstance(attachment_paths, str):
+            attachment_paths = [attachment_paths] if attachment_paths.strip() else []
+        elif not isinstance(attachment_paths, list):
             attachment_paths = []
 
         if not to:

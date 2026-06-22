@@ -1,8 +1,8 @@
-# 🪟 VAF on Windows: Setup & Usage Guide
+# VAF on Windows: Setup & Usage Guide
 
-VAF is optimized for the Windows environment, offering a seamless background service integration while maintaining powerful command-line capabilities.
+On Windows, VAF runs as a background service and provides a command-line interface.
 
-## 📥 Installation
+## Installation
 
 The recommended method for setting up VAF on Windows is via the automated PowerShell script. This ensures all dependencies, including system-specific drivers for GPU acceleration and speech synthesis, are correctly configured.
 
@@ -21,7 +21,7 @@ The recommended method for setting up VAF on Windows is via the automated PowerS
 
 ---
 
-## 🚀 Operation Modes
+## Operation Modes
 
 VAF offers two primary modes of operation:
 
@@ -42,7 +42,7 @@ vaf run
 
 ---
 
-## 🎨 System Tray Status
+## System Tray Status
 
 The tray icon provides immediate visual feedback on the agent's state:
 - 🟢 **Green (Active)**: The agent is currently processing a request or task.
@@ -51,7 +51,7 @@ The tray icon provides immediate visual feedback on the agent's state:
 
 ---
 
-## 🌐 Local Network Hosting
+## Local Network Hosting
 
 VAF includes secure capabilities to share the agent within your local network (LAN).
 
@@ -73,7 +73,7 @@ VAF includes secure capabilities to share the agent within your local network (L
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### 1. Startup Issues
 If the application fails to launch, consult these logs (in order of usefulness):

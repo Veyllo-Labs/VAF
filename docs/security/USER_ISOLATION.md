@@ -96,7 +96,7 @@ Use `get_local_admin_scope_id()` and `get_local_admin_username()` from `vaf.core
 
 ### Hybrid Scoping Strategy (Local Mode Stability)
 
-To bridge the gap between strict multi-tenant isolation and a seamless local UX, VAF uses a **Hybrid Scoping Strategy**. This is especially important for long-lived connections like Email and WhatsApp.
+To bridge the gap between strict multi-tenant isolation and a low-friction local experience, VAF uses a **Hybrid Scoping Strategy**. This is especially important for long-lived connections like Email and WhatsApp.
 
 **The Problem:** In local mode, a user might set up Email under one UUID, then clear their browser cache, getting a new UUID. Without fallbacks, the Agent would think no accounts are connected.
 

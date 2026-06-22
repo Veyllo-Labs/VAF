@@ -76,7 +76,6 @@ import webbrowser
 from vaf.core.config import Config
 from vaf.core.log_helper import get_dated_log_path
 from vaf.core.backend import ServerManager
-from vaf.core.web_server import app
 from vaf.core.tray_context import TrayContext
 import uvicorn
 from vaf.startup_logger import log, clear_log
@@ -360,6 +359,11 @@ def start_uvicorn():
         import asyncio
         import sys
         import os
+
+        # Web server app is imported lazily here (not at module level) so that
+        # `import vaf.tray` does not pull in fastapi/uvicorn/web_server. Only the
+        # tray path, which actually serves the app, needs it.
+        from vaf.core.web_server import app
 
         # Ensure UTF-8 output for background threads (prevents Unicode log crashes)
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")

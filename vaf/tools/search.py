@@ -2,6 +2,10 @@ import re
 import requests
 import os
 import threading
+import hashlib
+import time
+import json
+from pathlib import Path
 from urllib.parse import quote_plus, unquote, parse_qs, urlparse
 
 from bs4 import BeautifulSoup
@@ -379,6 +383,42 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
         "required": ["query"]
     }
 
+    # ── result cache: identical queries are served for a short TTL instead of
+    #    re-searching + re-synthesising. Mirrors the file cache in webfetch.py.
+    def _ws_cache_dir(self) -> Path:
+        d = Config.APP_DIR / "tmp" / "web_search_cache"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _ws_cache_key(self, query, max_results, deep, trusted_sources_only, user_question) -> str:
+        raw = "|".join([
+            (query or "").strip().lower(),
+            str(max_results),
+            str(int(bool(deep))),
+            str(int(bool(trusted_sources_only))),
+            (user_question or "").strip().lower(),
+        ])
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+    def _ws_cache_get(self, key: str, ttl: int):
+        try:
+            p = self._ws_cache_dir() / f"{key}.json"
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if time.time() - data.get("timestamp", 0) < ttl:
+                    return data.get("result")
+        except Exception:
+            pass
+        return None
+
+    def _ws_cache_set(self, key: str, query: str, result: str) -> None:
+        try:
+            with open(self._ws_cache_dir() / f"{key}.json", "w", encoding="utf-8") as f:
+                json.dump({"timestamp": time.time(), "query": query, "result": result}, f, ensure_ascii=False)
+        except Exception:
+            pass
+
     def run(self, **kwargs) -> str:
         query = kwargs.get('query', '')
         max_results = int(kwargs.get("max_results", 5) or 5)
@@ -392,6 +432,22 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
         try:
             max_results = max(1, min(max_results, 10))
+
+            # ── result cache lookup: serve identical queries from the cache ──
+            _cache_ttl = int(Config.get("web_search_cache_ttl_seconds", 900) or 0)
+            _cache_eligible = (
+                bool(Config.get("web_search_cache_enabled", True))
+                and not return_raw
+                and not open_in_browser
+                and _cache_ttl > 0
+            )
+            _cache_key = None
+            if _cache_eligible:
+                _cache_key = self._ws_cache_key(query, max_results, deep, trusted_sources_only, user_question)
+                _cached = self._ws_cache_get(_cache_key, _cache_ttl)
+                if _cached is not None:
+                    UI.event("Web Search", f"Cache hit ({query[:60]})", style="dim")
+                    return _cached
 
             # ═══════════════════════════════════════════════════════════════
             # SOURCE FILTERING: trusted_sources_only OR smart intent-based
@@ -799,6 +855,13 @@ Final Answer:"""
                     "hand the user the links.\n\n---\n\n"
                 )
                 summary = lead + summary
+
+            # Cache the final formatted result for identical future queries (real
+            # web results only — never the RAG fallback, empty, or error output).
+            if _cache_eligible and _cache_key and search_source != "Internal Knowledge (RAG)":
+                _final = summary.strip()
+                if _final:
+                    self._ws_cache_set(_cache_key, query, _final)
 
             return summary.strip()
         except Exception as e:

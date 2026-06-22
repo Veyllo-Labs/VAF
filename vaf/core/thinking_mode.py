@@ -957,7 +957,7 @@ You are the user's personal AI assistant. You know them from your long-term memo
 5. **Never repeat** questions from the declined list or recent thinking activity.
 6. Messages must be **natural, short, human** — like a helpful friend texting.
 7. **ALWAYS call thinking_done** at the end. No exceptions.
-8. **NEVER** include internal reasoning, debugging output, tool results, error messages, or chain-of-thought in message text. The `message` parameter of send_telegram/send_whatsapp/send_discord must contain ONLY the final, polished, user-facing text.
+8. **NEVER** include internal reasoning, debugging output, tool results, error messages, or chain-of-thought in message text. To contact the user you MUST call a TOOL: `ask_user` (preferred) or `thinking_done(message=...)`. Writing the question as plain assistant text does NOT reach the user — it is silently dropped. The `message` parameter must contain ONLY the final, polished, user-facing text.
 
 ## NOTES & TODOS ARE REAL, ACTIONABLE TASKS — NOT NOISE
 Every automation **note** or **todo** in your list was **deliberately saved by the USER**. They are not
@@ -1007,6 +1007,9 @@ mark the todo done or delete/clear the note; if you ask the user about it, pass 
 **IF** you need the user's decision on something concrete and specific:
   → Call `ask_user(message="<one clean, specific question or proposal>", proposed_action="<short note of what you'd do if they agree>", source_note_id="<id if the question is about a note>", source_todo_id="<id if about a todo>")`. Put ONLY the final user-facing text in `message` — no reasoning, no "I should…", no tool talk. This delivers the message, tracks it, and waits for the reply; the MAIN agent carries out `proposed_action` once the user confirms, and the linked note/todo is marked handled so it never comes back.
   → If a main_messenger is configured (see User Identity) you may instead send via that messenger tool.
+  → If you reach the end and realise you never called ask_user, deliver the same message via
+    `thinking_done(message="<the question>", proposed_action="...", source_note_id="<id>")` — it uses the
+    exact same tracked path. Either way the message MUST go through a tool call.
   → NEVER write the question as plain assistant text, NEVER use send_mail, NEVER invent contact addresses.
   → The system handles waiting for the reply. Then call `thinking_done`.
 
@@ -1121,6 +1124,59 @@ def emit_message_to_web_ui(user_scope_id: Optional[str], content: str) -> Option
         return None
 
 
+def deliver_tracked_message(
+    user_scope_id: Optional[str],
+    message: str,
+    proposed_action: Optional[str] = None,
+    source_note_id: Optional[str] = None,
+    source_todo_id: Optional[str] = None,
+    username: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Deliver ONE clean, user-facing message from the background run and track it as a request.
+
+    This is the single delivery path shared by `ask_user` (the primary, explicit channel) and the
+    `thinking_done(message=...)` fallback (used when a weak model composes the message but forgets to
+    call ask_user). It (1) records a tracked request (status 'asked', stamped with the current run_seq +
+    the source note/todo so a confirm can clear them), (2) sets waiting_for_reply so the main agent
+    picks up the user's reply, and (3) emits the exact text to the Web UI. The text is ALWAYS an explicit
+    caller argument — chain-of-thought is never scraped, so reasoning cannot leak. Returns the request
+    dict with an extra `delivered` flag, or None if `message` was empty."""
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    from vaf.core import thinking_requests as treq
+
+    message = (message or "").strip()
+    if not message:
+        return None
+    user_scope_id = user_scope_id or get_local_admin_scope_id()
+    run_seq = current_run_seq(user_scope_id)
+    req = treq.add_request(
+        user_scope_id,
+        question=message,
+        run_seq=run_seq,
+        proposed_action=(proposed_action or "").strip() or None,
+        thinking_run_id=os.environ.get("VAF_THINKING_RUN_ID"),
+        source_note_id=(source_note_id or "").strip() or None,
+        source_todo_id=(source_todo_id or "").strip() or None,
+    )
+    uname = (username or "").strip() or get_local_admin_username()
+    set_waiting_for_reply(
+        user_scope_id, username=uname, display_name=uname,
+        question_text=message, request_id=req["id"],
+    )
+    sid = emit_message_to_web_ui(user_scope_id, message)
+    req = dict(req)
+    req["delivered"] = bool(sid)
+    return req
+
+
+def run_has_open_request(user_scope_id: Optional[str]) -> bool:
+    """True if the background run already raised a tracked request THIS run (so a fallback delivery via
+    thinking_done must not send a second message). Uses the current run_seq as the run boundary."""
+    from vaf.core import thinking_requests as treq
+    cur = current_run_seq(user_scope_id)
+    return bool(treq.list_requests(user_scope_id, within_runs=1, current_run_seq=cur))
+
+
 def _try_emit_to_web_ui_and_wait(
     run_history: List[Dict[str, Any]],
     user_scope_id: Optional[str],
@@ -1143,18 +1199,23 @@ _PHASE_PROMPTS = {
         "- Any actionable notes? Handle them.\n"
         "- Automations look complete? Great.\n"
         "- Nothing to do? Call thinking_done('Nothing actionable.').\n"
-        "If you can act: do it now. If you need the user's input: send ONE message, then call thinking_done."
+        "If you can act: do it now. To contact the user you MUST call a tool — `ask_user(message=..., "
+        "source_note_id=...)` — writing the question as plain text does NOT deliver it. Then call thinking_done."
     ),
     # Turn 2: Should be wrapping up. Escalate.
     2: (
         "Wrap up now. If you took an action, call thinking_done with a summary. "
-        "If you sent a message, call thinking_done (the system handles the reply). "
+        "If you still have a question or proposal for the user, deliver it NOW with a tool — either "
+        "`ask_user(message=\"<the question>\", proposed_action=\"...\", source_note_id=\"<id>\")`, or "
+        "`thinking_done(message=\"<the question>\", proposed_action=\"...\", source_note_id=\"<id>\")`. "
+        "A question written as plain text is NOT delivered. "
         "If you haven't done anything useful yet, call thinking_done('Nothing actionable.')."
     ),
     # Turn 3+: Force termination.
     3: (
-        "FINAL TURN. Call thinking_done NOW with a summary of what you did. "
-        "Do not call any more tools. Do not send any messages. Just call thinking_done."
+        "FINAL TURN. Call thinking_done NOW. If you have a pending question for the user, deliver it in "
+        "this same call: thinking_done(message=\"<the question>\", source_note_id=\"<id>\"). Otherwise "
+        "call thinking_done with a short summary. Do not call any other tools."
     ),
 }
 

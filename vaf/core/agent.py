@@ -54,6 +54,14 @@ def _extract_action_text(text: str):
 # request_clarification, memory_save) are real actions and must NOT count as spin.
 _BOOKKEEPING_TOOLS = frozenset({"update_working_memory", "update_intent", "add_task"})
 
+# Read/gather tools a background thinking run must not call endlessly. The redundant-call block only
+# catches EXACT-arg duplicates, so a weak model can spin memory_search with varied queries (or re-list)
+# forever (observed: 5 memory_search calls drifting off-topic). The thinking read-cap blocks these by
+# NAME after a few calls within one step, telling the model to act on what it already gathered.
+_READ_TOOLS_THINKING = frozenset({
+    "memory_search", "web_search", "list_automation_notes", "list_automation_todos", "list_automations",
+})
+
 
 def _parse_qwen_tool_calls(text: str, valid_names=None):
     """Parse Qwen / Hermes style tool calls that a reasoning model sometimes emits as TEXT (often inside
@@ -491,6 +499,51 @@ class Agent:
             return (None, False)
         except Exception:
             return (None, False)
+
+    def _thinking_read_cap_step(self, function_name: str):
+        """Thinking-mode-only per-tool-NAME read cap. Counts calls to a read/gather tool within the
+        current step; at the Nth (thinking_read_cap_per_tool, default 3) it returns a block string telling
+        the model to act on what it has, instead of executing the call again. Returns the block string or
+        None. Gated by VAF_THINKING_MODE so the main chat loop is never affected. The per-step counter
+        (self._thinking_read_counts) is reset at the start of each chat_step."""
+        try:
+            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                return None
+            if function_name not in _READ_TOOLS_THINKING:
+                return None
+            # Forced-resolution node: gather tools are blocked from the FIRST call, so a forced
+            # tool_choice="required" can only be satisfied by a decisive/progress tool.
+            if getattr(self, "_thinking_force_progress", False):
+                try:
+                    append_domain_log("backend", f"[THINKING_READ_CAP] forced-node blocked {function_name}")
+                except Exception:
+                    pass
+                return (
+                    f"Gathering is disabled right now — you must resolve the open item. Do NOT call "
+                    f"{function_name}. Call ask_user(message=..., source_note_id=...) or "
+                    "delete_automation_note(note_id=...) now."
+                )
+            from vaf.core.config import Config
+            if not Config.get("thinking_read_cap_enabled", True):
+                return None
+            cap = max(2, int(Config.get("thinking_read_cap_per_tool", 3) or 3))
+            counts = getattr(self, "_thinking_read_counts", None)
+            if counts is None:
+                counts = self._thinking_read_counts = {}
+            counts[function_name] = counts.get(function_name, 0) + 1
+            if counts[function_name] >= cap:
+                try:
+                    append_domain_log("backend", f"[THINKING_READ_CAP] blocked {function_name} (#{counts[function_name]})")
+                except Exception:
+                    pass
+                return (
+                    f"You have already called {function_name} {counts[function_name]} times this run. "
+                    "Stop gathering — you have enough context. ACT on what you already have (handle the "
+                    "open note/todo, or ask one specific question), or call thinking_done."
+                )
+            return None
+        except Exception:
+            return None
 
     def _task_stuck_step(self, idx: int, text: str) -> str:
         """Pending-task verification (single-nudge; decouples loop termination from the model's
@@ -5315,10 +5368,17 @@ class Agent:
         memory_context=None,
         thinking_mode: bool = False,
         images: Optional[List[Dict]] = None,
+        force_tool_choice: Optional[str] = None,
     ):
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
         self._current_turn_thinking_mode = bool(thinking_mode)
+        # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
+        # block the gather tools immediately so "required" can ONLY be satisfied by a decisive/progress
+        # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
+        self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
+        self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
+        self._thinking_force_progress = bool(self._force_tool_choice)
         
         try:
             append_domain_log("backend", "chat_step_start")
@@ -5375,8 +5435,19 @@ class Agent:
                         except Exception:
                             pass
                     _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
+                    # Concrete content the background run gathered behind a teaser message (e.g. the actual
+                    # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
+                    # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
+                    # main agent invented incoherent cooling tips because the content was never passed).
+                    _details = (_req or {}).get("details") or ""
+                    if _details:
+                        _facts = (f" The concrete information behind that message — use THIS to answer their "
+                                  f"reply, do not invent new facts: {_details}.")
+                    else:
+                        _facts = (" You do not have the specifics on hand; if the user asks for details, look "
+                                  "them up (e.g. web_search) — do NOT make up facts.")
                     self._thinking_reply_context = (
-                        f"[Context: During a background pass you reached out to the user with: \"{q_text}\"."
+                        f"[Context: During a background pass you reached out to the user with: \"{q_text}\".{_facts}"
                         f"{_carry} The user's reply follows immediately after this system note.]"
                     )
                 else:
@@ -5838,6 +5909,7 @@ class Agent:
         _hard_stop_injected = False   # True after hard-stop user message was injected once
         self._autocontinue_step_sig = None  # reset the task-stuck guard at the start of each run
         self._autocontinue_stuck = 0
+        self._thinking_read_counts = {}  # reset the thinking read-tool cap (per-step, thinking mode only)
         _ww_reactive_injected = set()  # tools whose learned know-how was already re-fed on error this turn
 
         while empty_retry_count < MAX_EMPTY_RETRIES:
@@ -5940,6 +6012,9 @@ class Agent:
                     # Disable tools if requested
                     current_tools = self.TOOLS if not disable_tools else None
                     tool_choice = "auto" if current_tools else "none" # Default to auto if tools, none otherwise
+                    if current_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
+                        tool_choice = self._force_tool_choice  # forced-resolution node: model MUST emit a tool
+                        self._force_tool_choice_used = True     # only the first generation is forced
 
                     first_token = True
                     # json, sys, escape already imported globally
@@ -6192,7 +6267,10 @@ class Agent:
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
-                        
+                        if current_tools and getattr(self, "_force_tool_choice", None) and not self._force_tool_choice_used:
+                            current_tool_choice = self._force_tool_choice  # forced-resolution node
+                            self._force_tool_choice_used = True             # only the first generation is forced
+
                         payload = {
                              "messages": prepared_messages,
                              "tools": current_tools,
@@ -7160,6 +7238,20 @@ class Agent:
                 for tc in tool_calls_detected:
                     function_name = tc['function']['name']
 
+                    # THINKING READ-CAP: in a background thinking run, block a read/gather tool called too
+                    # many times this step (memory_search spin etc.). Soft block — the result tells the
+                    # model to act; other tools still work. No-op outside thinking mode.
+                    _read_block = self._thinking_read_cap_step(function_name)
+                    if _read_block:
+                        UI.event("Warning", f"Thinking read-cap: blocked {function_name}", style="warning")
+                        self.history.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "name": function_name,
+                            "content": _read_block,
+                        })
+                        continue
+
                     # Stop button: honour it BETWEEN tools, not only at the loop top. A single LLM
                     # response can carry many tool calls; without this, hitting Stop drains the whole
                     # batch (observed: list_tools fired dozens of times after "stopped by user").
@@ -7222,11 +7314,32 @@ class Agent:
                         try:
                             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                         except: arguments = {}
-                        summary = arguments.get("summary", "Done.").strip() or "Done."
-                        
+                        if not isinstance(arguments, dict):
+                            arguments = {}
+                        summary = (arguments.get("summary") or "Done.").strip() or "Done."
+
+                        # thinking_done is special-cased here and returns BEFORE the normal tool-execution
+                        # path, so ThinkingDoneTool.run() never runs. Honor the message fallback inline via
+                        # the shared helper, otherwise thinking_done(message=...) would be silently dropped.
+                        try:
+                            from vaf.core.thinking_mode import deliver_thinking_done_fallback
+                            _note = deliver_thinking_done_fallback(
+                                getattr(self, "_current_user_scope_id", None),
+                                arguments.get("message"),
+                                proposed_action=arguments.get("proposed_action"),
+                                source_note_id=arguments.get("source_note_id"),
+                                source_todo_id=arguments.get("source_todo_id"),
+                                username=getattr(self, "_current_username", None),
+                                details=arguments.get("details"),
+                            )
+                            if _note:
+                                summary = summary + _note
+                        except Exception as _td_err:
+                            append_domain_log("backend", f"[LOOP_PROTECTION] thinking_done delivery failed: {_td_err}")
+
                         UI.event("Debug", "Thinking Mode: done signal received, breaking loop.", style="dim")
                         append_domain_log("backend", f"[LOOP_PROTECTION] thinking_done detected - breaking loop with summary: {summary[:50]}")
-                        
+
                         # Add tool result to history
                         self.history.append({
                             "role": "tool",

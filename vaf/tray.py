@@ -662,7 +662,25 @@ def check_activity_loop(update_icon_callback):
         time_since_ws_activity = time.time() - tray_context.last_websocket_activity
         has_websocket = tray_context.active_websockets > 0
         telegram_grace = tray_context.has_recent_telegram_activity()
-        
+
+        # Unified "user really away" signal = time since the user's last MESSAGE (last_interaction, the
+        # same source the thinking run uses), NOT the websocket heartbeat. Lets us free the model after
+        # genuine inactivity even while the WebUI is still open. And: never unload while a thinking run is
+        # active or imminently due (think first, then unload).
+        try:
+            from vaf.core.last_interaction import get_last_interaction as _gli
+            _li = _gli(None)
+            user_away_min = ((time.time() - float(_li["ts"])) / 60.0) if (_li and _li.get("ts")) else float("inf")
+        except Exception:
+            user_away_min = float("inf")
+        unload_idle_min = float(Config.get("model_unload_idle_minutes", 30) or 30)
+        really_away = user_away_min >= unload_idle_min
+        try:
+            from vaf.core.thinking_mode import should_defer_model_unload as _sdmu
+            thinking_defer = bool(_sdmu())
+        except Exception:
+            thinking_defer = False
+
         # Check provider type - cloud providers don't need local model loading
         provider = Config.get("provider", "local")
         is_cloud_provider = provider in ("openai", "anthropic", "google", "openrouter", "mistral", "groq", "deepseek")
@@ -677,36 +695,39 @@ def check_activity_loop(update_icon_callback):
                 log("Tray", "Persistent mode enabled. Loading model...")
                 start_model_async("Persistent")
             update_icon_callback("persistent")
-        elif is_active or telegram_grace:
-            # Load model for Web/CLI activity or recent Telegram prompt (keeps model for telegram_idle_timeout)
-            if not is_loaded and not is_cloud_provider:
-                print("Activity detected. Loading model...")
-                log("Tray", "Activity detected. Loading model...")
-                start_model_async("Activity")
-            update_icon_callback("active")
         else:
-            # When no active web connection: unload after idle_timeout from last ws activity/disconnect.
-            # If we have never had a websocket, use last_heartbeat so we do not unload immediately.
-            # Do not unload while within telegram_idle_timeout of last Telegram prompt (e.g. 2 min).
-            no_web = tray_context.active_websockets == 0
-            had_web = tray_context.last_websocket_disconnect > 0 or tray_context.last_websocket_activity > 0
-            idle_long_enough = (
-                (had_web and time_since_ws_activity > tray_context.idle_timeout and time_since_disconnect > tray_context.idle_timeout)
-                or (not had_web and time_since_last > tray_context.idle_timeout)
-            )
-            if (
-                is_loaded and
-                not is_cloud_provider and
-                no_web and
-                idle_long_enough and
-                not telegram_grace
-            ):
-                print(f"Idle timeout ({tray_context.idle_timeout}s) reached. Unloading model...")
-                log("Tray", f"Idle timeout reached. Unloading model (loaded={is_loaded}).")
-                server_mgr.stop_server(force_external=True) # We own it effectively here
-                tray_context.set_model_loaded(False)
-                log("Tray", "Model unloaded.")
-                update_icon_callback("idle")
+            # Keep the local model warm while a thinking run is active/due (think first, then unload), OR
+            # while the app is actively used — UNLESS the user is REALLY away (no message for
+            # model_unload_idle_minutes), in which case "active" (e.g. WebUI just sitting open) no longer
+            # keeps it warm.
+            keep_warm = thinking_defer or ((not really_away) and (is_active or telegram_grace))
+            if keep_warm:
+                if not is_loaded and not is_cloud_provider:
+                    reason = "Thinking" if (thinking_defer and not (is_active or telegram_grace)) else "Activity"
+                    print(f"{reason} detected. Loading model...")
+                    log("Tray", f"{reason} detected. Loading model...")
+                    start_model_async(reason)
+                update_icon_callback("active")
+            elif is_loaded and not is_cloud_provider:
+                # Not warm and thinking has nothing to do -> consider unloading the local model.
+                # Trigger: the user is REALLY away (last message), or the legacy ws-idle fallback. Server/
+                # headless never reaches here (the unload watchdog only runs in the desktop tray).
+                no_web = tray_context.active_websockets == 0
+                had_web = tray_context.last_websocket_disconnect > 0 or tray_context.last_websocket_activity > 0
+                ws_idle = (
+                    (had_web and time_since_ws_activity > tray_context.idle_timeout and time_since_disconnect > tray_context.idle_timeout)
+                    or (not had_web and time_since_last > tray_context.idle_timeout)
+                )
+                if really_away or (no_web and ws_idle and not telegram_grace):
+                    why = f"user away {user_away_min:.0f}min" if really_away else f"ws idle {tray_context.idle_timeout}s"
+                    print(f"Idle ({why}) reached. Unloading model...")
+                    log("Tray", f"Idle ({why}) reached. Unloading model (loaded={is_loaded}).")
+                    server_mgr.stop_server(force_external=True) # We own it effectively here
+                    tray_context.set_model_loaded(False)
+                    log("Tray", "Model unloaded.")
+                    update_icon_callback("idle")
+                else:
+                    update_icon_callback("active" if is_ready else "idle")
             else:
                 # Show "active" if ready (cloud: websocket connected, local: model loaded)
                 update_icon_callback("active" if is_ready else "idle")

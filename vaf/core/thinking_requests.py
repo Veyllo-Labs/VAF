@@ -67,16 +67,20 @@ def add_request(
     thinking_run_id: Optional[str] = None,
     source_note_id: Optional[str] = None,
     source_todo_id: Optional[str] = None,
+    details: Optional[str] = None,
 ) -> dict:
     """Record a new 'asked' request. source_note_id / source_todo_id link the request to the
     automation note/todo it came from, so that note/todo can be marked handled once the user
-    confirms (and stops re-surfacing). Returns the created entry (with id)."""
+    confirms (and stops re-surfacing). `details` carries the concrete information behind a teaser
+    message (e.g. the actual list of tips the run found) so the main agent can answer a follow-up with
+    the REAL facts instead of re-deriving them. Returns the created entry (with id)."""
     path = _path(user_scope_id)
     items = _load(path)
     entry = {
         "id": str(uuid.uuid4())[:8],
         "question": (question or "").strip()[:1000],
         "proposed_action": (proposed_action or "").strip()[:500] or None,
+        "details": (details or "").strip()[:4000] or None,
         "status": "asked",
         "run_seq": int(run_seq) if run_seq is not None else 0,
         "thinking_run_id": (thinking_run_id or "").strip() or None,

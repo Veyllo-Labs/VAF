@@ -763,6 +763,30 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         return []
 
 
+def should_defer_model_unload() -> bool:
+    """True if the local model should stay loaded for the background thinking run — a run is currently
+    active, or one is eligible to start right now (a user idle past the threshold AND cooldown elapsed).
+    The DESKTOP model-unload watchdog (tray.py) calls this so it never pulls the model out from under
+    thinking: think first, then unload. (Server/headless never runs that watchdog.) Returns False on any
+    error or when thinking is disabled."""
+    try:
+        from vaf.core.config import Config
+        if not Config.get("thinking_enabled", True):
+            return False
+        # 1) A run is executing right now (lock held for the local user).
+        if is_locked(None):
+            return True
+        # 2) A run is eligible to start now: some user idle past the threshold AND cooldown elapsed.
+        idle_minutes = float(Config.get("thinking_idle_minutes", 10) or 10)
+        cooldown = float(Config.get("thinking_cooldown_minutes", 60) or 60)
+        for scope in get_idle_user_scope_ids(idle_minutes):
+            if is_locked(scope) or _minutes_since_last_run(scope) >= cooldown:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def should_skip_for_automation(user_scope_id: Optional[str], buffer_minutes: int) -> bool:
     """True if an automation runs within buffer_minutes for this user (skip thinking start)."""
     from vaf.core.automation import get_next_automation_run_utc
@@ -989,7 +1013,7 @@ Apply these rules IN ORDER:
   → Call `thinking_done` with summary "Nothing actionable." — DONE. (If ANY note or todo exists it is actionable by default — do NOT exit here; handle it below.)
 
 **IF** there is ANY open todo (it is a task the user set — do it):
-  → Do it now (a check/test: run it and report; otherwise act, or — if it needs the user's decision — ask via `ask_user(..., source_todo_id="<id>")`). Mark it done (`update_automation_todo done=true`). Then `thinking_done`.
+  → Do it now (a check/test: run it and report; otherwise act, or — if it needs the user's decision — ask via `ask_user(..., source_todo_id="<id>")`). Once done, clear it with `delete_automation_todo(todo_id="<id>")`. Then `thinking_done`.
 
 **IF** there is ANY note (the user saved it deliberately → it IS actionable):
   → Either ACT on it (e.g. `web_search` + a concrete suggestion, create an automation, update a todo)
@@ -1001,8 +1025,9 @@ Apply these rules IN ORDER:
   → Create it, call `thinking_done` with summary — DONE.
 
 IMPORTANT — never re-do a handled item: every note/todo carries an `id`. Once you have acted on it,
-mark the todo done or delete/clear the note; if you ask the user about it, pass its id to ask_user
-(below) so the system clears it on confirm. A done todo / handled note disappears from your next run.
+clear it (`delete_automation_todo(todo_id=...)` / `delete_automation_note(note_id=...)`); if you ask the
+user about it, pass its id to ask_user (below) so the system clears it on confirm. A cleared todo /
+handled note disappears from your next run.
 
 **IF** you need the user's decision on something concrete and specific:
   → Call `ask_user(message="<one clean, specific question or proposal>", proposed_action="<short note of what you'd do if they agree>", source_note_id="<id if the question is about a note>", source_todo_id="<id if about a todo>")`. Put ONLY the final user-facing text in `message` — no reasoning, no "I should…", no tool talk. This delivers the message, tracks it, and waits for the reply; the MAIN agent carries out `proposed_action` once the user confirms, and the linked note/todo is marked handled so it never comes back.
@@ -1131,6 +1156,7 @@ def deliver_tracked_message(
     source_note_id: Optional[str] = None,
     source_todo_id: Optional[str] = None,
     username: Optional[str] = None,
+    details: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Deliver ONE clean, user-facing message from the background run and track it as a request.
 
@@ -1157,6 +1183,7 @@ def deliver_tracked_message(
         thinking_run_id=os.environ.get("VAF_THINKING_RUN_ID"),
         source_note_id=(source_note_id or "").strip() or None,
         source_todo_id=(source_todo_id or "").strip() or None,
+        details=(details or "").strip() or None,
     )
     uname = (username or "").strip() or get_local_admin_username()
     set_waiting_for_reply(
@@ -1177,6 +1204,42 @@ def run_has_open_request(user_scope_id: Optional[str]) -> bool:
     return bool(treq.list_requests(user_scope_id, within_runs=1, current_run_seq=cur))
 
 
+def deliver_thinking_done_fallback(
+    user_scope_id: Optional[str],
+    message: Optional[str],
+    proposed_action: Optional[str] = None,
+    source_note_id: Optional[str] = None,
+    source_todo_id: Optional[str] = None,
+    username: Optional[str] = None,
+    details: Optional[str] = None,
+) -> str:
+    """The `thinking_done(message=...)` fallback delivery, shared by BOTH the ThinkingDoneTool and the
+    agent's thinking_done dispatch (agent.chat_step special-cases thinking_done and returns before running
+    the tool, so without this the message would be silently dropped in the real run). Delivers the message
+    via the same tracked path as ask_user unless one was already raised this run. Returns a short status
+    note to append to the thinking_done summary ('' if nothing was delivered)."""
+    message = (message or "").strip()
+    if not message:
+        return ""
+    from vaf.core.config import get_local_admin_scope_id
+    scope = user_scope_id or get_local_admin_scope_id()
+    if run_has_open_request(scope):
+        return " (a question was already delivered this run; the extra message was not re-sent)"
+    req = deliver_tracked_message(
+        scope, message,
+        proposed_action=proposed_action,
+        source_note_id=source_note_id,
+        source_todo_id=source_todo_id,
+        username=username,
+        details=details,
+    )
+    if req and req.get("delivered"):
+        return f" (message delivered to the user, tracked as request {req['id']})"
+    if req:
+        return f" (message recorded as request {req['id']}; it will surface on the user's next visit)"
+    return ""
+
+
 def _try_emit_to_web_ui_and_wait(
     run_history: List[Dict[str, Any]],
     user_scope_id: Optional[str],
@@ -1190,41 +1253,104 @@ def _try_emit_to_web_ui_and_wait(
     Kept as a stub so the call site stays stable; always returns False."""
     return False
 
-# Phase-based prompts for thinking mode turns 1+ (turn 0 uses THINKING_PROMPT)
-_PHASE_PROMPTS = {
-    # Turn 1: Tool results are in from GATHER. Now analyze + decide.
-    1: (
-        "You should now have the tool results from gathering. Analyze what you found:\n"
-        "- Any open todos? Process them.\n"
-        "- Any actionable notes? Handle them.\n"
-        "- Automations look complete? Great.\n"
-        "- Nothing to do? Call thinking_done('Nothing actionable.').\n"
-        "If you can act: do it now. To contact the user you MUST call a tool — `ask_user(message=..., "
-        "source_note_id=...)` — writing the question as plain text does NOT deliver it. Then call thinking_done."
-    ),
-    # Turn 2: Should be wrapping up. Escalate.
-    2: (
-        "Wrap up now. If you took an action, call thinking_done with a summary. "
-        "If you still have a question or proposal for the user, deliver it NOW with a tool — either "
-        "`ask_user(message=\"<the question>\", proposed_action=\"...\", source_note_id=\"<id>\")`, or "
-        "`thinking_done(message=\"<the question>\", proposed_action=\"...\", source_note_id=\"<id>\")`. "
-        "A question written as plain text is NOT delivered. "
-        "If you haven't done anything useful yet, call thinking_done('Nothing actionable.')."
-    ),
-    # Turn 3+: Force termination.
-    3: (
-        "FINAL TURN. Call thinking_done NOW. If you have a pending question for the user, deliver it in "
-        "this same call: thinking_done(message=\"<the question>\", source_note_id=\"<id>\"). Otherwise "
-        "call thinking_done with a short summary. Do not call any other tools."
-    ),
-}
+# Content-driven prompts for thinking-mode turns 1+ (turn 0 uses THINKING_PROMPT). The phase is driven by
+# WORK DONE (is the housekeeping floor clear?), NOT by turn count. There is deliberately no "wrap up now /
+# FINAL TURN" termination pressure: the model is allowed to keep working until the housekeeping ledger is
+# resolved (the completion gate enforces this), then it climbs one rung to proactive upkeep. The hard
+# turn cap (SAFETY 1) remains only as a backstop.
+
+# Floor not yet clear: open notes/todos remain. Decisive — pick ONE item and resolve it with ONE tool
+# call in the next response. Default to ACT (a note is a request for help). No more analysis / no prose.
+_PROMPT_HOUSEKEEPING = (
+    "You have open notes/todos the user saved. Pick the FIRST one and resolve it in your NEXT response "
+    "with exactly ONE tool call — do not write analysis, do not search again:\n"
+    "- DEFAULT = ACT: a note like 'it's too hot, how do I cool down' is a request for help. Turn what you "
+    "already found into ONE concrete suggestion and deliver it with "
+    "`ask_user(message=\"<the suggestion as a short, specific proposal>\", source_note_id=\"<id>\")` — that "
+    "single call delivers it AND clears the note.\n"
+    "- Only if you truly cannot help without more info, ask ONE specific question the same way.\n"
+    "- If you already acted on an item, clear it now: `delete_automation_note(note_id=\"<id>\")` / "
+    "`delete_automation_todo(todo_id=\"<id>\")`.\n"
+    "Respond with the tool call ONLY. Once every item is resolved, call thinking_done."
+)
+
+# Force-decision: injected after several turns of gathering/analysing without a decisive action. The model
+# must emit exactly one progress tool now and stop searching.
+_PROMPT_FORCE_DECISION = (
+    "STOP. You have searched and analysed across several turns without resolving anything. In your NEXT "
+    "response output EXACTLY ONE tool call and NO prose:\n"
+    "- If a note/todo is still open: `ask_user(message=\"<one concrete suggestion or question>\", "
+    "source_note_id=\"<id>\")` (this delivers AND clears it), or `delete_automation_note(note_id=\"<id>\")` "
+    "if you already acted.\n"
+    "- Otherwise: `thinking_done(summary=\"...\")`.\n"
+    "Do NOT call web_search, memory_search or list_* again. Decide now."
+)
+
+# Tools that count as DECISIVE progress in a thinking run (resolve an item, contact the user, or finish).
+# Used by the progress-gate to detect "gathering/analysing forever without acting".
+_PROGRESS_TOOLS = frozenset({
+    "ask_user", "thinking_done",
+    "delete_automation_note", "delete_automation_todo", "add_automation_todo",
+    "create_automation", "update_automation", "save_thinking_suggestion",
+})
 
 
-def _get_turn_prompt(turn: int) -> str:
-    """Phase-based prompt: Turn 0 = THINKING_PROMPT, Turn 1-2 = Analyze/Act, Turn 3+ = Force done."""
+def _turn_used_progress_tool(history_slice: List[Dict[str, Any]]) -> bool:
+    """True if any assistant message in this turn's history slice called a decisive progress tool."""
+    for m in history_slice or []:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            name = (tc.get("function") or {}).get("name") or tc.get("name") or ""
+            if name in _PROGRESS_TOOLS:
+                return True
+    return False
+
+
+def _build_forced_item_prompt(item: Dict[str, Any]) -> str:
+    """The custom prompt for a FORCED-RESOLUTION node: it names exactly one open item and is paired with
+    tool_choice='required' + gather tools disabled, so the model cannot search or write prose — it must
+    emit the ask_user/delete tool call for THIS item."""
+    iid = (item.get("id") or "").strip()
+    label = (item.get("label") or "").strip() or "(no text)"
+    if item.get("kind") == "todo":
+        return (
+            f"Resolve the user's todo NOW — todo [{iid}]: \"{label}\". Emit EXACTLY ONE tool call this "
+            "turn (no prose, no searching — gathering is disabled):\n"
+            f"- If it is done, call delete_automation_todo(todo_id=\"{iid}\").\n"
+            f"- If it needs the user's decision, call ask_user(message=\"<one specific question in the "
+            f"user's language>\", source_todo_id=\"{iid}\").\n"
+            "Emit the tool call now."
+        )
+    return (
+        f"Resolve the user's note NOW — note [{iid}]: \"{label}\". A note is a request for help. Emit "
+        "EXACTLY ONE tool call this turn (no prose, no searching — gathering is disabled):\n"
+        f"- BEST: ask_user(message=\"<one short, concrete suggestion or question about this, in the "
+        f"user's language>\", source_note_id=\"{iid}\") — this delivers it to the user AND clears the note. "
+        "If your message references things you found (e.g. tips/options), ALSO pass details=\"<the actual "
+        "content — the real list/facts>\" so the user can get the specifics later without you re-deriving them.\n"
+        f"- If you have already sent a suggestion for it, call delete_automation_note(note_id=\"{iid}\").\n"
+        "Emit the ask_user (or delete) tool call now."
+    )
+
+# Floor clear: no open notes/todos remain. Optionally do ONE piece of proactive upkeep from EXISTING
+# signals (Stufe 1). Evidence-gated to avoid noise; silence is fine.
+_PROMPT_PROACTIVE = (
+    "Your housekeeping is clear — no open notes or todos remain. You MAY do ONE piece of genuinely useful "
+    "upkeep, but only from EXISTING signals (a tracked interest needing a status check, a time-sensitive "
+    "fact that affects a known plan, profile hygiene). EVIDENCE RULE: only act/contact if you can name the "
+    "memory, note, or conversation it is based on — never a generic 'can I help?'. Act > ask; at most one "
+    "message; silence is perfectly fine. If nothing is genuinely useful right now, call "
+    "thinking_done('Nothing actionable after checking notes, todos and recent context.')."
+)
+
+
+def _get_turn_prompt(turn: int, ledger_clear: bool = True) -> str:
+    """Turn 0 = THINKING_PROMPT (gather + Stufe-0). Turns 1+ are content-driven: keep doing housekeeping
+    while the ledger has unresolved items, otherwise climb to the proactive (Stufe-1) prompt."""
     if turn == 0:
         return THINKING_PROMPT
-    return _PHASE_PROMPTS.get(turn, _PHASE_PROMPTS[3])
+    return _PROMPT_PROACTIVE if ledger_clear else _PROMPT_HOUSEKEEPING
 
 
 def _detect_and_set_waiting_for_reply(
@@ -1509,6 +1635,10 @@ def _run_thinking_for_user(
         try:
             max_turns = int(Config.get("thinking_max_turns", 6) or 6)
             max_turns = max(1, min(max_turns, 10))
+            # Progress-gate: after this many turns with no decisive (act/ask/clear) tool, force a one-tool
+            # decision. Give the loop room to reach the threshold + 2 turns to comply (capped at 10).
+            _progress_threshold = max(2, int(Config.get("thinking_no_progress_turns", 5) or 5))
+            max_turns = min(10, max(max_turns, _progress_threshold + 2))
             # RAG context for first turn only — build user-specific query
             memory_context = ""
             try:
@@ -1558,14 +1688,51 @@ def _run_thinking_for_user(
             # Log/summary must include only messages created during THIS run,
             # not preloaded session history.
             run_history_start = len(getattr(agent, "history", []) or [])
+
+            # Stufe-0 completion gate: snapshot the open notes/todos at run START. Before the run is
+            # allowed to finish (thinking_done), every captured item must be acted-and-cleared or turned
+            # into a tracked question this run; otherwise the run gets ONE targeted nudge naming the
+            # specific items. user_scope_id is already resolved (None -> admin) above, so the ledger reads
+            # the same per-user store the agent's tools write under.
+            from vaf.core import thinking_ledger as _tledger
+            _gate_enabled = bool(Config.get("thinking_gate_enabled", True))
+            _cur_seq = current_run_seq(user_scope_id)
+            _run_ledger = _tledger.build_ledger(user_scope_id) if _gate_enabled else []
+            _gate_nudged = False
+            _no_progress_turns = 0      # consecutive turns with no decisive (act/ask/clear) tool
+            _force_decision_pending = False
+
             for turn in range(max_turns):
-                prompt = _get_turn_prompt(turn)
+                _unresolved = (
+                    _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq)
+                    if (_gate_enabled and _run_ledger) else []
+                )
+                _ledger_clear = not _unresolved
+                _force_tc = None
+                if turn == 0:
+                    # Turn 0: gather (THINKING_PROMPT) — read the notes/todos/memory before acting.
+                    prompt = _get_turn_prompt(0, _ledger_clear)
+                elif not _ledger_clear:
+                    # FORCED-RESOLUTION NODE (the enforceable gate-tree): pick the first open item and
+                    # compel the model to resolve it — tool_choice='required' + gather disabled means it
+                    # MUST emit ask_user/delete for this item; it can no longer escape into search or prose.
+                    prompt = _build_forced_item_prompt(_unresolved[0])
+                    _force_tc = "required"
+                elif _force_decision_pending:
+                    prompt = _PROMPT_FORCE_DECISION
+                    _force_decision_pending = False
+                    _force_tc = "required"
+                else:
+                    # Floor clear: optional proactive upkeep (Stufe 1) — NOT forced; silence is fine.
+                    prompt = _PROMPT_PROACTIVE
+                _turn_hist_start = len(getattr(agent, "history", []) or [])
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(
                     prompt,
                     stream_callback=None,
                     memory_context=mem_ctx,
                     thinking_mode=True,
+                    force_tool_choice=_force_tc,
                 )
                 current_history = (getattr(agent, "history", []) or [])
                 run_history = _history_delta(current_history, run_history_start)
@@ -1626,14 +1793,61 @@ def _run_thinking_for_user(
                     except Exception:
                         pass
 
-                if _history_has_thinking_done(run_history):
-                    logger.info("Thinking: breaking loop (thinking_done detected)")
+                # A tracked question was raised this run (ask_user / forced node) -> the run's job is DONE:
+                # end NOW and wait for the user's reply. Max 1 message per run. Continuing (e.g. climbing to
+                # the proactive rung) would leave the background run alive and racing the main agent on the
+                # shared local model when the user replies — the cause of the 17:51 concurrency + handoff
+                # race (note never marked handled). The main agent picks up the reply.
+                if run_has_open_request(user_scope_id):
+                    logger.info("Thinking: a question was raised this run — ending to wait for the user's reply")
                     break
 
-                # SAFETY 1: Hard limit — force-break after turn 4 (5 turns total)
-                if turn >= 4:
-                    logger.warning("Thinking: [SAFETY_LIMIT] force-break after %d turns (thinking_done not called)", turn + 1)
+                if _history_has_thinking_done(run_history):
+                    _unresolved = (
+                        _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq)
+                        if (_gate_enabled and _run_ledger) else []
+                    )
+                    if _unresolved and not _gate_nudged:
+                        # Single-shot completion gate: the model tried to finish with open housekeeping.
+                        # Inject ONE targeted nudge naming the items, then let the loop continue so the
+                        # model can act-or-ask. Mirrors the main loop's single-nudge task verification.
+                        _gate_nudged = True
+                        logger.info("Thinking: GATE nudge for %d unresolved item(s)", len(_unresolved))
+                        agent.chat_step(
+                            _tledger.build_gate_nudge(_unresolved),
+                            stream_callback=None,
+                            memory_context=None,
+                            thinking_mode=True,
+                            force_tool_choice="required",   # backstop: compel a decisive tool call
+                        )
+                        current_history = (getattr(agent, "history", []) or [])
+                        run_history = _history_delta(current_history, run_history_start)
+                        continue
+                    if _unresolved and _gate_nudged:
+                        logger.warning(
+                            "Thinking: GATE incomplete run — %d item(s) still unresolved after one nudge",
+                            len(_unresolved),
+                        )
+                        break
+                    logger.info("Thinking: breaking loop (thinking_done detected, ledger clear)")
                     break
+
+                # PROGRESS-GATE: the completion gate guards the EXIT (thinking_done); this guards against
+                # spinning INSIDE the loop — gathering/analysing turn after turn without a decisive action
+                # (the 15:38 run did ~10 web_search calls + reasoning, never acting). Count consecutive
+                # turns with no progress tool; at the threshold, force a one-tool decision next turn.
+                _turn_slice = (getattr(agent, "history", []) or [])[_turn_hist_start:]
+                if _turn_used_progress_tool(_turn_slice):
+                    _no_progress_turns = 0
+                else:
+                    _no_progress_turns += 1
+                if _no_progress_turns >= _progress_threshold and not _force_decision_pending:
+                    logger.warning(
+                        "Thinking: PROGRESS-GATE — %d turns without a decisive tool, forcing a decision",
+                        _no_progress_turns,
+                    )
+                    _force_decision_pending = True
+                    _no_progress_turns = 0   # give the forced turn a clean slate
 
                 # SAFETY 2: If after turn 2 agent hasn't made any tool calls at all, abort
                 if turn >= 2:

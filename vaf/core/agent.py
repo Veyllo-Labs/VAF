@@ -62,6 +62,17 @@ _READ_TOOLS_THINKING = frozenset({
     "memory_search", "web_search", "list_automation_notes", "list_automation_todos", "list_automations",
 })
 
+# Decision nudge for the PROACTIVE grounding step (there is NO open note/todo there, so the housekeeping
+# "resolve the open item / delete_automation_note" block message misleads the weak model into searching
+# again instead of committing). Returned when it over-searches or reaches for a blocked tool.
+_PROACTIVE_DECIDE_NUDGE = (
+    "You have searched enough this run — do NOT call {fn} again. Decide NOW from the real memories you "
+    "retrieved: EITHER ask_user(message=\"<one specific suggestion, ideally an automation that takes "
+    "recurring work off the user>\", proposed_action=\"create automation: <what + when>\", details=\"<a "
+    "VERBATIM quote of one real memory you just saw>\") — OR, only if nothing is genuinely groundable, "
+    "thinking_done(\"Nothing grounded.\"). No more searching, no prose."
+)
+
 
 def _parse_qwen_tool_calls(text: str, valid_names=None):
     """Parse Qwen / Hermes style tool calls that a reasoning model sometimes emits as TEXT (often inside
@@ -512,21 +523,35 @@ class Agent:
             if function_name not in _READ_TOOLS_THINKING:
                 return None
             # Forced-resolution node: gather tools are blocked from the FIRST call, so a forced
-            # tool_choice="required" can only be satisfied by a decisive/progress tool.
+            # tool_choice="required" can only be satisfied by a decisive/progress tool. EXCEPTION: the
+            # proactive grounding step sets _thinking_allow_search so the model can dig into ONE specific
+            # thing with memory_search itself (still per-tool read-capped below, so it cannot churn);
+            # everything else stays blocked.
+            _proactive = bool(getattr(self, "_thinking_allow_search", False))
             if getattr(self, "_thinking_force_progress", False):
-                try:
-                    append_domain_log("backend", f"[THINKING_READ_CAP] forced-node blocked {function_name}")
-                except Exception:
-                    pass
-                return (
-                    f"Gathering is disabled right now — you must resolve the open item. Do NOT call "
-                    f"{function_name}. Call ask_user(message=..., source_note_id=...) or "
-                    "delete_automation_note(note_id=...) now."
-                )
+                _allow_search = _proactive and function_name == "memory_search"
+                if not _allow_search:
+                    try:
+                        append_domain_log("backend", f"[THINKING_READ_CAP] forced-node blocked {function_name}")
+                    except Exception:
+                        pass
+                    # Proactive grounding step has NO open item -> give the correct DECISION nudge instead of
+                    # the housekeeping "resolve the open item / delete_automation_note" message (which the
+                    # weak model reads as nonsense and answers by searching again).
+                    if _proactive:
+                        return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
+                    return (
+                        f"Gathering is disabled right now — you must resolve the open item. Do NOT call "
+                        f"{function_name}. Call ask_user(message=..., source_note_id=...) or "
+                        "delete_automation_note(note_id=...) now."
+                    )
+                # memory_search allowed for the proactive step -> fall through to the (tighter) read-cap.
             from vaf.core.config import Config
             if not Config.get("thinking_read_cap_enabled", True):
                 return None
             cap = max(2, int(Config.get("thinking_read_cap_per_tool", 3) or 3))
+            if _proactive:
+                cap = 2   # the proactive step already has the pre-fetched digest; 2 self-searches is plenty
             counts = getattr(self, "_thinking_read_counts", None)
             if counts is None:
                 counts = self._thinking_read_counts = {}
@@ -536,6 +561,8 @@ class Agent:
                     append_domain_log("backend", f"[THINKING_READ_CAP] blocked {function_name} (#{counts[function_name]})")
                 except Exception:
                     pass
+                if _proactive:
+                    return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
                 return (
                     f"You have already called {function_name} {counts[function_name]} times this run. "
                     "Stop gathering — you have enough context. ACT on what you already have (handle the "
@@ -5369,6 +5396,7 @@ class Agent:
         thinking_mode: bool = False,
         images: Optional[List[Dict]] = None,
         force_tool_choice: Optional[str] = None,
+        allow_memory_search: bool = False,
     ):
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
@@ -5379,6 +5407,9 @@ class Agent:
         self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
         self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
         self._thinking_force_progress = bool(self._force_tool_choice)
+        # Proactive grounding exception: even in a forced node, let the model dig into ONE specific thing
+        # with memory_search itself (read-capped). Set only for the proactive step in thinking_mode.
+        self._thinking_allow_search = bool(allow_memory_search and thinking_mode)
         # Reset the thinking-reply context per turn so it persists across ALL generations of THIS turn
         # (set below from waiting_for_reply) but never leaks into the next turn.
         self._thinking_reply_context = None
@@ -7531,7 +7562,16 @@ class Agent:
                         # SEAMLESS COMPRESSION: Prune large tool output while extracting facts
                         # ═══════════════════════════════════════════════════════════════
                         processed_result = self.context_manager.process_tool_output(function_name, result_str)
-                        
+
+                        # PROACTIVE EVIDENCE POOL: in a thinking run, capture real retrieved memory so the
+                        # proactive evidence-gate can verify a suggestion is grounded in it (not fabricated).
+                        if function_name == "memory_search" and getattr(self, "_current_turn_thinking_mode", False):
+                            try:
+                                from vaf.core.thinking_mode import add_run_evidence
+                                add_run_evidence(getattr(self, "_current_user_scope_id", None), result_str)
+                            except Exception:
+                                pass
+
                         if function_name == 'document_agent' and "Could not create document plan" in result_str:
                             self.history.append({
                                 "role": "tool",

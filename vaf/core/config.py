@@ -26,6 +26,8 @@ class Config:
     DEFAULTS = {
         "config_format_version": 1,  # bumped by vaf/core/migrations.py when the config format changes
         "update_check_on_start": True,  # one-line "update available" hint at startup (vaf update)
+        "web_search_cache_enabled": True,        # serve identical web_search queries from a short-lived cache
+        "web_search_cache_ttl_seconds": 900,     # 15 minutes
         "model": "auto",  # "auto" = VRAM-adaptive local default: Qwen3.5-4B (<=10 GB VRAM) or Qwen3.5-9B (>10 GB), unsloth GGUF, quant auto-picked. Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,
@@ -263,6 +265,10 @@ class Config:
         "thinking_read_cap_per_tool": 3,                     # Nth call of a read tool (memory_search/web_search/list_*) within one step is blocked
         "thinking_no_progress_turns": 5,                     # After this many turns with no decisive (act/ask/clear) tool, force a single-tool decision
         "model_unload_idle_minutes": 30,                     # Desktop only: unload the local model after the user is really away (no message) this long, once thinking is idle. Server/headless never unloads.
+        "thinking_proactive_enabled": True,                  # When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2)
+        "thinking_proactive_evidence_min_chars": 24,         # Evidence-gate: a proactive suggestion's details must quote >= this many chars verbatim from real retrieved memory/history
+        "thinking_proactive_min_runs": 6,                    # Min runs between proactive outreaches (anti-spam)
+        "thinking_proactive_memory_k": 4,                    # Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also memory_search once itself)
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

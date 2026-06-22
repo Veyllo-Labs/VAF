@@ -21,6 +21,7 @@ from vaf.core.session import SessionManager, Session
 from vaf.cli.autosuggest import SmartAutoSuggest
 import json
 from vaf.core.config import Config
+from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
 from typing import Optional, List
@@ -30,7 +31,13 @@ log("WebServer", "VAF imports done")
 
 log_uvicorn = logging.getLogger("uvicorn")
 
-app = FastAPI(title="VAF Local Server")
+app = FastAPI(title="VAF Local Server", version=__version__)
+
+
+@app.get("/api/version")
+async def api_version():
+    """The running VAF version (single source of truth: vaf/version.py)."""
+    return {"version": __version__}
 
 # Active model download cancel events keyed by websocket id (for cancel_model_download)
 _active_model_download_cancels: dict[int, threading.Event] = {}
@@ -947,7 +954,7 @@ def _build_artifact_payload(session, session_id: str = None):
 
 @app.get("/")
 async def root():
-    return {"status": "VAF Backend Online", "version": "1.0.0"}
+    return {"status": "VAF Backend Online", "version": __version__}
 
 from pydantic import BaseModel
 

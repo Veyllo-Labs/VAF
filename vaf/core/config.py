@@ -24,6 +24,8 @@ class Config:
     CONFIG_FILE = APP_DIR / "config.json"
     
     DEFAULTS = {
+        "config_format_version": 1,  # bumped by vaf/core/migrations.py when the config format changes
+        "update_check_on_start": True,  # one-line "update available" hint at startup (vaf update)
         "model": "auto",  # "auto" = VRAM-adaptive local default: Qwen3.5-4B (<=10 GB VRAM) or Qwen3.5-9B (>10 GB), unsloth GGUF, quant auto-picked. Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,
@@ -394,6 +396,27 @@ class Config:
             with open(cls.CONFIG_FILE, "r") as f:
                 data = json.load(f)
             result = {**cls.DEFAULTS, **data}
+            # Ordered, additive config migrations (vaf/core/migrations.py). The
+            # stored version is read from the RAW file (missing -> 1) so an old
+            # config is not mistaken for current via the DEFAULTS merge. No-op
+            # until a migration is registered.
+            try:
+                from vaf.core import migrations as _mig
+                _stored_ver = int(data.get("config_format_version", 1) or 1)
+                if _stored_ver < _mig.CONFIG_FORMAT_VERSION:
+                    result, _applied = _mig.run_config_migrations(result, _stored_ver)
+                    result["config_format_version"] = _mig.CONFIG_FORMAT_VERSION
+                    if _applied:
+                        # Persist against the sparse raw file (don't write all defaults).
+                        try:
+                            _raw, _ = _mig.run_config_migrations(dict(data), _stored_ver)
+                            _raw["config_format_version"] = _mig.CONFIG_FORMAT_VERSION
+                            with open(cls.CONFIG_FILE, "w") as _mf:
+                                json.dump(_raw, _mf, indent=4)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             # Apply defaults when saved value is missing or empty (so UI/API always get valid URLs)
             for key in ("speech_tts_docker_url", "speech_tts_docker_url_de", "speech_tts_docker_url_en", "speech_tts_docker_url_fr", "speech_stt_docker_url"):
                 if key in cls.DEFAULTS and not (result.get(key) or "").strip():

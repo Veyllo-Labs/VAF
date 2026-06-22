@@ -1,0 +1,388 @@
+"""
+VAF self-update.
+
+`vaf update` targets the latest published GitHub Release (a git tag `v<version>`)
+and updates the in-place git checkout: stop service -> fetch + checkout tag ->
+reinstall deps -> invalidate web build -> run migrations -> restart -> verify,
+with rollback to the previous commit on any failure. See docs/setup/RELEASING.md.
+
+Safety rests on a verified fact: build artifacts (bin/, web/.next, node_modules,
+venv) and all user state (~/.vaf) live OUTSIDE the git tree, so `git checkout`
+only swaps tracked source and rollback is another checkout.
+"""
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+import typer
+
+from vaf import __version__
+from vaf.cli.cmd import service
+from vaf.cli.cmd.git import is_git_repo, run_git
+from vaf.cli.ui import UI
+
+app = typer.Typer(help="Check for and apply VAF updates")
+
+GITHUB_REPO = "Veyllo-Labs/VAF"
+_RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+
+class _UpdateError(Exception):
+    """A recoverable failure during an update; triggers rollback."""
+
+
+# ── version / release helpers ────────────────────────────────────────────────
+
+def _resolve_latest_release():
+    """Fetch the latest published VAF release from GitHub (offline-safe -> None).
+
+    Mirrors ServerManager.resolve_latest_release (vaf/core/backend.py). On success
+    returns {tag, version (tag without leading 'v'), html_url, body, prerelease}.
+    """
+    try:
+        resp = requests.get(_RELEASES_LATEST_URL, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            tag = data.get("tag_name", "") or ""
+            return {
+                "tag": tag,
+                "version": tag[1:] if tag.startswith("v") else tag,
+                "html_url": data.get("html_url", ""),
+                "body": data.get("body", ""),
+                "prerelease": bool(data.get("prerelease", False)),
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _compare_versions(current: str, latest: str) -> int:
+    """Return -1 if current < latest, 0 if equal, 1 if current > latest."""
+    try:
+        from packaging.version import parse
+        c, lt = parse(current), parse(latest)
+    except Exception:
+        c, lt = current, latest
+    return (c > lt) - (c < lt)
+
+
+# ── opt-in startup "update available" hint ────────────────────────────────────
+
+def _update_cache_path() -> Path:
+    return Path.home() / ".vaf" / "update_cache.json"
+
+
+def _cached_or_fetch_latest():
+    """Return {version, relevant} from a <24h cache, else fetch once and cache it.
+
+    None when the latest version is unknown (offline). `relevant` is True when the
+    latest published release is newer than the installed version.
+    """
+    cache = _update_cache_path()
+    now = datetime.now(timezone.utc)
+    try:
+        cached = json.loads(cache.read_text())
+        checked = datetime.fromisoformat(cached["checked_at"])
+        if (now - checked).total_seconds() < 86400:
+            return {"version": cached.get("latest_version"), "relevant": bool(cached.get("relevant"))}
+    except Exception:
+        pass
+    rel = _resolve_latest_release()
+    if not rel or not rel.get("version"):
+        return None
+    version = rel["version"]
+    relevant = _compare_versions(__version__, version) < 0
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"checked_at": now.isoformat(), "latest_version": version, "relevant": relevant}))
+    except Exception:
+        pass
+    return {"version": version, "relevant": relevant}
+
+
+def maybe_notify_update() -> None:
+    """Print a one-line 'update available' hint at startup, if enabled.
+
+    Opt-out via the `update_check_on_start` config flag; throttled to one network
+    check per day via an on-disk cache. Fully defensive — any error is ignored,
+    and it never applies an update.
+    """
+    try:
+        from vaf.core.config import Config
+        if not Config.get("update_check_on_start", True):
+            return
+        info = _cached_or_fetch_latest()
+        if info and info.get("relevant") and info.get("version"):
+            UI.event("Update", f"Update available: {__version__} -> {info['version']}. Run `vaf update`.")
+    except Exception:
+        pass
+
+
+# ── checkout / paths ─────────────────────────────────────────────────────────
+
+def _repo_root() -> Path:
+    guess = Path(__file__).resolve().parents[3]
+    code, out, _ = run_git(["rev-parse", "--show-toplevel"], cwd=str(guess))
+    if code == 0 and out.strip():
+        return Path(out.strip())
+    return guess
+
+
+def _git(root: Path, *args):
+    code, out, err = run_git(list(args), cwd=str(root))
+    return code, (out or "").strip(), (err or "").strip()
+
+
+def _breadcrumb_path() -> Path:
+    return Path.home() / ".vaf" / "last_update.json"
+
+
+def _write_breadcrumb(data: dict) -> None:
+    p = _breadcrumb_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2))
+
+
+def _clear_breadcrumb() -> None:
+    _breadcrumb_path().unlink(missing_ok=True)
+
+
+# ── update steps (each effect goes through a mockable seam) ───────────────────
+
+def _stop_service() -> None:
+    try:
+        service.cmd_stop()
+    except typer.Exit as e:  # server mode delegates to systemctl and raises Exit(rc)
+        if e.exit_code not in (0, None):
+            raise _UpdateError("failed to stop the VAF service")
+
+
+def _start_service() -> None:
+    try:
+        service.cmd_start()
+    except typer.Exit as e:
+        if e.exit_code not in (0, None):
+            raise _UpdateError("failed to start the VAF service")
+
+
+def _install_python_deps(root: Path) -> None:
+    UI.info("Installing Python dependencies...")
+    for args in (["-e", "."], ["-r", "requirements.txt"]):
+        r = subprocess.run([sys.executable, "-m", "pip", "install", *args], cwd=str(root))
+        if r.returncode != 0:
+            raise _UpdateError(f"pip install {' '.join(args)} failed")
+
+
+def _invalidate_web_build(root: Path) -> None:
+    # The frontend rebuilds lazily when web/.next/BUILD_ID is missing
+    # (frontend_manager.py), so invalidating is enough — no build here.
+    try:
+        bid = root / "web" / ".next" / "BUILD_ID"
+        if bid.exists():
+            bid.unlink()
+    except Exception:
+        pass  # non-fatal
+
+
+def _run_migrations() -> None:
+    # Config migrations run inside Config.load(); state migrations run on session
+    # load. Loading config here applies any pending config migration once.
+    try:
+        from vaf.core.config import Config
+        Config.load()
+    except Exception:
+        pass
+
+
+def _verify(target_version: str) -> None:
+    r = subprocess.run([sys.executable, "-m", "vaf.main", "--version"], capture_output=True, text=True)
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if target_version not in out:
+        raise _UpdateError(f"post-update version check failed (expected {target_version}, got: {out[:80]})")
+
+
+def _rollback(root: Path, anchor: str) -> None:
+    UI.info("Rolling back to the previous version...")
+    _git(root, "checkout", anchor)
+    try:
+        _install_python_deps(root)
+    except Exception:
+        UI.error("Rollback dependency reinstall failed; you may need `pip install -e .` manually.")
+    _invalidate_web_build(root)
+    try:
+        _start_service()
+    except Exception:
+        pass
+
+
+# ── apply ─────────────────────────────────────────────────────────────────────
+
+def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None) -> None:
+    root = _repo_root()
+    if not is_git_repo(str(root)):
+        UI.error(f"VAF at {root} is not a git checkout; `vaf update` needs one. Re-install from git.")
+        raise typer.Exit(1)
+
+    # Resolve the target tag/version.
+    if target_tag:
+        target = target_tag if target_tag.startswith("v") else f"v{target_tag}"
+        target_version = target[1:]
+        notes_url = ""
+    else:
+        rel = _resolve_latest_release()
+        if not rel or not rel.get("tag"):
+            UI.error("Could not determine the latest release (offline, or none published yet).")
+            raise typer.Exit(1)
+        target, target_version, notes_url = rel["tag"], rel["version"], rel.get("html_url", "")
+        if _compare_versions(__version__, target_version) >= 0:
+            UI.event("Update", f"Already up to date ({__version__}).")
+            raise typer.Exit(0)
+
+    # Clean-tree pre-check (untracked files are fine — build artifacts are gitignored).
+    code, dirty, _ = _git(root, "status", "--porcelain", "--untracked-files=no")
+    if code != 0:
+        UI.error("git status failed; cannot update safely.")
+        raise typer.Exit(1)
+    tree_dirty = bool(dirty)
+
+    code, cur_sha, _ = _git(root, "rev-parse", "HEAD")
+    _, cur_branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+
+    UI.event("Update", f"Update: {__version__} -> {target_version}  (tag {target})")
+    if notes_url:
+        UI.print(f"Release notes: {notes_url}")
+
+    if dry_run:
+        UI.event("Update", "Dry run — nothing will be changed. Planned steps:")
+        for s in [
+            "stop the VAF service",
+            "git fetch origin --tags",
+            f"git checkout {target}",
+            "pip install -e .  +  pip install -r requirements.txt",
+            "invalidate web/.next (lazy rebuild on next start)",
+            "run config/state migrations",
+            "restart the VAF service",
+            f"verify `vaf --version` == {target_version}",
+        ]:
+            UI.print(f"  - {s}")
+        UI.print(f"Rollback anchor: {cur_sha[:12]} ({cur_branch}).")
+        if tree_dirty:
+            UI.warning("Your checkout has local changes to tracked files; a real update would abort until they are committed/stashed.")
+        raise typer.Exit(0)
+
+    if tree_dirty:
+        UI.error("Your VAF checkout has local changes to tracked files:")
+        for line in dirty.splitlines()[:20]:
+            UI.print(f"  {line}")
+        UI.print("Commit or `git stash` them, then re-run `vaf update`.")
+        raise typer.Exit(1)
+
+    if not assume_yes:
+        ans = UI.prompt(f"Update VAF {__version__} -> {target_version}? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            UI.event("Update", "Cancelled.")
+            raise typer.Exit(0)
+
+    _write_breadcrumb({
+        "recorded_head": cur_sha,
+        "branch": cur_branch,
+        "from_version": __version__,
+        "target_tag": target,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    try:
+        UI.info("Stopping VAF service...")
+        _stop_service()
+
+        UI.info(f"Fetching and checking out {target}...")
+        code, _, err = _git(root, "fetch", "origin", "--tags")
+        if code != 0:
+            raise _UpdateError(f"git fetch failed: {err}")
+        code, _, err = _git(root, "checkout", target)
+        if code != 0:
+            raise _UpdateError(f"git checkout {target} failed: {err}")
+
+        _install_python_deps(root)
+        _invalidate_web_build(root)
+        _run_migrations()
+
+        UI.info("Restarting VAF service...")
+        _start_service()
+        _verify(target_version)
+
+        _clear_breadcrumb()
+        UI.success(f"VAF updated to {target_version}.")
+        if notes_url:
+            UI.print(f"Release notes: {notes_url}")
+    except Exception as e:
+        UI.error(f"Update failed: {e}")
+        _rollback(root, cur_sha or cur_branch or "HEAD")
+        _clear_breadcrumb()
+        raise typer.Exit(1)
+
+
+def _recover() -> None:
+    p = _breadcrumb_path()
+    if not p.exists():
+        UI.event("Update", "No interrupted update to recover.")
+        raise typer.Exit(0)
+    try:
+        data = json.loads(p.read_text())
+    except Exception:
+        UI.error("Update breadcrumb is unreadable; remove ~/.vaf/last_update.json manually.")
+        raise typer.Exit(1)
+    root = _repo_root()
+    anchor = data.get("recorded_head") or data.get("branch") or "main"
+    UI.info(f"Recovering an interrupted update — restoring {str(anchor)[:12]}...")
+    _rollback(root, anchor)
+    _clear_breadcrumb()
+    UI.success("Recovered to the previous version.")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+@app.callback(invoke_without_command=True)
+def _update_main(
+    ctx: typer.Context,
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen; change nothing"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not prompt for confirmation"),
+    tag: str = typer.Option(None, "--tag", help="Update to a specific tag instead of the latest release"),
+    recover: bool = typer.Option(False, "--recover", help="Recover from an interrupted update"),
+):
+    """Update VAF to the latest published release (bare `vaf update`)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if recover:
+        _recover()
+        return
+    _apply(dry_run=dry_run, assume_yes=yes, target_tag=tag)
+
+
+@app.command("check")
+def check():
+    """Check whether a newer VAF release is available (read-only)."""
+    UI.event("Update", f"Installed version: {__version__}")
+    if _breadcrumb_path().exists():
+        UI.warning("A previous update did not finish. Run `vaf update --recover`.")
+    rel = _resolve_latest_release()
+    if rel is None:
+        UI.event("Update", "Could not reach GitHub to check for updates (offline?).", style="warning")
+        raise typer.Exit(0)
+    latest = rel["version"]
+    if not latest:
+        UI.event("Update", "No published release found yet.", style="warning")
+        raise typer.Exit(0)
+    cmp = _compare_versions(__version__, latest)
+    if cmp < 0:
+        UI.event("Update", f"Update available: {__version__} -> {latest}")
+        if rel.get("html_url"):
+            UI.print(f"Release notes: {rel['html_url']}")
+        UI.print("Run `vaf update` to install it.")
+    elif cmp == 0:
+        UI.event("Update", f"VAF is up to date ({__version__}).")
+    else:
+        UI.event("Update", f"Installed version {__version__} is newer than the latest release ({latest}).")

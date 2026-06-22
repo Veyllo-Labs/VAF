@@ -253,7 +253,7 @@ def bootstrap():
 bootstrap()
 
 import typer
-from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww
+from vaf.cli.cmd import run, models, info, scaffold, generate, automate, debug, git, subagent, workflow, bridge, server, security, service, ww, update
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -288,6 +288,8 @@ app.add_typer(debug.app, name="debug", help="AI error analysis")
 
 # Git integration
 app.add_typer(git.app, name="git", help="Git with AI support")
+# Self-update (check for / apply new VAF releases)
+app.add_typer(update.app, name="update", help="Check for and apply VAF updates")
 
 # Session management
 app.add_typer(session_app, name="session", help="Manage conversations")

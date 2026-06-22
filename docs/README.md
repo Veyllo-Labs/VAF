@@ -16,6 +16,7 @@ Docs are grouped into category folders. Full index by category:
 - [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md) — TTS/STT/Gotenberg/DB/Redis containers.
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) — Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
 - [GATEWAY.md](setup/GATEWAY.md) — Persistent gateway server, multi-channel access.
+- [RELEASING.md](setup/RELEASING.md) — Cutting a release; how `vaf update` updates installed clients.
 - [SERVER_MODE.md](setup/SERVER_MODE.md) — Standalone llama-server mode.
 - [PROCESS_MANAGEMENT.md](setup/PROCESS_MANAGEMENT.md) — Process lifecycle management.
 - [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md) — Network-mode security model, doctor checks.

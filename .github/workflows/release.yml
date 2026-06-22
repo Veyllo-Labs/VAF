@@ -1,0 +1,80 @@
+name: VAF Release
+
+# Cutting a release: push a tag `v<version>` (see docs/setup/RELEASING.md).
+# This re-runs the test gate on the tagged commit and, on success, creates the
+# GitHub Release that `vaf update` targets. No build artifacts are uploaded —
+# clients update via git checkout of the tag.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  gate-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev python3-dev
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest
+          pip install -e .
+
+      - name: Lint (syntax/undefined names only)
+        run: ruff check . --select=E9,F63,F7,F82 --exclude vaf/tools/coder_templates
+
+      - name: Verify CLI entry point
+        run: |
+          vaf --version
+          vaf --help
+
+      - name: Run tests
+        run: pytest tests/ --ignore=tests/test_gpu_inference.py
+
+      - name: Verify tag matches vaf/version.py
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION="$(python -c 'import vaf; print(vaf.__version__)')"
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match vaf/version.py ($CODE_VERSION)"; exit 1
+          fi
+
+      - name: Extract release notes + detect prerelease
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ ("^## \\[" ver "\\]") {flag=1; next}
+            /^## \[/ {flag=0}
+            flag {print}
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "See CHANGELOG.md for details." > release_notes.md
+          fi
+          if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: VAF ${{ github.ref_name }}
+          body_path: release_notes.md
+          prerelease: ${{ steps.notes.outputs.prerelease }}

@@ -38,6 +38,14 @@ class ThinkingDoneTool(BaseTool):
                 "type": "string",
                 "description": "Optional: short note of what you would do if the user agrees (main agent carries it out on confirm).",
             },
+            "details": {
+                "type": "string",
+                "description": (
+                    "Optional but IMPORTANT if your message references content you found/prepared: the "
+                    "ACTUAL content (real list/facts). Not shown to the user; handed to the main agent so "
+                    "a follow-up is answered with your real findings, not a made-up version."
+                ),
+            },
             "source_note_id": {
                 "type": "string",
                 "description": "Optional: id of the automation NOTE this message is about; marked handled when the user confirms.",
@@ -52,30 +60,21 @@ class ThinkingDoneTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         summary = (kwargs.get("summary") or "").strip()
-        message = (kwargs.get("message") or "").strip()
         delivered_note = ""
-        if message:
-            # Fallback delivery: a weak model often composes the question but forgets to call ask_user.
-            # Route that final text through the SAME tracked path here — unless ask_user already raised a
-            # request this run (guard against a double message).
-            try:
-                from vaf.core.thinking_mode import deliver_tracked_message, run_has_open_request
-                from vaf.core.config import get_local_admin_scope_id
-                scope = kwargs.get("user_scope_id") or get_local_admin_scope_id()
-                if run_has_open_request(scope):
-                    delivered_note = " (a question was already delivered this run; the extra message was not re-sent)"
-                else:
-                    req = deliver_tracked_message(
-                        scope, message,
-                        proposed_action=kwargs.get("proposed_action"),
-                        source_note_id=kwargs.get("source_note_id"),
-                        source_todo_id=kwargs.get("source_todo_id"),
-                        username=kwargs.get("username"),
-                    )
-                    if req and req.get("delivered"):
-                        delivered_note = f" (message delivered to the user, tracked as request {req['id']})"
-                    elif req:
-                        delivered_note = f" (message recorded as request {req['id']}; it will surface on the user's next visit)"
-            except Exception:  # pragma: no cover - defensive: never fail the run on delivery
-                delivered_note = ""
+        # Fallback delivery: a weak model often composes the question but forgets to call ask_user. Route
+        # that final text through the SAME tracked path (shared helper, also used by the agent's
+        # thinking_done dispatch), guarded against a double message.
+        try:
+            from vaf.core.thinking_mode import deliver_thinking_done_fallback
+            delivered_note = deliver_thinking_done_fallback(
+                kwargs.get("user_scope_id"),
+                kwargs.get("message"),
+                proposed_action=kwargs.get("proposed_action"),
+                source_note_id=kwargs.get("source_note_id"),
+                source_todo_id=kwargs.get("source_todo_id"),
+                username=kwargs.get("username"),
+                details=kwargs.get("details"),
+            )
+        except Exception:  # pragma: no cover - defensive: never fail the run on delivery
+            delivered_note = ""
         return (summary or "Done.") + delivered_note

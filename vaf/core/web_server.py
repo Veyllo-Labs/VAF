@@ -3368,14 +3368,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             )
                         except Exception:
                             pass
-                        # If thinking mode sent a question via the Web UI and is waiting for
-                        # this user's reply, deliver the reply to the thinking mode now.
-                        try:
-                            from vaf.core.thinking_mode import get_waiting_for_reply, clear_waiting_for_reply
-                            if get_waiting_for_reply(user_scope_id):
-                                clear_waiting_for_reply(user_scope_id, content)
-                        except Exception:
-                            pass
+                        # NOTE: do NOT clear waiting_for_reply here. If the background run asked a
+                        # question and the user is now replying, the MAIN agent's chat_step needs the
+                        # waiting state to reconstruct the question context (_thinking_reply_context) and
+                        # to advance the tracked request (asked -> confirmed/done) + mark the source
+                        # note/todo handled. It reads the context and then clears the waiting state itself
+                        # (see Agent.chat_step). Clearing it here first destroyed that handoff — the agent
+                        # found nothing and answered without the question's context (observed 2026-06-22).
                         if attached_images:
                             metadata["images"] = attached_images
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)

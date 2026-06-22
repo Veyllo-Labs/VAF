@@ -40,6 +40,16 @@ class AskUserTool(BaseTool):
                     "uses this to carry the task out after the user confirms."
                 ),
             },
+            "details": {
+                "type": "string",
+                "description": (
+                    "IMPORTANT when your message references something you found or prepared (e.g. 'I "
+                    "found 15 cooling methods, want the list?'): put the ACTUAL content here — the real "
+                    "list/facts/findings. It is NOT shown to the user, but it is handed to the main agent "
+                    "so that when the user asks for specifics it answers with YOUR real findings instead "
+                    "of making something up. Never tease content without filling this."
+                ),
+            },
             "source_note_id": {
                 "type": "string",
                 "description": (
@@ -81,6 +91,7 @@ class AskUserTool(BaseTool):
             source_note_id=kwargs.get("source_note_id"),
             source_todo_id=kwargs.get("source_todo_id"),
             username=kwargs.get("username"),
+            details=kwargs.get("details"),
         )
         if not req:  # pragma: no cover - guarded above
             return "Error: message must not be empty."

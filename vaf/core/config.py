@@ -258,6 +258,11 @@ class Config:
         "thinking_quiet_hours_enabled": False,               # Do not run thinking mode during quiet hours (local time)
         "thinking_quiet_hours_start": "23:00",                # Quiet period start (HH:MM, 24h); e.g. 23:00 = 11 PM
         "thinking_quiet_hours_end": "07:00",                 # Quiet period end (HH:MM, 24h); e.g. 07:00 = 7 AM (overnight span supported)
+        "thinking_gate_enabled": True,                       # Completion gate: nudge once if a captured note/todo is still unhandled before thinking_done
+        "thinking_read_cap_enabled": True,                   # Block excessive read/gather tool calls in a thinking run (memory_search/web_search spin etc.)
+        "thinking_read_cap_per_tool": 3,                     # Nth call of a read tool (memory_search/web_search/list_*) within one step is blocked
+        "thinking_no_progress_turns": 5,                     # After this many turns with no decisive (act/ask/clear) tool, force a single-tool decision
+        "model_unload_idle_minutes": 30,                     # Desktop only: unload the local model after the user is really away (no message) this long, once thinking is idle. Server/headless never unloads.
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

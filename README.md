@@ -41,6 +41,19 @@ Choose **[2] Server** for home servers, NAS devices, or any headless machine tha
 
 ---
 
+## Updating
+
+VAF updates in place to the latest published release:
+
+```bash
+vaf update           # Stop, fetch the latest release, reinstall, migrate, restart
+vaf update check     # Check whether a newer version is available
+```
+
+`vaf update` only proceeds from a clean checkout, records a rollback point, and reverts automatically if any step fails. A one-line "update available" hint appears at startup (disable via `update_check_on_start` in `config.json`). Maintainers cutting releases: see [docs/setup/RELEASING.md](docs/setup/RELEASING.md).
+
+---
+
 ## Modes
 
 VAF runs in three modes depending on your use case.
@@ -170,6 +183,9 @@ vaf run              # Interactive chat (TUI)
 vaf prompt "..."     # One-shot prompt
 vaf tray             # Background service + web UI (foreground)
 vaf server on|off|status
+
+vaf update           # Update to the latest release
+vaf update check     # Check if a newer release is available
 
 vaf session list|load|delete|export|search
 vaf snapshot create|list|restore|undo

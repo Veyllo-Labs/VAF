@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import uvicorn
 import concurrent.futures
+from vaf.version import __version__
 
 from vaf.core.protocol import (
     VAFMessage, 
@@ -132,11 +133,11 @@ async def lifespan(app: FastAPI):
     logger.info("VAF Gateway shutting down...")
     executor.shutdown()
 
-app = FastAPI(title="VAF Gateway", lifespan=lifespan)
+app = FastAPI(title="VAF Gateway", version=__version__, lifespan=lifespan)
 
 @app.get("/")
 async def root():
-    return {"status": "online", "system": "VAF Agentic Gateway", "version": "0.1.0"}
+    return {"status": "online", "system": "VAF Agentic Gateway", "version": __version__}
 
 @app.get("/api/file")
 async def download_file(path: str = Query(..., description="Absolute path to local file")):

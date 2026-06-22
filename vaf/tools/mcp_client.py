@@ -10,6 +10,8 @@ This implementation supports stdio transport (most common).
 
 import json
 import subprocess
+
+from vaf.version import __version__
 import sys
 import os
 from typing import Dict, Any, Optional, List
@@ -133,7 +135,7 @@ class MCPClientTool(BaseTool):
         init = self._json_rpc(process, "initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "VAF", "version": "1.0"},
+            "clientInfo": {"name": "VAF", "version": __version__},
         }, request_id=1)
         if init is None or "error" in init:
             try:

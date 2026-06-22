@@ -23,7 +23,8 @@ The backend consists of two main components:
 - **CORS**: Enabled for local development
 
 **Endpoints**:
-- `GET /`: Health check endpoint
+- `GET /`: Health check endpoint (includes the running `version`)
+- `GET /api/version`: The running VAF version (source of truth: `vaf/version.py`)
 - `WebSocket /ws`: Real-time bidirectional communication
 
 #### 2. Interface Manager (`web_interface.py`)

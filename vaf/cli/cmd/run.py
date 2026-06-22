@@ -646,6 +646,13 @@ def run(
 
     from vaf.core.config import Config
 
+    # One-line "update available" hint (throttled; opt out via update_check_on_start).
+    try:
+        from vaf.cli.cmd.update import maybe_notify_update
+        maybe_notify_update()
+    except Exception:
+        pass
+
     # Determine UI mode from flag (default to modern)
     ui_mode = "classic" if classic else "modern"
     

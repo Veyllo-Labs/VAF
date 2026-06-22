@@ -663,18 +663,17 @@ def check_activity_loop(update_icon_callback):
         has_websocket = tray_context.active_websockets > 0
         telegram_grace = tray_context.has_recent_telegram_activity()
 
-        # Unified "user really away" signal = time since the user's last MESSAGE (last_interaction, the
-        # same source the thinking run uses), NOT the websocket heartbeat. Lets us free the model after
-        # genuine inactivity even while the WebUI is still open. And: never unload while a thinking run is
-        # active or imminently due (think first, then unload).
-        try:
-            from vaf.core.last_interaction import get_last_interaction as _gli
-            _li = _gli(None)
-            user_away_min = ((time.time() - float(_li["ts"])) / 60.0) if (_li and _li.get("ts")) else float("inf")
-        except Exception:
-            user_away_min = float("inf")
+        # Unified "user really away" signal = the local user is idle past the unload window, using the
+        # SAME alias-merged per-user idle logic the thinking run uses (the local admin is logical None).
+        # NOTE: do NOT read a single scope key here — get_last_interaction(None) only reads "default",
+        # which missed the real admin scope and unloaded the model while the user was actively chatting.
         unload_idle_min = float(Config.get("model_unload_idle_minutes", 30) or 30)
-        really_away = user_away_min >= unload_idle_min
+        try:
+            from vaf.core.thinking_mode import get_idle_user_scope_ids as _idle_ids
+            really_away = None in _idle_ids(unload_idle_min)
+        except Exception:
+            really_away = False   # fail safe: keep the model loaded
+        # Never unload while a thinking run is active or imminently due (think first, then unload).
         try:
             from vaf.core.thinking_mode import should_defer_model_unload as _sdmu
             thinking_defer = bool(_sdmu())
@@ -719,7 +718,7 @@ def check_activity_loop(update_icon_callback):
                     or (not had_web and time_since_last > tray_context.idle_timeout)
                 )
                 if really_away or (no_web and ws_idle and not telegram_grace):
-                    why = f"user away {user_away_min:.0f}min" if really_away else f"ws idle {tray_context.idle_timeout}s"
+                    why = f"user away >{unload_idle_min:.0f}min" if really_away else f"ws idle {tray_context.idle_timeout}s"
                     print(f"Idle ({why}) reached. Unloading model...")
                     log("Tray", f"Idle ({why}) reached. Unloading model (loaded={is_loaded}).")
                     server_mgr.stop_server(force_external=True) # We own it effectively here

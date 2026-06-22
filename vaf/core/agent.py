@@ -5379,6 +5379,9 @@ class Agent:
         self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
         self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
         self._thinking_force_progress = bool(self._force_tool_choice)
+        # Reset the thinking-reply context per turn so it persists across ALL generations of THIS turn
+        # (set below from waiting_for_reply) but never leaks into the next turn.
+        self._thinking_reply_context = None
         
         try:
             append_domain_log("backend", "chat_step_start")
@@ -9247,7 +9250,11 @@ class Agent:
         # the [Context: ...] text never appears in WebUI chat bubbles.
         _thinking_ctx = getattr(self, "_thinking_reply_context", None)
         if _thinking_ctx:
-            self._thinking_reply_context = None  # consume once
+            # Inject for EVERY generation of this turn — do NOT consume here. A reply turn can run
+            # multiple generations (the first may make a tool call, then a second produces the answer);
+            # consuming on the first left the answer generation context-less (observed: background agent
+            # asked about WM dates, user replied, main agent answered "that's vague"). It is reset per
+            # turn at chat_step entry instead.
             # Find index of the last user message
             _last_user_idx = None
             for _i in range(len(messages) - 1, -1, -1):

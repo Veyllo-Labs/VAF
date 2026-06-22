@@ -1174,6 +1174,35 @@ def deliver_tracked_message(
     if not message:
         return None
     user_scope_id = user_scope_id or get_local_admin_scope_id()
+
+    # ONE message per run, enforced HERE (not just between turns): the weak local model often calls
+    # ask_user several times within a SINGLE chat_step (the duplicate emits the user saw twice). The
+    # loop-level run_has_open_request guard only runs BETWEEN turns, so it cannot stop an intra-turn
+    # repeat — this is the only place that can. Applies to every message type (a confirm clears the
+    # one item this run processed; the next run handles the next).
+    if run_has_open_request(user_scope_id):
+        logger.info("Thinking: a message was already delivered this run — duplicate suppressed")
+        return None
+
+    # MESSAGE GATE: a FREE message (no source note/todo) is governed by the per-run mode. Housekeeping
+    # messages (carrying a source_note_id/source_todo_id) are always exempt — their evidence IS the item.
+    #   off      -> block (gather/forced-resolution: a free message there is premature/generic, e.g. the
+    #               turn-0 "no tasks, I'm ready when you need me" floskel)
+    #   grounded -> proactive suggestion: deliver only if details quote real retrieved memory/history
+    #   open     -> get-to-know question: allowed (a question states no fact, cannot fabricate)
+    if not (source_note_id or "").strip() and not (source_todo_id or "").strip():
+        _mode = get_proactive_mode(user_scope_id)
+        if _mode == "off":
+            logger.info("Thinking: free message blocked (not in a proactive step) — premature/generic")
+            return None
+        if _mode == "grounded":
+            from vaf.core.config import Config
+            _min_chars = int(Config.get("thinking_proactive_evidence_min_chars", 24) or 24)
+            if not _evidence_grounded(details or "", get_run_evidence(user_scope_id), _min_chars):
+                logger.info("Thinking: proactive suggestion dropped — details not grounded in retrieved memory/history")
+                return None
+        # _mode == "open" -> allowed (get-to-know question)
+
     run_seq = current_run_seq(user_scope_id)
     req = treq.add_request(
         user_scope_id,
@@ -1202,6 +1231,89 @@ def run_has_open_request(user_scope_id: Optional[str]) -> bool:
     from vaf.core import thinking_requests as treq
     cur = current_run_seq(user_scope_id)
     return bool(treq.list_requests(user_scope_id, within_runs=1, current_run_seq=cur))
+
+
+# --- Proactive evidence pool (Stufe 2) ---------------------------------------------------------------
+# The real memory/history retrieved THIS run, so the evidence-gate can verify a PROACTIVE suggestion is
+# grounded in it (not fabricated by the weak local model). Per-scope, in-memory, cleared at run end. The
+# per-run message MODE governs what a FREE (no source note/todo) message is allowed to do:
+#   "off"      -> block free messages (gather/forced-resolution: a free message there is premature/generic)
+#   "grounded" -> proactive grounded step: deliver only if details quote real retrieved memory/history
+#   "open"     -> get-to-know step: a question states no fact, so it is allowed without evidence
+# Housekeeping messages (carrying a source_note_id/source_todo_id) are always exempt.
+_RUN_EVIDENCE: Dict[str, str] = {}
+_PROACTIVE_MODE: Dict[str, str] = {}
+_RUN_EVIDENCE_MAX = 20000  # keep the tail bounded
+
+
+def set_run_evidence(user_scope_id: Optional[str], text: str) -> None:
+    _RUN_EVIDENCE[_key(user_scope_id)] = (text or "")[:_RUN_EVIDENCE_MAX]
+
+
+def add_run_evidence(user_scope_id: Optional[str], text: str) -> None:
+    """Append real retrieved evidence (e.g. a memory_search result) to this run's pool."""
+    text = (text or "").strip()
+    if not text:
+        return
+    k = _key(user_scope_id)
+    combined = (_RUN_EVIDENCE.get(k, "") + "\n" + text)
+    _RUN_EVIDENCE[k] = combined[-_RUN_EVIDENCE_MAX:]
+
+
+def get_run_evidence(user_scope_id: Optional[str]) -> str:
+    return _RUN_EVIDENCE.get(_key(user_scope_id), "")
+
+
+def clear_run_evidence(user_scope_id: Optional[str]) -> None:
+    _RUN_EVIDENCE.pop(_key(user_scope_id), None)
+    _PROACTIVE_MODE.pop(_key(user_scope_id), None)
+
+
+def set_proactive_mode(user_scope_id: Optional[str], mode: str) -> None:
+    """mode in {'off','grounded','open'} — governs delivery of a FREE (no source) message this run."""
+    _PROACTIVE_MODE[_key(user_scope_id)] = mode if mode in ("off", "grounded", "open") else "off"
+
+
+def get_proactive_mode(user_scope_id: Optional[str]) -> str:
+    return _PROACTIVE_MODE.get(_key(user_scope_id), "off")
+
+
+def _normalize_ev(s: str) -> str:
+    import re
+    return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+
+def _evidence_grounded(details: str, pool: str, min_chars: int) -> bool:
+    """True if `details` quotes a verbatim (whitespace/case-normalized) substring of length >= min_chars
+    from `pool` — proof a proactive suggestion is grounded in REAL retrieved memory/history, not invented.
+    Short details (< min_chars) must appear in full."""
+    d = _normalize_ev(details)
+    p = _normalize_ev(pool)
+    if not d or not p:
+        return False
+    n = max(8, int(min_chars or 24))
+    if len(d) < n:
+        return d in p
+    for i in range(0, len(d) - n + 1):
+        if d[i:i + n] in p:
+            return True
+    return False
+
+
+def proactive_rate_limited(user_scope_id: Optional[str], current_run_seq_val: int, min_runs: int) -> bool:
+    """True if a PROACTIVE request (a tracked request with no source note/todo) was raised within the last
+    `min_runs` runs — used to suppress proactive outreach and avoid idle-spam."""
+    if min_runs <= 0:
+        return False
+    from vaf.core import thinking_requests as treq
+    try:
+        recent = treq.list_requests(user_scope_id, within_runs=min_runs, current_run_seq=current_run_seq_val)
+    except Exception:
+        return False
+    for r in recent:
+        if not (r.get("source_note_id") or "").strip() and not (r.get("source_todo_id") or "").strip():
+            return True
+    return False
 
 
 def deliver_thinking_done_fallback(
@@ -1307,20 +1419,70 @@ def _turn_used_progress_tool(history_slice: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _deadline_status(due_at: str) -> str:
+    """Deterministic deadline context for the forced todo prompt (so the weak model doesn't have to do
+    date math): 'OVERDUE — …', 'due TODAY …', 'due TOMORROW …', 'due in N days …', or '' if no/unparseable
+    date. Compares by calendar date."""
+    due_at = (due_at or "").strip()
+    if not due_at:
+        return ""
+    try:
+        from datetime import datetime, date as _date
+        try:
+            d = datetime.fromisoformat(due_at).date()
+        except ValueError:
+            d = _date.fromisoformat(due_at[:10])
+        delta = (d - datetime.now().date()).days
+    except Exception:
+        return ""
+    if delta < 0:
+        return f"OVERDUE — the deadline ({due_at}) is {-delta} day(s) in the PAST"
+    if delta == 0:
+        return f"due TODAY ({due_at})"
+    if delta == 1:
+        return f"due TOMORROW ({due_at})"
+    return f"due in {delta} days ({due_at})"
+
+
 def _build_forced_item_prompt(item: Dict[str, Any]) -> str:
     """The custom prompt for a FORCED-RESOLUTION node: it names exactly one open item and is paired with
     tool_choice='required' + gather tools disabled, so the model cannot search or write prose — it must
-    emit the ask_user/delete tool call for THIS item."""
+    emit a decisive tool call for THIS item. A NOTE → ask_user (help/question) or delete. A TODO → turn it
+    into an automation: a low-risk REMINDER built autonomously (create_automation + clear the todo), or an
+    ACTION automation proposed via ask_user. The deadline is given as a deterministic status; an OVERDUE
+    todo is asked-about, not scheduled into the future; existing automations must not be duplicated."""
     iid = (item.get("id") or "").strip()
     label = (item.get("label") or "").strip() or "(no text)"
     if item.get("kind") == "todo":
+        due = (item.get("due_at") or "").strip()
+        status = _deadline_status(due)
+        due_ctx = f" {status}." if status else " No fixed deadline."
+        if status.startswith("OVERDUE"):
+            return (
+                f"Resolve the user's todo NOW — todo [{iid}]: \"{label}\".{due_ctx} The deadline has PASSED, "
+                "so do NOT schedule a future reminder. Emit ONE tool call this turn (no prose, no searching):\n"
+                f"- Ask whether it is still relevant: ask_user(message=\"<'{label}' war fällig {due} — ist das "
+                f"noch aktuell, soll ich helfen?>\", source_todo_id=\"{iid}\").\n"
+                f"- OR, if it is clearly done/obsolete, just clear it: delete_automation_todo(todo_id=\"{iid}\").\n"
+                "Emit the tool call now."
+            )
+        rem_prompt = f"Remind the user: {label}" + (f" (due {due})" if due else "")
+        ask_msg = "Soll ich dafür eine Automation einrichten" + (f", die bis {due} läuft?" if due else "?")
         return (
-            f"Resolve the user's todo NOW — todo [{iid}]: \"{label}\". Emit EXACTLY ONE tool call this "
-            "turn (no prose, no searching — gathering is disabled):\n"
-            f"- If it is done, call delete_automation_todo(todo_id=\"{iid}\").\n"
-            f"- If it needs the user's decision, call ask_user(message=\"<one specific question in the "
-            f"user's language>\", source_todo_id=\"{iid}\").\n"
-            "Emit the tool call now."
+            f"Resolve the user's todo NOW — todo [{iid}]: \"{label}\".{due_ctx} A todo is a task to turn "
+            "into an AUTOMATION so it isn't forgotten; use the deadline to choose WHEN to schedule it. You "
+            "already have the list of existing automations — do NOT create one that DUPLICATES an existing "
+            "automation. Resolve it this turn (no prose, no searching — gathering is disabled):\n"
+            f"- REMINDER (just notify the user near the deadline) → build it YOURSELF, then clear the todo: "
+            f"create_automation(name=\"<short name>\", prompt=\"{rem_prompt}\", frequency=\"<once|daily|"
+            f"weekly|monthly>\", time=\"HH:MM\") — pick the frequency/time that fits the deadline — THEN "
+            f"delete_automation_todo(todo_id=\"{iid}\").\n"
+            f"- ACTION automation (it would DO something externally — send a mail, run a task, change "
+            f"files) → do NOT build it yourself: ask_user(message=\"{ask_msg}\", proposed_action=\"create "
+            f"automation for: {label}\", source_todo_id=\"{iid}\").\n"
+            f"- If an existing automation ALREADY covers this todo, just clear it: "
+            f"delete_automation_todo(todo_id=\"{iid}\").\n"
+            "Emit the tool call(s) now."
         )
     return (
         f"Resolve the user's note NOW — note [{iid}]: \"{label}\". A note is a request for help. Emit "
@@ -1333,21 +1495,100 @@ def _build_forced_item_prompt(item: Dict[str, Any]) -> str:
         "Emit the ask_user (or delete) tool call now."
     )
 
-# Floor clear: no open notes/todos remain. Optionally do ONE piece of proactive upkeep from EXISTING
-# signals (Stufe 1). Evidence-gated to avoid noise; silence is fine.
+def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> str:
+    """Deterministically pull a representative sample of the user's REAL memories for the proactive step.
+    The weak local model often never searches on its own, and the forced grounding turn cannot gather —
+    so the run does the retrieval in code: a few targeted queries aimed at proactive value (recurring
+    routines, current work, preferences) -> a deduped, length-bounded digest of real memory snippets. The
+    model is shown this digest AND may still memory_search ONCE itself for specifics; it then quotes ONE
+    snippet verbatim (the evidence-gate checks against the same text, which is seeded into the pool)."""
+    try:
+        from vaf.core.config import Config
+        if not Config.get("memory_enabled", True):
+            return ""
+        from vaf.memory.rag import run_memory_search_sync
+        from uuid import UUID as _UUID
+        task_scope = None
+        if user_scope_id:
+            try:
+                task_scope = _UUID(str(user_scope_id))
+            except (ValueError, TypeError):
+                task_scope = None
+        k = max(2, min(8, int(Config.get("thinking_proactive_memory_k", 4) or 4)))
+        queries = [
+            "a recurring routine or habit the user does regularly — daily or weekly, a repetitive task",
+            "what the user is currently working on — their project, goal or focus",
+            "the user's preferences, interests, likes and recurring needs",
+        ]
+        seen: set = set()
+        chunks: List[str] = []
+        for q in queries:
+            try:
+                res = run_memory_search_sync(
+                    query=q, k=k, user_scope_id=task_scope, caller="thinking_proactive"
+                ) or ""
+            except Exception:
+                res = ""
+            for part in res.split("---"):
+                p = part.strip()
+                if not p:
+                    continue
+                key = _normalize_ev(p)[:160]
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                chunks.append(p)
+        return ("\n---\n".join(chunks))[:6000]
+    except Exception:
+        return ""
+
+
+# Floor clear: PROACTIVE intelligence (Stufe 2). Mine memory + recent history for ONE genuinely useful
+# thing — prefer an AUTOMATION that takes recurring work off the user. The run hands the model a digest of
+# REAL retrieved memories AND lets it memory_search ONCE itself for specifics. Strictly evidence-grounded:
+# the suggestion is dropped unless `details` quotes the real memory it is based on. Forced (no prose churn).
 _PROMPT_PROACTIVE = (
-    "Your housekeeping is clear — no open notes or todos remain. You MAY do ONE piece of genuinely useful "
-    "upkeep, but only from EXISTING signals (a tracked interest needing a status check, a time-sensitive "
-    "fact that affects a known plan, profile hygiene). EVIDENCE RULE: only act/contact if you can name the "
-    "memory, note, or conversation it is based on — never a generic 'can I help?'. Act > ask; at most one "
-    "message; silence is perfectly fine. If nothing is genuinely useful right now, call "
-    "thinking_done('Nothing actionable after checking notes, todos and recent context.')."
+    "Your housekeeping is clear — no open notes or todos. Now think proactively for the user. Below are "
+    "REAL memories retrieved for you; you may ALSO call memory_search ONCE with a precise query to dig into "
+    "ONE specific thing before you decide. Then find ONE genuinely useful thing they may not have thought "
+    "of. In priority order:\n"
+    "1. AUTOMATION OPPORTUNITY (best — take recurring work off them): is there something the user does or "
+    "asks for REPEATEDLY (evidence in the memories) that is NOT already covered by an existing automation "
+    "(you saw the list)? → propose automating it: ask_user(message=\"<e.g. 'Du fragst fast jeden Morgen "
+    "nach dem Wetter — soll ich dir das automatisch um 7:00 schicken?'>\", proposed_action=\"create "
+    "automation: <what + when>\", details=\"<QUOTE the exact repeated memory it is based on>\"). On yes, the "
+    "main agent builds it.\n"
+    "2. ELSE one other helpful, non-obvious suggestion grounded in the real memories → ask_user("
+    "message=\"<specific>\", details=\"<QUOTE the exact memory>\").\n"
+    "3. ELSE — only if you genuinely have NOTHING grounded — call thinking_done('Nothing grounded.') and "
+    "you will then ask the user a get-to-know question instead.\n"
+    "HARD RULES: at most ONE memory_search (for specifics), then EXACTLY ONE decisive tool call (ask_user "
+    "OR thinking_done) — no prose. You MUST put a VERBATIM quote of a real memory in `details` (paraphrasing "
+    "or inventing is rejected and dropped). Never generic ('can I help?'); never repeat a recent/declined "
+    "question."
+)
+
+# Forced fallback: nothing grounded to suggest -> still NOT silence. Ask ONE question to get to know the
+# user better (so future runs can help). A question states no fact, so it is not evidence-gated.
+_PROMPT_GET_TO_KNOW = (
+    "You found nothing concrete to suggest from memory right now — but silence is NOT the goal. Ask the "
+    "user ONE specific, friendly question to get to know them better, so you can help them more next time: "
+    "their current focus or work, a routine they would like automated, a recurring task, or an interest. "
+    "Emit EXACTLY ONE tool call: ask_user(message=\"<the question, in the user's language>\"). Make it "
+    "specific and natural (NOT 'how can I help?'); never repeat a recent or declined question. No other tools."
+)
+
+# Floor clear but proactive disabled / rate-limited: just finish.
+_PROMPT_NOTHING_TODO = (
+    "Your housekeeping is clear and there is nothing proactive to raise right now. Call "
+    "thinking_done('Nothing actionable.')."
 )
 
 
 def _get_turn_prompt(turn: int, ledger_clear: bool = True) -> str:
     """Turn 0 = THINKING_PROMPT (gather + Stufe-0). Turns 1+ are content-driven: keep doing housekeeping
-    while the ledger has unresolved items, otherwise climb to the proactive (Stufe-1) prompt."""
+    while the ledger has unresolved items, otherwise the proactive scan (the loop decides whether proactive
+    is allowed; see the run loop)."""
     if turn == 0:
         return THINKING_PROMPT
     return _PROMPT_PROACTIVE if ledger_clear else _PROMPT_HOUSEKEEPING
@@ -1698,17 +1939,52 @@ def _run_thinking_for_user(
             _gate_enabled = bool(Config.get("thinking_gate_enabled", True))
             _cur_seq = current_run_seq(user_scope_id)
             _run_ledger = _tledger.build_ledger(user_scope_id) if _gate_enabled else []
+            # An item already asked within this many runs counts as handled-for-now: the forced node does
+            # not re-ask it and the completion gate does not block on it (it re-surfaces after the window).
+            _recent_runs = max(1, int(Config.get("thinking_recent_request_runs", 6) or 6))
             _gate_nudged = False
             _no_progress_turns = 0      # consecutive turns with no decisive (act/ask/clear) tool
             _force_decision_pending = False
 
+            # Proactive (Stufe 2): seed the evidence pool with this run's real retrieved memory + recent
+            # user history, so a proactive suggestion can be verified as grounded (not fabricated). The
+            # agent's memory_search calls add to the pool live (see agent.chat_step). Phase off by default.
+            _proactive_enabled = bool(Config.get("thinking_proactive_enabled", True))
+            _proactive_min_runs = int(Config.get("thinking_proactive_min_runs", 6) or 6)
+            # Proactive grounding turns: 0,1 = grounded (model also searches itself); 2 = get-to-know; 3 = done.
+            _proactive_step = 0
+            _proactive_digest = ""    # real memories retrieved in code, shown to the model + in the pool
+            clear_run_evidence(user_scope_id)
+            set_proactive_mode(user_scope_id, "off")
+            try:
+                _seed = (memory_context or "")
+                _user_hist = [str(m.get("content") or "") for m in (getattr(agent, "history", []) or [])
+                              if isinstance(m, dict) and m.get("role") == "user"]
+                if _user_hist:
+                    _seed = _seed + "\n" + "\n".join(_user_hist[-12:])
+                set_run_evidence(user_scope_id, _seed)
+            except Exception:
+                pass
+            # Hand the proactive step REAL memories: the weak model rarely searches on its own and the
+            # forced grounding turn cannot gather, so retrieve a targeted sample in code. Seeded into the
+            # evidence pool so a verbatim quote of it passes the gate; also injected into the prompt below.
+            if _proactive_enabled:
+                try:
+                    _proactive_digest = _build_proactive_memory_digest(agent, user_scope_id)
+                    if _proactive_digest:
+                        add_run_evidence(user_scope_id, _proactive_digest)
+                except Exception:
+                    _proactive_digest = ""
+
             for turn in range(max_turns):
                 _unresolved = (
-                    _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq)
+                    _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq, recent_runs=_recent_runs)
                     if (_gate_enabled and _run_ledger) else []
                 )
                 _ledger_clear = not _unresolved
                 _force_tc = None
+                _allow_search = False   # proactive grounding turns let the model memory_search itself
+                set_proactive_mode(user_scope_id, "off")  # default: block free messages; proactive branch opens it
                 if turn == 0:
                     # Turn 0: gather (THINKING_PROMPT) — read the notes/todos/memory before acting.
                     prompt = _get_turn_prompt(0, _ledger_clear)
@@ -1722,9 +1998,32 @@ def _run_thinking_for_user(
                     prompt = _PROMPT_FORCE_DECISION
                     _force_decision_pending = False
                     _force_tc = "required"
+                elif not _proactive_enabled or proactive_rate_limited(user_scope_id, _cur_seq, _proactive_min_runs):
+                    # Floor clear but proactive disabled or rate-limited -> just finish.
+                    prompt = _PROMPT_NOTHING_TODO
+                elif _proactive_step < 2:
+                    # PROACTIVE grounding (FORCED, two passes): find ONE grounded, useful suggestion (esp. an
+                    # automation opportunity). The model is handed a digest of REAL memories AND may
+                    # memory_search ONCE itself for specifics (allow_memory_search) — still read-capped, so no
+                    # churn; everything else stays blocked by the forced node. Two passes so a pass-1 search
+                    # can be turned into a grounded ask_user in pass 2. ask_user is evidence-gated; if nothing
+                    # grounds after both, step 2 asks a get-to-know question (silence is NOT the end).
+                    _digest_block = (
+                        "\n\nREAL MEMORIES about the user (quote ONE verbatim in `details`; or memory_search "
+                        "ONCE for specifics first):\n" + _proactive_digest
+                    ) if _proactive_digest else ""
+                    prompt = _PROMPT_PROACTIVE + _digest_block
+                    _force_tc = "required"
+                    _allow_search = True
+                    set_proactive_mode(user_scope_id, "grounded")
+                    _proactive_step += 1
                 else:
-                    # Floor clear: optional proactive upkeep (Stufe 1) — NOT forced; silence is fine.
-                    prompt = _PROMPT_PROACTIVE
+                    # GET-TO-KNOW (FORCED): nothing grounded -> still ask ONE get-to-know question (no
+                    # evidence-gate; a question states no fact). Always ends the run with a question.
+                    prompt = _PROMPT_GET_TO_KNOW
+                    _force_tc = "required"
+                    set_proactive_mode(user_scope_id, "open")
+                    _proactive_step = 3
                 _turn_hist_start = len(getattr(agent, "history", []) or [])
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(
@@ -1733,6 +2032,7 @@ def _run_thinking_for_user(
                     memory_context=mem_ctx,
                     thinking_mode=True,
                     force_tool_choice=_force_tc,
+                    allow_memory_search=_allow_search,
                 )
                 current_history = (getattr(agent, "history", []) or [])
                 run_history = _history_delta(current_history, run_history_start)
@@ -1804,7 +2104,7 @@ def _run_thinking_for_user(
 
                 if _history_has_thinking_done(run_history):
                     _unresolved = (
-                        _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq)
+                        _tledger.unresolved_items(user_scope_id, _run_ledger, _cur_seq, recent_runs=_recent_runs)
                         if (_gate_enabled and _run_ledger) else []
                     )
                     if _unresolved and not _gate_nudged:
@@ -1829,6 +2129,14 @@ def _run_thinking_for_user(
                             len(_unresolved),
                         )
                         break
+                    # Floor clear, but silence is NOT the end: if the proactive flow has not yet asked the
+                    # user anything (no grounded suggestion delivered, get-to-know step not done), keep going
+                    # so the run still asks ONE question (grounded suggestion or a get-to-know question).
+                    if (_proactive_enabled
+                            and not proactive_rate_limited(user_scope_id, _cur_seq, _proactive_min_runs)
+                            and _proactive_step < 3):
+                        logger.info("Thinking: floor clear but proactive question still pending (step %d) — continuing", _proactive_step)
+                        continue
                     logger.info("Thinking: breaking loop (thinking_done detected, ledger clear)")
                     break
 
@@ -2009,6 +2317,7 @@ def _run_thinking_for_user(
     finally:
         os.environ.pop("VAF_THINKING_MODE", None)
         os.environ.pop("VAF_THINKING_SCOPE_ID", None)
+        clear_run_evidence(user_scope_id)   # drop the proactive evidence pool + phase flag (no cross-run leak)
         _set_last_run_completed(user_scope_id)
         try:
             from vaf.core.user_notifications import append_notification

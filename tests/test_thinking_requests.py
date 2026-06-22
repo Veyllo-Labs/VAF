@@ -130,6 +130,7 @@ def test_thinking_done_does_not_double_send_after_ask_user(monkeypatch, tmp_path
     from vaf.tools.ask_user import AskUserTool
     from vaf.tools.thinking_done import ThinkingDoneTool
     scope = "user-dbl"
+    tm.set_proactive_mode(scope, "open")   # allow the first free message; then test the double-send guard
     AskUserTool().run(message="Erste Frage?", user_scope_id=scope)
     assert len(tr.list_requests(scope, status="asked")) == 1
     out = ThinkingDoneTool().run(message="Zweite Frage?", user_scope_id=scope)

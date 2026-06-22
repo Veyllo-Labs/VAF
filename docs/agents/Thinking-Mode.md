@@ -52,7 +52,27 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   (e.g. `web_search`) rather than invent them.
 - **Don't re-ask:** every run injects the requests raised in the last `thinking_recent_request_runs`
   runs (default 6) with their status, so the agent does not repeat a question it already asked, follows
-  up on `confirmed` ones, and never re-proposes a `declined` one.
+  up on `confirmed` ones, and never re-proposes a `declined` one. This is also enforced at the gate
+  level: `thinking_ledger.item_resolved(..., recent_runs=N)` treats an item with a request raised in the
+  last N runs as handled-for-now, so the forced-resolution node does not re-ask it (and the completion
+  gate does not block on it) while the user has not yet replied; it re-surfaces after the window.
+- **Multiple notes/todos:** the ledger lists **todos before notes** (a todo usually converts into an
+  automation — an act with no message; a note usually resolves by sending help/a question, which ends the
+  run — max 1 message). The forced node resolves the first open item each turn; act continues to the next
+  item, an `ask_user` ends the run. So a run does as much act-able work as it can, then asks at most once,
+  and the remaining items are handled in subsequent runs.
+- **Todos become automations:** a todo is a task with a `due_at` deadline that the agent should turn into
+  an automation so it isn't forgotten. The forced node gives the agent the deadline as **scheduling
+  context** and resolves the todo by:
+  - **Reminder** (just notify the user near the deadline) → the agent builds it **autonomously**
+    (`create_automation(frequency, time, prompt="Remind …")`, schedule chosen to fit the deadline) and then
+    clears the todo (`delete_automation_todo`).
+  - **Action automation** (does something externally visible) → the agent does **not** build it; it asks
+    via `ask_user(..., proposed_action=, source_todo_id=)` and the main agent builds it on confirm.
+  - **Known limitation:** `create_automation` schedules by time-of-day/frequency (once = next occurrence),
+    not a specific future date (`automation.py calculate_next_run`), so a one-time reminder cannot be
+    pinned to an arbitrary deadline date — the agent picks from `once/daily/weekly/monthly` and names the
+    real deadline in the reminder text. A date-aware one-time trigger is a possible future enhancement.
 - **Processed notes/todos disappear:** automation **todos** marked `done` and automation **notes**
   marked `handled` are filtered out of the gather **and** the user's list (`list_notes` excludes handled
   by default), so a processed item never re-surfaces and the agent cannot loop on it. If a question
@@ -89,6 +109,10 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_read_cap_per_tool` | `3` | Nth call of a read tool (`memory_search` / `web_search` / `list_*`) within one step is blocked. |
 | `thinking_no_progress_turns` | `5` | After this many turns with no decisive (act/ask/clear) tool, force a one-tool decision (no more searching). The run's turn budget is sized to give this room. |
 | `model_unload_idle_minutes` | `30` | **Desktop only.** Unload the local model after the user is *really* away (no message) this long — even with the WebUI open. Server/headless never unloads (no watchdog). |
+| `thinking_proactive_enabled` | `true` | When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2). |
+| `thinking_proactive_evidence_min_chars` | `24` | Evidence-gate: a proactive suggestion's `details` must quote ≥ this many chars verbatim from real retrieved memory/history, or it is dropped. |
+| `thinking_proactive_min_runs` | `6` | Min runs between proactive outreaches (anti-spam). |
+| `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
 
@@ -109,6 +133,54 @@ The thinking-mode prompt allows the agent to perform **at most one** targeted we
 ## Proactive profile evolution (`save_thinking_suggestion`)
 
 The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propose updates to the user profile (e.g. *"User cares about package tracking"*). Suggestions are stored per user and presented in Settings for review; the agent does not overwrite identity or preferences without the user approving. See `vaf/tools/thinking_suggestion.py` and `vaf/core/thinking_suggestions.py`.
+
+---
+
+## Proactive intelligence (Stufe 2)
+
+When the housekeeping floor is clear (no open notes/todos) and proactivity is enabled
+(`thinking_proactive_enabled`) and not rate-limited, the run runs a **forced proactive flow** —
+**silence is not the goal**, the run always ends by asking the user *something*:
+
+- **Real memories are handed to the model (not left to the weak 4B to fetch):** before the grounded
+  turns, `_build_proactive_memory_digest` retrieves a targeted sample of the user's REAL memories **in
+  code** — several queries aimed at proactive value (recurring routine, current work, preferences),
+  `thinking_proactive_memory_k` (default **4**) each, deduped. This is necessary because the local model
+  rarely searches on its own and the forced grounding turn cannot gather. The digest is injected into the
+  grounded prompt AND seeded into the evidence pool (so a verbatim quote of it passes the gate).
+
+1. **Grounded suggestion (forced, evidence-gated — TWO passes):** find ONE genuinely useful thing —
+   prioritising an **automation opportunity** (something the user does/asks for *repeatedly*, not already
+   covered by an existing automation → `ask_user(message="…", proposed_action="create automation: …",
+   details="<quote>")`; on "yes" the **main agent builds the automation**). The turn is forced
+   (`tool_choice="required"`) so the weak model can't churn on prose — but, unlike the housekeeping
+   forced node, **`memory_search` is allowed here** (`allow_memory_search` → `_thinking_allow_search`):
+   the model may dig into ONE specific thing itself (still read-capped, so no churn), and its results are
+   added to the evidence pool live. Two passes so a pass-1 search can become a grounded `ask_user` in
+   pass 2. The `ask_user` is evidence-gated; otherwise it falls to the get-to-know question.
+2. **Get-to-know question (forced fallback, NOT gated):** if the grounded passes produced nothing, the run
+   does **not** finish silently — it asks ONE specific question to get to know the user better (their
+   focus/work, a routine they'd like automated, an interest), so future runs can help. A question states
+   no fact, so it is exempt from the evidence-gate. The completion gate keeps the run from finishing while
+   this is still pending (`_proactive_step < 3`).
+
+- **Message gate (3 modes, set per turn in `deliver_tracked_message`):** a FREE message (no
+  `source_note_id`/`source_todo_id`) is governed by the run's mode (`thinking_mode.set_proactive_mode`):
+  - **`off`** (gather / forced-resolution): a free message is **blocked** — this kills the generic turn-0
+    floskel ("no tasks, I'm ready when you need me") that previously slipped through before the proactive
+    flow even ran.
+  - **`grounded`** (proactive grounding passes): delivered only if `details` quote a verbatim, normalized
+    substring of ≥ `thinking_proactive_evidence_min_chars` from this run's REAL retrieved memory/history
+    (the per-run **evidence pool** = turn-0 `memory_context` + the pre-fetched proactive digest + recent
+    user messages + every `memory_search` result captured live, including the model's own searches).
+    Otherwise silently dropped — anti-fabrication.
+  - **`open`** (get-to-know step): delivered (a question states no fact, so it cannot fabricate).
+  Housekeeping deliveries (carrying a source id) are always exempt. Better silent/blocked than fabricated.
+- **Anti-spam:** at most one proactive outreach per `thinking_proactive_min_runs` (a proactive request is
+  one with no source ids); the existing recent-requests + declined-questions prompts prevent repeats.
+- **Honest limit:** with the local 4B the *cleverness* is model-bound — realistic output is surfacing a
+  real, citable thing + one concrete step, kept safe by the strict gate (a stronger thinking model would
+  raise quality; not enabled).
 
 ---
 

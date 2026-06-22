@@ -93,8 +93,14 @@ class AskUserTool(BaseTool):
             username=kwargs.get("username"),
             details=kwargs.get("details"),
         )
-        if not req:  # pragma: no cover - guarded above
-            return "Error: message must not be empty."
+        if not req:
+            # message was non-empty (checked above) but delivery returned nothing -> the proactive
+            # evidence-gate dropped it (details did not quote real retrieved memory/history).
+            return (
+                "Not sent: a proactive suggestion must quote the real memory/message it is based on in "
+                "`details` (paraphrasing or inventing is rejected). If you have nothing grounded, call "
+                "thinking_done — you will then ask the user a get-to-know question instead."
+            )
         if req.get("delivered"):
             return (
                 f"Message delivered to the user (tracked as request {req['id']}). Stop now and wait for "

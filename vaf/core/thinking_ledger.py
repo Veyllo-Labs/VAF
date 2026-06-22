@@ -28,10 +28,25 @@ _MAX_NUDGE_ITEMS = 5  # name at most this many items in a single gate nudge
 def build_ledger(user_scope_id: Optional[str]) -> List[LedgerItem]:
     """Snapshot the open notes/todos at run START. Deterministic, no model judgment.
 
-    The caller MUST pass an already-resolved scope (None -> admin done upstream)."""
+    TODOS are listed BEFORE notes: a todo can often be done-and-deleted without messaging the user,
+    while a note usually resolves by sending help/a question (which ends the run — max 1 message). Doing
+    the act-able todos first means a run gets the most done before that one message-stop, instead of an
+    act-able todo being blocked behind a note that asks. The caller MUST pass an already-resolved scope
+    (None -> admin done upstream)."""
     from vaf.core import automation_planner as ap
 
     ledger: List[LedgerItem] = []
+    try:
+        for t in ap.list_todos(user_scope_id):
+            tid = (t.get("id") or "").strip()
+            if not tid or bool(t.get("done")):
+                continue
+            label = (t.get("text") or "").strip().replace("\n", " ")[:80]
+            # due_at is the deadline — passed to the forced prompt as planning context for the agent to
+            # pick a sensible automation schedule.
+            ledger.append({"kind": "todo", "id": tid, "label": label, "due_at": (t.get("due_at") or "").strip() or None})
+    except Exception:
+        pass
     try:
         for n in ap.list_notes(user_scope_id, include_handled=False):
             nid = (n.get("id") or "").strip()
@@ -41,24 +56,17 @@ def build_ledger(user_scope_id: Optional[str]) -> List[LedgerItem]:
             ledger.append({"kind": "note", "id": nid, "label": label})
     except Exception:
         pass
-    try:
-        for t in ap.list_todos(user_scope_id):
-            tid = (t.get("id") or "").strip()
-            if not tid or bool(t.get("done")):
-                continue
-            label = (t.get("text") or "").strip().replace("\n", " ")[:80]
-            ledger.append({"kind": "todo", "id": tid, "label": label})
-    except Exception:
-        pass
     return ledger
 
 
-def _request_covers(user_scope_id: Optional[str], current_run_seq: int, *, note_id: str = "", todo_id: str = "") -> bool:
-    """True if a tracked request was raised THIS run (within_runs=1) for the given source note/todo id."""
+def _request_covers(user_scope_id: Optional[str], current_run_seq: int, *, note_id: str = "", todo_id: str = "", within_runs: int = 1) -> bool:
+    """True if a tracked request covering this source note/todo was raised within the last `within_runs`
+    thinking runs. within_runs=1 = THIS run only; a wider window stops re-asking the same item every run
+    while the user has not replied yet."""
     from vaf.core import thinking_requests as treq
 
     try:
-        recent = treq.list_requests(user_scope_id, within_runs=1, current_run_seq=current_run_seq)
+        recent = treq.list_requests(user_scope_id, within_runs=within_runs, current_run_seq=current_run_seq)
     except Exception:
         return False
     for r in recent:
@@ -69,13 +77,16 @@ def _request_covers(user_scope_id: Optional[str], current_run_seq: int, *, note_
     return False
 
 
-def item_resolved(user_scope_id: Optional[str], item: LedgerItem, current_run_seq: int) -> bool:
-    """True if this captured ledger item has been handled during the run.
+def item_resolved(user_scope_id: Optional[str], item: LedgerItem, current_run_seq: int, recent_runs: int = 1) -> bool:
+    """True if this captured ledger item is handled (or has a pending question) and so should NOT be
+    forced/nudged again.
 
     note: id no longer in list_notes(include_handled=False) (deleted OR set_note_handled) OR a request
-          raised this run carries source_note_id == id.
-    todo: id no longer in list_todos (deleted) OR that todo's done == True OR a request raised this run
-          carries source_todo_id == id."""
+          covering source_note_id == id was raised within the last `recent_runs` runs.
+    todo: id no longer in list_todos (deleted) OR that todo's done == True OR a request covering
+          source_todo_id == id within `recent_runs` runs.
+    With recent_runs > 1 an already-asked item counts as handled-for-now, so the run neither re-asks it
+    nor is blocked from finishing while the user has not yet replied (it re-surfaces after the window)."""
     from vaf.core import automation_planner as ap
 
     kind = item.get("kind")
@@ -90,7 +101,7 @@ def item_resolved(user_scope_id: Optional[str], item: LedgerItem, current_run_se
             still_open = True
         if not still_open:
             return True
-        return _request_covers(user_scope_id, current_run_seq, note_id=iid)
+        return _request_covers(user_scope_id, current_run_seq, note_id=iid, within_runs=recent_runs)
 
     if kind == "todo":
         try:
@@ -102,14 +113,14 @@ def item_resolved(user_scope_id: Optional[str], item: LedgerItem, current_run_se
             return True
         if bool(match.get("done")):
             return True
-        return _request_covers(user_scope_id, current_run_seq, todo_id=iid)
+        return _request_covers(user_scope_id, current_run_seq, todo_id=iid, within_runs=recent_runs)
 
     return True  # unknown kind -> never block
 
 
-def unresolved_items(user_scope_id: Optional[str], ledger: List[LedgerItem], current_run_seq: int) -> List[LedgerItem]:
-    """The ledger items that are still not handled."""
-    return [it for it in (ledger or []) if not item_resolved(user_scope_id, it, current_run_seq)]
+def unresolved_items(user_scope_id: Optional[str], ledger: List[LedgerItem], current_run_seq: int, recent_runs: int = 1) -> List[LedgerItem]:
+    """The ledger items still needing action (not handled and not asked within the last `recent_runs`)."""
+    return [it for it in (ledger or []) if not item_resolved(user_scope_id, it, current_run_seq, recent_runs)]
 
 
 def build_gate_nudge(items: List[LedgerItem]) -> str:

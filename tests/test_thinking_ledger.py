@@ -93,6 +93,82 @@ def test_unresolved_items_and_gate_nudge(monkeypatch, tmp_path):
     assert len(tl.unresolved_items(scope, led, current_run_seq=1)) == 1
 
 
+def test_ledger_orders_todos_before_notes(monkeypatch, tmp_path):
+    """Act-able todos come first so a run does the most work before the one message-stop a note triggers."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-ord"
+    ap.add_note(scope, "kalt", title="heizung")
+    ap.add_todo(scope, "rechnung zahlen")
+    led = tl.build_ledger(scope)
+    assert [i["kind"] for i in led] == ["todo", "note"]
+
+
+def test_ledger_todo_carries_due_at(monkeypatch, tmp_path):
+    """A todo's deadline is captured so the forced prompt can give the agent scheduling context."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-due"
+    ap.add_todo(scope, "Bericht abgeben", due_at="2026-06-25")
+    led = tl.build_ledger(scope)
+    todo = next(i for i in led if i["kind"] == "todo")
+    assert todo["due_at"] == "2026-06-25"
+
+
+def test_forced_todo_prompt_converts_to_automation():
+    """A future TODO is resolved by turning it into an automation: reminder built autonomously
+    (create_automation + clear the todo), action proposed via ask_user. Deadline included; dedup guard."""
+    import vaf.core.thinking_mode as tm
+    from datetime import datetime, timedelta
+    future = (datetime.now() + timedelta(days=5)).date().isoformat()
+    p = tm._build_forced_item_prompt({"kind": "todo", "id": "t9", "label": "Quartalsbericht", "due_at": future})
+    assert "create_automation" in p          # reminder built autonomously
+    assert "delete_automation_todo" in p     # then clear the todo
+    assert "ask_user" in p and "source_todo_id" in p   # action -> ask
+    assert future in p                       # deadline as scheduling context
+    assert "duplicate" in p.lower()          # dedup guard against existing automations
+    # a note still uses the note path (no automation)
+    pn = tm._build_forced_item_prompt({"kind": "note", "id": "n1", "label": "wetter"})
+    assert "create_automation" not in pn and "source_note_id" in pn
+
+
+def test_forced_todo_overdue_asks_not_schedules():
+    """An OVERDUE todo (deadline in the past) must NOT be scheduled into the future — ask if still relevant."""
+    import vaf.core.thinking_mode as tm
+    from datetime import datetime, timedelta
+    past = (datetime.now() - timedelta(days=3)).date().isoformat()
+    p = tm._build_forced_item_prompt({"kind": "todo", "id": "t1", "label": "Steuer abgeben", "due_at": past})
+    assert "OVERDUE" in p or "PASSED" in p
+    assert "create_automation" not in p              # do NOT build a future reminder for a passed deadline
+    assert "ask_user" in p and "source_todo_id" in p
+    assert past in p
+
+
+def test_deadline_status_helper():
+    import vaf.core.thinking_mode as tm
+    from datetime import datetime, timedelta
+    assert tm._deadline_status("") == ""
+    assert tm._deadline_status("not-a-date") == ""
+    today = datetime.now().date().isoformat()
+    assert "TODAY" in tm._deadline_status(today)
+    assert "OVERDUE" in tm._deadline_status((datetime.now() - timedelta(days=2)).date().isoformat())
+    assert "in 4 days" in tm._deadline_status((datetime.now() + timedelta(days=4)).date().isoformat())
+
+
+def test_recent_runs_window_suppresses_reask(monkeypatch, tmp_path):
+    """An item asked in a PREVIOUS run stays 'resolved' within the recency window (no re-ask every run),
+    then re-surfaces once the window passes."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-rw"
+    n = ap.add_note(scope, "x", title="t")
+    item = {"kind": "note", "id": n["id"], "label": "t"}
+    tr.add_request(scope, "frage?", run_seq=10, source_note_id=n["id"])
+    # default recent_runs=1: a request from run 10 does NOT cover run 13 -> would re-ask
+    assert tl.item_resolved(scope, item, current_run_seq=13, recent_runs=1) is False
+    # recent_runs=6: 13-10=3 < 6 -> resolved (do NOT re-ask)
+    assert tl.item_resolved(scope, item, current_run_seq=13, recent_runs=6) is True
+    # window passed: 17-10=7 >= 6 -> unresolved again (re-surfaces)
+    assert tl.item_resolved(scope, item, current_run_seq=17, recent_runs=6) is False
+
+
 def test_empty_ledger_never_blocks(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     assert tl.build_ledger("u7") == []

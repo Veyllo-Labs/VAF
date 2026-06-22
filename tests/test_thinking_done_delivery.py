@@ -64,6 +64,7 @@ def test_fallback_does_not_double_send(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
                         lambda scope, content: (sent.append(content), "sid-1")[1])
     scope = "user-z"
+    tm.set_proactive_mode(scope, "open")   # allow the free message to deliver, then test the double-send guard
     tm.deliver_thinking_done_fallback(scope, "Erste Frage?")
     note = tm.deliver_thinking_done_fallback(scope, "Zweite Frage?")
     assert "already delivered" in note

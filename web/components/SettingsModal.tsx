@@ -277,13 +277,27 @@ const CATEGORIES = [
     { id: 'about', labelKey: 'about', icon: Globe },
 ];
 
-const PROVIDERS = [
-    { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o' },
-    { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-6', staticModels: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5'] },
-    { id: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-v4-flash', staticModels: ['deepseek-v4-flash', 'deepseek-v4-0324', 'deepseek-auto'] },
-    { id: 'google', label: 'Google', defaultModel: 'gemini-1.5-flash-latest' },
-    { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet' },
+// Provider display labels + order. The model lists (default + fallback) are sourced
+// from the backend's single source of truth (GET /api/provider-models →
+// Config.PROVIDER_MODELS). FALLBACK_PROVIDER_MODELS below is used only if that fetch
+// fails (offline / old backend). The live /v1/models list still wins in the UI.
+const PROVIDER_META: { id: string; label: string }[] = [
+    { id: 'openai', label: 'OpenAI' },
+    { id: 'anthropic', label: 'Anthropic' },
+    { id: 'deepseek', label: 'DeepSeek' },
+    { id: 'google', label: 'Google' },
+    { id: 'openrouter', label: 'OpenRouter' },
 ];
+
+type ProviderModelInfo = { default: string; fallback: string[] };
+
+const FALLBACK_PROVIDER_MODELS: Record<string, ProviderModelInfo> = {
+    openai:     { default: 'gpt-4o', fallback: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'] },
+    anthropic:  { default: 'claude-sonnet-4-6', fallback: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5'] },
+    deepseek:   { default: 'deepseek-v4-flash', fallback: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-auto'] },
+    google:     { default: 'gemini-2.5-flash', fallback: ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'] },
+    openrouter: { default: 'anthropic/claude-sonnet-4.6', fallback: ['anthropic/claude-sonnet-4.6', 'openai/gpt-4o', 'google/gemini-2.5-flash'] },
+};
 
 // Vision-capable providers (no static model lists — models are fetched dynamically via refresh button)
 const VISION_PROVIDERS: { id: string; label: string }[] = [
@@ -336,6 +350,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const tGeneral = useTranslations('settings.general');
     const tPersona = useTranslations('settings.persona');
     const tAi = useTranslations('settings.ai');
+
+    // Per-provider model metadata from the backend's single source (GET /api/provider-models).
+    // Falls back to the hardcoded map if the fetch fails (offline / older backend).
+    const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo>>(FALLBACK_PROVIDER_MODELS);
+    useEffect(() => {
+        const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+        fetch(`${base}/api/provider-models`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (d && typeof d === 'object' && !Array.isArray(d)) setProviderModels(prev => ({ ...prev, ...d })); })
+            .catch(() => {});
+    }, [apiBase]);
+    // Effective provider list for the dropdowns — labels/order from PROVIDER_META,
+    // default + fallback models from the backend (or the hardcoded fallback).
+    const PROVIDERS = useMemo(() => PROVIDER_META.map(m => ({
+        id: m.id,
+        label: m.label,
+        defaultModel: providerModels[m.id]?.default || FALLBACK_PROVIDER_MODELS[m.id]?.default || '',
+        staticModels: providerModels[m.id]?.fallback || FALLBACK_PROVIDER_MODELS[m.id]?.fallback || [],
+    })), [providerModels]);
     const tVoice = useTranslations('settings.voice');
     const tInterface = useTranslations('settings.interface');
     const tAdvanced = useTranslations('settings.advanced');

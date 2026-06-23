@@ -1,7 +1,7 @@
 """
 VAF API Backend - Provider System
 Implements structured, provider-specific interfaces for AI services.
-Uses official SDKs (openai, anthropic, google-generativeai) for robust interaction.
+Uses official SDKs (openai, anthropic, google-genai) for robust interaction.
 """
 
 import os
@@ -124,7 +124,11 @@ class OpenAIProvider(BaseAIProvider):
             return
 
         try:
-            reasoning_model = self._is_reasoning_model(model)
+            # Reasoning-param gating applies only to the DIRECT OpenAI API. OpenRouter
+            # (same provider class, different base_url) normalizes around max_tokens for
+            # every model — sending max_completion_tokens there can lose the token limit,
+            # so let OpenRouter normalize. DeepSeek/local: ids never match o-series anyway.
+            reasoning_model = self.provider_name == "openai" and self._is_reasoning_model(model)
             # Prepare arguments
             kwargs = {
                 "model": model,
@@ -523,125 +527,229 @@ class AnthropicProvider(BaseAIProvider):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class GoogleProvider(BaseAIProvider):
-    """Provider for Google Gemini models."""
-    
+    """Provider for Google Gemini models (native google-genai SDK)."""
+
+    # Models with built-in thinking (surfaced as thought parts). Gemini 2.0 and
+    # earlier have no thinking.
+    _THINKING_MODELS = ("gemini-2.5", "gemini-3")
+
     def __init__(self, api_key: str):
         super().__init__("google", api_key)
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            self.sdk = genai
+            from google import genai
+            self.genai = genai
+            self.client = genai.Client(api_key=api_key)
         except ImportError:
-            self.sdk = None
-            logger.error("Google GenerativeAI SDK missing. Please run: pip install google-generativeai")
+            self.client = None
+            logger.error("google-genai SDK missing. Please run: pip install google-genai")
+
+    @classmethod
+    def _supports_thinking(cls, model: str) -> bool:
+        m = (model or "").lower()
+        return any(p in m for p in cls._THINKING_MODELS)
+
+    @staticmethod
+    def _build_contents(messages, types, b64):
+        """Convert VAF's OpenAI-format history (system already stripped) to Gemini
+        `Content` objects, including the tool roundtrip:
+        - assistant + tool_calls -> role 'model' with function_call parts (+ text)
+        - role:'tool'            -> role 'user' with a function_response part
+        - user/assistant text    -> text / image parts
+        Empty turns are skipped (Gemini rejects empty parts).
+        """
+        contents = []
+        for m in messages:
+            role = m.get("role")
+
+            if role == "tool":
+                name = m.get("name") or "tool"
+                result = str(m.get("content", ""))
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_function_response(name=name, response={"result": result})],
+                ))
+                continue
+
+            if role == "assistant":
+                parts = []
+                text = m.get("content")
+                if isinstance(text, str) and text.strip():
+                    parts.append(types.Part.from_text(text=text))
+                elif isinstance(text, list):
+                    for b in text:
+                        if isinstance(b, dict) and b.get("type") == "text" and b.get("text"):
+                            parts.append(types.Part.from_text(text=b["text"]))
+                for tc in (m.get("tool_calls") or []):
+                    fn = tc.get("function", {}) or {}
+                    args = fn.get("arguments", "{}")
+                    try:
+                        parsed = json.loads(args) if isinstance(args, str) else (args or {})
+                    except Exception:
+                        parsed = {}
+                    parts.append(types.Part.from_function_call(name=fn.get("name", ""), args=parsed))
+                if parts:
+                    contents.append(types.Content(role="model", parts=parts))
+                continue
+
+            # user (and any unexpected role)
+            content = m.get("content")
+            parts = []
+            if isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text" and block.get("text"):
+                        parts.append(types.Part.from_text(text=block["text"]))
+                    elif block.get("type") == "image_url":
+                        url = block["image_url"]["url"]
+                        if url.startswith("data:"):
+                            header, data = url.split(",", 1)
+                            mime = header.split(":")[1].split(";")[0]
+                            parts.append(types.Part.from_bytes(data=b64.b64decode(data), mime_type=mime))
+            elif content:
+                parts.append(types.Part.from_text(text=str(content)))
+            if parts:
+                contents.append(types.Content(role="user", parts=parts))
+        return contents
+
+    @staticmethod
+    def _iter_parts(resp):
+        cands = getattr(resp, "candidates", None) or []
+        if not cands:
+            return []
+        content = getattr(cands[0], "content", None)
+        if not content:
+            return []
+        return getattr(content, "parts", None) or []
+
+    def _record_usage(self, resp):
+        um = getattr(resp, "usage_metadata", None)
+        if not um:
+            return
+        inp = getattr(um, "prompt_token_count", 0) or 0
+        out = (getattr(um, "candidates_token_count", 0) or 0) + (getattr(um, "thoughts_token_count", 0) or 0)
+        self.usage["input_tokens"] += inp
+        self.usage["output_tokens"] += out
+        self.last_request_usage["input_tokens"] = inp
+        self.last_request_usage["output_tokens"] = out
+
+    def _tool_call_payload(self, fc):
+        return json.dumps({"tool_calls": [{
+            "index": 0,
+            "id": getattr(fc, "id", None) or f"call_{fc.name}",
+            "type": "function",
+            "function": {"name": fc.name, "arguments": json.dumps(dict(fc.args or {}))},
+        }]})
 
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
-        if not self.sdk:
-            yield "[Error] Google GenerativeAI SDK missing."
+        if not self.client:
+            yield "[Error] google-genai SDK missing."
             return
 
-        try:
-            import base64 as _b64
-            # Convert messages to Gemini format
-            contents = []
-            system_instruction = None
-            for m in messages:
-                if m["role"] == "system":
-                    system_instruction = m["content"] if isinstance(m["content"], str) else ""
-                else:
-                    role = "user" if m["role"] == "user" else "model"
-                    content = m["content"]
-                    if isinstance(content, list):
-                        # Multimodal: convert OpenAI image_url blocks to Gemini inline_data
-                        parts = []
-                        for block in content:
-                            if block.get("type") == "text":
-                                parts.append(block["text"])
-                            elif block.get("type") == "image_url":
-                                url = block["image_url"]["url"]
-                                if url.startswith("data:"):
-                                    header, b64_data = url.split(",", 1)
-                                    mime_type = header.split(":")[1].split(";")[0]
-                                    parts.append({
-                                        "inline_data": {
-                                            "mime_type": mime_type,
-                                            "data": _b64.b64decode(b64_data),
-                                        }
-                                    })
-                        contents.append({"role": role, "parts": parts})
-                    else:
-                        contents.append({"role": role, "parts": [content]})
+        from google.genai import types
+        import base64 as _b64
 
-            # Configure tools
-            google_tools = None
-            if tools:
-                google_tools = []
-                for t in tools:
-                    if t["type"] == "function":
-                        func = t["function"]
-                        # Deep copy and sanitize parameters
-                        params = json.loads(json.dumps(func.get("parameters", {"type": "object"})))
-                        if "additionalProperties" in params: del params["additionalProperties"]
-                        
-                        google_tools.append({
-                            "function_declarations": [{
-                                "name": func["name"],
-                                "description": func.get("description", ""),
-                                "parameters": params
-                            }]
-                        })
-
-            client = self.sdk.GenerativeModel(
-                model_name=model,
-                system_instruction=system_instruction,
-                tools=google_tools
-            )
-
-            config = self.sdk.types.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens
-            )
-
-            if stream:
-                response = client.generate_content(contents, generation_config=config, stream=True)
-                for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
-                    
-                    # Handle function calls
-                    for part in chunk.candidates[0].content.parts:
-                        if hasattr(part, 'function_call') and part.function_call:
-                            # Convert to OpenAI compatible format
-                            yield json.dumps({
-                                "tool_calls": [{
-                                    "index": 0, # Since Gemini streams one candidate part at a time usually, but for parallel safe to expect one-by-one or handle list
-                                    "id": f"call_{part.function_call.name}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": part.function_call.name,
-                                        "arguments": json.dumps({k: v for k, v in part.function_call.args.items()})
-                                    }
-                                }]
-                            })
-                
-                # Usage stats
-                usage = response.usage_metadata
-                self.usage["input_tokens"] += usage.prompt_token_count
-                self.usage["output_tokens"] += usage.candidates_token_count
-                self.last_request_usage["input_tokens"] = usage.prompt_token_count
-                self.last_request_usage["output_tokens"] = usage.candidates_token_count
+        # 1. Consolidate system messages (leading -> system_instruction; mid-run -> user turns).
+        consolidated = consolidate_system_messages(messages)
+        system_instruction = None
+        rest: List[Dict] = []
+        for m in consolidated:
+            if m.get("role") == "system":
+                c = m.get("content")
+                if isinstance(c, str):
+                    system_instruction = c
             else:
-                response = client.generate_content(contents, generation_config=config)
-                if response.text:
-                    yield response.text
-                
-                # Stats
-                usage = response.usage_metadata
-                self.usage["input_tokens"] += usage.prompt_token_count
-                self.usage["output_tokens"] += usage.candidates_token_count
-                self.last_request_usage["input_tokens"] = usage.prompt_token_count
-                self.last_request_usage["output_tokens"] = usage.candidates_token_count
-                
+                rest.append(m)
+
+        # 2. Build contents (incl. tool roundtrip).
+        contents = self._build_contents(rest, types, _b64)
+
+        # 3. Tools (OpenAI -> Gemini function declarations; raw JSON schema).
+        gtools = None
+        if tools:
+            decls = []
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t["function"]
+                    decls.append(types.FunctionDeclaration(
+                        name=func["name"],
+                        description=func.get("description", ""),
+                        parameters_json_schema=func.get("parameters", {"type": "object", "properties": {}}),
+                    ))
+            if decls:
+                gtools = [types.Tool(function_declarations=decls)]
+
+        # 4. tool_choice -> FunctionCallingConfig (AUTO is the default, so only set non-auto).
+        tool_config = None
+        if gtools and tool_choice and tool_choice != "auto":
+            mode, allowed = None, None
+            if tool_choice in ("required", "any"):
+                mode = "ANY"
+            elif tool_choice == "none":
+                mode = "NONE"
+            elif isinstance(tool_choice, dict):
+                fn = tool_choice.get("function", {})
+                if fn.get("name"):
+                    mode, allowed = "ANY", [fn["name"]]
+            if mode:
+                tool_config = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(mode=mode, allowed_function_names=allowed))
+
+        # 5. Thinking (config-gated, supported models only) — surface thought summaries.
+        thinking_on = Config.get("google_thinking", True)
+        thinking_on = thinking_on if isinstance(thinking_on, bool) else \
+            str(thinking_on).strip().lower() in ("1", "true", "yes", "on")
+        thinking_config = None
+        if thinking_on and self._supports_thinking(model):
+            thinking_config = types.ThinkingConfig(include_thoughts=True)
+
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            system_instruction=system_instruction or None,
+            tools=gtools,
+            tool_config=tool_config,
+            thinking_config=thinking_config,
+        )
+
+        try:
+            if stream:
+                in_think = False
+                last = None
+                for chunk in self.client.models.generate_content_stream(
+                    model=model, contents=contents, config=config
+                ):
+                    last = chunk
+                    for part in self._iter_parts(chunk):
+                        if getattr(part, "thought", False) and getattr(part, "text", None):
+                            if not in_think:
+                                in_think = True
+                                yield "<think>"
+                            yield part.text
+                        elif getattr(part, "function_call", None):
+                            if in_think:
+                                in_think = False
+                                yield "</think>\n\n"
+                            yield self._tool_call_payload(part.function_call)
+                        elif getattr(part, "text", None):
+                            if in_think:
+                                in_think = False
+                                yield "</think>\n\n"
+                            yield part.text
+                if in_think:
+                    yield "</think>"
+                self._record_usage(last)
+            else:
+                resp = self.client.models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+                for part in self._iter_parts(resp):
+                    if getattr(part, "thought", False) and getattr(part, "text", None):
+                        yield "<think>" + part.text + "</think>\n\n"
+                    elif getattr(part, "function_call", None):
+                        yield self._tool_call_payload(part.function_call)
+                    elif getattr(part, "text", None):
+                        yield part.text
+                self._record_usage(resp)
+
         except Exception as e:
             err_str = str(e)
             UI.error(f"Google Provider Error: {err_str}")
@@ -700,15 +808,9 @@ class APIBackendManager:
             tool_choice: Control tool usage - 'auto' (default), 'none', 'required', 
                         or {'type': 'function', 'function': {'name': '...'}} for specific tool
         """
-        # Determine model
-        default_models = {
-            "openai": "gpt-4o",
-            "anthropic": "claude-sonnet-4-6",
-            "deepseek": "deepseek-v4-flash",
-            "google": "gemini-1.5-flash",
-            "openrouter": "anthropic/claude-3.5-sonnet",
-            "local": "llama3",
-        }
+        # Determine model — defaults derive from Config.PROVIDER_MODELS (single source).
+        default_models = {p: m["default"] for p, m in Config.PROVIDER_MODELS.items()}
+        default_models["local"] = "llama3"
         if not model:
             # Read fresh from disk so mid-session model changes (via Settings) take effect immediately
             live_config = Config.load()
@@ -790,6 +892,7 @@ class APIBackendManager:
         ("claude-mythos",  1_000_000),
         ("claude",          200_000),
         # Google
+        ("gemini-3",      1_048_576),
         ("gemini-2.5",    1_048_576),
         ("gemini-2.0",    1_048_576),
         ("gemini-1.5-pro",2_097_152),
@@ -862,16 +965,11 @@ class APIBackendManager:
 
     @staticmethod
     def get_available_models(provider: str) -> List[str]:
-        """Legacy static list for UI dropdowns (can be extended to use providers)."""
-        models = {
-            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-            "anthropic": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
-            "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-auto"],
-            "google": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
-            "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o"],
-            "local": ["llama3", "mistral", "codellama"]
-        }
-        return models.get(provider, [])
+        """Static fallback list for UI dropdowns — sourced from Config.PROVIDER_MODELS
+        (single source). Used when no live /v1/models fetch is available."""
+        if provider == "local":
+            return ["llama3", "mistral", "codellama"]
+        return Config.get_fallback_models(provider)
 
     @staticmethod
     def list_models(provider: str) -> List[str]:

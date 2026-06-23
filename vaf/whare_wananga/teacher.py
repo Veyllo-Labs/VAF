@@ -33,9 +33,9 @@ _PROVIDERS = ("anthropic", "openai", "google", "openrouter", "deepseek")
 # Coarse capability tiers over model FAMILIES (higher = stronger). Pragmatic substring match on the
 # configured model id; small/fast variants are demoted regardless of family. Needs upkeep as models
 # change -- an explicit `whare_wananga_teacher_model` override is the escape hatch.
-_STRONG = ("opus", "gpt-5", "o1", "o3", "o4", "gemini-2.5-pro", "ultra", "grok-4", "deepseek-r1",
-           "405b", "-large")
-_MID = ("sonnet", "gpt-4.1", "gpt-4o", "gpt-4-turbo", "gemini-1.5-pro", "gemini-2.0-pro", "grok-3",
+_STRONG = ("opus", "gpt-5", "o1", "o3", "o4", "gemini-3-pro", "gemini-3.1-pro", "gemini-2.5-pro",
+           "ultra", "grok-4", "deepseek-r1", "405b", "-large")
+_MID = ("sonnet", "gpt-4.1", "gpt-4o", "gpt-4-turbo", "grok-3",
         "deepseek-v3", "deepseek-chat", "70b", "72b")
 # word-ish boundary so "mini" does NOT match "geMINI", etc. (a marker must start at a non-letter).
 _SMALL_RE = re.compile(r"(?<![a-z])(flash|mini|nano|lite|haiku|small|8b|7b)")

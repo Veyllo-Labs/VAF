@@ -33,12 +33,12 @@ Enter GOOGLE API key: [your key]
 | Success Found 12 models
 
 Select GOOGLE model (12 available):
-  > gemini-1.5-pro-latest
-    gemini-1.5-flash-latest
-    gemini-1.5-pro-002
-    gemini-1.5-flash-002
-    gemini-pro
-    gemini-pro-vision
+  > gemini-2.5-pro
+    gemini-2.5-flash
+    gemini-3.5-flash
+    gemini-2.5-flash-lite
+    gemini-3-flash-preview
+    gemini-2.5-flash-lite
     ...
     Keep current
     Enter custom model ID
@@ -50,7 +50,7 @@ In Settings menu:
 ```
 Settings Menu:
   🌐 AI Provider: GOOGLE
-  🤖 API Model: gemini-1.5-pro-latest  ← New menu item!
+  🤖 API Model: gemini-2.5-pro  ← New menu item!
   🔧 Sub-Agent Provider: LOCAL (inherited)
   ─────────────────
   ...
@@ -74,7 +74,7 @@ GET https://api.openai.com/v1/models
 
 # Example: Google
 GET https://generativelanguage.googleapis.com/v1beta/models?key=...
-→ Returns: gemini-1.5-pro-latest, gemini-1.5-flash-latest, ...
+→ Returns: gemini-2.5-pro, gemini-2.5-flash, ...
 ```
 
 ### Custom Model Support
@@ -93,9 +93,9 @@ Enter custom model ID: gpt-4o-2025-01-15
 Your current model is marked:
 ```
 Select Model:
-  ✓ gemini-1.5-pro-latest (current)
-    gemini-1.5-flash-latest
-    gemini-1.5-pro-002
+  ✓ gemini-2.5-pro (current)
+    gemini-2.5-flash
+    gemini-3.5-flash
     ...
 ```
 
@@ -106,7 +106,7 @@ If API fetch fails (network issue, rate limit), VAF falls back to a curated stat
 ```python
 # Fallback lists (automatically used if dynamic fetch fails)
 "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", ...]
-"google": ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", ...]
+"google": ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
 ```
 
 ## Implementation Details
@@ -181,14 +181,14 @@ vaf run → Settings → AI Provider → Google AI Studio
 Enter API key: AIza...
 
 # Models fetched from Google API:
-- gemini-1.5-pro-latest
-- gemini-1.5-pro-002
-- gemini-1.5-pro-001
-- gemini-1.5-flash-latest
-- gemini-1.5-flash-002
-- gemini-1.5-flash-001
-- gemini-pro
-- gemini-pro-vision
+- gemini-2.5-pro
+- gemini-3.5-flash
+- gemini-3.1-flash-lite
+- gemini-2.5-flash
+- gemini-2.5-flash-lite
+- gemini-2.5-pro
+- gemini-3-flash-preview
+- gemini-2.5-flash-lite
 ```
 
 ### Example 3: OpenRouter Multi-Provider
@@ -199,11 +199,11 @@ vaf run → Settings → AI Provider → OpenRouter
 Enter API key: sk-or-...
 
 # 30+ models fetched:
-- anthropic/claude-3.5-sonnet
-- anthropic/claude-3-opus
+- anthropic/claude-sonnet-4.6
+- anthropic/claude-opus-4.8
 - openai/gpt-4o
 - openai/gpt-4-turbo
-- google/gemini-pro-1.5
+- google/gemini-2.5-flash
 - meta-llama/llama-3.1-405b-instruct
 - mistralai/mistral-large
 - cohere/command-r-plus
@@ -270,7 +270,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 |----------|---------------|-------------------|
 | OpenAI | ✅ | `gpt-4o` |
 | Anthropic | ✅ all Claude 3+ | `claude-sonnet-4-6` |
-| Google | ✅ all Gemini | `gemini-2.0-flash` |
+| Google | ✅ all Gemini | `gemini-2.5-flash` |
 | OpenRouter | ✅ varies | `openai/gpt-4o` |
 | DeepSeek | ❌ | — |
 | Local | depends on model | — |

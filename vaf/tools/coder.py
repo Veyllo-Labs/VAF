@@ -2503,9 +2503,9 @@ Thumbs.db
         _API_PROVIDERS = {
             "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-v4-flash"),
             "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
-            "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-3.5-sonnet"),
+            "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-sonnet-4.6"),
             "anthropic":  ("https://api.anthropic.com/v1",      "claude-sonnet-4-6"),
-            "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"),
+            "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
         }
         _is_api_mode = _provider in _API_PROVIDERS
         if _is_api_mode:

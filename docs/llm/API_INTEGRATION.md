@@ -8,7 +8,7 @@ VAF now supports multiple AI providers through API integration, allowing you to 
 - **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
 - **Anthropic** - Claude Sonnet 4.6, Claude Opus 4.8, Claude Haiku 4.5 (native Messages API: tool use, streaming, adaptive thinking, prompt caching)
 - **DeepSeek** - DeepSeek V4 Flash, DeepSeek V4 Pro
-- **Google AI Studio** - Gemini 1.5 Pro/Flash, Gemini 1.0 Pro
+- **Google AI Studio** - Gemini 2.5 Flash/Pro, Gemini 3.5 Flash (native google-genai SDK: tool use, streaming, thinking)
 - **OpenRouter** - Multi-provider access (Claude, GPT-4, Llama, etc.)
 
 ## Configuration
@@ -68,12 +68,18 @@ Each provider has default models, but you can customize:
   "api_model_openai": "gpt-4o",
   "api_model_anthropic": "claude-sonnet-4-6",
   "api_model_deepseek": "deepseek-v4-flash",
-  "api_model_google": "gemini-1.5-pro",
-  "api_model_openrouter": "anthropic/claude-3.5-sonnet"
+  "api_model_google": "gemini-2.5-flash",
+  "api_model_openrouter": "anthropic/claude-sonnet-4.6"
 }
 ```
 
 **Guardrail for mixed local/API setups:** If an API provider is active but a local GGUF-style model value is still present (for example `gemma-4-E2B-it-Q8_0.gguf` or `"auto"`), VAF automatically falls back to the provider-specific `api_model_<provider>` value. This prevents API requests from failing with provider-side "model not found" errors.
+
+### Single source of truth for provider models
+
+The per-provider default model and the static fallback list shown in the dropdown live in one place: `PROVIDER_MODELS` in `vaf/core/config.py`. To change a default or a fallback, edit that dict only — every Python call site reads it (`Config.get_default_model()` / `Config.get_fallback_models()`, `APIBackendManager`, the agent, the browser agent), and the web UI reads it through `GET /api/provider-models`.
+
+The dropdown is otherwise populated dynamically: when you enter an API key, VAF fetches the provider's live model list (`/v1/models`) and the live list takes precedence. The static fallback is used only when no key is set or the fetch fails (offline, rate limit). `local` is not in `PROVIDER_MODELS` — GGUF models are discovered from disk, not a fixed list.
 
 ## Sub-Agent Provider Configuration
 
@@ -165,11 +171,11 @@ All API providers support **streaming responses** for real-time output.
 
 ### Tool Calling
 
-- ✅ **OpenAI** - Full support
-- ✅ **Anthropic** - Full support
+- ✅ **OpenAI** - Full support (native function calling)
+- ✅ **Anthropic** - Full support (`tool_use`/`tool_result` roundtrip via the native SDK)
+- ✅ **Google** - Full support (`function_call`/`function_response` via the native google-genai SDK)
 - ✅ **OpenRouter** - Provider-dependent
-- ⚠️ **DeepSeek** - Limited support
-- ⚠️ **Google** - Limited support
+- ⚠️ **DeepSeek** - `tool_choice` limited to `auto`/`none` (see LLM_BACKEND_FACTS.md)
 
 ### Vision / Image Input
 
@@ -177,7 +183,7 @@ Providers that support multimodal (image) input:
 
 - ✅ **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
 - ✅ **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) — converted to `source.base64` format
-- ✅ **Google** (`gemini-1.5-pro`, `gemini-2.0-flash`, etc.) — converted to `inline_data` parts
+- ✅ **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) — converted to `Part.from_bytes` (inline_data) parts
 - ✅ **OpenRouter** — provider-dependent (model must support vision)
 - ❌ **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
 - ⚠️ **Local (Ollama)** — only if the loaded model supports vision (e.g. `llava`)
@@ -192,7 +198,7 @@ Providers that support multimodal (image) input:
 6. Each provider class converts this intermediate format to its own wire format:
    - `OpenAIProvider` (also DeepSeek, OpenRouter, local): passes list content as-is.
    - `AnthropicProvider._convert_content()`: converts `image_url` → `{"type":"image","source":{"type":"base64","media_type":"...","data":"..."}}`.
-   - `GoogleProvider`: converts `image_url` → `{"inline_data":{"mime_type":"...","data":bytes}}`.
+   - `GoogleProvider`: converts `image_url` → `types.Part.from_bytes(data=..., mime_type=...)` (google-genai inline_data part).
 
 **Limitation:** Images are held in memory for the duration of the session. They are not persisted to `session.json` (only the text content is saved), so image thumbnails will not appear in the chat after a page reload.
 
@@ -274,9 +280,15 @@ ls -l ~/.vaf/config.json   # expect -rw------- (600)
 ### OpenAI
 
 **Models:**
-- `gpt-4o` - Latest, multimodal (recommended)
+- `gpt-4o` - Multimodal (recommended, default)
 - `gpt-4-turbo` - Fast, large context
 - `gpt-3.5-turbo` - Cheaper, faster
+
+Reasoning models (`o1`/`o3`/`o4` series, `gpt-5`) are supported. VAF detects them and
+adjusts the request automatically: it sends `max_completion_tokens` instead of `max_tokens`
+and omits `temperature` (these models accept only the default), since the direct OpenAI API
+rejects the standard parameters otherwise. This applies to the direct OpenAI provider only;
+OpenRouter normalizes parameters itself, so its routes are not adjusted.
 
 **Get API Key:** https://platform.openai.com/api-keys
 
@@ -315,11 +327,21 @@ that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request woul
 ### Google AI Studio
 
 **Models:**
-- `gemini-1.5-pro-latest` - Best quality, 2M context (recommended)
-- `gemini-1.5-flash-latest` - Fast, 1M context
-- `gemini-pro` - Legacy, 32K context
+- `gemini-2.5-flash` - Best price-performance, 1M context (recommended, default)
+- `gemini-3.5-flash` - Most intelligent flash, strong for agentic/coding
+- `gemini-2.5-pro` - Most advanced, deep reasoning
+- `gemini-2.5-flash-lite` - Fastest, most budget-friendly
 
-**Important:** Use `-latest` suffix for Gemini 1.5 models!
+VAF uses the native **google-genai** SDK (the deprecated `google-generativeai` package
+is no longer used). Tool use, streaming, vision, and thinking are supported. One optional
+config flag (`~/.vaf/config.json`):
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `google_thinking` | `true` | Surface model reasoning on thinking-capable models (Gemini 2.5/3.x), shown wrapped in `<think>…</think>` like DeepSeek. Set `false` to hide it. |
+
+**Note:** Gemini 1.5 models are retired (return 404) and `gemini-2.0-flash` is being
+shut down — use the 2.5/3.x models above.
 
 **Get API Key:** https://makersuite.google.com/app/apikey
 
@@ -327,11 +349,14 @@ that reject sampling params (Opus 4.7/4.8, Fable) — otherwise the request woul
 
 **Multi-provider access** through single API key.
 
-**Popular Models:**
-- `anthropic/claude-3.5-sonnet`
+**Popular Models** (OpenRouter uses dotted ids, e.g. `claude-sonnet-4.6`):
+- `anthropic/claude-sonnet-4.6`
 - `openai/gpt-4o`
-- `google/gemini-pro-1.5`
+- `google/gemini-2.5-flash`
 - `meta-llama/llama-3.1-405b-instruct`
+
+Note: OpenRouter normalizes parameters (e.g. `max_tokens`) across all models, so VAF's
+OpenAI reasoning-model gating is intentionally applied only to the direct OpenAI provider.
 
 **Get API Key:** https://openrouter.ai/keys
 

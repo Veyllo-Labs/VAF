@@ -330,14 +330,8 @@ class Agent:
         if self.provider != "local":
             api_model = self.config.get(f"api_model_{self.provider}")
             if not api_model:
-                api_defaults = {
-                    "openai": "gpt-4o",
-                    "anthropic": "claude-sonnet-4-6",
-                    "deepseek": "deepseek-v4-flash",
-                    "google": "gemini-1.5-flash",
-                    "openrouter": "anthropic/claude-3.5-sonnet",
-                }
-                api_model = api_defaults.get(self.provider, self.provider)
+                # Single source: Config.PROVIDER_MODELS (vaf/core/config.py)
+                api_model = Config.get_default_model(self.provider) or self.provider
             # Hybrid mode: use VAF_TOOL_MODEL when set (e.g. pro model for sub-agents in workflows)
             _tool_model_env = os.environ.get("VAF_TOOL_MODEL", "").strip()
             if _tool_model_env:
@@ -9377,11 +9371,13 @@ class Agent:
                     _vision_fb_model = Config.get("vision_model", "").strip() or None
                     _vision_fb_used = False
 
-                    # Safe default vision models per provider (used when vision_model is not set)
+                    # Safe default vision models per provider (used when vision_model is not set).
+                    # The first three track the provider default (Config.PROVIDER_MODELS);
+                    # openrouter keeps a vision-capable route explicitly.
                     _VISION_DEFAULTS = {
-                        "openai":     "gpt-4o",
-                        "anthropic":  "claude-sonnet-4-6",
-                        "google":     "gemini-2.0-flash",
+                        "openai":     Config.get_default_model("openai"),
+                        "anthropic":  Config.get_default_model("anthropic"),
+                        "google":     Config.get_default_model("google"),
                         "openrouter": "openai/gpt-4o",
                     }
                     if not _vision_fb_model and _vision_fb_provider:
@@ -9446,7 +9442,7 @@ class Agent:
                             "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-sonnet-4-6`) or OpenAI (`gpt-4o`), or configure a Vision Model in Settings → AI & Model.",
                             "openai":   "`gpt-4o` or `gpt-4-turbo`",
                             "anthropic": "`claude-sonnet-4-6` or newer",
-                            "google":   "`gemini-1.5-pro` or `gemini-2.0-flash`",
+                            "google":   "`gemini-2.5-flash` or `gemini-2.5-pro`",
                             "openrouter": "a vision model such as `openai/gpt-4o`",
                         }
                         _vision_hint = _vision_models.get(_provider, "a vision-capable model, or configure a Vision Model in Settings → AI & Model")

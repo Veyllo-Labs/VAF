@@ -529,14 +529,8 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
         or "instruct-q" in model.lower()
         or model.lower().startswith("veyllo/")
     ):
-        _defaults = {
-            "openai": "gpt-4o",
-            "anthropic": "claude-sonnet-4-6",
-            "deepseek": "deepseek-v4-flash",
-            "google": "gemini-1.5-flash",
-            "openrouter": "anthropic/claude-3.5-sonnet",
-        }
-        model = _defaults.get(provider, "gpt-4o")
+        from vaf.core.config import Config
+        model = Config.get_default_model(provider) or "gpt-4o"
 
     return VAFLLMBridge(model=model, provider_name=provider, session_id=session_id)
 

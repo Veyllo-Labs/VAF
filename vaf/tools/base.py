@@ -196,7 +196,7 @@ class BaseTool(ABC):
             # Fallback: Try to get default based on provider
             if provider == "openai": model = "gpt-4o"
             elif provider == "anthropic": model = "claude-sonnet-4-6"
-            elif provider == "google": model = "gemini-1.5-pro"
+            elif provider == "google": model = "gemini-2.5-flash"
             
             if not model:
                 print(f"[WARN] Tool {self.name}: No model configured. Skipping LLM query.")
@@ -237,7 +237,7 @@ class BaseTool(ABC):
                 err_str = str(e).lower()
                 # Self-Healing: If Invalid Model (400) or Model Not Found (404), try fallback
                 if "400" in err_str or "404" in err_str or "invalid model" in err_str:
-                    fallback = "gpt-4o" if provider == "openai" else ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-1.5-pro")
+                    fallback = "gpt-4o" if provider == "openai" else ("claude-sonnet-4-6" if provider == "anthropic" else "gemini-2.5-flash")
                     if fallback and fallback != model:
                         print(f"[WARN] Tool {self.name}: API Error with model '{model}'. Retrying with fallback '{fallback}'...")
                         _fut2 = _executor.submit(_execute_query, fallback)

@@ -57,6 +57,14 @@ async def get_config(request: Request) -> Dict[str, Any]:
     )
 
 
+@router.get("/provider-models")
+async def get_provider_models() -> Dict[str, Any]:
+    """Static per-provider model metadata (default + fallback list) — the single source
+    (Config.PROVIDER_MODELS) the web UI reads to populate provider/model dropdowns. Static,
+    non-sensitive: no auth required. The live /v1/models list still takes precedence in the UI."""
+    return Config.PROVIDER_MODELS
+
+
 @router.patch("/config")
 async def patch_config(
     body: Dict[str, Any],

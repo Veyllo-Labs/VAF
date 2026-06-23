@@ -99,10 +99,10 @@ Singleton pattern manager that:
 - Monospace font for technical content
 
 **Actions Timeline** (`web/components/TurnActionsTimeline.tsx`):
-- A turn's thinking blocks and tool calls are grouped into **one** collapsible timeline anchored on the turn's first assistant message (stable while streaming, so cards never remount). The final answer renders below it.
-- A left **rail** with one dot per action — solid black = thinking, hollow ring = a running/failed tool, solid gray = a completed tool — grows down as steps arrive. The living **white-dot avatar** walks down to sit centred on the active step's dot and returns to the top when the group collapses.
-- While the turn runs the timeline is **expanded**; when the agent starts answering it **collapses** to a borderless circle-row ("N actions") that re-expands on click. Past turns (and reloads) render collapsed by default.
-- Grouping is additive with safe fallbacks: only turns with ≥1 tool group; anything ambiguous keeps the per-row rendering. Tool rows persist across reload via the session cache (the server stores only a per-turn tool summary, not the individual cards).
+- A turn's thinking blocks, tool calls, and any conversational lines the model emits **between** tool calls (a `'say'` step — common with reasoning models like DeepSeek, e.g. "let me look closer") are grouped into **one** collapsible timeline anchored on the turn's first assistant message (stable while streaming, so cards never remount). The final answer renders below it.
+- A left **rail** with one dot per action — solid black = thinking, **hollow black ring = an intermediate spoken line (`'say'`)**, hollow gray ring = a running/failed tool, solid gray = a completed tool — grows down as steps arrive. The living **white-dot avatar** walks down to the active (running) step and returns to the top when the group collapses; a `'say'` step is always "done" so it never steals the avatar.
+- While the turn runs the timeline stays **expanded** until generation **ends** (so an intermediate line mid-turn no longer folds the rail while the agent is still working), then it **collapses** to a borderless circle-row ("N actions") that re-expands on click. Past turns (and reloads) render collapsed by default.
+- Grouping is additive with safe fallbacks: only turns with ≥1 tool group. Intermediate answer text used to abandon grouping (per-row fallback); it is now rendered as a `'say'` rail step instead, so the grouping holds. Tool rows persist across reload via the session cache (the server stores only a per-turn tool summary, not the individual cards).
 
 **Long reply collapse**:
 - A bot answer longer than ~800 chars collapses to a ~300-char preview with a "Show full response" toggle — but **only once a newer user message exists** (i.e. it is a *past* answer). The current/streaming answer and short replies are never collapsed.

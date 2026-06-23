@@ -5104,7 +5104,7 @@ function VAFDashboardContent() {
                                     // answer rendered below. SAFE FALLBACK: a turn is grouped only if it has ≥1 tool and
                                     // no non-final assistant carries visible answer text (else we'd hide content) — any
                                     // other turn keeps today's per-row rendering.
-                                    type TurnTl = { actions: { kind: 'think' | 'tool'; msg: typeof visibleMessages[number] }[]; answerMsg: typeof visibleMessages[number] };
+                                    type TurnTl = { actions: { kind: 'think' | 'tool' | 'say'; msg: typeof visibleMessages[number] }[]; answerMsg: typeof visibleMessages[number] };
                                     const turnTimeline = new Map<number, TurnTl>(); // key: visibleMessages idx of the turn's first assistant (anchor)
                                     const consumedVmIdx = new Set<number>();        // tools + non-anchor assistants shown inside a timeline
                                     (() => {
@@ -5120,12 +5120,16 @@ function VAFDashboardContent() {
                                             if (toolCount < 1 || assistants.length < 1) return;
                                             const anchor = assistants[0];
                                             const answerIdx = assistants[assistants.length - 1];
-                                            // would grouping drop a real intermediate answer? then don't group this turn.
-                                            for (const a of assistants) { if (a !== answerIdx && ans(vm[a]) !== '') return; }
+                                            // Intermediate assistant text — a conversational line BETWEEN tool calls (e.g.
+                                            // "Lass mich nochmal genauer nachschauen.") — is rendered as a first-class 'say'
+                                            // rail step, NOT a reason to abandon grouping. Only the FINAL assistant's answer
+                                            // (answerIdx) becomes the answer bubble below; every earlier assistant's visible
+                                            // text becomes a 'say' step in order, alongside its 'think' if present.
                                             const actions: TurnTl['actions'] = [];
                                             for (let k = s; k < e; k++) {
                                                 if (vm[k].role === 'assistant') {
                                                     if ((parseContent(vm[k].content).thought ?? '').trim() !== '') actions.push({ kind: 'think', msg: vm[k] });
+                                                    if (k !== answerIdx && ans(vm[k]) !== '') actions.push({ kind: 'say', msg: vm[k] });
                                                 } else if (vm[k].role === 'tool') {
                                                     actions.push({ kind: 'tool', msg: vm[k] });
                                                 }
@@ -5344,9 +5348,10 @@ function VAFDashboardContent() {
                                                             : 'talking')
                                                         : 'idle';
                                                     const botAvatarDim = !(isLatestBot && !loading);
-                                                    // expanded while the latest turn is still running (no answer yet); collapsed once it
-                                                    // answers and for all history — a manual click overrides either way.
-                                                    const timelineNaturalExpanded = isLatestBot && isGenerating && !hasBubbleContent;
+                                                    // Expanded while the latest turn is still running; collapses only when generation
+                                                    // ENDS (so an intermediate answer line mid-turn no longer folds the rail while the
+                                                    // agent is still working) and for all history — a manual click overrides either way.
+                                                    const timelineNaturalExpanded = isLatestBot && isGenerating;
                                                     const tlManual = timelineExpand.get(msg.timestamp);
                                                     const timelineExpanded = tlManual !== undefined ? tlManual : timelineNaturalExpanded;
                                                     const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {
@@ -5360,6 +5365,23 @@ function VAFDashboardContent() {
                                                                 kind: 'think' as const,
                                                                 state: (tdone ? 'done' : 'pending') as TimelineAction['state'],
                                                                 node: <ThinkingDetails thought={pc.thought ?? ''} isComplete={tdone} durationKey={m.timestamp} />,
+                                                            };
+                                                        }
+                                                        if (act.kind === 'say') {
+                                                            // Intermediate spoken line (between tool calls). Reuse the bot markdown
+                                                            // renderer in a lighter card than the final answer bubble so it reads as
+                                                            // an in-flight aside, not the turn's conclusion. Always 'done' (already
+                                                            // emitted) so it never steals the avatar's active dot from a running tool.
+                                                            const sayText = stripToolCallsJSON(parseContent(m.content).answer);
+                                                            return {
+                                                                key: `tl-say-${mIdx}`,
+                                                                kind: 'say' as const,
+                                                                state: 'done' as TimelineAction['state'],
+                                                                node: (
+                                                                    <div className="max-w-[95%] rounded-2xl rounded-tl-none border border-gray-200 bg-white px-4 py-2 text-[14px] leading-relaxed text-gray-700 shadow-sm">
+                                                                        <div className="chat-markdown"><ChatMarkdown>{sayText}</ChatMarkdown></div>
+                                                                    </div>
+                                                                ),
                                                             };
                                                         }
                                                         const tln = (m.toolName || '').toLowerCase();

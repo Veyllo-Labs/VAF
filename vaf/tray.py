@@ -601,6 +601,7 @@ def check_activity_loop(update_icon_callback):
     """Monitor activity and manage model state."""
     last_loaded = None
     last_persistent = None
+    last_provider = Config.get("provider", "local")  # track provider to react to a local<->API switch
     last_log_ts = 0.0
     loading_lock = threading.Lock()
     loading_in_progress = False
@@ -683,7 +684,28 @@ def check_activity_loop(update_icon_callback):
         # Check provider type - cloud providers don't need local model loading
         provider = Config.get("provider", "local")
         is_cloud_provider = provider in ("openai", "anthropic", "google", "openrouter", "mistral", "groq", "deepseek")
-        
+
+        # Provider switched at runtime -> manage the local model directly. The steady-state unload branch
+        # below is gated on `not is_cloud_provider`, so a model loaded BEFORE a switch to a cloud/API
+        # provider would otherwise stay warm forever. Free it here (level-triggered: retried each tick, and
+        # deferred only while a thinking run is active), and (re)load it when switching back to local.
+        if is_cloud_provider and tray_context.model_loaded and not thinking_defer:
+            log("Tray", f"Cloud provider '{provider}' active — unloading local model to free memory.")
+            try:
+                server_mgr.stop_server(force_external=True)
+            except Exception as e:
+                log("Tray", f"Model unload error: {e}")
+            tray_context.set_model_loaded(False)
+            update_icon_callback("active" if has_websocket else "idle")
+            emit_model_state()
+            last_provider = provider
+            time.sleep(1)
+            continue
+        if (not is_cloud_provider) and provider != last_provider and not tray_context.model_loaded:
+            log("Tray", "Provider switched to local — loading model...")
+            start_model_async("Provider->local")
+        last_provider = provider
+
         # For cloud providers, "ready" means we have a WebSocket connection
         # For local providers, "ready" means model is loaded
         is_ready = has_websocket if is_cloud_provider else is_loaded

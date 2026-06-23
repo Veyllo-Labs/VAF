@@ -266,7 +266,7 @@ class Config:
         "web_ui_enabled": True,                # Start Web UI automatically
         "server_persistence_enabled": False,   # Keep server running after exit
         "tray_autostart": False,               # Auto-start tray on OS login
-        "debug_logs_enabled": True,            # Write domain logs, timeline and queue.log; ON by default (the log GC bounds disk use). User opt-out via Settings -> Advanced.
+        "debug_logs_enabled": True,            # Write domain logs, timeline and queue.log; ON by default (the log GC bounds disk use). No UI toggle — user opt-out via config.json.
         "parallel_main_workers": 1,            # Main headless workers (1=legacy serialized, 2=weighted-fair parallel)
         "queue_policy": "legacy",              # legacy | weighted_fair
         "queue_weight_interactive": 5,         # Used when queue_policy=weighted_fair
@@ -284,6 +284,8 @@ class Config:
         "thinking_automation_buffer_minutes": 10,              # Do not start if automation runs within this many minutes
         "thinking_max_duration_minutes": 30,                  # Max duration per thinking run (then release lock)
         "thinking_wait_nudge_minutes": 3,                     # If user does not reply to a question: send nudge after this many minutes
+        "thinking_followup_max": 3,                            # Re-ask an unanswered proactive question up to N times (pointed follow-up), then let the topic rest
+        "default_language": "",                                # Fallback language for backend canned phrases (vocab book) when the user has no preferred_language; empty -> 'en'
         "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
         "thinking_nudge_activity_minutes": 5,                # Do not nudge if user was active on any channel in the last N minutes
         "thinking_provider": "inherit",                      # AI provider for thinking mode ('inherit' or e.g. 'openai', 'local')

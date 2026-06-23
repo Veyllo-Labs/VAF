@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Hey {name}, you around?",
+    "Hey {name}, still there?",
+    "{name}, are you there?",
+    "Hey {name}, did I catch you at a bad time?",
+    "Knock knock {name} — you there?",
+    "Hey {name}, ping me when you're back."
+  ],
+  "de": [
+    "Hey {name}, bist du da?",
+    "Hey {name}, noch da?",
+    "{name}, alles klar bei dir?",
+    "Hey {name}, erwische ich dich gerade ungünstig?",
+    "Klopf klopf {name} — bist du da?",
+    "Hey {name}, meld dich, wenn du wieder da bist."
+  ]
+}

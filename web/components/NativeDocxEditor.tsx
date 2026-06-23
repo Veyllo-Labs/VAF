@@ -428,6 +428,12 @@ function fitParagraphSliceToHeight(
   return createParagraphSlice(paragraph, fullText, startOffset, best, sliceIndex);
 }
 
+// A heading or a keep-together paragraph must NEVER be sliced mid-text across a page boundary (Word keeps
+// headings whole). Such paragraphs are placed atomically by the paginator below.
+function paragraphIsAtomic(block: NativeDocxParagraph): boolean {
+  return block.style_name.startsWith('Heading') || block.style_name === 'Title' || block.keep_together === true;
+}
+
 function splitBlocksIntoPages(
   section: NativeDocxSection,
   measureDocument?: Document
@@ -470,6 +476,38 @@ function splitBlocksIntoPages(
       }
 
       if (sourceBlock.type === 'paragraph' && host && measureDocument) {
+        // Headings / keep-together paragraphs are placed WHOLE (never sliced). If the block does not fit on
+        // the current (non-empty) page, it moves whole to the next page. Only if it is taller than an empty
+        // page (rare) do we fall through to the slicer below — so we never overflow or infinite-loop.
+        if (paragraphIsAtomic(sourceBlock)) {
+          if (sourceBlock.page_break_before && current.length > 0) {
+            pages.push(current);
+            current = [];
+            currentHeight = 0;
+          }
+          const fullHeight = measureRenderedBlockHeight(measureDocument, host, sourceBlock, contentWidthPx);
+          const gap = current.length > 0 ? 8 : 0;
+          const availableHeightPx = contentHeightPx - currentHeight - gap - PAGE_FIT_SAFETY_PX;
+          if (fullHeight > availableHeightPx && current.length > 0) {
+            pages.push(current);
+            current = [];
+            currentHeight = 0;
+          }
+          if (fullHeight <= contentHeightPx - PAGE_FIT_SAFETY_PX || current.length > 0) {
+            current.push({
+              key: `${sourceBlock.id}-slice-0`,
+              block: sourceBlock,
+              originalIndex: bi,
+              sliceIndex: 0,
+              startOffset: 0,
+              endOffset: flattenParagraphText(sourceBlock).length,
+            });
+            currentHeight += (current.length > 1 ? 8 : 0) + fullHeight;
+            return;
+          }
+          // else: taller than an empty page AND page already empty -> fall through to the slicer
+        }
+
         const fullText = flattenParagraphText(sourceBlock);
         let startOffset = 0;
         let sliceIndex = 0;
@@ -526,6 +564,32 @@ function splitBlocksIntoPages(
             break;
           }
         } while (startOffset < fullText.length || (fullText.length === 0 && sliceIndex === 0));
+        return;
+      }
+
+      // Non-measured fallback (pre-measure paint): keep headings / keep-together paragraphs whole too.
+      if (sourceBlock.type === 'paragraph' && paragraphIsAtomic(sourceBlock)) {
+        if (sourceBlock.page_break_before && current.length > 0) {
+          pages.push(current);
+          current = [];
+          currentHeight = 0;
+        }
+        const blockHeight = estimateBlockHeight(sourceBlock, contentWidthMm);
+        const gap = current.length > 0 ? 8 : 0;
+        if (current.length > 0 && currentHeight + gap + blockHeight > contentHeightPx - PAGE_FIT_SAFETY_PX) {
+          pages.push(current);
+          current = [];
+          currentHeight = 0;
+        }
+        current.push({
+          key: `${sourceBlock.id}-slice-0`,
+          block: sourceBlock,
+          originalIndex: bi,
+          sliceIndex: 0,
+          startOffset: 0,
+          endOffset: flattenParagraphText(sourceBlock).length,
+        });
+        currentHeight += (current.length > 1 ? 8 : 0) + blockHeight;
         return;
       }
 

@@ -316,3 +316,37 @@ def test_import_export_roundtrip_keeps_supported_text_features(tmp_path: Path):
         block.type == "paragraph" and getattr(block, "list_kind", "none") == "numbered"
         for block in reopened.sections[0].blocks
     )
+
+
+def test_import_drops_trailing_body_sectpr_without_warning(tmp_path):
+    """The trailing body <w:sectPr> (the document's final section properties) must NOT be imported as a
+    read-only 'Unsupported' placeholder — it is captured via doc.sections and re-emitted on export, so it
+    should produce neither a placeholder block nor the spurious warning."""
+    source = tmp_path / "trailing-sectpr.docx"
+    doc = Document()
+    doc.add_heading("Overview", level=1)
+    doc.add_paragraph("Body text")
+    doc.save(source)
+
+    native = import_docx_to_native_model(source)
+
+    assert all(block.type != "unsupported" for section in native.sections for block in section.blocks)
+    assert not any(w.code == "unsupported_block" for w in native.warnings)
+
+
+def test_trailing_sectpr_roundtrips_section_properties(tmp_path):
+    """Dropping the trailing sectPr placeholder loses no section data: import -> export -> re-import keeps
+    the section properties and still produces no unsupported block / warning."""
+    source = tmp_path / "rt-src.docx"
+    exported = tmp_path / "rt-out.docx"
+    doc = Document()
+    doc.add_paragraph("Body")
+    doc.save(source)
+
+    native = import_docx_to_native_model(source)
+    export_native_docx(native, exported)
+    reopened = import_docx_to_native_model(exported)
+
+    assert reopened.sections[0].properties.page_width_twips is not None
+    assert all(block.type != "unsupported" for section in reopened.sections for block in section.blocks)
+    assert not any(w.code == "unsupported_block" for w in reopened.warnings)

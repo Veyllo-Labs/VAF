@@ -164,10 +164,11 @@
   0%   { transform: translateX(-120%); }
   100% { transform: translateX(360%); }
 }
-/* light sweep used while the thinking panel is active — a translateX overlay (no repaint) */
+/* light sweep used while the thinking panel is active — a translateX overlay (no repaint).
+   Violet tint matches the mockup (rgba(124,58,237,…)) instead of a plain white sweep. */
 .chat-shimmer-overlay {
   position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
-  background: linear-gradient(100deg, transparent 28%, rgba(255,255,255,0.5) 50%, transparent 72%);
+  background: linear-gradient(100deg, transparent 30%, rgba(124,58,237,0.10) 50%, transparent 70%);
   transform: translateX(-130%);
   animation: chatShimmer 1.9s ease-in-out infinite;
 }
@@ -400,14 +401,26 @@
 .tsc .ag { position:absolute; width:48px; height:48px; }
 .tsc .bd { position:absolute; inset:0; background:#111827; border-radius:16px; box-shadow:0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05); transform-origin:center; }
 .tsc .ey { position:absolute; left:50%; top:50%; width:17px; height:17px; margin:-8.5px 0 0 -8.5px; border-radius:50%; background:#fff; box-shadow:0 0 9px 2px rgba(255,255,255,.42); transform-origin:center; }
-/* web_search — the magnifier sweeps a document (verbatim showcase; all leak-safe) */
-.tsc.search .ag { left:24px; top:58px; } .tsc.search .bd { animation:bSearch 3.2s ease-in-out infinite; } .tsc.search .ey { animation:eSearch 2.4s ease-in-out infinite; }
-.tsc.search .doc { position:absolute; left:92px; top:50px; width:72px; height:60px; border-radius:4px; border:1px solid var(--paper-edge); background:repeating-linear-gradient(0deg,rgba(40,48,66,.5) 0 1.5px,transparent 1.5px 8px),var(--paper); }
-.tsc.search .lens { position:absolute; left:96px; top:54px; width:18px; height:18px; border-radius:50%; border:2px solid var(--ink); box-shadow:0 0 0 1px var(--ink-fill); animation:iLens 3.4s ease-in-out infinite; }
-.tsc.search .lens::after { content:""; position:absolute; right:-6px; bottom:-5px; width:7px; height:2px; background:var(--ink); border-radius:2px; transform:rotate(45deg); }
-@keyframes bSearch { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(0);} }
-@keyframes eSearch { 0%,100%{transform:translate(2px,0);} 50%{transform:translate(3px,2px);} }   /* eye stays toward the document (never returns to centre) */
-@keyframes iLens { 0%{transform:translate(0,0);} 25%{transform:translate(38px,2px);} 50%{transform:translate(8px,22px);} 75%{transform:translate(44px,24px);} 100%{transform:translate(0,0);} }
+/* web_search — the agent eagerly hunts with a magnifier (Disney/Pixar: squash-&-stretch on
+   landings, overshoot, eye-tracking, a "found it!" glint + search dust). No document frame.
+   All transform/opacity = leak-safe (see docs/web-ui/AgentAvatar.md). */
+.tsc.search .ag { left:24px; top:58px; } .tsc.search .bd { animation:bSearch 2.6s ease-in-out infinite; transform-origin:50% 90%; } .tsc.search .ey { animation:eSearch 2.6s ease-in-out infinite; }
+.tsc.search .lens { position:absolute; left:94px; top:48px; width:20px; height:20px; border-radius:50%; border:2.5px solid var(--ink); box-shadow:0 0 0 1px var(--ink-fill), inset 0 0 5px var(--ink-fill); animation:iLens 2.6s ease-in-out infinite; transform-origin:center; }
+.tsc.search .lens::after { content:""; position:absolute; right:-7px; bottom:-6px; width:9px; height:2.5px; background:var(--ink); border-radius:2px; transform:rotate(45deg); }
+.tsc.search .lens .glint { position:absolute; left:3.5px; top:3.5px; width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.9); opacity:0; animation:iGlint 2.6s ease-in-out infinite; }
+.tsc.search .pt { position:absolute; border-radius:50%; background:var(--ink-soft); opacity:0; will-change:transform,opacity; }
+.tsc.search .pt.dark { background:#111827; }   /* a couple of near-black particles for depth */
+.tsc.search .pt.a { left:120px; top:42px; width:6px; height:6px; animation:iPartDark 2.7s ease-in-out infinite; }
+.tsc.search .pt.b { left:144px; top:60px; width:4px; height:4px; animation:iPart 2.7s ease-in-out infinite .55s; }
+.tsc.search .pt.c { left:108px; top:76px; width:5px; height:5px; animation:iPart 2.7s ease-in-out infinite 1.1s; }
+.tsc.search .pt.d { left:152px; top:46px; width:3.5px; height:3.5px; animation:iPartDark 2.7s ease-in-out infinite 1.6s; }
+.tsc.search .pt.e { left:128px; top:86px; width:3.5px; height:3.5px; animation:iPart 2.7s ease-in-out infinite .85s; }
+@keyframes bSearch { 0%,100%{transform:rotate(3deg) scale(1,1);} 30%{transform:rotate(-2deg) scale(1.05,.95);} 65%{transform:rotate(1deg) scale(.98,1.03);} }
+@keyframes eSearch { 0%,100%{transform:translate(1px,0) scale(1);} 22%{transform:translate(4px,-2px) scale(1.12);} 55%{transform:translate(2px,3px) scale(1);} 80%{transform:translate(4px,0) scale(1.08);} }
+@keyframes iLens { 0%{transform:translate(0,0) scale(1,1);} 18%{transform:translate(38px,3px) scale(1.16,.84);} 26%{transform:translate(35px,2px) scale(.93,1.09);} 31%{transform:translate(36px,3px) scale(1,1);} 49%{transform:translate(8px,24px) scale(1.16,.84);} 57%{transform:translate(10px,22px) scale(.95,1.07);} 73%{transform:translate(44px,23px) scale(1.1,.9);} 81%{transform:translate(44px,22px) scale(1.24,1.24);} 89%{transform:translate(44px,22px) scale(1,1);} 100%{transform:translate(0,0) scale(1,1);} }
+@keyframes iGlint { 0%,73%{opacity:0;transform:scale(0);} 81%{opacity:1;transform:scale(1.5);} 91%{opacity:0;transform:scale(.6);} 100%{opacity:0;transform:scale(0);} }
+@keyframes iPart { 0%,100%{opacity:0;transform:translateY(3px) scale(.5);} 45%{opacity:.5;transform:translateY(-4px) scale(1);} }
+@keyframes iPartDark { 0%,100%{opacity:0;transform:translateY(3px) scale(.5);} 45%{opacity:.85;transform:translateY(-4px) scale(1);} }
 /* bash / python_exec — terminal cursor + spinner (all transform/opacity = leak-safe) */
 .tsc.execute .ag { left:30px; top:58px; } .tsc.execute .bd { animation:bExec .18s linear infinite; } .tsc.execute .ey { animation:eExec 1.1s ease-in-out infinite; }
 .tsc.execute .term { position:absolute; left:100px; top:62px; width:76px; height:42px; border-radius:5px; border:1px solid var(--ink-soft); background:var(--ink-fill); }

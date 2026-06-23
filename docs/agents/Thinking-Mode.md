@@ -15,6 +15,7 @@ Thinking mode runs the main agent in the background while the user is idle. It a
 - **Dead-session cap:** A non-admin scope ID that has been silent longer than `thinking_max_idle_age_hours` (default 7 days) is treated as a dead/orphan session, not an idle user, and is skipped. Without this, stale web-session scope IDs left in `last_interaction.json` are each seen as a separate idle user and generate a phantom run every cooldown window indefinitely. The local admin is exempt so a genuinely long-away admin still runs.
 - **Safety Abort:** If the user becomes active on any channel during a run, the thinking process is immediately aborted to prevent dual-agent responses.
 - **Workflow Guard:** Thinking mode does not start while a workflow is executing (`VAF_IN_WORKFLOW_TERMINAL=1`). This prevents idle messages from interrupting long-running workflow steps.
+- **Workflow router off:** during a background run the workflow router does not run on the thinking prompt (`chat_step` gates it on `not thinking_mode`). Otherwise the router would match the run's own proactive prompt (which mentions e.g. "automatisch um 7:00" / "create automation"), inject a `[WORKFLOW SUGGESTION]` nudge with mis-extracted variables, and steer the run toward a fabricated "create a timer" proposal. A background run has no user request to route; it only does its own housekeeping.
 - **Local-server Guard:** When the background run would share the **same local model** as the main chat (main `provider=local` and `thinking_provider` is `inherit` or `local`), a run does **not** start while the main agent is busy on that server (`TaskQueue` in-flight or queued). Idle-by-last-message is not enough: the main agent may still be mid-task from an older message, so its activity is treated as 'not idle' and the background run never contends with the user for the one local model. If the background run uses a **different** provider (e.g. thinking via API while the main chat is local, or vice versa) there is no contention and it runs concurrently as before.
 - **Locking:** Uses a global file-based lock system with PID verification to prevent parallel runs. See [Singleton Task Locking in PROCESS_MANAGEMENT.md](../setup/PROCESS_MANAGEMENT.md#singleton-task-locking).
 - **Context:** The agent loads the user's full chat session — it has the same context as the normal agent.
@@ -44,6 +45,12 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   - **NOTE:** the WebUI message handler must NOT clear `waiting_for_reply` first — the main agent's
     `chat_step` needs it to build the reply context. (It was clearing it pre-emptively, which left the
     main agent with no context and an off-topic answer; observed 2026-06-22.)
+  - **Reply context overrides stale state:** the injected reply note states that the user's message is a
+    reply to *that* background question, and that the earlier `<user_intent>`/working-memory `<Plan>`
+    (which may concern an unrelated topic) must be ignored for this turn. Without the override, a stale and
+    more prominent intent/plan block could dominate the prompt and the main agent would answer about the
+    wrong topic (observed: a reply to a background question was answered as if it were about an unrelated
+    earlier request).
 - **Content handoff (`details`):** when a message teases something the run found (e.g. "I found 15
   cooling methods, want the list?"), the run passes the ACTUAL content in `ask_user(..., details="…")`.
   `details` is stored on the request (not shown to the user) and injected into the main agent's reply
@@ -110,12 +117,14 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_no_progress_turns` | `5` | After this many turns with no decisive (act/ask/clear) tool, force a one-tool decision (no more searching). The run's turn budget is sized to give this room. |
 | `model_unload_idle_minutes` | `30` | **Desktop only.** Unload the local model after the user is *really* away (no message) this long — even with the WebUI open. Server/headless never unloads (no watchdog). |
 | `thinking_proactive_enabled` | `true` | When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2). |
-| `thinking_proactive_evidence_min_chars` | `24` | Evidence-gate (LOCAL/weak model): a proactive suggestion's `message` or `details` must quote ≥ this many chars verbatim from real retrieved memory/history, or it is dropped. |
-| `thinking_proactive_evidence_min_chars_api` | `12` | Evidence-gate when the thinking run uses a HOSTED/strong model (lenient bar; selected automatically by provider). |
+| `thinking_proactive_evidence_min_chars` | `24` | Evidence-gate **backstop** (local model): a proactive suggestion's `message` or `details` must quote ≥ this many chars verbatim from real retrieved memory/history, or it is dropped. Secondary to the un-forced prompt that forbids inventing — see [Proactive intelligence](#proactive-intelligence-stufe-2). |
+| `thinking_proactive_evidence_min_chars_api` | `12` | Evidence-gate backstop when the thinking run uses a hosted model (lenient bar; selected automatically by provider). |
 | `thinking_proactive_min_runs` | `6` | **Deprecated** — rate-limiting no longer silences runs; repeats are prevented by the recent/declined dedup prompts. Unused. |
 | `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
+
+**DeepSeek auto routing:** When the thinking provider resolves to DeepSeek with the `deepseek-auto` model, the run is treated as a background task and routes to `deepseek-v4-pro` (the best model), matching the "background task = pro" design. `_run_thinking_for_user` sets `VAF_BACKGROUND_PRO=1` (a pro-context trigger for the `deepseek-auto` resolver in `api_backend.py`) for the duration of the run and clears it in its `finally`. A dedicated flag is used rather than `VAF_IN_WORKFLOW_TERMINAL` (which would make the thinking loop **skip** the run) or `VAF_IN_AUTOMATION` (which carries other automation semantics).
 
 ---
 
@@ -140,48 +149,63 @@ The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propos
 ## Proactive intelligence (Stufe 2)
 
 When the housekeeping floor is clear (no open notes/todos) and proactivity is enabled
-(`thinking_proactive_enabled`), the run runs a **forced proactive flow** — **silence is NEVER the goal**,
-the run ALWAYS ends by asking the user *something*. There is no rate-limit that silences a run: a run that
-recently reached out still reaches out again (just not a REPEAT — the recent/declined dedup prompts prevent
-that). Frequency is bounded by `thinking_cooldown_minutes` + `thinking_idle_minutes` + quiet hours.
+(`thinking_proactive_enabled`), the run ends by asking the user *something* — but the kind of message is
+constrained so it can never be fabricated. **A fact-containing suggestion may only be delivered when it is
+genuinely grounded in a real retrieved memory.** When nothing is grounded, the run does not invent: it falls
+back to a **fact-free get-to-know question** (which states no fact, so it cannot be a fabrication). So "the
+run always asks something" still holds, while invention is structurally impossible. There is no rate-limit
+that silences a run; a REPEAT is prevented by the recent/declined dedup prompts, and frequency is bounded by
+`thinking_cooldown_minutes` + `thinking_idle_minutes` + quiet hours.
 
-- **Real memories are handed to the model (not left to the weak 4B to fetch):** before the grounded
-  turns, `_build_proactive_memory_digest` retrieves a targeted sample of the user's REAL memories **in
-  code** — several queries aimed at proactive value (recurring routine, current work, preferences),
-  `thinking_proactive_memory_k` (default **4**) each, deduped. This is necessary because the local model
-  rarely searches on its own and the forced grounding turn cannot gather. The digest is injected into the
-  grounded prompt AND seeded into the evidence pool (so a verbatim quote of it passes the gate).
+> **Why the proactive step is not forced.** An earlier design *forced* a fact-containing suggestion on every
+> clear floor (`tool_choice="required"` + a "silence is never the goal" mandate). On a thin or empty desk
+> that mandate pressured a strong model to **invent** a plausible fact to satisfy it — in one run it
+> fabricated a daily "routine" from unrelated identity memories and proposed an automation for it. The
+> proactive step is therefore **no longer forced**: the model is given a genuine choice — ground a
+> suggestion in real memory, or defer to the fact-free question — and is told explicitly never to invent.
+> This mirrors a normal main-agent / automation turn, which is reliable precisely because it executes a real
+> task and never has to manufacture a goal.
 
-1. **Grounded suggestion (forced, evidence-gated — TWO passes):** find ONE genuinely useful thing —
-   prioritising an **automation opportunity** (something the user does/asks for *repeatedly*, not already
-   covered by an existing automation → `ask_user(message="…", proposed_action="create automation: …",
-   details="<quote>")`; on "yes" the **main agent builds the automation**). The turn is forced
-   (`tool_choice="required"`) so the weak model can't churn on prose — but, unlike the housekeeping
-   forced node, **`memory_search` is allowed here** (`allow_memory_search` → `_thinking_allow_search`):
-   the model may dig into ONE specific thing itself (still read-capped, so no churn), and its results are
-   added to the evidence pool live. Two passes so a pass-1 search can become a grounded `ask_user` in
-   pass 2. The `ask_user` is evidence-gated; otherwise it falls to the get-to-know question.
-2. **Get-to-know question (forced fallback, NOT gated):** if the grounded passes produced nothing, the run
-   does **not** finish silently — it asks ONE specific question to get to know the user better (their
-   focus/work, a routine they'd like automated, an interest), so future runs can help. A question states
-   no fact, so it is exempt from the evidence-gate. The completion gate keeps the run from finishing while
-   this is still pending (`_proactive_step < 3`).
+- **Real memories are handed to the model:** before the proactive step, `_build_proactive_memory_digest`
+  retrieves a targeted sample of the user's REAL memories **in code** — several queries aimed at proactive
+  value (recurring routine, current work, preferences), `thinking_proactive_memory_k` (default **4**) each,
+  deduped. The digest is injected into the proactive prompt, which requires that **every fact in a
+  suggestion come from these memories** (quoted in `details`), and is seeded into the evidence pool that the
+  backstop gate checks against.
+
+1. **Grounded suggestion (offered, not forced — ONE pass):** the model is shown the real-memory digest and
+   may `memory_search` **once** itself (`allow_memory_search` → `_thinking_allow_search`; read-capped, so no
+   churn). It offers ONE suggestion **only if** the real memories genuinely support it — prioritising an
+   **automation opportunity** (something the user does/asks for *repeatedly*, not already covered →
+   `ask_user(message="…", proposed_action="create automation: …", details="<the real memory it is based
+   on>")`; on "yes" the **main agent builds the automation**). There is **no `tool_choice="required"`** and
+   no pressure to produce a suggestion: if the memories do not support one — or a suggestion would require
+   inventing any detail — the model calls `thinking_done` and the run defers to the get-to-know question.
+   Every stated fact must come from the digest/memory; a half-remembered or paraphrased "fact" counts as
+   invention and must not be sent.
+2. **Get-to-know question (fact-free fallback):** if the proactive step grounded nothing, the run does
+   **not** finish silently — it asks ONE specific, friendly question to get to know the user better (their
+   focus/work, a routine they'd like automated, an interest), so future runs can help. A question states no
+   fact, so it can never be a fabrication; this is the safe way to honour "always ask one question". The
+   completion gate keeps the run from finishing while this is still pending (`_proactive_step < 3`).
 
 - **Message gate (3 modes, set per turn in `deliver_tracked_message`):** a FREE message (no
   `source_note_id`/`source_todo_id`) is governed by the run's mode (`thinking_mode.set_proactive_mode`):
   - **`off`** (gather / forced-resolution): a free message is **blocked** — this kills the generic turn-0
     floskel ("no tasks, I'm ready when you need me") that previously slipped through before the proactive
     flow even ran.
-  - **`grounded`** (proactive grounding passes): delivered if the **`message` OR `details`** quotes a
-    verbatim, normalized substring of ≥ the evidence bar from this run's REAL retrieved memory/history
-    (the per-run **evidence pool** = turn-0 `memory_context` + the pre-fetched proactive digest + recent
-    user messages + every `memory_search` result captured live, including the model's own searches). The
-    normalizer folds punctuation/hyphens (so "Three-Second-Loop" matches "Three-Second Loop") but never
-    paraphrase. The bar is **provider-calibrated**: `thinking_proactive_evidence_min_chars` (24) for the
-    LOCAL/weak model, `thinking_proactive_evidence_min_chars_api` (12) for a HOSTED/strong model that
-    rarely fabricates. If neither field is grounded the suggestion is dropped — but the run then climbs to
-    the get-to-know step (it never goes silent). Anti-fabrication floor: a real memory substring is always
-    required.
+  - **`grounded`** (proactive step): a **backstop** check — the suggestion is delivered only if `message` OR
+    `details` quotes a verbatim, normalized substring of ≥ the evidence bar from this run's REAL retrieved
+    memory/history (the per-run **evidence pool** = turn-0 `memory_context` + the pre-fetched digest +
+    recent user messages + every `memory_search` result captured live). The normalizer folds
+    punctuation/hyphens (so "Three-Second-Loop" matches "Three-Second Loop") but never paraphrase. **This is
+    a secondary safety net, not the primary defense:** a substring match only proves that *some* phrase is
+    real, not that the whole message is grounded — a message that quotes one real phrase and invents the
+    rest can still pass it (this is exactly how a fabricated suggestion once slipped through). The real
+    protection is upstream — the proactive step is un-forced and the prompt forbids inventing, so a strong
+    model declines rather than fabricates. An ungrounded free message is still dropped here, and the run then
+    falls to the fact-free get-to-know step. Bars: `thinking_proactive_evidence_min_chars` (24) local,
+    `thinking_proactive_evidence_min_chars_api` (12) hosted.
   - **`open`** (get-to-know step): delivered (a question states no fact, so it cannot fabricate).
   Housekeeping deliveries (carrying a source id) are always exempt. When the `grounded`/`open` gate drops a
   FREE message, `ask_user` returns **mode-aware feedback**: in `off` it tells the model to call
@@ -194,8 +218,9 @@ that). Frequency is bounded by `thinking_cooldown_minutes` + `thinking_idle_minu
   a user turn (`_main_agent_busy` via `TaskQueue`, ALL providers), and if a user turn begins mid-run the
   proactive message is recorded (request + `waiting_for_reply`) but its live push is **deferred** (it
   surfaces on the user's next load) — never dropped.
-- **Honest limit:** with the local 4B the *cleverness* is model-bound — realistic output is surfacing a
-  real, citable thing + one concrete step. On a hosted model the bar is relaxed and quality is higher.
+- **Honest limit:** the *usefulness* of a proactive suggestion is bounded by what is genuinely in memory —
+  a clear floor with thin memory correctly yields a fact-free get-to-know question, not a manufactured
+  suggestion. Quality rises as real, citable memories accumulate.
 
 ---
 
@@ -231,7 +256,7 @@ To prevent runaway API usage (e.g. the model repeatedly calling `thinking_done` 
 
 - **`thinking_done` hard break:** When the model calls `thinking_done`, the agent’s internal tool loop exits immediately. The dispatch is special-cased in `vaf/core/agent.py` (chat_step tool loop) and returns before the normal tool execution — so it also runs the `thinking_done(message=...)` delivery inline via `deliver_thinking_done_fallback` (otherwise the message fallback would be silently dropped). No further API request is made for that turn; the tool result is written to history and the run ends.
 - **Completion gate (guards the exit):** the OUTER thinking loop (`thinking_mode.py`) does not accept the first `thinking_done` while a captured note/todo is unresolved — it injects ONE targeted nudge and continues. Single-shot per run (`thinking_gate_enabled`). See [Run flow](#run-flow).
-- **Forced-resolution node (the enforceable gate-tree):** a weak local model tends to narrate its intended action as prose instead of emitting the tool call (observed repeatedly: it wrote "I'll call ask_user…" and even composed the full suggestion as text, but only ever called `web_search`). So housekeeping is **enforced**, not requested: for each open ledger item, the loop drives a forced node — it calls `chat_step(..., force_tool_choice="required")` with a per-item prompt, and during that step the read-cap blocks ALL gather tools from the first call (`_thinking_force_progress`). The model therefore **must** emit a decisive tool (`ask_user` / `delete_automation_*`) for that item — it can no longer escape into search or prose. The force applies to the first generation of the step only, then reverts to `auto` so the model can finish. `tool_choice` is honoured by the local llama-server (verified). In `vaf/core/thinking_mode.py` (`_build_forced_item_prompt` + the outer loop) and `vaf/core/agent.py` (`chat_step(force_tool_choice=...)`).
+- **Forced-resolution node (the enforceable gate-tree):** a weak local model tends to narrate its intended action as prose instead of emitting the tool call (observed repeatedly: it wrote "I'll call ask_user…" and even composed the full suggestion as text, but only ever called `web_search`). So housekeeping is **enforced**, not requested: for each open ledger item, the loop drives a forced node — it calls `chat_step(..., force_tool_choice="required")` with a per-item prompt, and during that step the read-cap blocks ALL gather tools from the first call (`_thinking_force_progress`). The model therefore **must** emit a decisive tool (`ask_user` / `delete_automation_*`) for that item — it can no longer escape into search or prose. The force applies to the first generation of the step only, then reverts to `auto` so the model can finish. `tool_choice` is honoured by the local llama-server (verified). **On DeepSeek** (flash/pro), the API rejects `tool_choice="required"` with a 400, so `APIBackendManager.chat_completion` auto-downgrades it to `"auto"` (see `docs/llm/LLM_BACKEND_FACTS.md`); the forced node still works because the per-item prompt + the read-cap (which blocks all gather tools on the forced step) compel the decisive tool call without the API-level force. In `vaf/core/thinking_mode.py` (`_build_forced_item_prompt` + the outer loop) and `vaf/core/agent.py` (`chat_step(force_tool_choice=...)`).
 - **Progress-gate (backstop against spinning):** the completion gate only fires *when* the model calls `thinking_done`. As a backstop for the proactive rung, the progress-gate counts consecutive turns with no decisive tool (`ask_user`, `delete_automation_*`, `create_automation`, `save_thinking_suggestion`, `thinking_done`) and, after `thinking_no_progress_turns` (default **5**), forces a single-tool decision. In `vaf/core/thinking_mode.py` (`_turn_used_progress_tool` + the outer loop).
 - **Read-tool cap (anti-churn):** in a thinking run a read/gather tool (`memory_search`, `web_search`, `list_automation_notes/todos`, `list_automations`) is blocked after `thinking_read_cap_per_tool` (default **3**) calls within one step, returning a result that tells the model to act. This catches the varied-query `memory_search`/`web_search` spin the redundant block misses (it needs exact args). Gated by `VAF_THINKING_MODE` (`_thinking_read_cap_step` in `vaf/core/agent.py`); the main chat is unaffected.
 - **Max tool turns per step:** A background thinking turn is capped at `thinking_max_tool_turns` (default **15**) tool-result cycles; the main chat uses a higher cap (75). If the model keeps calling tools without finishing, the run stops at the cap. Enforced in the chat_step tool loop in `vaf/core/agent.py` — this tighter background cap stops the tool-spin observed on weak local models.
@@ -252,10 +277,11 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 | `thinking_done` | **Only in Thinking Mode** | Signals end of the run; optional `message`/`proposed_action`/`source_note_id` deliver a final question as a fallback for `ask_user` (same tracked path) |
 | `thinking_note_add` | **Only in Thinking Mode** | Saves persistent notes for next run |
 | `save_thinking_suggestion` | **Only in Thinking Mode** | Proposes user-profile updates for review in Settings |
-| `memory_save` | ❌ Excluded | Thinking should read memory, not write to it |
-| `update_user_identity` | ❌ Excluded | Do not mutate the profile in the background — propose via `save_thinking_suggestion` |
-| `set_timer` | ❌ Excluded | Do not schedule user-facing actions directly — propose via `ask_user`; the main agent sets it on confirm |
-| `git_add_commit` / `git_status` / `git_log` | ❌ Excluded | VAF is the user's project, not the agent's |
+| `memory_save` | Excluded | Thinking should read memory, not write to it |
+| `update_user_identity` | Excluded | Do not mutate the profile in the background — propose via `save_thinking_suggestion` |
+| `update_intent` | No-op | A background run must not overwrite the main chat's `user_intent`. The tool returns a no-op in thinking mode (`VAF_THINKING_MODE`), so a run cannot write itself a directive that the next run would read back as a standing order |
+| `set_timer` | Excluded | Do not schedule user-facing actions directly — propose via `ask_user`; the main agent sets it on confirm |
+| `git_add_commit` / `git_status` / `git_log` | Excluded | VAF is the user's project, not the agent's |
 
 ---
 
@@ -282,6 +308,8 @@ Notes are stored in `thinking_notes.db` (SQLite, per-user isolated) and injected
 When the user refuses a question the agent asked (replies with "Nein", "no", "nicht", etc.), the agent:
 - Records the question text + user reply in `thinking_declined_questions.json` (auto-expire 30 days, max 20 entries)
 - Injects a "DO NOT ask these again" section into the next run's system prompt
+
+A reply that *asks a question back* (e.g. "nein habe ich nicht, wie kommst du darauf?") is **not** treated as a refusal: `_is_refusal` skips any reply that contains an interrogative question, so a clarification or a dispute of the premise is handed to the main agent to answer rather than being silently logged as a decline and dropped.
 
 The actual sent question text is captured from the `send_telegram` / `send_whatsapp` / `send_discord` tool call arguments, not from a summary.
 

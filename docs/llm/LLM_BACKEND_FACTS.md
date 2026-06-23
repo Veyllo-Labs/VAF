@@ -167,9 +167,9 @@ DeepSeek's API (both `deepseek-v4-flash` and `deepseek-v4-pro`) only supports `t
 
 Note: Despite the error message saying "deepseek-reasoner", this affects **all** current DeepSeek models — `v4-flash` and `v4-pro` are internally reasoning models. The API returns this misleading model name regardless of what model name was sent.
 
-**Fix in `vaf/tools/coder.py`:** When `_provider == "deepseek"` and `tool_choice == "required"`, the coding agent downgrades to `"auto"` and injects an explicit user message instructing the model to call `set_todos` immediately. This preserves the planning-first behavior without relying on the API parameter.
+**Universal fix in `vaf/core/api_backend.py`:** `APIBackendManager.chat_completion` downgrades any forcing `tool_choice` to `"auto"` for DeepSeek — when `provider_name == "deepseek"`, `tools` are present, and `tool_choice` is `"required"` or a specific function-forcing dict, it is rewritten to `"auto"`. `"auto"`/`"none"`/no-tools and non-DeepSeek providers are left untouched. The block runs **after** the `deepseek-auto` model resolution and the reasoner guard (so the reasoner guard's `"none"` is not re-touched), and **before** the provider call — the single chokepoint that every caller routed through the manager passes (main agent streaming/non-stream/fallback, thinking-mode forced nodes, sub-agents). Forced-tool callers already carry a prompt-level imperative, so they degrade gracefully.
 
-**Fix in `vaf/core/api_backend.py`:** The same guard exists for the main agent's tool router.
+**Additional fix in `vaf/tools/coder.py`:** The coding agent keeps its own equivalent guard because it bypasses `APIBackendManager` and posts to the provider over HTTP directly. When `_provider == "deepseek"` and `tool_choice == "required"`, it downgrades to `"auto"` and injects an explicit user message instructing the model to call `set_todos` immediately, preserving the planning-first behavior without relying on the API parameter.
 
 ---
 

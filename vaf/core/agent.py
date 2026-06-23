@@ -5475,8 +5475,11 @@ class Agent:
                         _facts = (" You do not have the specifics on hand; if the user asks for details, look "
                                   "them up (e.g. web_search) — do NOT make up facts.")
                     self._thinking_reply_context = (
-                        f"[Context: During a background pass you reached out to the user with: \"{q_text}\".{_facts}"
-                        f"{_carry} The user's reply follows immediately after this system note.]"
+                        f"[Context: The user's message below is a REPLY to a question YOUR background pass "
+                        f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
+                        f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
+                        f"are unrelated to this reply and must not be treated as the topic. The user's reply "
+                        f"follows immediately after this system note.]"
                     )
                 else:
                     self._thinking_reply_context = None
@@ -5611,7 +5614,13 @@ class Agent:
         # Workflows provide structured, multi-step pipelines for common tasks
         
         workflow_tried = False
-        if not skip_input and not disable_workflows:
+        # Never run the workflow router during a background thinking run: it would match the thinking
+        # PROMPT itself (which contains phrases like "automatisch um 7:00"/"create automation") and prepend
+        # a "[WORKFLOW SUGGESTION] Create Scheduled Task" nudge — with garbage variables (every var "07:00")
+        # — steering the run to fabricate a "create a timer" proposal. The thinking run has no user request
+        # to route; it only does its own housekeeping. Use the turn-local param, not the env var (the env
+        # var can leak across concurrent threads).
+        if not skip_input and not disable_workflows and not thinking_mode:
             workflow_tried = True
             # Try workflow matching BEFORE adding to history
             workflow_result = self._try_workflow(user_input, stream_callback)

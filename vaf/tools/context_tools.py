@@ -73,10 +73,18 @@ class UpdateIntentTool(BaseTool):
     def run(self, **kwargs) -> str:
         base_dir = kwargs.get('base_dir', '.')
         intent = kwargs.get('intent', '')
-        
+
         if not intent:
             return "Error: Intent content is required."
-        
+
+        # A background thinking run must NEVER overwrite the session North Star. user_intent is the MAIN
+        # chat's goal; a background run that writes it creates a self-reinforcing directive loop (it once
+        # wrote 'Propose automating Mert's daily Mutivation routines' from a distorted memory, then read it
+        # back as an order every run). The existing intent-locks (agent.py) only guard the auto-write of
+        # user input, not this tool path — so guard it here too.
+        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+            return "Noted (intent not changed: a background run does not modify the main chat's user intent)."
+
         try:
             mpm = MainPersistenceManager(base_dir, session_id=_current_session_id())
             mpm.update_user_intent(intent)

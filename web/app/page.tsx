@@ -5367,9 +5367,11 @@ function VAFDashboardContent() {
                                                         ? (answerMsg.content.includes('<think>') && !parsedAns.isThinkingComplete)
                                                         : (msg.content.includes('<think>') && !isThinkingComplete);
                                                     const botAvatarMode: AvatarMode = (isLatestBot && !loading)
-                                                        ? (agentReaction ? agentReaction
+                                                        // delegate has TOP priority: while a sub-agent runs it stays stable, so tool-outcome
+                                                        // flashes (agentReaction) can't interrupt it and make the sub-agent re-spawn mid-run.
+                                                        ? (isSubAgentRunning ? 'delegate'
+                                                            : agentReaction ? agentReaction
                                                             : gateRequest ? 'permission'
-                                                            : isSubAgentRunning ? 'delegate'   // a sub-agent is doing the work → hand-off animation
                                                             : !isGenerating ? 'idle'
                                                             : liveThinking ? 'thinking'
                                                             : 'talking')

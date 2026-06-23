@@ -42,7 +42,9 @@ export type AvatarMode =
     // Activity · Status (a barrier the agent bumps into)
     | 'blocked'
     // Activity · Multi-Agent — the agent hands a token to a sub-agent (used while a sub-agent runs)
-    | 'delegate';
+    | 'delegate'
+    // Activity · Tool scenes (agent + the running tool's prop, the whole showcase scene scaled to 36px)
+    | 'searching' | 'executing' | 'browsing' | 'writing' | 'downloading' | 'uploading' | 'remembering';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
@@ -111,6 +113,31 @@ const E_ACT: Partial<Record<AvatarMode, string>> = {
 };
 const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking' || m === 'blocked' || m === 'delegate';
 
+// Tool-activity scenes: the whole showcase scene scaled 0.75 (agent stays 36px) + the tool's prop.
+// `l`/`t` = wrapper offset (showcase agent position × 0.75, negated) so the agent sits at the avatar's
+// left; `w`/`h` size the avatar area so the prop has room (the rest overflows visibly, like delegate).
+const TOOL_SCENES: Record<string, { cls: string; l: number; t: number; w: number; h: number }> = {
+    searching: { cls: 'search', l: -18, t: -43.5, w: 108, h: 36 },
+    executing: { cls: 'execute', l: -22.5, t: -43.5, w: 110, h: 36 },
+    browsing: { cls: 'browse', l: -19.5, t: -42, w: 110, h: 36 },
+    writing: { cls: 'write', l: -18, t: -43.5, w: 114, h: 36 },
+    downloading: { cls: 'download', l: -57, t: -55.5, w: 44, h: 36 },
+    uploading: { cls: 'upload', l: -57, t: -55.5, w: 44, h: 36 },
+    remembering: { cls: 'remembering', l: -57, t: -58.5, w: 46, h: 36 },
+};
+const toolProps = (m: AvatarMode): React.ReactNode => {
+    switch (m) {
+        case 'searching': return (<><div className="doc" /><div className="lens" /></>);
+        case 'executing': return (<><div className="term"><span className="prompt" /><span className="cur" /></div><div className="spinner" /></>);
+        case 'browsing': return (<div className="globe"><i className="glon" /></div>);
+        case 'writing': return (<div className="editor"><span className="tline" /><span className="caret" /></div>);
+        case 'downloading':
+        case 'uploading': return (<><span className="arrow" /><span className="pkt p1" /><span className="pkt p2" /><span className="pkt p3" /></>);
+        case 'remembering': return (<><span className="mem m1" /><span className="mem m2" /><span className="mem m3" /><span className="mem m4" /></>);
+        default: return null;
+    }
+};
+
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
 
@@ -146,6 +173,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
 
     const active = shown !== 'idle';
     const act = isActivity(shown);
+    const toolScene = TOOL_SCENES[shown];   // non-null while a tool runs → render the scaled scene instead of the plain body
 
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';
@@ -170,7 +198,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const eyeSize = dim ? 14 : shown === 'talking' ? 15 : 14;
 
     return (
-        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: shown === 'delegate' ? 88 : undefined, transition: 'width 0.25s ease' }}>
+        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: toolScene ? toolScene.w : (shown === 'delegate' ? 88 : undefined), transition: 'width 0.25s ease' }}>
             {/* The agent is PERSISTENT — never destroyed, hidden, scaled or faded on a state
                 change. Only the running animation (body/eye) and the surrounding props swap, so the
                 figure stays in one piece. */}
@@ -328,10 +356,20 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     </>
                 )}
 
+                {/* tool-activity scene — the agent + the running tool's prop (the whole showcase scene scaled
+                    so the agent stays 36px). Rendered INSTEAD of the plain body while a tool runs. */}
+                {toolScene && !dim && (
+                    <div className={`tsc ${toolScene.cls}`} style={{ left: toolScene.l, top: toolScene.t }}>
+                        <div className="ag"><div className="bd" /><div className="ey" /></div>
+                        {toolProps(shown)}
+                    </div>
+                )}
+
                 {/* AGENT STAGE — the persistent figure (body+eye). For `blocked` the agent keeps its FIXED
                     size and only GLIDES left (transform + transition only = leak-safe) to free room for the
                     barrier on the right, like the showcase play: the agent is never shrunk, swapped or faded.
                     For `delegate` the stage is a 36px box on the LEFT (the root is wider); else it fills the root. */}
+                {!toolScene && (
                 <div style={{
                     position: 'absolute',
                     ...(shown === 'delegate' ? { left: 0, top: 0, width: 36, height: 36 } : { inset: 0 }),
@@ -361,6 +399,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         }} />
                     </div>
                 </div>
+                )}
             </div>
         </div>
     );

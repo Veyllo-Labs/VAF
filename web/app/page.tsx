@@ -864,6 +864,19 @@ const SystemStep = ({ message, isLoading, onClick, useBotIcon = false }: { messa
     );
 };
 
+// Map a running tool's raw name → the avatar's tool-scene animation (null = no special scene).
+// Sub-agent tools are handled separately (isSubAgentRunning → 'delegate'), so they're not listed here.
+function toolAvatarMode(rawName: string): AvatarMode | null {
+    const n = (rawName || '').toLowerCase();
+    if (n === 'browser_agent') return 'browsing';                                                   // globe
+    if (['web_search', 'webfetch', 'web_fetch', 'read_file', 'find_files', 'github_get_file', 'github_search_files', 'github_get_file_structure'].includes(n)) return 'searching';   // magnifier over a document
+    if (['bash', 'python_exec', 'python_sandbox'].includes(n)) return 'executing';                  // terminal + spinner
+    if (['write_file', 'document_writer', 'document_editor', 'move_file', 'github_update_file', 'replace_editor_text', 'replace_editor_selection'].includes(n)) return 'writing';   // editor types
+    if (['memory_save', 'memory_search', 'add_memory', 'update_codex'].includes(n)) return 'remembering';   // recall dots
+    if (n.startsWith('send_') || n === 'whatsapp_call') return 'uploading';                         // packets rise out
+    return null;
+}
+
 // One ▢ step box. The active box pops bigger + opaque and is RANDOMLY black-filled or just a crisp
 // outline; idle boxes are small, faint, hollow. Monochrome (no colours); fill toggles per tick.
 const PlanBox = ({ active, filled }: { active: boolean; filled: boolean }) => (
@@ -1091,6 +1104,7 @@ function VAFDashboardContent() {
     const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string }[]>([]);
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
+    const [activeToolMode, setActiveToolMode] = useState<AvatarMode | null>(null); // avatar animation for the running tool (web_search→searching, …)
 
     const pendingCreateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
     const pendingUpdateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
@@ -2266,11 +2280,13 @@ function VAFDashboardContent() {
                     const toolName = String(name || '').toLowerCase();
                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolName);
 
-                    // Track active tool for loading bubble
+                    // Track active tool for loading bubble + the avatar's tool animation
                     if (subType === 'start') {
                         setActiveToolName(String(name || '').replace(/_/g, ' '));
+                        setActiveToolMode(toolAvatarMode(String(name || '')));
                     } else if (subType === 'end' || subType === 'error') {
                         setActiveToolName('');
+                        setActiveToolMode(null);
                     }
 
                     if (subType === 'start' && isSubAgentTool) {
@@ -5369,7 +5385,9 @@ function VAFDashboardContent() {
                                                     const botAvatarMode: AvatarMode = (isLatestBot && !loading)
                                                         // delegate has TOP priority: while a sub-agent runs it stays stable, so tool-outcome
                                                         // flashes (agentReaction) can't interrupt it and make the sub-agent re-spawn mid-run.
-                                                        ? (isSubAgentRunning ? 'delegate'
+                                                        // a tool with its own scene wins (incl. browser_agent → globe); other sub-agents → delegate.
+                                                        ? (activeToolMode ? activeToolMode
+                                                            : isSubAgentRunning ? 'delegate'
                                                             : agentReaction ? agentReaction
                                                             : gateRequest ? 'permission'
                                                             : !isGenerating ? 'idle'

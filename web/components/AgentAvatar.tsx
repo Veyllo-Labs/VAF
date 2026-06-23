@@ -174,6 +174,13 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const active = shown !== 'idle';
     const act = isActivity(shown);
     const toolScene = TOOL_SCENES[shown];   // non-null while a tool runs → render the scaled scene instead of the plain body
+    // A tool scene (or delegate) extends a prop to the agent's RIGHT. Reserving that as layout WIDTH would
+    // shove the whole content column (timeline / bubble) rightward every time a tool runs. Instead keep the
+    // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
+    // negative margin-left pulls the scene (and the agent with it) left, an equal margin-right restores the
+    // margin-box so nothing to the RIGHT moves. Margins transition (not per-frame) → leak-safe.
+    const sceneWidth = toolScene ? toolScene.w : (shown === 'delegate' ? 88 : 0);
+    const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
 
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';
@@ -198,7 +205,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const eyeSize = dim ? 14 : shown === 'talking' ? 15 : 14;
 
     return (
-        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: toolScene ? toolScene.w : (shown === 'delegate' ? 88 : undefined), transition: 'width 0.25s ease' }}>
+        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: leanLeft ? 36 : undefined, marginLeft: leanLeft ? -leanLeft : undefined, marginRight: leanLeft ? leanLeft : undefined, transition: 'margin 0.25s ease' }}>
             {/* The agent is PERSISTENT — never destroyed, hidden, scaled or faded on a state
                 change. Only the running animation (body/eye) and the surrounding props swap, so the
                 figure stays in one piece. */}

@@ -117,9 +117,11 @@ The editor renders the document as a sequence of fixed-size A4 pages (210 × 297
 Page breaking uses actual DOM measurement rather than character-count heuristics. The `splitBlocksIntoPages` function in `NativeDocxEditor.tsx`:
 
 1. Creates a hidden measurement host element matching the page's content width.
-2. For each paragraph, renders a preview node off-screen and measures its height.
+2. For each paragraph, renders a preview node off-screen (`createPreviewNode`) and measures its height (`measureRenderedBlockHeight`).
 3. When a paragraph exceeds the remaining space on the current page, a binary-search algorithm (`fitParagraphSliceToHeight`) splits the paragraph text at a word boundary that fits.
-4. Non-paragraph blocks (tables, images, page breaks) use simpler height estimation.
+4. Non-paragraph blocks (tables, images, page breaks) use the same measurement wrapper; a DOM-free estimate (`estimateBlockHeight`) is used only when no document is available (server render).
+
+**Invariant: measurement must mirror render.** The off-screen measurement node and the on-screen render node (`DocxBlockPreview`) take their typography (tag, font family, font size, line height, per-style margins, list marker) from one shared helper, `paragraphVisualStyle`. The measurement wrapper chrome (`measureRenderedBlockHeight`) matches the on-screen block chrome (`InlineEditableBlock`: 2px vertical padding plus a 2px transparent border). The measured node carries the paragraph's real margins, and the wrapper's border stops them collapsing out, so `getBoundingClientRect` includes them — the packer therefore adds no separate inter-block gap. If measurement and render diverge, pages either underfill (dead space, too many pages) or overflow the fixed-height page; any change to a block's visual styling must go through `paragraphVisualStyle` so the two cannot drift.
 
 Each rendered block carries metadata (`originalIndex`, `sliceIndex`, `startOffset`, `endOffset`) so the rest of the editor can map between paginated slices and the original document model.
 

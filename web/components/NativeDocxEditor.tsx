@@ -77,9 +77,13 @@ type ParagraphPaginationSlice = {
 };
 
 const MM_TO_PX = 96 / 25.4;
+const PT_TO_PX = 96 / 72;
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
-const BLOCK_VERTICAL_CHROME_PX = 20;
+// Real per-block chrome measured/rendered: InlineEditableBlock has px-1 py-0.5 (2px vertical padding)
+// + border-2 (2px) on top and bottom = 8px. measureRenderedBlockHeight wraps blocks with the SAME chrome
+// (see :measureRenderedBlockHeight). Keep this in sync with that wrapper, or pagination drifts.
+const BLOCK_VERTICAL_CHROME_PX = 8;
 const PAGE_FIT_SAFETY_PX = 6;
 
 function twipsToMm(value: number | null | undefined, fallback: number): number {
@@ -180,20 +184,20 @@ function splitParagraphForPagination(paragraph: NativeDocxParagraph, contentWidt
 
 function estimateBlockHeight(block: NativeDocxBlock, contentWidthMm: number): number {
   if (block.type === 'paragraph') {
+    // Mirror the rendered metrics (shared paragraphVisualStyle): real font-size / line-height + the block's
+    // own top+bottom margin + the 8px wrapper chrome. The measured path is preferred in the browser; this
+    // DOM-free estimate only needs to be close enough not to grossly over- or under-fill before measurement.
+    const v = paragraphVisualStyle(block);
+    const fontSizePt = parseFloat(String(v.style.fontSize)) || 11;
+    const lineHeightPx = fontSizePt * PT_TO_PX * (typeof v.style.lineHeight === 'number' ? v.style.lineHeight : 1.4);
     const text = flattenParagraphText(block);
-    const fontSize = block.runs[0]?.font_size_pt ?? 11;
-    const lineHeight = Math.max(fontSize * 1.65, 18);
     const charsPerLine = paragraphCharsPerLine(contentWidthMm);
     const logicalLines = Math.max(1, Math.ceil(Math.max(text.length, 1) / charsPerLine));
-    const styleBoost =
-      block.style_name === 'Title' ? 18 :
-      block.style_name === 'Heading 1' ? 14 :
-      block.style_name === 'Heading 2' ? 10 :
-      block.style_name === 'Heading 3' ? 6 : 0;
-    return Math.ceil(logicalLines * lineHeight + styleBoost + BLOCK_VERTICAL_CHROME_PX);
+    const m = paragraphMarginTopBottomPx(block);
+    return Math.ceil(logicalLines * lineHeightPx + m.top + m.bottom + BLOCK_VERTICAL_CHROME_PX);
   }
   if (block.type === 'table') return Math.max(64, block.rows.length * 54) + BLOCK_VERTICAL_CHROME_PX;
-  if (block.type === 'image') return Math.max(120, Math.min(260, block.height_px ?? 180)) + BLOCK_VERTICAL_CHROME_PX;
+  if (block.type === 'image') return Math.max(120, Math.min(256, block.height_px ?? 180)) + BLOCK_VERTICAL_CHROME_PX;
   if (block.type === 'unsupported') return 42 + BLOCK_VERTICAL_CHROME_PX;
   return 0;
 }
@@ -223,30 +227,25 @@ function createParagraphSlice(
   };
 }
 
-function paragraphTagName(paragraph: NativeDocxParagraph): 'h1' | 'h2' | 'h3' | 'p' {
-  if (paragraph.style_name === 'Title' || paragraph.style_name === 'Heading 1') return 'h1';
-  if (paragraph.style_name === 'Heading 2') return 'h2';
-  if (paragraph.style_name === 'Heading 3') return 'h3';
-  return 'p';
-}
-
 function createPreviewNode(measureDocument: Document, block: NativeDocxBlock): HTMLElement {
   if (block.type === 'paragraph') {
-    const tagName = paragraphTagName(block);
-    const node = measureDocument.createElement(tagName);
-    const isHeading = tagName !== 'p';
-    node.style.margin = '0';
+    // Match DocxBlockPreview exactly (shared paragraphVisualStyle) so measured height == rendered height.
+    const v = paragraphVisualStyle(block);
+    const node = measureDocument.createElement(v.tag);
     node.style.textAlign = block.alignment;
-    node.style.fontWeight = isHeading ? '700' : '400';
     node.style.whiteSpace = 'pre-wrap';
     node.style.overflowWrap = 'anywhere';
-    if (isHeading) {
-      node.style.fontSize = tagName === 'h1' ? '1.5em' : tagName === 'h2' ? '1.25em' : '1.1em';
-    }
+    node.style.fontFamily = v.fontFamily;
+    node.style.fontSize = String(v.style.fontSize);
+    node.style.lineHeight = String(v.style.lineHeight);
+    node.style.fontWeight = String(v.style.fontWeight ?? 400);
+    node.style.margin = String(v.style.margin ?? '0');                 // real margin -> counted in the wrapper box
+    if (v.style.paddingBottom) node.style.paddingBottom = String(v.style.paddingBottom); // Title rule height
+    if (v.style.borderBottom) node.style.borderBottom = String(v.style.borderBottom);    // Title rule height
 
     if (block.list_kind !== 'none') {
       const marker = measureDocument.createElement('span');
-      marker.style.marginRight = '8px';
+      marker.style.marginRight = v.listMarkerMarginRight;
       marker.style.color = '#9ca3af';
       marker.textContent = block.list_kind === 'bullet' ? '•' : '1.';
       node.appendChild(marker);
@@ -257,9 +256,9 @@ function createPreviewNode(measureDocument: Document, block: NativeDocxBlock): H
       if (run.bold) span.style.fontWeight = '700';
       if (run.italic) span.style.fontStyle = 'italic';
       if (run.underline) span.style.textDecoration = 'underline';
-      if (run.font_name) span.style.fontFamily = run.font_name;
-      if (run.font_size_pt) span.style.fontSize = `${run.font_size_pt}pt`;
-      if (run.color) span.style.color = `#${run.color.replace('#', '')}`;
+      const ff = runFontFamily(run.font_name);                         // match render: only a non-default font
+      if (ff) span.style.fontFamily = ff;
+      if (run.font_size_pt && run.font_size_pt !== 11) span.style.fontSize = `${run.font_size_pt}pt`; // match render
       span.textContent = run.text || '\u00A0';
       node.appendChild(span);
     });
@@ -291,7 +290,7 @@ function createPreviewNode(measureDocument: Document, block: NativeDocxBlock): H
 
   if (block.type === 'image') {
     const node = measureDocument.createElement('div');
-    node.style.height = `${Math.max(120, Math.min(260, block.height_px ?? 180))}px`;
+    node.style.height = `${Math.max(120, Math.min(256, block.height_px ?? 180))}px`;
     node.style.borderRadius = '8px';
     node.style.overflow = 'hidden';
     if (block.base64_data) {
@@ -363,9 +362,12 @@ function measureRenderedBlockHeight(
   const wrapper = measureDocument.createElement('div');
   wrapper.style.width = `${contentWidthPx}px`;
   wrapper.style.boxSizing = 'border-box';
-  wrapper.style.padding = '8px 12px';
+  // Match the on-screen block wrapper (InlineEditableBlock: px-1 py-0.5 + border-2) so the measured
+  // border-box height equals the rendered height. The 2px transparent border also stops the inner node's
+  // margin collapsing out, so getBoundingClientRect includes the paragraph's real top/bottom margin.
+  wrapper.style.padding = '2px 4px';
   wrapper.style.border = '2px solid transparent';
-  wrapper.style.borderRadius = '12px';
+  wrapper.style.borderRadius = '4px';
   wrapper.appendChild(createPreviewNode(measureDocument, block));
   host.appendChild(wrapper);
   const height = Math.ceil(wrapper.getBoundingClientRect().height);
@@ -486,7 +488,7 @@ function splitBlocksIntoPages(
             currentHeight = 0;
           }
           const fullHeight = measureRenderedBlockHeight(measureDocument, host, sourceBlock, contentWidthPx);
-          const gap = current.length > 0 ? 8 : 0;
+          const gap = 0; // inter-block spacing is the block's own margin, already in its measured height
           const availableHeightPx = contentHeightPx - currentHeight - gap - PAGE_FIT_SAFETY_PX;
           if (fullHeight > availableHeightPx && current.length > 0) {
             pages.push(current);
@@ -502,7 +504,7 @@ function splitBlocksIntoPages(
               startOffset: 0,
               endOffset: flattenParagraphText(sourceBlock).length,
             });
-            currentHeight += (current.length > 1 ? 8 : 0) + fullHeight;
+            currentHeight += fullHeight; // block height already includes its own top/bottom margin
             return;
           }
           // else: taller than an empty page AND page already empty -> fall through to the slicer
@@ -519,7 +521,7 @@ function splitBlocksIntoPages(
             currentHeight = 0;
           }
 
-          const gap = current.length > 0 ? 8 : 0;
+          const gap = 0; // inter-block spacing is the block's own margin, already in its measured height
           const availableHeightPx = contentHeightPx - currentHeight - gap - PAGE_FIT_SAFETY_PX;
           let fitted = fitParagraphSliceToHeight(
             measureDocument,
@@ -552,7 +554,7 @@ function splitBlocksIntoPages(
             startOffset: fitted.startOffset,
             endOffset: fitted.endOffset,
           });
-          currentHeight += (current.length > 1 ? 8 : 0) + blockHeight;
+          currentHeight += blockHeight; // block height already includes its own top/bottom margin
           startOffset = fitted.endOffset;
           sliceIndex += 1;
 
@@ -575,7 +577,7 @@ function splitBlocksIntoPages(
           currentHeight = 0;
         }
         const blockHeight = estimateBlockHeight(sourceBlock, contentWidthMm);
-        const gap = current.length > 0 ? 8 : 0;
+        const gap = 0; // inter-block spacing is the block's own margin, already in its estimated height
         if (current.length > 0 && currentHeight + gap + blockHeight > contentHeightPx - PAGE_FIT_SAFETY_PX) {
           pages.push(current);
           current = [];
@@ -589,7 +591,7 @@ function splitBlocksIntoPages(
           startOffset: 0,
           endOffset: flattenParagraphText(sourceBlock).length,
         });
-        currentHeight += (current.length > 1 ? 8 : 0) + blockHeight;
+        currentHeight += blockHeight; // block height already includes its own top/bottom margin
         return;
       }
 
@@ -607,7 +609,7 @@ function splitBlocksIntoPages(
         }
 
         const blockHeight = estimateBlockHeight(block, contentWidthMm);
-        const gap = current.length > 0 ? 8 : 0;
+        const gap = 0; // inter-block spacing is the block's own margin, already in its estimated height
         if (current.length > 0 && currentHeight + gap + blockHeight > contentHeightPx - PAGE_FIT_SAFETY_PX) {
           pages.push(current);
           current = [];
@@ -622,7 +624,7 @@ function splitBlocksIntoPages(
           startOffset: sourceBlock.type === 'paragraph' ? renderBlock.startOffset : null,
           endOffset: sourceBlock.type === 'paragraph' ? renderBlock.endOffset : null,
         });
-        currentHeight += (current.length > 1 ? 8 : 0) + blockHeight;
+        currentHeight += blockHeight; // block height already includes its own top/bottom margin
       });
     });
   } finally {
@@ -674,6 +676,51 @@ const DOC_BODY_FONT = "'Times New Roman', Times, serif";
 const DEFAULT_DOC_FONTS = new Set(['Arial', 'Calibri', 'Calibri Light', 'Times New Roman', 'Times', '']);
 const runFontFamily = (name?: string): string | undefined =>
   name && !DEFAULT_DOC_FONTS.has(name) ? name : undefined;
+
+// SINGLE SOURCE OF TRUTH for a paragraph's visual geometry. Consumed by BOTH DocxBlockPreview (the
+// on-screen render) AND createPreviewNode / estimateBlockHeight (off-screen height measurement). They must
+// stay identical, or pagination drifts: if measurement is taller than render the pages underfill (dead
+// space), if shorter they overflow the fixed-height page. Style by the paragraph's Word style name so the
+// editor matches the saved .docx and the Document Viewer.
+type ParagraphVisual = {
+  tag: 'h1' | 'h2' | 'h3' | 'p';
+  isHeading: boolean;
+  style: React.CSSProperties; // color, fontSize(pt), fontWeight, lineHeight, margin(pt); Title adds the blue rule
+  fontFamily: string;
+  listMarkerMarginRight: string;
+};
+
+function paragraphVisualStyle(block: NativeDocxParagraph): ParagraphVisual {
+  const styleName = block.style_name;
+  const isTitle = styleName === 'Title';
+  const isH1 = styleName === 'Heading 1';
+  const isH2 = styleName === 'Heading 2';
+  const isH3 = styleName === 'Heading 3';
+  const isHeading = isTitle || isH1 || isH2 || isH3;
+  const tag: ParagraphVisual['tag'] = isTitle || isH1 ? 'h1' : isH2 ? 'h2' : isH3 ? 'h3' : 'p';
+  const style: React.CSSProperties =
+    isTitle ? { color: '#1f3864', fontSize: '22pt', fontWeight: 700, lineHeight: 1.15, margin: '0 0 12pt', paddingBottom: '5pt', borderBottom: '1.5px solid #4472c4' }
+    : isH1 ? { color: '#2f5496', fontSize: '16pt', fontWeight: 700, lineHeight: 1.2, margin: '14pt 0 4pt' }
+    : isH2 ? { color: '#2f5496', fontSize: '13pt', fontWeight: 700, lineHeight: 1.25, margin: '12pt 0 3pt' }
+    : isH3 ? { color: '#2f5496', fontSize: '11.5pt', fontWeight: 700, lineHeight: 1.3, margin: '10pt 0 3pt' }
+    : { color: '#1f2328', fontSize: '11pt', fontWeight: 400, lineHeight: 1.4, margin: '0 0 6pt' };
+  return { tag, isHeading, style, fontFamily: DOC_BODY_FONT, listMarkerMarginRight: '0.55em' };
+}
+
+// Top+bottom margin of a paragraph block in px, parsed from the shared style's CSS `margin` shorthand
+// (e.g. '0 0 6pt' or '14pt 0 4pt'). The measured node carries the real margin so its border-box height
+// already includes it; this helper is only for the DOM-free estimate fallback. getBoundingClientRect on
+// the measured wrapper includes the node's margins (the wrapper's border stops them collapsing out).
+function paragraphMarginTopBottomPx(block: NativeDocxParagraph): { top: number; bottom: number } {
+  const parts = String(paragraphVisualStyle(block).style.margin ?? '0').trim().split(/\s+/);
+  const toPx = (v: string): number => {
+    const m = /([\d.]+)pt/.exec(v);
+    return m ? parseFloat(m[1]) * PT_TO_PX : 0;
+  };
+  const top = parts[0] ?? '0';
+  const bottom = parts.length >= 3 ? parts[2] : (parts[0] ?? '0');
+  return { top: toPx(top), bottom: toPx(bottom) };
+}
 
 export default function NativeDocxEditor({
   isOpen = true, onClose, canClose = true, filePath, title,
@@ -1291,19 +1338,12 @@ function DocxBlockPreview({
     // the Document Viewer (the "original" look): the Title is large with a thin blue rule;
     // Heading 1/2/3 are blue, no rule, decreasing sizes; body is a clean dark serif. The
     // template's per-run colour is ignored (as the Viewer does) so the body stays uniform.
-    const styleName = block.style_name;
-    const isTitle = styleName === 'Title';
-    const isH1 = styleName === 'Heading 1';
-    const isH2 = styleName === 'Heading 2';
-    const isH3 = styleName === 'Heading 3';
-    const isHeading = isTitle || isH1 || isH2 || isH3;
-    const Tag = isTitle || isH1 ? 'h1' : isH2 ? 'h2' : isH3 ? 'h3' : 'p';
-    const blockStyle: React.CSSProperties =
-      isTitle ? { color: '#1f3864', fontSize: '22pt', fontWeight: 700, lineHeight: 1.15, margin: '0 0 12pt', paddingBottom: '5pt', borderBottom: '1.5px solid #4472c4' }
-      : isH1 ? { color: '#2f5496', fontSize: '16pt', fontWeight: 700, lineHeight: 1.2, margin: '14pt 0 4pt' }
-      : isH2 ? { color: '#2f5496', fontSize: '13pt', fontWeight: 700, lineHeight: 1.25, margin: '12pt 0 3pt' }
-      : isH3 ? { color: '#2f5496', fontSize: '11.5pt', fontWeight: 700, lineHeight: 1.3, margin: '10pt 0 3pt' }
-      : { color: '#1f2328', fontSize: '11pt', fontWeight: 400, lineHeight: 1.4, margin: '0 0 6pt' };
+    // Shared source of truth (also used by createPreviewNode / estimateBlockHeight for measurement, so
+    // pagination measures exactly what is rendered here). See paragraphVisualStyle.
+    const v = paragraphVisualStyle(block);
+    const isHeading = v.isHeading;
+    const Tag = v.tag;
+    const blockStyle: React.CSSProperties = v.style;
     if (editableSafe && editableRun && onParagraphChange) {
       const commitDraft = () => {
         if (draftText === editableRun.text) return;
@@ -1341,8 +1381,8 @@ function DocxBlockPreview({
       );
     }
     return (
-      <Tag style={{ textAlign: block.alignment as any, fontFamily: DOC_BODY_FONT, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', ...blockStyle }}>
-        {block.list_kind !== 'none' && <span style={{ marginRight: '0.55em', color: blockStyle.color }}>{block.list_kind === 'bullet' ? '•' : '1.'}</span>}
+      <Tag style={{ textAlign: block.alignment as any, fontFamily: v.fontFamily, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', ...blockStyle }}>
+        {block.list_kind !== 'none' && <span style={{ marginRight: v.listMarkerMarginRight, color: blockStyle.color }}>{block.list_kind === 'bullet' ? '•' : '1.'}</span>}
         {block.runs.map((run) => (
           <span key={run.id} style={{ fontWeight: run.bold ? 700 : undefined, fontStyle: run.italic ? 'italic' : undefined, textDecoration: run.underline ? 'underline' : undefined, fontFamily: runFontFamily(run.font_name), fontSize: run.font_size_pt && run.font_size_pt !== 11 ? `${run.font_size_pt}pt` : undefined }}>
             {run.text || '\u00A0'}

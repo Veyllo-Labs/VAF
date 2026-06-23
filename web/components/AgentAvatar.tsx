@@ -127,7 +127,7 @@ const TOOL_SCENES: Record<string, { cls: string; l: number; t: number; w: number
 };
 const toolProps = (m: AvatarMode): React.ReactNode => {
     switch (m) {
-        case 'searching': return (<><div className="doc" /><div className="lens" /></>);
+        case 'searching': return (<><span className="pt a dark" /><span className="pt b" /><span className="pt c" /><span className="pt d dark" /><span className="pt e" /><div className="lens"><span className="glint" /></div></>);
         case 'executing': return (<><div className="term"><span className="prompt" /><span className="cur" /></div><div className="spinner" /></>);
         case 'browsing': return (<div className="globe"><i className="glon" /></div>);
         case 'writing': return (<div className="editor"><span className="tline" /><span className="caret" /></div>);

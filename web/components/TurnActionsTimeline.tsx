@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 // the rail + the avatar walk, never the card internals.
 export interface TimelineAction {
     key: string;
-    kind: 'think' | 'tool';
+    kind: 'think' | 'tool' | 'say';
     state: 'pending' | 'done' | 'error';
     node: ReactNode;
 }
@@ -86,11 +86,14 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
     }, [expanded, activeIdx, actions.length]);
 
     // Black/white circle scheme: thinking = solid black; a tool is a hollow ring while running or on
-    // error, and fills solid gray once it completes successfully.
+    // error, and fills solid gray once it completes successfully. An intermediate spoken line ('say' —
+    // the agent talks between tool calls) is a hollow black ring: in the agent's own "black" voice
+    // family like think, but distinct from think (solid) and from a running tool (gray ring).
     const circleClass = (a: TimelineAction) =>
         a.kind === 'think' ? 'bg-gray-900 border-gray-900'
-            : a.state === 'done' ? 'bg-gray-400 border-gray-400'
-                : 'bg-transparent border-gray-400';
+            : a.kind === 'say' ? 'bg-white border-gray-900'
+                : a.state === 'done' ? 'bg-gray-400 border-gray-400'
+                    : 'bg-transparent border-gray-400';
 
     const label = `${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
 

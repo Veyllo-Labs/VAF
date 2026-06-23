@@ -102,6 +102,7 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_cooldown_minutes` | `60` | Minutes to wait after a run before starting another |
 | `thinking_max_duration_minutes` | `30` | Max duration per run (then release lock) |
 | `thinking_wait_nudge_minutes` | `3` | If user does not reply: send nudge after this many minutes |
+| `thinking_followup_max` | `3` | When a proactive question is unanswered, re-ask the SAME one (pointed follow-up) up to N times, then let the topic rest (no question, no nudge) until the user reacts. |
 | `thinking_wait_skip_minutes` | `10` | If still no reply: clear waiting state after this many minutes |
 | `thinking_nudge_activity_minutes` | `5` | Do not nudge if user was active on any channel in the last N minutes |
 | `thinking_provider` | `"inherit"` | AI provider for thinking mode (`inherit` = same as main chat, or `openai`, `anthropic`, `deepseek`, `local`) |
@@ -188,6 +189,16 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    focus/work, a routine they'd like automated, an interest), so future runs can help. A question states no
    fact, so it can never be a fabrication; this is the safe way to honour "always ask one question". The
    completion gate keeps the run from finishing while this is still pending (`_proactive_step < 3`).
+
+- **Follow up on the open question, then rest (anti-repetition):** before proposing a NEW topic, the run
+  checks for the most recent **unanswered** free proactive request (`thinking_requests.get_open_proactive_request`
+  — status `asked`, not note/todo-sourced, within the recency window). If one exists, the run re-asks **that**
+  question as a short, pointed yes/no **follow-up** (`_build_followup_prompt`) instead of inventing a new
+  topic, and the delivery **updates that request** (bumps a `followups` counter via `bump_followup`,
+  `set_followup_context`) rather than logging a duplicate. After `thinking_followup_max` (default 3) unanswered
+  follow-ups the topic **rests**: the run does not ask anything (so no new question and no nudge) until the
+  user reacts on their own. This replaces the old "always a brand-new topic every run" behaviour, which
+  produced near-duplicate suggestions plus repeated nudges.
 
 - **Message gate (3 modes, set per turn in `deliver_tracked_message`):** a FREE message (no
   `source_note_id`/`source_todo_id`) is governed by the run's mode (`thinking_mode.set_proactive_mode`):
@@ -318,7 +329,11 @@ The actual sent question text is captured from the `send_telegram` / `send_whats
 ## Waiting for user reply
 
 - When the agent sends a message during a run → `set_waiting_for_reply()` is called with the question text
-- **Nudge:** After `thinking_wait_nudge_minutes`, a short "Hey, bist du da?" is sent.
+- **Nudge:** After `thinking_wait_nudge_minutes`, a short "are you there?" nudge is sent. The wording is
+  **varied and multilingual** — picked (rotating, so it differs each time) from the backend **vocabulary
+  book** (`vaf/core/vocab`, key `nudge`) in the user's `preferred_language`, falling back to English. The
+  phrasings are generated/expanded across languages by `scripts/generate_vocab.py` (dev-time; the runtime
+  never calls an LLM for a nudge).
   - **Inactivity Protection:** No nudge is sent if the user was active on ANY channel within the last `thinking_nudge_activity_minutes` (default 5 min).
 - **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared
 - **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)` is called.

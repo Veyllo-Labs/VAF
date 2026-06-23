@@ -82,6 +82,7 @@ def add_request(
         "proposed_action": (proposed_action or "").strip()[:500] or None,
         "details": (details or "").strip()[:4000] or None,
         "status": "asked",
+        "followups": 0,
         "run_seq": int(run_seq) if run_seq is not None else 0,
         "thinking_run_id": (thinking_run_id or "").strip() or None,
         "source_note_id": (source_note_id or "").strip() or None,
@@ -141,6 +142,48 @@ def list_requests(
             if (int(current_run_seq) - int(e.get("run_seq") or 0)) < int(within_runs)
         ]
     return sorted(items, key=lambda e: (e.get("created_at") or ""), reverse=True)
+
+
+def bump_followup(
+    user_scope_id: Optional[str],
+    request_id: str,
+    new_question: Optional[str] = None,
+    run_seq: Optional[int] = None,
+) -> Optional[dict]:
+    """Increment a request's follow-up counter and refresh its recency/text. Used when the run re-asks the
+    SAME open (unanswered) question instead of creating a duplicate entry. Returns the updated entry or None."""
+    path = _path(user_scope_id)
+    items = _load(path)
+    updated = None
+    for e in items:
+        if isinstance(e, dict) and e.get("id") == request_id:
+            e["followups"] = int(e.get("followups") or 0) + 1
+            if new_question:
+                e["question"] = str(new_question).strip()[:1000]
+            if run_seq is not None:
+                e["run_seq"] = int(run_seq)
+            e["status"] = "asked"
+            e["updated_at"] = _now()
+            updated = e
+            break
+    if updated is not None:
+        _save(path, items)
+    return updated
+
+
+def get_open_proactive_request(
+    user_scope_id: Optional[str],
+    current_run_seq: int,
+    within_runs: int = 6,
+) -> Optional[dict]:
+    """Most recent UNANSWERED, FREE proactive request (status 'asked', not linked to an automation
+    note/todo), within the recent window. This is the open question the next run should FOLLOW UP on
+    instead of proposing a new topic. Returns the entry or None."""
+    recent = list_requests(user_scope_id, status="asked", within_runs=within_runs, current_run_seq=current_run_seq)
+    for e in recent:  # newest first
+        if not (e.get("source_note_id") or "").strip() and not (e.get("source_todo_id") or "").strip():
+            return e
+    return None
 
 
 def recent_requests_prompt(

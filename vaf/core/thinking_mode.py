@@ -505,7 +505,18 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) 
         conn = get_messaging_connections(username=(username or "admin").strip() or "admin", user_scope_id=user_scope_id)
         main = (conn.get("main_messenger") or "").strip().lower()
         name = (display_name or username or "").strip() or "admin"
-        nudge = f"Hey {name}, bist du da?"
+        # Varied, multilingual nudge from the VAF vocabulary book (rotates per user, in the user's
+        # preferred_language). Falls back to a plain line if the vocab data is unavailable.
+        try:
+            from vaf.core import vocab
+            nudge = vocab.pick(
+                "nudge",
+                vocab.resolve_user_language(user_scope_id, username),
+                scope=user_scope_id,
+                name=name,
+            ) or f"Hey {name}, are you there?"
+        except Exception:
+            nudge = f"Hey {name}, are you there?"
         if main == "telegram":
             chat_id = get_telegram_chat_id(user_scope_id, username)
             if chat_id:
@@ -1227,16 +1238,23 @@ def deliver_tracked_message(
         # _mode == "open" -> allowed (get-to-know question)
 
     run_seq = current_run_seq(user_scope_id)
-    req = treq.add_request(
-        user_scope_id,
-        question=message,
-        run_seq=run_seq,
-        proposed_action=(proposed_action or "").strip() or None,
-        thinking_run_id=os.environ.get("VAF_THINKING_RUN_ID"),
-        source_note_id=(source_note_id or "").strip() or None,
-        source_todo_id=(source_todo_id or "").strip() or None,
-        details=(details or "").strip() or None,
-    )
+    _fu_id = get_followup_context(user_scope_id)
+    req = None
+    if _fu_id and not (source_note_id or "").strip() and not (source_todo_id or "").strip():
+        # This free message is a FOLLOW-UP on an existing open question — update that request (bump its
+        # follow-up counter + refresh recency/text) instead of creating a duplicate entry.
+        req = treq.bump_followup(user_scope_id, _fu_id, new_question=message, run_seq=run_seq)
+    if req is None:
+        req = treq.add_request(
+            user_scope_id,
+            question=message,
+            run_seq=run_seq,
+            proposed_action=(proposed_action or "").strip() or None,
+            thinking_run_id=os.environ.get("VAF_THINKING_RUN_ID"),
+            source_note_id=(source_note_id or "").strip() or None,
+            source_todo_id=(source_todo_id or "").strip() or None,
+            details=(details or "").strip() or None,
+        )
     uname = (username or "").strip() or get_local_admin_username()
     set_waiting_for_reply(
         user_scope_id, username=uname, display_name=uname,
@@ -1321,6 +1339,27 @@ def set_proactive_mode(user_scope_id: Optional[str], mode: str) -> None:
 
 def get_proactive_mode(user_scope_id: Optional[str]) -> str:
     return _PROACTIVE_MODE.get(_key(user_scope_id), "off")
+
+
+# Per-scope "the free message being delivered this run is a FOLLOW-UP on request <id>" — set in the
+# follow-up rung so deliver_tracked_message updates that request (bumps its counter) instead of creating a
+# duplicate. Cleared at run setup + end.
+_FOLLOWUP_CTX: Dict[str, str] = {}
+
+
+def set_followup_context(user_scope_id: Optional[str], request_id: Optional[str]) -> None:
+    if request_id:
+        _FOLLOWUP_CTX[_key(user_scope_id)] = str(request_id)
+    else:
+        _FOLLOWUP_CTX.pop(_key(user_scope_id), None)
+
+
+def get_followup_context(user_scope_id: Optional[str]) -> Optional[str]:
+    return _FOLLOWUP_CTX.get(_key(user_scope_id))
+
+
+def clear_followup_context(user_scope_id: Optional[str]) -> None:
+    _FOLLOWUP_CTX.pop(_key(user_scope_id), None)
 
 
 def _normalize_ev(s: str) -> str:
@@ -1632,6 +1671,18 @@ _PROMPT_NOTHING_TODO = (
     "Your housekeeping is clear and there is nothing proactive to raise right now. Call "
     "thinking_done('Nothing actionable.')."
 )
+
+
+def _build_followup_prompt(question: str) -> str:
+    """Re-ask the SAME open (unanswered) question, more pointed — instead of proposing a new topic."""
+    q = (question or "").strip().replace("\n", " ")[:300]
+    return (
+        "You earlier reached out to the user with the question below, and they have NOT replied yet:\n"
+        f"  \"{q}\"\n"
+        "Do NOT introduce a new topic. Ask ONE short, friendly FOLLOW-UP on the SAME thing, phrased so it is "
+        "easy to answer with a quick yes/no (e.g. 'Soll ich das einrichten — ja oder nein?'), in the user's "
+        "language. Emit EXACTLY ONE tool call: ask_user(message=\"<the follow-up>\"). No other tools, no prose."
+    )
 
 
 def _get_turn_prompt(turn: int, ledger_clear: bool = True) -> str:
@@ -2010,6 +2061,22 @@ def _run_thinking_for_user(
             _proactive_digest = ""    # real memories retrieved in code, shown to the model + in the pool
             clear_run_evidence(user_scope_id)
             set_proactive_mode(user_scope_id, "off")
+            clear_followup_context(user_scope_id)
+            # Follow-up vs new topic: if a previous proactive question is still UNANSWERED, the run re-asks
+            # THAT one (pointed) instead of proposing a new topic — up to thinking_followup_max times, then
+            # the topic rests (no question, no nudge) until the user reacts.
+            _open_followup = None
+            _followup_action = None  # 'ask' | 'rest'
+            if _proactive_enabled:
+                try:
+                    from vaf.core import thinking_requests as _treq
+                    _of = _treq.get_open_proactive_request(user_scope_id, _cur_seq, within_runs=_recent_runs)
+                    if _of:
+                        _max_fu = max(0, int(Config.get("thinking_followup_max", 3) or 3))
+                        _open_followup = _of
+                        _followup_action = "ask" if int(_of.get("followups") or 0) < _max_fu else "rest"
+                except Exception:
+                    _open_followup = None
             try:
                 _seed = (memory_context or "")
                 _user_hist = [str(m.get("content") or "") for m in (getattr(agent, "history", []) or [])
@@ -2056,6 +2123,19 @@ def _run_thinking_for_user(
                     # Floor clear but proactivity DISABLED -> just finish. (Rate-limiting no longer silences
                     # a run: silence is never the goal. Repeats are prevented by the recent/declined dedup
                     # prompts injected into the persistent system message; frequency by cooldown + quiet hours.)
+                    prompt = _PROMPT_NOTHING_TODO
+                elif _open_followup is not None and _followup_action == "ask":
+                    # FOLLOW-UP: a previous proactive question is still unanswered -> re-ask THAT one (pointed,
+                    # yes/no) instead of proposing a new topic. The delivery bumps the original request's
+                    # follow-up counter (set_followup_context) rather than creating a duplicate.
+                    prompt = _build_followup_prompt(_open_followup.get("question") or "")
+                    _force_tc = "required"
+                    set_proactive_mode(user_scope_id, "open")
+                    set_followup_context(user_scope_id, _open_followup.get("id"))
+                    _proactive_step = 3
+                elif _open_followup is not None and _followup_action == "rest":
+                    # Already followed up the max number of times with no reply -> let the topic rest this
+                    # run: no new question (and therefore no nudge) until the user reacts on their own.
                     prompt = _PROMPT_NOTHING_TODO
                 elif _proactive_step < 1:
                     # PROACTIVE grounding (ONE pass, NOT forced): offer ONE suggestion ONLY if the REAL
@@ -2372,6 +2452,7 @@ def _run_thinking_for_user(
         os.environ.pop("VAF_THINKING_SCOPE_ID", None)
         os.environ.pop("VAF_BACKGROUND_PRO", None)   # don't leak the pro-routing flag into the main process
         clear_run_evidence(user_scope_id)   # drop the proactive evidence pool + phase flag (no cross-run leak)
+        clear_followup_context(user_scope_id)   # don't leak the follow-up target into a later run
         _set_last_run_completed(user_scope_id)
         try:
             from vaf.core.user_notifications import append_notification

@@ -1,0 +1,82 @@
+{
+  "en": [
+    "Hey {name}, you around?",
+    "Hey {name}, still there?",
+    "{name}, are you there?",
+    "Hey {name}, did I catch you at a bad time?",
+    "Knock knock {name} — you there?",
+    "Hey {name}, ping me when you're back."
+  ],
+  "de": [
+    "Hey {name}, bist du da?",
+    "Hey {name}, noch da?",
+    "{name}, alles klar bei dir?",
+    "Hey {name}, erwische ich dich gerade ungünstig?",
+    "Klopf klopf {name} — bist du da?",
+    "Hey {name}, meld dich, wenn du wieder da bist."
+  ],
+  "es": [
+    "Hey {name}, ¿estás ahí?",
+    "{name}, ¿sigues por ahí?",
+    "Hola {name}, ¿te pillo en buen momento?",
+    "Hey {name}, ¿andas por aquí?",
+    "Toc toc {name}, ¿estás?",
+    "Hey {name}, avísame cuando vuelvas."
+  ],
+  "fr": [
+    "Hey {name}, tu es là ?",
+    "{name}, toujours là ?",
+    "Coucou {name}, je te dérange ?",
+    "Hey {name}, tu es dans le coin ?",
+    "Toc toc {name}, tu es là ?",
+    "Hey {name}, fais-moi signe quand tu reviens."
+  ],
+  "it": [
+    "Hey {name}, ci sei?",
+    "{name}, ancora lì?",
+    "Ciao {name}, ti disturbo?",
+    "Hey {name}, sei nei paraggi?",
+    "Toc toc {name}, ci sei?",
+    "Hey {name}, fammi un cenno quando torni."
+  ],
+  "pt": [
+    "Hey {name}, está aí?",
+    "{name}, ainda aí?",
+    "Olá {name}, apanho-te em má altura?",
+    "Hey {name}, andas por aqui?",
+    "Toc toc {name}, estás aí?",
+    "Hey {name}, dá um sinal quando voltares."
+  ],
+  "nl": [
+    "Hey {name}, ben je er?",
+    "{name}, nog daar?",
+    "Hoi {name}, kom ik gelegen?",
+    "Hey {name}, ben je in de buurt?",
+    "Klop klop {name}, ben je er?",
+    "Hey {name}, laat het weten als je terug bent."
+  ],
+  "tr": [
+    "Hey {name}, orada mısın?",
+    "{name}, hâlâ orada mısın?",
+    "Selam {name}, müsait misin?",
+    "Hey {name}, buralarda mısın?",
+    "Tık tık {name}, orada mısın?",
+    "Hey {name}, döndüğünde haber ver."
+  ],
+  "pl": [
+    "Hej {name}, jesteś tam?",
+    "{name}, dalej tam jesteś?",
+    "Cześć {name}, łapię cię w dobrym momencie?",
+    "Hej {name}, jesteś w pobliżu?",
+    "Puk puk {name}, jesteś?",
+    "Hej {name}, daj znać, jak wrócisz."
+  ],
+  "ru": [
+    "Привет {name}, ты тут?",
+    "{name}, ещё на месте?",
+    "Привет {name}, сейчас удобно?",
+    "Эй {name}, ты рядом?",
+    "Тук-тук {name}, ты тут?",
+    "Привет {name}, напиши, когда вернёшься."
+  ]
+}

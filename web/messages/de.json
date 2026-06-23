@@ -309,6 +309,8 @@
       "mcpConnected": "{count} verbunden / {total} konfiguriert",
       "workflows": "Workflows",
       "workflowsAvailable": "{count} Workflows verfügbar",
+      "skills": "Skills",
+      "skillsAvailable": "{count} Skills verfügbar",
       "trustedSources": "Vertrauenswürdige Quellen",
       "trustedSourcesCategories": "{count} Kategorien"
     },
@@ -565,6 +567,8 @@
       "viewCode": "Code ansehen",
       "noToolsFound": "Keine Tools gefunden",
       "noToolsFoundHint": "Versuche, deine Suchbegriffe anzupassen.",
+      "empty": "Noch keine Tools",
+      "emptyHint": "Erstelle ein eigenes Tool, um zu beginnen.",
       "refresh": "Tool-Liste aktualisieren"
     },
     "mcp": {
@@ -575,6 +579,8 @@
       "addServer": "Server hinzufügen",
       "adminRequired": "Admin-Rechte erforderlich, um MCP-Server zu verwalten.",
       "noServers": "Keine MCP-Server konfiguriert.",
+      "empty": "Noch keine MCP-Server",
+      "emptyHint": "Füge einen MCP-Server hinzu, um zu beginnen.",
       "tools": "{count} Tools",
       "offline": "offline",
       "disabled": "deaktiviert",
@@ -617,8 +623,24 @@
       "template": "Vorlage",
       "noWorkflowsFound": "Keine Workflows gefunden",
       "noWorkflowsFoundHint": "Versuche, deine Suchbegriffe anzupassen.",
+      "empty": "Noch keine Workflows",
+      "emptyHint": "Erstelle einen Workflow, um zu beginnen.",
       "flowVisualization": "Interaktive Fluss-Visualisierung",
       "stepDefinition": "Schritt-Definition"
+    },
+    "skills": {
+      "title": "Skills",
+      "available": "{count} Skills verfügbar",
+      "searchPlaceholder": "Skills suchen…",
+      "invalid": "Fehlerhaft",
+      "edit": "Bearbeiten",
+      "empty": "Noch keine Skills",
+      "emptyHint": "Erstelle einen Skill oder lade ein SKILL.md-Bundle hoch.",
+      "noneFound": "Keine Skills gefunden",
+      "noneFoundHint": "Versuche, deine Suchbegriffe anzupassen.",
+      "riskHigh": "Risiko",
+      "riskMedium": "Achtung",
+      "riskTitle": "Sicherheits-Scan: {level} Risiko (Score {score}/100)"
     },
     "trustedSources": {
       "title": "Vertrauenswürdige Quellen",

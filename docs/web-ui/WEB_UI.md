@@ -150,7 +150,7 @@ The left sidebar has three sections:
 
 - **Timeline** (top) — the agent tool-use timeline (see below). The default view when opening the window.
 - **Activity** — the notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
-- **Log Files** (collapsible) — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Collapsed by default; only meaningful when **Debug Logs** is enabled in Settings → Advanced.
+- **Log Files** (collapsible) — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Collapsed by default; only meaningful when **Debug Logs** is enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`).
 
 #### Timeline view
 

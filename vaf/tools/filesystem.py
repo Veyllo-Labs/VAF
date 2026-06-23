@@ -15,6 +15,58 @@ BLOCKED_DIRS = [
 # VAF program root - agent must NEVER access this (source code, config, secrets)
 _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# ── Librarian per-user jail ──────────────────────────────────────────────────────────────────────
+# While a librarian_agent run executes, is_safe_path additionally enforces that the agent can read only
+# the CALLER's OWN data — never another user's VAF_Projects/<uid8>/. This is a contextvar so it is scoped
+# to the librarian run only: when unset (the default for coder/document/every other caller) it has ZERO
+# effect. Set/reset via set_librarian_scope/reset_librarian_scope from LibrarianTool.run.
+import contextvars as _contextvars
+_librarian_scope_ctx = _contextvars.ContextVar("vaf_librarian_scope", default=None)
+
+
+def set_librarian_scope(scope_info):
+    """scope_info: None (no jail) or dict {is_admin: bool, uid8: str, allowed_roots: list[Path]}.
+    Returns a token to pass to reset_librarian_scope."""
+    return _librarian_scope_ctx.set(scope_info)
+
+
+def reset_librarian_scope(token):
+    try:
+        _librarian_scope_ctx.reset(token)
+    except Exception:
+        pass
+
+
+def _librarian_jail_ok(abs_path) -> bool:
+    """True if abs_path is allowed under the active librarian jail. Fail-closed. No jail set => True."""
+    info = _librarian_scope_ctx.get()
+    if not info:
+        return True
+    try:
+        import re as _re_j
+        from vaf.core.platform import Platform
+        target = Path(abs_path).resolve()
+        if info.get("is_admin"):
+            return True  # local admin / machine owner: full access (still bounded by VAF/BLOCKED checks)
+        # HARD cross-user invariant: any VAF_Projects/<8-hex> that is not the caller's own is DENIED.
+        projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
+        if target == projects_root or target.is_relative_to(projects_root):
+            rel = target.relative_to(projects_root)
+            first = rel.parts[0] if rel.parts else ""
+            if _re_j.fullmatch(r"[0-9a-f]{8}", first) and first != (info.get("uid8") or ""):
+                return False
+        # Positive allow-list: a remote (non-admin) user may only read inside their own allowed roots.
+        for r in (info.get("allowed_roots") or []):
+            try:
+                rp = Path(r).resolve()
+                if target == rp or target.is_relative_to(rp):
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False  # fail-closed
+
 def _resolve_folder_alias(path_str: str) -> str:
     """Resolve folder aliases like 'Desktop', 'Documents' to actual paths.
     If Desktop is not accessible, automatically falls back to Documents."""
@@ -141,6 +193,9 @@ def is_safe_path(path):
         for blocked in BLOCKED_DIRS:
             if blocked in abs_path:
                 return False, f"Access denied: {blocked}"
+        # Librarian per-user jail (no-op unless a librarian run set the scope contextvar).
+        if not _librarian_jail_ok(abs_path):
+            return False, "Access denied: outside your own data"
         return True, abs_path
     except Exception:
         return False, "Invalid path"

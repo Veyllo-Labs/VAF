@@ -4,6 +4,8 @@
 
 The VAF Librarian Agent now supports **user-configurable settings** for file size limits, auto-chunking, and more. This allows you to customize the agent's behavior to match your needs.
 
+**Access scope (multi-user):** the librarian runs under a per-user filesystem jail. A remote (non-admin) user can read only their own `VAF_Projects/<uid[:8]>/`; the local admin / machine owner keeps full access; another user's data is never readable. See [USER_ISOLATION.md](../security/USER_ISOLATION.md#librarian-agent-vaftoolslibrarianpy-vaftoolsfilesystempy).
+
 ## Configuration File
 
 Settings are stored in: **`~/.vaf/config.json`**

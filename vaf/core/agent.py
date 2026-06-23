@@ -4212,45 +4212,64 @@ class Agent:
         """
         # Track which tier was used (for status display)
         self._workflow_selection_tier = 1  # Default: Tier 1 (LLM Reasoning)
-        
+        # Fresh each turn: the unified router sets this only on a positive skill match.
+        self._pending_skill_match = None
+
         try:
             from vaf.workflows.templates import WORKFLOW_TEMPLATES, list_templates
-            
+
             # Get available workflows dynamicallly
             available_workflows = list_templates()
-            
+
             # Format workflows like tool definitions for the LLM
             # "ID: Description"
             workflow_definitions = []
             for w in available_workflows:
                 workflow_definitions.append(f"- {w['id']}: {w['description']}")
             workflow_list_str = "\n".join(workflow_definitions)
+
+            # Skills are the SECOND routing tier (under workflows). The router only
+            # ever sees name+description (progressive disclosure); the body loads
+            # later via use_skill. Scope to the current user.
+            _skill_scope = getattr(self, "_current_user_scope_id", None)
+            try:
+                from vaf.skills.templates import list_skills
+                available_skills = list_skills(user_scope_id=_skill_scope)
+            except Exception:
+                available_skills = []
+            skill_ids = {s["id"] for s in available_skills}
+            skill_list_str = "\n".join(
+                f"- {s['id']}: {s['description']}" for s in available_skills
+            ) or "(none)"
             
             prompt = (
-                f"You are the Workflow Router. Your goal is to map a user request to the correct pre-defined workflow ID.\n\n"
+                f"You are the Router. Map a user request to the single best pre-defined "
+                f"WORKFLOW or SKILL, or to nothing.\n\n"
+                f"A WORKFLOW is a fixed multi-step pipeline that runs automatically.\n"
+                f"A SKILL is a set of expert instructions the agent reads and then follows flexibly.\n\n"
                 f"AVAILABLE WORKFLOWS:\n"
                 f"{workflow_list_str}\n\n"
+                f"AVAILABLE SKILLS:\n"
+                f"{skill_list_str}\n\n"
                 f"ROUTING INSTRUCTIONS:\n"
                 f"1. Analyze the User Request for INTENT.\n"
-                f"2. Check if a Workflow matches that intent EXACTLY.\n"
-                f"3. Return the `workflow_id` if a strong match exists.\n"
+                f"2. If a WORKFLOW matches that intent strongly, return `workflow:<id>`.\n"
+                f"3. Else if a SKILL matches the intent, return `skill:<id>`.\n"
                 f"4. Return `none` if:\n"
                 f"   - The request is a simple lookup (weather, news, facts).\n"
                 f"   - The request is a generic chat or question.\n"
                 f"   - The request is too vague.\n"
-                f"   - You would rather use individual tools (web_search, coding_agent) directly.\n\n"
+                f"   - You would rather use individual tools (web_search, coding_agent) directly.\n"
+                f"   - Nothing above is a clear match.\n\n"
                 f"EXAMPLES:\n"
-                f"- User: 'Create a website' -> `create_website`\n"
-                f"- User: 'Research AI trends and write a report' -> `research_and_document`\n"
-                f"- User: 'What is the weather?' -> `none` (Too simple)\n"
-                f"- User: 'Who is Elon Musk?' -> `none` (Too simple)\n"
-                f"- User: 'Die Webseite ist buggy, schau dir das an' -> `none` (Fix/debug request, not creation)\n"
-                f"- User: 'Fix the layout issue on the site' -> `none` (Fix/debug request)\n"
-                f"- User: 'Analyze this website for errors' -> `none` (Analysis request, not creation)\n"
-                f"- User: 'The website has an error, please fix it' -> `none` (Fix/debug request)\n\n"
+                f"- User: 'Create a website' -> workflow:create_website\n"
+                f"- User: 'Research AI trends and write a report' -> workflow:research_and_document\n"
+                f"- User: 'What is the weather?' -> none (Too simple)\n"
+                f"- User: 'Who is Elon Musk?' -> none (Too simple)\n"
+                f"- User: 'Die Webseite ist buggy, schau dir das an' -> none (Fix/debug request)\n"
+                f"- User: 'Fix the layout issue on the site' -> none (Fix/debug request)\n\n"
                 f"USER REQUEST: \"{user_input}\"\n\n"
-                f"Think step-by-step. Does this complex task fit a workflow?\n"
-                f"Output ONLY the workflow_id or 'none'."
+                f"Think step-by-step. Output ONLY one token: workflow:<id>, skill:<id>, or none."
             )
             
             # Quick Inference with reasoning (temperature 0.1 for strict logic)
@@ -4280,18 +4299,36 @@ class Agent:
                 self._workflow_selection_tier = 2
                 return None
             
-            # Parse workflow ID (dynamically from all available workflows)
+            low = content.lower()
+
+            # 1) SKILL match (skill:<id>). Skills bypass the workflow execution path:
+            #    we store a side-channel match and return None, so _try_workflow turns
+            #    it into a one-shot [SKILL SUGGESTION] hint instead of running a pipeline.
+            if skill_ids:
+                skill_ids_pattern = '|'.join(re.escape(sid) for sid in skill_ids)
+                m_skill = re.search(rf'skill:\s*({skill_ids_pattern})\b', low)
+                if m_skill:
+                    matched_skill = m_skill.group(1)
+                    name = next(
+                        (s["name"] for s in available_skills if s["id"] == matched_skill),
+                        matched_skill,
+                    )
+                    self._pending_skill_match = {"skill_id": matched_skill, "name": name}
+                    return None
+
+            # 2) WORKFLOW match (workflow:<id> or a bare id for back-compat).
             workflow_ids_pattern = '|'.join(re.escape(wf_id) for wf_id in WORKFLOW_TEMPLATES.keys())
-            match = re.search(rf'\b({workflow_ids_pattern})\b', content.lower())
-            if match:
-                workflow_id = match.group(1)
-                if workflow_id in WORKFLOW_TEMPLATES:
-                    return workflow_id
-            
-            # Check for "none" response
-            if "none" in content.lower():
+            if workflow_ids_pattern:
+                match = re.search(rf'(?:workflow:\s*)?\b({workflow_ids_pattern})\b', low)
+                if match:
+                    workflow_id = match.group(1)
+                    if workflow_id in WORKFLOW_TEMPLATES:
+                        return workflow_id
+
+            # 3) Explicit "none" response
+            if "none" in low:
                 return None
-            
+
             # If we couldn't parse the LLM response:
             # Return None → Tier 2 (Agent Choice) will handle
             # Agent gets workflow list and can decide
@@ -4410,6 +4447,24 @@ class Agent:
                     workflow_id = self.analyze_workflow(user_input)
             
             if not workflow_id:
+                # The unified router may have matched a SKILL instead. Convert that
+                # side-channel match into a one-shot [SKILL SUGGESTION] hint (injected
+                # into the user turn by chat_step) and skip the generic "no workflow"
+                # note — the agent already has a concrete suggestion.
+                _skill_match = getattr(self, "_pending_skill_match", None)
+                if _skill_match:
+                    self._pending_skill_match = None
+                    self._pending_skill_hint = {
+                        "skill_id": _skill_match["skill_id"],
+                        "name": _skill_match.get("name", _skill_match["skill_id"]),
+                    }
+                    UI.event(
+                        "Step 1/2",
+                        f"Skill [suggested: {_skill_match['skill_id']} - Agent deciding]",
+                        style="cyan",
+                    )
+                    return None
+
                 # No workflow match - give agent brief hint (not full list!)
                 # Agent can use list_workflows tool if they need to see options
                 self.history.append({
@@ -4421,7 +4476,7 @@ class Agent:
                         "Most simple requests (weather, news, questions) don't need workflows."
                     )
                 })
-                
+
                 # Show Tier 2 status (Agent Choice)
                 UI.event("Step 1/2", f"Workflow [Tier 2: No auto-match - Agent deciding]", style="cyan")
                 return None
@@ -5649,6 +5704,26 @@ class Agent:
                 )
                 user_input = _wf_note + user_input
 
+            # Skills are the second routing tier. If the router matched a SKILL
+            # (and not a workflow), surface it the same way: the router only saw
+            # name+description, so we point the agent at use_skill, which loads the
+            # full instructions on demand (progressive disclosure). One-shot, cleared
+            # immediately. Mutually exclusive with the workflow hint by construction
+            # (a skill match is set only when no workflow matched).
+            _sk_hint = getattr(self, "_pending_skill_hint", None)
+            if _sk_hint:
+                self._pending_skill_hint = None  # one-shot — clear immediately
+                # Pin use_skill into the active tool set for this turn (the router
+                # runs just below) so the agent can actually load the skill.
+                self._skill_tool_needed_this_turn = True
+                _sk_note = (
+                    f"[SKILL SUGGESTION] The skill \"{_sk_hint['name']}\" "
+                    f"({_sk_hint['skill_id']}) looks relevant to this request.\n"
+                    f"To load its full instructions call: use_skill(skill_id=\"{_sk_hint['skill_id']}\")\n"
+                    f"Then follow the instructions and read any bundled files it references.\n\n"
+                )
+                user_input = _sk_note + user_input
+
         # Always add user input if provided, even if skip_input=True (which skips analysis/overhead)
         if user_input:
             _user_msg: Dict = {"role": "user", "content": user_input}
@@ -5843,6 +5918,19 @@ class Agent:
                     UI.event("Router", "Safety Net: Router found none. Using list_tools, search_tools.", style="dim")
             else:
                 self._active_tools = selected_tools
+
+            # If the router suggested a skill this turn, make sure use_skill is in the
+            # active set so the agent can actually load it (the [SKILL SUGGESTION] told
+            # it to). Pinned after the cap, like the discovery tools. When _active_tools
+            # is None (ALL tools) it is already available.
+            if getattr(self, "_skill_tool_needed_this_turn", False):
+                self._skill_tool_needed_this_turn = False
+                if (
+                    "use_skill" in self.tools
+                    and self._active_tools is not None
+                    and "use_skill" not in self._active_tools
+                ):
+                    self._active_tools = list(self._active_tools) + ["use_skill"]
 
             # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
             actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
@@ -8706,6 +8794,13 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["session_id"] = getattr(self, "current_session_id", None)
                     tool_args["_agent"] = self
+                if name == "librarian_agent":
+                    # Drives the per-user filesystem jail (is_safe_path) so the librarian only reads the
+                    # caller's own data, never another user's VAF_Projects/<uid8>.
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name == "use_skill":
+                    # Scope skill visibility to the calling user (None = admin).
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):

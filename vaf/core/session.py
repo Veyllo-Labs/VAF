@@ -885,6 +885,64 @@ def resolve_agent_output_dir(default: Path, session_id: Optional[str] = None) ->
     return default
 
 
+WORKSPACE_LABEL_FILE = ".vaf_workspace.json"
+
+
+def get_user_projects_root(user_scope_id: Optional[str]) -> Optional[Path]:
+    """Per-user root holding ALL of a user's chat workspaces: VAF_Projects/<uid8>/.
+
+    uid8 = first 8 hex chars of the user_scope_id UUID (dashes stripped, lowercased) — the SAME
+    derivation get_session_workspace_dir uses (~line 860) and the /api/file isolation check
+    (web_server.py ~1382). Returns None without a user_scope_id (no per-user root)."""
+    uid = str(user_scope_id or "").replace("-", "").lower()
+    if not uid:
+        return None
+    from vaf.core.platform import Platform
+    return Platform.documents_dir() / "VAF_Projects" / uid[:8]
+
+
+def read_workspace_label(folder: Path) -> Optional[str]:
+    """User-set display label from <folder>/.vaf_workspace.json, or None. Fully exception-guarded."""
+    try:
+        p = Path(folder) / WORKSPACE_LABEL_FILE
+        if not p.is_file():
+            return None
+        label = str((json.loads(p.read_text(encoding="utf-8")) or {}).get("label") or "").strip()
+        return label or None
+    except Exception:
+        return None
+
+
+def write_workspace_label(folder: Path, label: str) -> bool:
+    """Set the workspace display label (a small dotfile INSIDE the workspace, so it survives session
+    deletion -> orphans stay renamable). Never renames the folder. Atomic write. Returns success."""
+    import os as _os
+    try:
+        folder = Path(folder)
+        if not folder.is_dir():
+            return False
+        label = str(label or "").strip()[:200]
+        p = folder / WORKSPACE_LABEL_FILE
+        tmp = folder / (WORKSPACE_LABEL_FILE + ".tmp")
+        tmp.write_text(json.dumps({"label": label}, ensure_ascii=False), encoding="utf-8")
+        _os.replace(str(tmp), str(p))
+        return True
+    except Exception:
+        return False
+
+
+def resolve_workspace_display_name(folder: Path, session_id: str, live_title: Optional[str]) -> str:
+    """Display-name precedence (locked decision: rename = display label only):
+    explicit label file -> the linked live session's title -> the folder name (== session_id).
+    Works for orphans (no live session) because it never requires one."""
+    label = read_workspace_label(folder)
+    if label:
+        return label
+    if live_title and str(live_title).strip():
+        return str(live_title).strip()
+    return str(session_id)
+
+
 @session_app.command("list")
 def list_sessions(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum sessions to show")

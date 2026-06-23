@@ -1227,6 +1227,10 @@ function VAFDashboardContent() {
     const [workflows, setWorkflows] = useState<Array<{ id: string; name: string; description: string; steps: number; is_custom?: boolean }>>([]);
     const [isWorkflowSaving, setIsWorkflowSaving]       = useState(false);
     const [workflowBackendError, setWorkflowBackendError] = useState<string | null>(null);
+    const [skills, setSkills] = useState<Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>>([]);
+    const [isSkillSaving, setIsSkillSaving]             = useState(false);
+    const [skillBackendError, setSkillBackendError]     = useState<string | null>(null);
+    const [skillSavedTick, setSkillSavedTick]           = useState(0);
     const [trustedSources, setTrustedSources] = useState<{ categories: Array<{ id: string; name: string; description: string; sources: Array<{ name: string; url: string; domains: string[]; trust_score: number; is_custom: boolean }> }> }>({ categories: [] });
     const [trustedSourcesError, setTrustedSourcesError] = useState<string | null>(null);
     const [automations, setAutomations] = useState<Array<{ id: string; name: string; description: string; prompt?: string; frequency: string; time: string; weekday?: string | null; day?: number | null; enabled: boolean; next_run?: string }>>([]);
@@ -1277,6 +1281,8 @@ function VAFDashboardContent() {
     const [workspaceInfo, setWorkspaceInfo] = useState<{
         path: string;
         name: string;
+        displayName?: string;
+        label?: string | null;
         subpath: string;
         dirs: Array<{ name: string; items: number }>;
         files: Array<{ name: string; size: number; modified: string }>;
@@ -1284,6 +1290,13 @@ function VAFDashboardContent() {
     const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
     const [workspaceUploading, setWorkspaceUploading] = useState(false);
     const workspaceFileInputRef = useRef<HTMLInputElement>(null);
+    // Central Data Explorer: 'index' lists ALL of this user's workspaces (live + orphaned); 'folder' is the
+    // per-chat view. Default 'folder' so opening from a chat keeps today's behavior.
+    const [workspaceView, setWorkspaceView] = useState<'index' | 'folder'>('folder');
+    const [allWorkspaces, setAllWorkspaces] = useState<Array<{
+        sessionId: string; displayName: string; label: string | null; liveTitle: string | null;
+        orphan: boolean; fileCount: number; folderCount: number; updated: string;
+    }>>([]);
 
     const workspaceSubpathRef = useRef('');
     const refreshWorkspace = useCallback(async (sid?: string | null, subpath?: string) => {
@@ -1292,7 +1305,8 @@ function VAFDashboardContent() {
         const sub = subpath ?? workspaceSubpathRef.current;
         try {
             const res = await fetch(
-                `${getApiBase()}/api/session/workspace?sessionId=${encodeURIComponent(id)}&subpath=${encodeURIComponent(sub)}`
+                `${getApiBase()}/api/session/workspace?sessionId=${encodeURIComponent(id)}&subpath=${encodeURIComponent(sub)}`,
+                { credentials: 'include' }
             );
             if (!res.ok) {
                 // Folder may have been deleted - fall back to the root
@@ -1325,7 +1339,7 @@ function VAFDashboardContent() {
                     reader.readAsDataURL(file);
                 });
                 await fetch(`${getApiBase()}/api/session/workspace/upload`, {
-                    method: 'POST',
+                    method: 'POST', credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         sessionId: currentSessionId,
@@ -1356,29 +1370,67 @@ function VAFDashboardContent() {
             return next;
         });
     }, [refreshWorkspace]);
+    // Central index: list all of the user's workspaces (server scopes to the authenticated user).
+    const refreshAllWorkspaces = useCallback(async () => {
+        try {
+            const res = await fetch(`${getApiBase()}/api/workspaces`, { credentials: 'include' });
+            if (!res.ok) return;
+            const data = await res.json();
+            setAllWorkspaces(Array.isArray(data?.workspaces) ? data.workspaces : []);
+        } catch { /* backend unreachable - keep current */ }
+    }, []);
+    // Drill into any workspace from the index (incl. orphans) WITHOUT switching the active chat.
+    const openWorkspace = useCallback((sid: string) => {
+        workspaceSubpathRef.current = '';
+        setWorkspaceNavHist([]);
+        setWorkspaceView('folder');
+        refreshWorkspace(sid, '');
+    }, [refreshWorkspace]);
+    const renameWorkspace = useCallback(async (sid: string, current: string) => {
+        const label = window.prompt('Workspace name', current || '');
+        if (label == null) return;
+        try {
+            await fetch(`${getApiBase()}/api/workspaces/rename`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: sid, label: label.trim() }),
+            });
+            await refreshAllWorkspaces();
+        } catch { /* keep current */ }
+    }, [refreshAllWorkspaces]);
     // Delete with confirmation dialog (target held in state while the dialog is open)
-    const [workspaceDeleteTarget, setWorkspaceDeleteTarget] = useState<{ name: string; isDir: boolean; items?: number } | null>(null);
+    const [workspaceDeleteTarget, setWorkspaceDeleteTarget] = useState<{ name: string; isDir: boolean; items?: number; kind?: 'workspace'; sessionId?: string } | null>(null);
     const [workspaceDeleting, setWorkspaceDeleting] = useState(false);
     const deleteWorkspaceEntry = useCallback(async () => {
-        if (!currentSessionId || !workspaceDeleteTarget) return;
+        if (!workspaceDeleteTarget) return;
         setWorkspaceDeleting(true);
         try {
-            await fetch(`${getApiBase()}/api/session/workspace/delete`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sessionId: currentSessionId,
-                    name: workspaceDeleteTarget.name,
-                    subpath: workspaceSubpathRef.current,
-                }),
-            });
-            await refreshWorkspace();
+            if (workspaceDeleteTarget.kind === 'workspace' && workspaceDeleteTarget.sessionId) {
+                // Delete a WHOLE workspace folder from the central index (orphans + manual cleanup).
+                await fetch(`${getApiBase()}/api/workspaces/delete`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: workspaceDeleteTarget.sessionId }),
+                });
+                await refreshAllWorkspaces();
+            } else if (currentSessionId) {
+                await fetch(`${getApiBase()}/api/session/workspace/delete`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sessionId: currentSessionId,
+                        name: workspaceDeleteTarget.name,
+                        subpath: workspaceSubpathRef.current,
+                    }),
+                });
+                await refreshWorkspace();
+            }
         } catch { /* delete failed - list stays unchanged */ }
         finally {
             setWorkspaceDeleting(false);
             setWorkspaceDeleteTarget(null);
         }
-    }, [currentSessionId, workspaceDeleteTarget, refreshWorkspace]);
+    }, [currentSessionId, workspaceDeleteTarget, refreshWorkspace, refreshAllWorkspaces]);
     // xraySection state removed - Context Window modal now shows only overview diagram
 
     // Agent Brain: working memory, plan, tasks, intent, team state
@@ -2181,6 +2233,7 @@ function VAFDashboardContent() {
             socket.send(JSON.stringify({ type: 'get_config' }));
             socket.send(JSON.stringify({ type: 'get_models' }));
             socket.send(JSON.stringify({ type: 'get_workflows' })); // Fetch workflows for autocomplete
+            socket.send(JSON.stringify({ type: 'get_skills' }));    // Fetch skills (second routing tier)
             socket.send(JSON.stringify({ type: 'get_tools' }));     // Fetch tools for reference
         };
         socket.onmessage = (event) => {
@@ -3662,6 +3715,22 @@ function VAFDashboardContent() {
                 else if (data.type === 'workflow_error') {
                     setIsWorkflowSaving(false);
                     setWorkflowBackendError(data.error || 'Unknown error');
+                }
+                else if (data.type === 'skills_list') {
+                    setSkills(data.skills || []);
+                }
+                else if (data.type === 'skill_created' || data.type === 'skill_updated' || data.type === 'skill_deleted') {
+                    setIsSkillSaving(false);
+                    setSkillBackendError(null);
+                    setSkillSavedTick(t => t + 1);  // closes the editor; skills_list broadcast refreshes the grid
+                }
+                else if (data.type === 'skill_permissions_updated') {
+                    setIsSkillSaving(false);
+                    setSkillBackendError(null);
+                }
+                else if (data.type === 'skill_error') {
+                    setIsSkillSaving(false);
+                    setSkillBackendError(data.error || 'Unknown error');
                 }
                 else if (data.type === 'trusted_sources_list') {
                     setTrustedSources({ categories: data.categories || [] });
@@ -6290,7 +6359,7 @@ function VAFDashboardContent() {
             )}
 
             {/* Context Window Modal - Clean & Professional */}
-            {isWorkspaceModalOpen && workspaceInfo?.path && (
+            {isWorkspaceModalOpen && (workspaceView === 'index' || workspaceInfo?.path) && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
                     <div className="relative bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
                         {/* Header */}
@@ -6298,10 +6367,16 @@ function VAFDashboardContent() {
                             <div className="flex justify-between items-center">
                                 <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-3 min-w-0">
                                     <Folder className="text-gray-800 shrink-0" size={22} />
-                                    <span className="truncate">{workspaceInfo.name}</span>
-                                    <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded shrink-0">
-                                        Chat Workspace
-                                    </span>
+                                    {workspaceView === 'index' ? (
+                                        <span className="truncate">My Workspaces</span>
+                                    ) : (
+                                        <>
+                                            <span className="truncate">{workspaceInfo?.displayName || workspaceInfo?.name}</span>
+                                            <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded shrink-0">
+                                                Chat Workspace
+                                            </span>
+                                        </>
+                                    )}
                                 </h3>
                                 <button
                                     onClick={() => setIsWorkspaceModalOpen(false)}
@@ -6313,13 +6388,16 @@ function VAFDashboardContent() {
                             </div>
                         </div>
 
-                        {/* Explorer toolbar: Back / Up / address bar / refresh / upload */}
+                        {/* Explorer toolbar: Back / Up / address bar / refresh / upload (folder view only) */}
+                        {workspaceView === 'folder' && workspaceInfo?.path && (
                         <div className="shrink-0 flex items-center gap-2 border-b border-gray-100 bg-white px-6 py-2.5">
                             <button
-                                onClick={workspaceGoBack}
-                                disabled={workspaceNavHist.length === 0}
-                                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 disabled:opacity-30 disabled:hover:bg-transparent"
-                                title="Back"
+                                onClick={() => {
+                                    if (workspaceNavHist.length === 0 && !workspaceInfo?.subpath) { setWorkspaceView('index'); refreshAllWorkspaces(); }
+                                    else { workspaceGoBack(); }
+                                }}
+                                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                                title={workspaceNavHist.length === 0 && !workspaceInfo?.subpath ? 'All workspaces' : 'Back'}
                             >
                                 <ArrowLeft size={16} />
                             </button>
@@ -6363,8 +6441,56 @@ function VAFDashboardContent() {
                                 {workspaceUploading ? 'Uploading…' : 'Upload'}
                             </button>
                         </div>
+                        )}
+
+                        {/* Central index: ALL of this user's workspaces (live + orphaned), incl. those from deleted chats */}
+                        {workspaceView === 'index' && (
+                            <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                                <div className="flex items-center justify-between px-3 pb-1">
+                                    <span className="text-[11px] text-gray-300">{allWorkspaces.length} {allWorkspaces.length === 1 ? 'workspace' : 'workspaces'}</span>
+                                    <button onClick={() => refreshAllWorkspaces()} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800" title="Refresh"><RefreshCw size={15} /></button>
+                                </div>
+                                <div className="grid content-start gap-1 p-2 [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))]">
+                                    {allWorkspaces.map(w => (
+                                        <div
+                                            key={w.sessionId}
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => openWorkspace(w.sessionId)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') openWorkspace(w.sessionId); }}
+                                            className={cn(
+                                                "group relative flex cursor-pointer flex-col items-center gap-1 rounded-xl border px-2 py-3 text-center transition-colors",
+                                                w.sessionId === currentSessionId
+                                                    ? "border-emerald-300 bg-emerald-50/50"
+                                                    : "border-transparent hover:border-violet-100 hover:bg-violet-50/60"
+                                            )}
+                                            title={w.sessionId === currentSessionId ? `${w.displayName} — current chat` : w.displayName}
+                                        >
+                                            {w.sessionId === currentSessionId && (
+                                                <span
+                                                    className="absolute left-1.5 top-1.5 z-10 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white"
+                                                    title="Current chat"
+                                                />
+                                            )}
+                                            <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                                <button onClick={(e) => { e.stopPropagation(); renameWorkspace(w.sessionId, w.displayName); }} className="rounded-full bg-white p-1.5 text-gray-400 shadow-sm hover:bg-violet-100 hover:text-violet-600" title="Rename"><Edit2 size={13} /></button>
+                                                <button onClick={(e) => { e.stopPropagation(); setWorkspaceDeleteTarget({ name: w.displayName, isDir: true, items: w.fileCount + w.folderCount, kind: 'workspace', sessionId: w.sessionId }); }} className="rounded-full bg-white p-1.5 text-gray-400 shadow-sm hover:bg-red-100 hover:text-red-600" title="Delete workspace"><Trash2 size={13} /></button>
+                                            </div>
+                                            <Folder size={44} strokeWidth={1} className={w.orphan ? 'text-gray-300' : 'text-amber-400'} fill={w.orphan ? '#f3f4f6' : '#fde68a'} />
+                                            <span className="line-clamp-2 w-full break-words text-xs font-medium leading-tight text-gray-800">{w.displayName}</span>
+                                            {w.orphan && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">orphan</span>}
+                                            <span className="text-[10px] text-gray-300">{w.fileCount} {w.fileCount === 1 ? 'file' : 'files'}</span>
+                                        </div>
+                                    ))}
+                                    {allWorkspaces.length === 0 && (
+                                        <div className="col-span-full flex h-48 items-center justify-center text-sm text-gray-300">No workspaces yet.</div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         {/* File browser (folders + files, scoped to the chat folder) */}
+                        {workspaceView === 'folder' && workspaceInfo?.path && (
                         <div
                             className={cn(
                                 "relative min-h-0 flex-1 overflow-y-auto px-4 py-3 transition-colors",
@@ -6468,6 +6594,7 @@ function VAFDashboardContent() {
                                 )}
                             </div>
                         </div>
+                        )}
 
                         {/* Delete confirmation dialog */}
                         {workspaceDeleteTarget && (
@@ -6479,7 +6606,7 @@ function VAFDashboardContent() {
                                         </div>
                                         <div className="min-w-0">
                                             <div className="text-sm font-bold text-gray-900">
-                                                Delete {workspaceDeleteTarget.isDir ? 'folder' : 'file'}?
+                                                Delete {workspaceDeleteTarget.kind === 'workspace' ? 'workspace' : workspaceDeleteTarget.isDir ? 'folder' : 'file'}?
                                             </div>
                                             <p className="mt-1 text-xs leading-relaxed text-gray-500">
                                                 <span className="font-mono font-semibold text-gray-700">{workspaceDeleteTarget.name}</span>
@@ -6967,6 +7094,30 @@ function VAFDashboardContent() {
                 }}
                 isWorkflowSaving={isWorkflowSaving}
                 workflowBackendError={workflowBackendError}
+                skills={skills}
+                onCreateSkill={(data) => {
+                    setIsSkillSaving(true);
+                    setSkillBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'create_skill', ...data }));
+                }}
+                onUpdateSkill={(data) => {
+                    setIsSkillSaving(true);
+                    setSkillBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'update_skill', ...data }));
+                }}
+                onDeleteSkill={(id) => {
+                    setIsSkillSaving(true);
+                    setSkillBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'delete_skill', skill_id: id }));
+                }}
+                onUploadSkill={(filename, base64, override) => {
+                    setIsSkillSaving(true);
+                    setSkillBackendError(null);
+                    ws?.send(JSON.stringify({ type: 'upload_skill', filename, data: base64, override }));
+                }}
+                isSkillSaving={isSkillSaving}
+                skillBackendError={skillBackendError}
+                skillSavedTick={skillSavedTick}
                 mcpServers={mcpServers}
                 onRefreshMcpServers={() => ws?.send(JSON.stringify({ type: 'get_mcp_servers' }))}
                 onSaveMcpServer={(d) => { setIsMcpSaving(true); setMcpBackendError(null); ws?.send(JSON.stringify({ type: 'create_mcp_server', ...d })); }}

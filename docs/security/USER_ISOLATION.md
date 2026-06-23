@@ -279,7 +279,9 @@ The prefix is derived from `session.metadata["user_scope_id"]` at project creati
 
 **Unsafe-directory guard:** `is_unsafe_project_dir()` (`vaf/tools/coder.py`) rejects the user's home directory itself, the standard user directories (Documents, Desktop, ...), `~/.vaf` and the VAF program tree as agent work directories — for the CWD heuristic, explicit `project_path` arguments, paths extracted from task text and `git init`. Unsafe paths fall back to the `VAF_Projects` flow.
 
-**Workspace window endpoints:** `GET /api/session/workspace` and `POST /api/session/workspace/upload` (`vaf/core/web_server.py`) enforce session ownership: the session's `metadata.user_scope_id` must match the requesting user (legacy sessions without a scope and the local admin are allowed), otherwise 403. `GET /api/file` additionally refuses downloads from another user's `VAF_Projects/<uid[:8]>/` subtree (local admin exempt; legacy flat projects unaffected).
+**Workspace window endpoints:** `GET /api/session/workspace` and `POST /api/session/workspace/upload` (`vaf/core/web_server.py`) enforce session ownership: the session's `metadata.user_scope_id` must match the requesting user (legacy sessions without a scope and the local admin are allowed), otherwise 403. `GET /api/file` additionally refuses downloads from another user's `VAF_Projects/<uid[:8]>/` subtree (local admin exempt; legacy flat projects unaffected); this check is **fail-closed** — if ownership cannot be verified it denies.
+
+**Central Data Explorer endpoints:** `GET /api/workspaces`, `POST /api/workspaces/rename`, and `POST /api/workspaces/delete` (`vaf/core/web_server.py`) back the WebUI "all my workspaces" view. They derive the per-user root `VAF_Projects/<uid[:8]>/` solely from the authenticated user's scope (never a client value), so a user can only ever list, rename, or delete their own workspaces, and they return opaque session-id handles rather than absolute paths. The list includes **orphaned** workspaces — folders left behind when a chat is deleted (deleting a chat removes only the session JSON, not the files) — detected by diffing the folder set against the live session ids. Rename is **display-label only**: it writes a `.vaf_workspace.json` label inside the folder (the on-disk folder name stays the session id, which the resolver keys on) and survives session deletion, so orphans stay renamable. Delete removes the whole folder, boundary-checked to the caller's own root.
 
 ### Session workspace (`vaf/core/session.py`, `vaf/core/web_server.py`)
 
@@ -288,6 +290,14 @@ Each chat session has a **stable workspace root** stored in `Session.project_pat
 - `session.project_path` is only set for paths inside `VAF_Projects/` (temp dirs and one-off outputs are excluded).
 - `runtime_state["last_project_path"]` continues to track the most recently created or edited project within the session. Unsafe directories (home dir, `~/.vaf`, ...) are never recorded — and never re-injected into prompts — so sessions that stored such a path before the guard existed self-heal (`is_unsafe_project_dir` checks in `web_server.py` and `headless_runner.py`).
 - The agent receives both values as `[SESSION WORKSPACE]` and `[ACTIVE PROJECT]` context lines at the start of each turn (injected by `vaf/core/headless_runner.py`).
+
+### Librarian agent (`vaf/tools/librarian.py`, `vaf/tools/filesystem.py`)
+
+The `librarian_agent` reads the local filesystem to answer "find / list / summarize my files" tasks. By default `is_safe_path` (`vaf/tools/filesystem.py`) only blocks the VAF program tree and a few system directories — it is not user-aware — so without an extra guard the librarian could read across every user's `VAF_Projects/<uid[:8]>/` tree and the whole home directory. A **per-user jail** is therefore layered on top of `is_safe_path`:
+
+- The agent's tool dispatcher injects the caller's `user_scope_id` into the `librarian_agent` call (`vaf/core/agent.py`); `LibrarianTool.run` installs it as a **contextvar** (`set_librarian_scope`) for the duration of the run only, so every other caller (coder, document tools) is unaffected.
+- While the jail is active, `is_safe_path` additionally enforces: a **remote (non-admin) user** may read only inside their own `VAF_Projects/<uid[:8]>/`; the **local admin / machine owner** keeps full access (their personal `Downloads`/`Documents`/… included). Any path under another user's `VAF_Projects/<other-uid[:8]>/` is **always denied**.
+- The check is **fail-closed**: if the scope cannot be resolved, access is denied. The contextvar is reset in a `finally`, so the jail never leaks into a later run.
 
 ### Automations (`vaf/core/automation.py`)
 
@@ -364,6 +374,8 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |
 | Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |
+| Central Data Explorer (`/api/workspaces`) | Per-user root derived from authenticated scope; lists/renames/deletes only the caller's own workspaces (incl. orphans); opaque handles, not paths | Application |
+| Librarian agent (filesystem read) | Per-user jail (contextvar over `is_safe_path`): remote user confined to own `VAF_Projects/<uid[:8]>/`, local admin full; another user's tree always denied, fail-closed | OS |
 | Sandbox | Per-user working directory in Docker | Container |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |

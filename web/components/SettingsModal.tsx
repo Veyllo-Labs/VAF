@@ -21,6 +21,8 @@ import McpServerEditor from './settings/McpServerEditor';
 import type { McpServerInfo } from './settings/McpServerEditor';
 import WorkflowCreator from './settings/WorkflowCreator';
 import type { WorkflowSaveData } from './settings/WorkflowCreator';
+import SkillsEditor from './settings/SkillsEditor';
+import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
 // Loading fallback for lazy-loaded ReactFlow
@@ -114,7 +116,7 @@ import {
     Check, ChevronRight, Zap, Search, Download, RefreshCw, Workflow, GitBranch, Loader2,
     Brain, Database, Link2, MessageSquare, Network, Users, User, Lock, Server, Laptop, Smartphone,
     Edit, Trash2, Plus, Filter, MoreHorizontal, CheckCircle, XCircle, ShieldAlert, Copy, Wand2, LogOut, Calendar,
-    Eye, EyeOff, ExternalLink
+    Eye, EyeOff, ExternalLink, Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
@@ -204,6 +206,22 @@ export interface SettingsModalProps {
     isWorkflowSaving?: boolean;
     /** Last error from the backend for a workflow operation */
     workflowBackendError?: string | null;
+    /** Skills (Anthropic Agent Skills / SKILL.md) visible to this user */
+    skills?: Array<{ id: string; name: string; description: string; valid?: boolean; error?: string | null; shared_with?: string[]; created_by?: string; can_manage?: boolean; source?: string; scan?: { score?: number; level?: string; count?: number } | null }>;
+    /** Increments when a skill op (create/update/delete) succeeds — closes the editor. */
+    skillSavedTick?: number;
+    /** Create a new skill (admin only) */
+    onCreateSkill?: (data: SkillSaveData) => void;
+    /** Update an existing skill (admin only) */
+    onUpdateSkill?: (data: SkillSaveData) => void;
+    /** Delete a skill (admin only) */
+    onDeleteSkill?: (id: string) => void;
+    /** Upload a skill folder bundle as a .zip (admin only) */
+    onUploadSkill?: (filename: string, base64: string, override: boolean) => void;
+    /** Whether a skill save/delete is in progress */
+    isSkillSaving?: boolean;
+    /** Last error from the backend for a skill operation */
+    skillBackendError?: string | null;
     /** Configured MCP servers + live connection status (admin only) */
     mcpServers?: McpServerInfo[];
     /** Re-fetch the MCP server list (sent when the MCP modal opens) */
@@ -346,7 +364,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -450,6 +468,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             steps: Array<{ input: string; tool: string; description: string }>;
         };
     } | null>(null);
+    // Skills modal + editor state: null = closed; { skillId: null } = create; { skillId: "x", initialData } = edit
+    const [showSkillsModal, setShowSkillsModal] = useState(false);
+    const [skillsEditor, setSkillsEditor] = useState<{
+        skillId: string | null;
+        initialData?: { name?: string; description?: string; source?: string };
+    } | null>(null);
     const [showTrustedSourcesModal, setShowTrustedSourcesModal] = useState(false);
     const [showNetworkModal, setShowNetworkModal] = useState(false);
     const [showMemoryModal, setShowMemoryModal] = useState(false);
@@ -483,6 +507,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     const [toolsSearch, setToolsSearch] = useState('');
     const [workflowsSearch, setWorkflowsSearch] = useState('');
+    const [skillsSearch, setSkillsSearch] = useState('');
     const [trustedSourceForm, setTrustedSourceForm] = useState<{ categoryId: string; name: string; url: string }>({ categoryId: '', name: '', url: '' });
     const [addFormCategoryId, setAddFormCategoryId] = useState<string | null>(null);
     const [newCategoryName, setNewCategoryName] = useState('');
@@ -933,6 +958,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     }, [showMemoryModal, fetchMemoryGraph]);
 
+    // Close the skills editor once the backend confirms a create/update/delete.
+    // (A blocked save sends skill_error instead, leaving the editor open with findings.)
+    useEffect(() => {
+        setSkillsEditor(null);
+    }, [skillSavedTick]);
+
     // Stacked Escape Key Handling
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -946,6 +977,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 // Editor sits above the visualizer — close it first, keeping the flow behind.
                 if (workflowCreator) {
                     setWorkflowCreator(null);
+                    e.stopPropagation();
+                    return;
+                }
+                if (skillsEditor) {
+                    setSkillsEditor(null);
                     e.stopPropagation();
                     return;
                 }
@@ -976,8 +1012,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     e.stopPropagation();
                     return;
                 }
+                if (showMcpModal) {
+                    setShowMcpModal(false);
+                    e.stopPropagation();
+                    return;
+                }
                 if (showWorkflowsModal) {
                     setShowWorkflowsModal(false);
+                    e.stopPropagation();
+                    return;
+                }
+                if (showSkillsModal) {
+                    setShowSkillsModal(false);
                     e.stopPropagation();
                     return;
                 }
@@ -1013,7 +1059,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, codeModal, workflowCreator, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showWorkflowsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
+    }, [isOpen, codeModal, workflowCreator, skillsEditor, workflowModal, showMemoryModal, showCreateAutomationModal, showUserIdentityModal, showToolsModal, showMcpModal, showWorkflowsModal, showSkillsModal, showTrustedSourcesModal, showCloudDashboard, showCalendarDashboard, showCalendarWizard, onClose]);
 
     // When automation calendar is opened from Settings, request notes/todos so they are loaded
     useEffect(() => {
@@ -2750,6 +2796,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.server_persistence_enabled ?? false}
                                         onChange={(v: boolean) => handleChange('server_persistence_enabled', v)}
                                     />
+                                    {/* Memory system + Debug logs toggles are intentionally hidden from the UI.
+                                        Both default to ON (config.py: memory_enabled / debug_logs_enabled = True)
+                                        and stay on unless a user opts out manually in ~/.vaf/config.json.
                                     <div className="h-4" />
                                     <Switch
                                         label={tAdvanced('memorySystem')}
@@ -2764,6 +2813,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.debug_logs_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
+                                    */}
                                     <div className="h-4" />
                                     <button
                                         onClick={() => setShowToolsModal(true)}
@@ -2794,6 +2844,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <div className="flex flex-col items-start">
                                             <span className="text-sm font-medium text-gray-700">{tAdvanced('workflows')}</span>
                                             <span className="text-xs text-gray-500">{tAdvanced('workflowsAvailable', { count: workflows.length })}</span>
+                                        </div>
+                                        <ChevronRight size={16} className="text-gray-400" />
+                                    </button>
+                                    <div className="h-4" />
+                                    <button
+                                        onClick={() => setShowSkillsModal(true)}
+                                        className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-100 transition-colors"
+                                    >
+                                        <div className="flex flex-col items-start">
+                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('skills')}</span>
+                                            <span className="text-xs text-gray-500">{tAdvanced('skillsAvailable', { count: skills.length })}</span>
                                         </div>
                                         <ChevronRight size={16} className="text-gray-400" />
                                     </button>
@@ -3227,7 +3288,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
 
                         {/* Tools Grid */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                        <div className="relative flex-1 overflow-y-auto p-6 bg-gray-50/30">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
 
                                 {/* ── "Create custom tool" card (admin only, always first) ── */}
@@ -3370,6 +3431,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-sm text-gray-500 mt-1">{tModals('tools.noToolsFoundHint')}</p>
                                 </div>
                             )}
+
+                            {/* Empty state: no tools at all */}
+                            {tools.length === 0 && toolsSearch === '' && (
+                                <PanelEmptyState
+                                    icon={<Cpu size={32} />}
+                                    title={tModals('tools.empty')}
+                                    hint={tModals('tools.emptyHint')}
+                                    accentBg="bg-blue-50"
+                                    accentText="text-blue-500"
+                                />
+                            )}
                         </div>
                     </div>
                 </div>
@@ -3508,6 +3580,34 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 />
             )}
 
+            {/* Skills editor (create / edit a SKILL.md skill) */}
+            {skillsEditor !== null && (
+                <SkillsEditor
+                    skillId={skillsEditor.skillId}
+                    initialData={skillsEditor.initialData}
+                    isSaving={isSkillSaving}
+                    backendError={skillBackendError}
+                    onClose={() => setSkillsEditor(null)}
+                    onSave={(data) => {
+                        // Do NOT close here: a high-risk scan block returns skill_error and
+                        // the editor must stay open with the findings. The editor closes on
+                        // success via the skillSavedTick effect above.
+                        if (skillsEditor.skillId === null) {
+                            onCreateSkill?.(data);
+                        } else {
+                            onUpdateSkill?.(data);
+                        }
+                    }}
+                    onDelete={(id) => {
+                        onDeleteSkill?.(id);
+                        setSkillsEditor(null);
+                    }}
+                    onUploadZip={(filename, base64, override) => {
+                        onUploadSkill?.(filename, base64, override);
+                    }}
+                />
+            )}
+
             {/* License Content Modal */}
             {showLicenseModal && (
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowLicenseModal(false)}>
@@ -3580,7 +3680,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
 
                         {/* Body */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                        <div className="relative flex-1 overflow-y-auto p-6 bg-gray-50/30">
                             {currentUser?.role !== 'admin' ? (
                                 <div className="text-center text-gray-400 py-12">{tModals('mcp.adminRequired')}</div>
                             ) : (
@@ -3633,6 +3733,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     ))}
                                     {mcpServers.length === 0 && !onSaveMcpServer && (
                                         <div className="col-span-full text-center text-gray-400 py-12">{tModals('mcp.noServers')}</div>
+                                    )}
+                                    {/* Empty state: admin, no servers yet */}
+                                    {mcpServers.length === 0 && mcpSearch === '' && onSaveMcpServer && (
+                                        <PanelEmptyState
+                                            icon={<Network size={32} />}
+                                            title={tModals('mcp.empty')}
+                                            hint={tModals('mcp.emptyHint')}
+                                            accentBg="bg-amber-50"
+                                            accentText="text-amber-500"
+                                        />
                                     )}
                                 </div>
                             )}
@@ -3690,7 +3800,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </div>
 
                         {/* Workflows Grid */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                        <div className="relative flex-1 overflow-y-auto p-6 bg-gray-50/30">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
 
                                 {/* ── "Create Workflow" card (admin only, always first) ── */}
@@ -3780,6 +3890,149 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </div>
                                     <h3 className="text-lg font-medium text-gray-900">{tModals('workflows.noWorkflowsFound')}</h3>
                                     <p className="text-sm text-gray-500 mt-1">{tModals('workflows.noWorkflowsFoundHint')}</p>
+                                </div>
+                            )}
+
+                            {/* Empty state: no workflows at all */}
+                            {workflows.length === 0 && workflowsSearch === '' && (
+                                <PanelEmptyState
+                                    icon={<GitBranch size={32} />}
+                                    title={tModals('workflows.empty')}
+                                    hint={tModals('workflows.emptyHint')}
+                                    accentBg="bg-purple-50"
+                                    accentText="text-purple-500"
+                                />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Skills Modal - same layout as the Workflows modal */}
+            {showSkillsModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowSkillsModal(false)}>
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-800">{tModals('skills.title')}</h2>
+                                <p className="text-sm text-gray-500">{tModals('skills.available', { count: skills.length })}</p>
+                            </div>
+                            <button onClick={() => setShowSkillsModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        {/* Search Bar */}
+                        <div className="p-6 border-b border-gray-100 bg-gray-50/50">
+                            <div className="relative max-w-md">
+                                <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder={tModals('skills.searchPlaceholder')}
+                                    value={skillsSearch}
+                                    onChange={(e) => setSkillsSearch(e.target.value)}
+                                    className="w-full pl-12 pr-4 h-12 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Skills Grid */}
+                        <div className="relative flex-1 overflow-y-auto p-6 bg-gray-50/30">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+
+                                {/* "Create Skill" card (admin only, first) */}
+                                {currentUser?.role === 'admin' && onCreateSkill && skillsSearch === '' && (
+                                    <button
+                                        onClick={() => setSkillsEditor({ skillId: null })}
+                                        className="group aspect-square bg-white rounded-2xl border-2 border-dashed border-gray-300 hover:border-emerald-400 hover:shadow-lg hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-3 text-gray-400 hover:text-emerald-500"
+                                        title="Create a new skill"
+                                    >
+                                        <div className="w-12 h-12 rounded-full border-2 border-dashed border-current flex items-center justify-center text-2xl font-light">+</div>
+                                        <span className="text-sm font-medium">Create Skill</span>
+                                    </button>
+                                )}
+
+                                {skills
+                                    .filter(s =>
+                                        skillsSearch === '' ||
+                                        s.name.toLowerCase().includes(skillsSearch.toLowerCase()) ||
+                                        s.description.toLowerCase().includes(skillsSearch.toLowerCase())
+                                    )
+                                    .map((s, idx) => {
+                                        const canManage = s.can_manage !== false;
+                                        const invalid = s.valid === false;
+                                        return (
+                                            <div
+                                                key={s.id || idx}
+                                                onClick={() => { if (canManage) setSkillsEditor({ skillId: s.id, initialData: { name: s.name, description: s.description, source: s.source } }); }}
+                                                className={`group relative aspect-square bg-white rounded-2xl border-2 transition-all overflow-hidden flex flex-col ${canManage ? 'cursor-pointer hover:shadow-xl hover:-translate-y-1' : ''} ${invalid ? 'border-red-200 hover:border-red-400' : 'border-emerald-200 hover:border-emerald-500'}`}
+                                            >
+                                                <div className="absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity rotate-12">
+                                                    <Sparkles size={160} />
+                                                </div>
+                                                <div className="p-5 flex-1 flex flex-col relative z-10">
+                                                    <div className="flex items-start justify-between mb-2">
+                                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-sm transition-colors ${invalid ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white'}`}>
+                                                            <Sparkles size={20} />
+                                                        </div>
+                                                        {invalid ? (
+                                                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold uppercase tracking-wider rounded-md">{tModals('skills.invalid')}</span>
+                                                        ) : (s.scan && (s.scan.level === 'high' || s.scan.level === 'medium') && (
+                                                            <span
+                                                                title={tModals('skills.riskTitle', { level: s.scan.level || '', score: s.scan.score ?? 0 })}
+                                                                className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md ${s.scan.level === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
+                                                            >
+                                                                {s.scan.level === 'high' ? tModals('skills.riskHigh') : tModals('skills.riskMedium')}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                    <h3 className={`text-lg font-bold text-gray-900 mb-1 transition-colors line-clamp-1 ${invalid ? '' : 'group-hover:text-emerald-600'}`}>{s.name}</h3>
+                                                    <div className="flex-1">
+                                                        <p className="text-xs text-gray-500 line-clamp-4 leading-relaxed">{invalid ? (s.error || s.description) : s.description}</p>
+                                                    </div>
+                                                    <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 group-hover:text-gray-600">
+                                                        <span className="font-mono">{s.id}</span>
+                                                        {canManage && (
+                                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-600 font-medium">
+                                                                {tModals('skills.edit')} <ChevronRight size={12} />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className={`h-2 border-t transition-colors ${invalid ? 'bg-red-50 border-red-100' : 'bg-gray-100 border-gray-200 group-hover:bg-emerald-50 group-hover:border-emerald-100'}`} />
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+
+                            {/* Empty state: no skills at all */}
+                            {skills.length === 0 && skillsSearch === '' && (
+                                <PanelEmptyState
+                                    icon={<Sparkles size={32} />}
+                                    title={tModals('skills.empty')}
+                                    hint={tModals('skills.emptyHint')}
+                                    accentBg="bg-emerald-50"
+                                    accentText="text-emerald-400"
+                                />
+                            )}
+
+                            {/* Empty state: search found nothing */}
+                            {skills.length > 0 && skills.filter(s =>
+                                skillsSearch === '' ||
+                                s.name.toLowerCase().includes(skillsSearch.toLowerCase()) ||
+                                s.description.toLowerCase().includes(skillsSearch.toLowerCase())
+                            ).length === 0 && (
+                                <div className="flex flex-col items-center justify-center py-20 text-center">
+                                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-gray-400">
+                                        <Search size={32} />
+                                    </div>
+                                    <h3 className="text-lg font-medium text-gray-900">{tModals('skills.noneFound')}</h3>
+                                    <p className="text-sm text-gray-500 mt-1">{tModals('skills.noneFoundHint')}</p>
                                 </div>
                             )}
                         </div>
@@ -5420,6 +5673,26 @@ const Input = ({ label, value, onChange, type = "text", placeholder, disabled, l
         />
     </div>
 );
+
+// Centered empty state for the management panels (Skills / Tools / Workflows / MCP).
+// Absolutely centered in its (relative) panel body, with the panel's own accent color.
+function PanelEmptyState({ icon, title, hint, accentBg, accentText }: {
+    icon: React.ReactNode;
+    title: string;
+    hint: string;
+    accentBg: string;
+    accentText: string;
+}) {
+    return (
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6 pointer-events-none">
+            <div className={`w-16 h-16 ${accentBg} rounded-full flex items-center justify-center mb-4 ${accentText}`}>
+                {icon}
+            </div>
+            <h3 className="text-lg font-medium text-gray-900">{title}</h3>
+            <p className="text-sm text-gray-500 mt-1 max-w-sm">{hint}</p>
+        </div>
+    );
+}
 
 interface SelectProps {
     label: string;

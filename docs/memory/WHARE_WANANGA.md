@@ -8,7 +8,7 @@ code term is `tool_knowledge`.
 It is distinct from two neighbouring concepts:
 
 - It is **not** a "skill" in the Agent-Skills sense (a task-level cookbook that spans
-  several tools); that layer maps to VAF workflows.
+  several tools); that layer maps to VAF [Skills](../agents/SKILLS.md) and workflows.
 - It is **not** the tool itself; it is the learned knowledge *about* operating one tool.
 
 ## Status
@@ -166,7 +166,7 @@ mirrored from the `docs/animations/agent_avatar` reference.)
 Beyond the dashboard, each training run is also surfaced in the Web UI's visual **Timeline** log
 (Notifications -> Timeline) as a *Tool Learning* lane entry -- start, tool, mode, and the
 confirmed/challenge outcome -- and as `[WHARE-WANANGA] training started/done` lines in
-`backend_*.log`. Both require Debug Logs enabled (Settings -> Advanced -> Debug Logs);
+`backend_*.log`. Both require Debug Logs enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`);
 `jobs.train_started` / `jobs.train_ended` emit a `ww_train_start` + `ww_train_end` pair (merged by
 `run_id`) via `log_timeline_event`.
 The training "sandbox" is class-scoped (not OS isolation): the trainer may only call the

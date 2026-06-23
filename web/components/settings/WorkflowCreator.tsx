@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import { X, Plus, Trash2, AlertCircle, Loader2, GitBranch } from 'lucide-react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { X, Plus, Trash2, AlertCircle, Loader2, GitBranch, Upload, Download } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -190,6 +190,64 @@ export default function WorkflowCreator({
     });
   };
 
+  // ── import / export (interchange format = the stored WORKFLOW dict) ───────────
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';            // allow re-importing the same file
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const wf = JSON.parse(String(reader.result));
+        if (!wf || typeof wf !== 'object' || !Array.isArray(wf.steps) || wf.steps.length === 0) {
+          setLocalError('Invalid workflow file: expected an object with a non-empty "steps" array.');
+          return;
+        }
+        setName(String(wf.name ?? '').trim());
+        setDescription(String(wf.description ?? ''));
+        setTriggers(Array.isArray(wf.triggers) ? wf.triggers.map(String).filter(Boolean) : []);
+        setSteps(wf.steps.map((s: any) => ({
+          _id:         uid(),
+          input:       String(s?.input ?? s?.prompt ?? ''),
+          tool:        String(s?.tool ?? 'coding_agent'),
+          description: String(s?.description ?? ''),
+        })));
+        if (!isEdit) {
+          const wid = String(wf.workflow_id ?? '').trim();
+          if (wid) { setIdEdited(true); setWfId(wid); }
+          else { setIdEdited(false); }   // let the name-derived id regenerate
+        }
+        setLocalError(null);
+      } catch {
+        setLocalError('Could not parse workflow file: not valid JSON.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExport = () => {
+    const wf = {
+      name:        name.trim() || (isEdit ? workflowId! : wfId),
+      description: description.trim(),
+      triggers,
+      steps: steps.map((s, i) => ({
+        input:       s.input,
+        tool:        s.tool,
+        description: s.description.trim() || `Step ${i + 1}`,
+        output:      `step_${i + 1}_output`,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(wf, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(isEdit ? workflowId : wfId) || 'workflow'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ─── render ─────────────────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
@@ -209,9 +267,34 @@ export default function WorkflowCreator({
               {isEdit ? `Edit "${initialData?.name || workflowId}"` : 'Create Workflow'}
             </h2>
           </div>
-          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImportFile}
+              className="hidden"
+            />
+            {!isEdit && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                title="Import a workflow from a .json file"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <Upload size={14} /> Import
+              </button>
+            )}
+            <button
+              onClick={handleExport}
+              title="Download this workflow as a .json file"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Download size={14} /> Export
+            </button>
+            <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* ── Scrollable body ── */}

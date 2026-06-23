@@ -93,20 +93,20 @@ This starts:
 
 ### 2. Enable Memory System
 
-The Memory System is enabled by default. You can toggle it in Settings → Advanced → System.
+The Memory System is enabled by default. There is no UI toggle — it stays on unless you opt out by setting `memory_enabled: false` in `~/.vaf/config.json`.
 
 ### 3. Access the Memory Graph
 
-- **Via Settings**: Settings → Advanced → System → Memory System button
+- **Via Settings**: the **View Graph** button in Settings → Persona (RAG / memory section)
 - **Direct URL**: `http://localhost:3000/memory`
 
 ## Configuration
 
-Settings are available in the VAF Settings Modal under Advanced → System:
+Memory settings live in `~/.vaf/config.json` (the Memory System has no UI toggle — it is on by default):
 
-| Setting | Default | Description |
+| `config.json` key | Default | Description |
 |---------|---------|-------------|
-| Memory System | Enabled | Enable/disable the entire memory system |
+| `memory_enabled` | `true` | Enable/disable the entire memory system |
 | Chunk Size | 512 | Size of text chunks in tokens for RAG retrieval |
 | Auto-Connect Threshold | 0.7 | Cosine similarity threshold (0-1) for auto-connecting memories |
 

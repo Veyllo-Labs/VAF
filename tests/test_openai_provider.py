@@ -31,8 +31,8 @@ class _FakeClient:
         self.chat = _FakeChat()
 
 
-def _provider():
-    p = OpenAIProvider("openai", "dummy-key")
+def _provider(name="openai"):
+    p = OpenAIProvider(name, "dummy-key")
     p.client = _FakeClient()
     return p
 
@@ -77,6 +77,15 @@ def test_gpt5_treated_as_reasoning():
     assert "max_completion_tokens" in kw
     assert "max_tokens" not in kw
     assert "temperature" not in kw
+
+
+def test_openrouter_does_not_gate_reasoning_models():
+    # OpenRouter normalizes around max_tokens for every model — gating would lose the
+    # token limit. A reasoning route via OpenRouter must still get max_tokens + temperature.
+    kw = _drive(_provider("openrouter"), "openai/o3-mini", temperature=0.7, max_tokens=4096)
+    assert kw["max_tokens"] == 4096
+    assert kw["temperature"] == 0.7
+    assert "max_completion_tokens" not in kw
 
 
 # ── parallel_tool_calls gating ────────────────────────────────────────────────

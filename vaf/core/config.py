@@ -9,6 +9,38 @@ import base64
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
 
 
+# ── Single source of truth for per-provider API models ────────────────────────
+# `default` = used when the user hasn't picked a model; `fallback` = the static
+# dropdown list shown when no live model fetch has happened (no key / offline /
+# rate-limited). The live list (provider /v1/models) still takes precedence in the
+# UI. Change a model HERE ONCE — every Python call site and the web UI read this
+# (UI via GET /api/provider-models). `local` is intentionally absent (GGUF models
+# are discovered from disk, not a fixed list).
+PROVIDER_MODELS: dict[str, dict] = {
+    "openai": {
+        "default": "gpt-4o",
+        "fallback": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+    },
+    "anthropic": {
+        "default": "claude-sonnet-4-6",
+        "fallback": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
+    },
+    "deepseek": {
+        "default": "deepseek-v4-flash",
+        "fallback": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-auto"],
+    },
+    "google": {
+        "default": "gemini-2.5-flash",
+        "fallback": ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+    },
+    "openrouter": {
+        # OpenRouter uses DOTTED ids (claude-sonnet-4.6), unlike Anthropic's dashed ids.
+        "default": "anthropic/claude-sonnet-4.6",
+        "fallback": ["anthropic/claude-sonnet-4.6", "openai/gpt-4o", "google/gemini-2.5-flash"],
+    },
+}
+
+
 class Config:
     # In Docker mode, use dedicated config volume (NOT VAF-Space!)
     # VAF-Space = User data (NAS-like storage)
@@ -66,17 +98,18 @@ class Config:
         "google_search_engine_id": "",
         
         # API Model Selection per Provider
-        "api_model_openai": "gpt-4o",
-        "api_model_anthropic": "claude-sonnet-4-6",
-        "api_model_deepseek": "deepseek-v4-flash",  # deepseek-chat deprecated 2026-07-24
-        "api_model_google": "gemini-1.5-flash",  # Free tier, fast & capable
-        "api_model_openrouter": "anthropic/claude-3.5-sonnet",
-        
+        # Defaults derive from PROVIDER_MODELS (single source of truth — see top of file).
+        "api_model_openai": PROVIDER_MODELS["openai"]["default"],
+        "api_model_anthropic": PROVIDER_MODELS["anthropic"]["default"],
+        "api_model_deepseek": PROVIDER_MODELS["deepseek"]["default"],  # deepseek-chat deprecated 2026-07-24
+        "api_model_google": PROVIDER_MODELS["google"]["default"],
+        "api_model_openrouter": PROVIDER_MODELS["openrouter"]["default"],
+
         # Vision Model Fallback — used when the primary provider does not support image input.
         # Example: primary = deepseek (no vision) → vision_provider = google / openai / anthropic.
         # Leave empty to keep current behavior (strip images + show error to user).
         "vision_provider": "",   # e.g. "google", "openai", "anthropic", "openrouter"
-        "vision_model": "",      # e.g. "gemini-2.0-flash", "gpt-4o" — leave empty for provider default
+        "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-4o" — leave empty for provider default
 
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
@@ -398,6 +431,19 @@ class Config:
         "email_oauth_apple_client_id": "",
         "email_oauth_apple_client_secret": "",
     }
+
+    # Per-provider model metadata (single source — see module-level PROVIDER_MODELS).
+    PROVIDER_MODELS = PROVIDER_MODELS
+
+    @classmethod
+    def get_default_model(cls, provider: str) -> str:
+        """Default model id for an API provider (empty for local / unknown)."""
+        return cls.PROVIDER_MODELS.get(provider, {}).get("default", "")
+
+    @classmethod
+    def get_fallback_models(cls, provider: str) -> list:
+        """Static fallback model list for an API provider (used when no live fetch)."""
+        return list(cls.PROVIDER_MODELS.get(provider, {}).get("fallback", []))
 
     @classmethod
     def load(cls) -> dict:

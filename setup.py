@@ -65,7 +65,7 @@ BASE_REQUIRES = [
     "beautifulsoup4>=4.12.0", "html2text>=2024.2.26",
     # LLM providers + model download
     "huggingface_hub[hf_xet]>=0.20.0", "tqdm>=4.65.0",
-    "openai>=1.12.0", "anthropic>=0.18.0", "google-generativeai>=0.4.0",
+    "openai>=1.12.0", "anthropic>=0.18.0", "google-genai>=1.0.0",
     # Automation / scheduling
     "schedule>=1.2.0", "inquirer>=3.1.0",
     # Linting (used by the built-in linter tool)

@@ -94,12 +94,25 @@ class AskUserTool(BaseTool):
             details=kwargs.get("details"),
         )
         if not req:
-            # message was non-empty (checked above) but delivery returned nothing -> the proactive
-            # evidence-gate dropped it (details did not quote real retrieved memory/history).
+            # message was non-empty (checked above) but delivery returned nothing. WHY depends on the
+            # per-run proactive MODE — give mode-specific guidance so the model stops retrying blindly.
+            try:
+                from vaf.core.thinking_mode import get_proactive_mode
+                _mode = get_proactive_mode(kwargs.get("user_scope_id"))
+            except Exception:
+                _mode = "grounded"
+            if _mode == "off":
+                # Not in a proactive step (gather / forced-resolution), or a message was already delivered
+                # this run. Retrying cannot succeed — stop now.
+                return (
+                    "Not sent: you are not in a proactive step right now (or a message was already "
+                    "delivered this run). Do NOT retry ask_user — call thinking_done now."
+                )
+            # grounded step: the evidence gate dropped it (not grounded in real retrieved memory).
             return (
-                "Not sent: a proactive suggestion must quote the real memory/message it is based on in "
-                "`details` (paraphrasing or inventing is rejected). If you have nothing grounded, call "
-                "thinking_done — you will then ask the user a get-to-know question instead."
+                "Not sent: a proactive suggestion must quote the REAL memory it is based on, verbatim, in "
+                "`message` or `details` (paraphrasing or inventing is rejected). If you have nothing "
+                "grounded, call thinking_done — you will then ask the user a get-to-know question instead."
             )
         if req.get("delivered"):
             return (

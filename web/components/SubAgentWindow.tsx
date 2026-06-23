@@ -110,8 +110,49 @@ export type SubAgentWindowProps = {
     document?: DocumentViewState | null;  // enables the document view (document agent only)
     librarian?: LibrarianViewState | null;  // enables the read-only explorer view (librarian agent only)
     browser?: BrowserViewState | null;  // enables the live browser window (browser agent only)
+    // Kind known the moment the main agent CALLS the sub-agent (from the tool name) -> the matching custom
+    // view renders IMMEDIATELY in a loading shell, instead of waiting for streamed data.
+    agentKind?: 'coder' | 'research' | 'document' | 'librarian' | 'browser' | null;
     [key: string]: any;
 };
+
+// Empty-but-valid shells so a custom view can render a loading state the instant the kind is known, before
+// any <x>_state has streamed. Each contains exactly the fields its view reads (coder.git is fully populated
+// because the VS-Code view reads coder.git.commits/.branch/.dirty non-optionally; librarian starts in
+// overview/"Scanning" mode with currentFolder null).
+const EMPTY_CODER: CoderViewState = {
+    fileTree: [], git: { branch: '', dirty: 0, commits: [] }, tasks: [],
+    loop: 0, taskProgress: '', linterOk: true, projectName: '', projectPath: '',
+};
+const EMPTY_RESEARCH: ResearchViewState = {
+    topic: '', stage: '', sections: [], sectionsHtml: [], sources: [], wordsTarget: 0, loop: 0,
+};
+const EMPTY_DOCUMENT: DocumentViewState = {
+    title: '', format: 'docx', docType: 'report', stage: '', sections: [], sectionsHtml: [],
+    placeholders: [], wordsTarget: 0, savePath: '', loop: 0,
+};
+const EMPTY_LIBRARIAN: LibrarianViewState = {
+    root: '~', stage: '', readOnly: true, totalSize: 0, totalFiles: 0, totalFolders: 0,
+    entries: [], topFolders: [], drives: [], search: null, activity: [], currentFolder: null,
+};
+const EMPTY_BROWSER: BrowserViewState = {
+    task: '', url: '', status: 'running', step: 0, maxSteps: 0, vision: 'auto', actions: [], history: [],
+};
+
+const SUBAGENT_KIND_LABEL: Record<string, string> = {
+    coder: 'Coder', research: 'Research Agent', document: 'Document Agent',
+    librarian: 'Librarian', browser: 'Browser Agent',
+};
+
+/** Slim header strip shown while a custom view has opened (kind known) but no data has streamed yet. */
+function StartingBanner({ label }: { label: string }) {
+    return (
+        <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50/70 px-3 py-1.5 text-[11.5px] text-gray-500">
+            <Loader2 size={12} className="animate-spin text-gray-400" />
+            <span>Starting {label} — waiting for the agent…</span>
+        </div>
+    );
+}
 
 const formatSize = (bytes: number) =>
     bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
@@ -523,6 +564,7 @@ export default function SubAgentWindow({
     document,
     librarian,
     browser,
+    agentKind = null,
 }: SubAgentWindowProps) {
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
@@ -594,7 +636,6 @@ export default function SubAgentWindow({
     }, [animatingIdx]);
 
     // ── VS-Code view (coding agent only) ──────────────────────────────────
-    const hasCoderData = !!(coder && coder.fileTree && coder.fileTree.length > 0);
     const [editorDark, setEditorDark] = useState(false);
 
     // Bottom panel tabs (Console / Linter / Telemetry)
@@ -642,7 +683,6 @@ export default function SubAgentWindow({
     }, [coder]);
 
     // ── Research view (research agent only) ───────────────────────────────
-    const hasResearchData = !!(research && research.sections && research.sections.length > 0);
     const researchViewerRef = useRef<HTMLDivElement>(null);
     const keepResearchViewerPinned = () => {
         if (researchViewerRef.current) {
@@ -658,7 +698,6 @@ export default function SubAgentWindow({
     // Show the document window as soon as the FIRST state arrives — even during the
     // (slow) planning phase when no sections exist yet — so the user sees the custom
     // window with a "Planning…" placeholder instead of the generic startup console.
-    const hasDocumentData = !!(document && (document.sections?.length || document.stage));
     const documentViewerRef = useRef<HTMLDivElement>(null);
     const keepDocumentViewerPinned = () => {
         if (documentViewerRef.current) {
@@ -681,7 +720,6 @@ export default function SubAgentWindow({
     }, [document?.sections, document?.stage, document?.savePath]);
 
     // Librarian read-only explorer view (file system / storage / Google Drive)
-    const hasLibrarianData = !!(librarian && (librarian.entries?.length || librarian.stage));
     const librarianViewerRef = useRef<HTMLDivElement>(null);
     const librarianActivityRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -699,11 +737,26 @@ export default function SubAgentWindow({
         if (browserActivityRef.current) browserActivityRef.current.scrollTop = browserActivityRef.current.scrollHeight;
     }, [consoleLines.length]);
 
+    // Custom views render IMMEDIATELY once the kind is known (from the tool CALL), in a loading shell, then
+    // fill as <x>_state streams. <x>V = a guaranteed-valid object for the (large) view bodies; <x>Loading =
+    // the kind is active but its data has not arrived yet -> show the "Starting…" banner.
+    const coderV = coder ?? EMPTY_CODER;
+    const researchV = research ?? EMPTY_RESEARCH;
+    const documentV = document ?? EMPTY_DOCUMENT;
+    const librarianV = librarian ?? EMPTY_LIBRARIAN;
+    const browserV = browser ?? EMPTY_BROWSER;
+    const coderLoading = !coder;
+    const researchLoading = !research;
+    const documentLoading = !document;
+    const librarianLoading = !librarian;
+    const browserLoading = !browser && !browserFrame;
+
     if (!isOpen && mode === 'overlay') return null;
 
-    if (mode === 'dock' && hasDocumentData && document) {
+    if (mode === 'dock' && agentKind === 'document') {
         // ── Document view for the document agent: A4 paper growing section by
         // section, placeholders pre-filled from memory/chat, status bar. ──
+        const document = documentV;  // guaranteed-valid shell while data streams (loading shown via banner)
         const doneCount = document.sections.filter(s => s.status === 'done').length;
         const wordsTotal = document.sections.reduce((sum, s) => sum + (s.words || 0), 0);
         const isLive = inferredPresence === 'online';
@@ -745,6 +798,7 @@ export default function SubAgentWindow({
             >
                 <style>{A4_PAGE_CSS + RESEARCH_PAPER_CSS + DOCUMENT_PAPER_CSS}</style>
                 <div className="flex h-full w-full flex-col">
+                    {documentLoading && <StartingBanner label="Document Agent" />}
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
@@ -925,7 +979,8 @@ export default function SubAgentWindow({
         );
     }
 
-    if (mode === 'dock' && hasResearchData && research) {
+    if (mode === 'dock' && agentKind === 'research') {
+        const research = researchV;  // guaranteed-valid shell while data streams (loading shown via banner)
         const doneCount = research.sections.filter(s => s.status === 'done').length;
         const wordsTotal = research.sections.reduce((sum, s) => sum + (s.words || 0), 0);
         const isLive = inferredPresence === 'online';
@@ -952,6 +1007,7 @@ export default function SubAgentWindow({
                 {/* Shared sheet + typography CSS — the print document uses the identical rules */}
                 <style>{A4_PAGE_CSS + RESEARCH_PAPER_CSS}</style>
                 <div className="flex h-full w-full flex-col">
+                    {researchLoading && <StartingBanner label="Research Agent" />}
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
@@ -1133,9 +1189,10 @@ export default function SubAgentWindow({
         );
     }
 
-    if (mode === 'dock' && hasLibrarianData && librarian && librarian.currentFolder) {
+    if (mode === 'dock' && agentKind === 'librarian' && librarian?.currentFolder) {
         // ── Folder-browse view: the librarian opened a concrete folder; list its files
-        // like a file manager and highlight search matches (read-only). ──
+        // like a file manager and highlight search matches (read-only). Renders only with
+        // real folder data; the overview shell below covers the loading state. ──
         const lib = librarian;
         const cf = lib.currentFolder!;
         const fmtBytes = (b: number): string => {
@@ -1318,10 +1375,10 @@ export default function SubAgentWindow({
         );
     }
 
-    if (mode === 'dock' && hasLibrarianData && librarian) {
+    if (mode === 'dock' && agentKind === 'librarian') {
         // ── Read-only explorer view for the librarian agent: filesystem map as a
         // disk-usage listing, storage/Google-Drive gauges, biggest folders, activity. ──
-        const lib = librarian;
+        const lib = librarianV;  // guaranteed-valid shell while data streams (loading shown via banner)
         const fmtBytes = (b: number): string => {
             if (!b || b < 0) return '0 B';
             const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let n = b;
@@ -1341,6 +1398,7 @@ export default function SubAgentWindow({
                 aria-hidden={!isOpen}
             >
                 <div className="flex h-full w-full flex-col">
+                    {librarianLoading && <StartingBanner label="Librarian" />}
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">
@@ -1476,10 +1534,11 @@ export default function SubAgentWindow({
         );
     }
 
-    if (mode === 'dock' && hasCoderData && coder) {
+    if (mode === 'dock' && agentKind === 'coder') {
         // ── VS-Code style view for the coding agent ───────────────────────
         // Left: header / file tabs / live editor / console. Right sidebar:
         // Explorer, Tasks, Source Control. Bottom: status bar.
+        const coder = coderV;  // guaranteed-valid shell while data streams (loading shown via banner)
         const isLive = inferredPresence === 'online';
         const activeName = (displayFile || '').split('/').pop() || '';
         const touched = coder.fileTree.filter(f => f.status);
@@ -1505,6 +1564,7 @@ export default function SubAgentWindow({
                 aria-hidden={!isOpen}
             >
                 <div className="flex h-full w-full flex-col">
+                    {coderLoading && <StartingBanner label="Coder" />}
                     <div className="flex min-h-0 flex-1">
                         {/* ── Left column: header, tabs, editor, console ── */}
                         <div className="flex min-w-0 flex-1 flex-col bg-[#F9FAFB]">
@@ -1839,9 +1899,8 @@ export default function SubAgentWindow({
     // Browser agent window: full-width live browser (chrome + widescreen screenshot) with a
     // bottom dock (task / action plan / visited URLs / activity). The numbered element boxes
     // come from the screenshot itself (browser-use highlights them).
-    const hasBrowserData = !!(browserFrame || browser);
-    if (mode === 'dock' && hasBrowserData) {
-        const b = browser;
+    if (mode === 'dock' && agentKind === 'browser') {
+        const b = browserV;  // guaranteed-valid shell while data streams (screenshot/banner cover loading)
         const isLive = inferredPresence === 'online';
         const verbLabel: Record<string, string> = { nav: 'Navigate', click: 'Click', type: 'Type', read: 'Read', scroll: 'Scroll' };
         const verbStyle: Record<string, string> = { nav: 'bg-sky-50 text-sky-700', click: 'bg-amber-50 text-amber-700', type: 'bg-indigo-50 text-indigo-700', read: 'bg-teal-50 text-teal-700', scroll: 'bg-gray-100 text-gray-500' };
@@ -1858,6 +1917,7 @@ export default function SubAgentWindow({
                 aria-hidden={!isOpen}
             >
                 <div className="flex h-full w-full flex-col">
+                    {browserLoading && <StartingBanner label="Browser Agent" />}
                     {/* Header */}
                     <div className="flex h-12 flex-none items-center justify-between border-b border-gray-200 bg-white px-4">
                         <div className="flex min-w-0 items-center gap-3">

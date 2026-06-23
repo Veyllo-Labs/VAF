@@ -405,6 +405,23 @@ function isThinkingModePrompt(content: string): boolean {
     );
 }
 
+// Sub-agent custom-view kind, derived from the tool name the moment the main agent CALLS the sub-agent —
+// so the matching custom window opens immediately (in a loading state) instead of waiting for streamed data.
+// Single source of truth for both detection and the immediate open.
+type SubAgentKind = 'coder' | 'research' | 'document' | 'librarian' | 'browser';
+const SUBAGENT_KIND_BY_TOOL: Array<[RegExp, SubAgentKind]> = [
+    [/coding_agent/i, 'coder'],
+    [/research_agent/i, 'research'],
+    [/document_agent/i, 'document'],
+    [/librarian_agent/i, 'librarian'],
+    [/browser_agent/i, 'browser'],
+];
+function subAgentKindFromName(toolName: string): SubAgentKind | null {
+    const n = String(toolName || '');
+    for (const [re, kind] of SUBAGENT_KIND_BY_TOOL) if (re.test(n)) return kind;
+    return null;
+}
+
 // Parse [WORKFLOW_ASYNC:taskId:workflowId] Workflow 'Name' ... from assistant text for card display
 // Hard cap on the in-memory `messages` array. During Live-Mode the agent streams
 // System/Step/Router/Tool log entries continuously; without a cap `messages` grows
@@ -1460,6 +1477,7 @@ function VAFDashboardContent() {
     const [subAgentState, setSubAgentState] = useState<{
         isOpen: boolean;
         agentName: string;
+        agentKind: SubAgentKind | null;   // known at the tool CALL -> open the matching custom window at once
         status: string;
         presence: 'online' | 'idle' | 'error';
         currentFile: string;
@@ -1542,6 +1560,7 @@ function VAFDashboardContent() {
     }>({
         isOpen: false,
         agentName: "Sub-Agent",
+        agentKind: null,
         status: "Idle",
         presence: "idle",
         currentFile: "",
@@ -2257,21 +2276,28 @@ function VAFDashboardContent() {
                     if (subType === 'start' && isSubAgentTool) {
                         lastSubAgentStatusRef.current = '';
                         subAgentUserClosedRef.current = false;  // New task - user wants to see it
-                        subAgentCustomViewRef.current = /coding|browser|research/i.test(String(name || ''));
-                        if (!subAgentCustomViewRef.current) openSubAgentWindow(false);
+                        // The main agent CALLS the sub-agent by name -> we know the kind right now and open
+                        // the matching custom window immediately (it renders a loading shell until data
+                        // streams), instead of showing the generic console first.
+                        const startKind = subAgentKindFromName(String(name || ''));
+                        subAgentCustomViewRef.current = startKind !== null;  // now correct for all 5 kinds
+                        openSubAgentWindow(false);  // no-op during a workflow (workflow guard inside)
                         const title = String(name || 'Sub-Agent').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
                         setSubAgentState(prev => ({
                             ...prev,
+                            agentKind: startKind,
                             status: 'Running...',
                             presence: 'online',
-                            // Clear stale browser view AND console on each new subagent task
-                            // start — otherwise a re-run shows the previous run's frame/output.
+                            // Clear ALL stale per-view state on each new task start — a re-run (or a
+                            // different kind) must never show the previous run's data through the new gate.
                             browserFrame: '',
                             browserUrl: '',
                             consoleLines: [],
                             coder: null,
                             research: null,
                             document: null,
+                            librarian: null,
+                            browser: null,
                             steps: [
                                 ...prev.steps.filter((s: { id: string }) => s.id !== toolId),
                                 { id: toolId, title, status: 'running', actions: [] as Array<{ type: string; details: string }> }
@@ -3034,10 +3060,10 @@ function VAFDashboardContent() {
                         (nextPresence !== 'idle' &&
                             nextPresence !== 'error' &&
                             (statusLower.includes('running') || statusLower.includes('pending')));
-                    // Custom-view tasks open only once their custom data arrived
-                    const hasCustomData = !!(prev.coder || prev.research || prev.librarian || prev.browserFrame);
-                    const shouldOpen = isRunning && !subAgentUserClosedRef.current
-                        && (!subAgentCustomViewRef.current || hasCustomData);
+                    // A custom kind can open as soon as it is known (the custom view renders a loading shell
+                    // without data) — START already opened it; this keeps a status tick consistent. (The old
+                    // data gate also missed document + the browser object.)
+                    const shouldOpen = isRunning && !subAgentUserClosedRef.current;
                     return {
                         ...prev,
                         isOpen: shouldOpen ? true : prev.isOpen,
@@ -5343,6 +5369,7 @@ function VAFDashboardContent() {
                                                     const botAvatarMode: AvatarMode = (isLatestBot && !loading)
                                                         ? (agentReaction ? agentReaction
                                                             : gateRequest ? 'permission'
+                                                            : isSubAgentRunning ? 'delegate'   // a sub-agent is doing the work → hand-off animation
                                                             : !isGenerating ? 'idle'
                                                             : liveThinking ? 'thinking'
                                                             : 'talking')
@@ -6178,6 +6205,7 @@ function VAFDashboardContent() {
                                     }}
                                     canClose={true}
                                     agentName={subAgentState.agentName}
+                                    agentKind={subAgentState.agentKind}
                                     status={subAgentState.status}
                                     presence={subAgentState.presence}
                                     currentFile={subAgentState.currentFile}

@@ -40,7 +40,9 @@ export type AvatarMode =
     // Activity · Lifecycle (used on the 2FA / login screen)
     | 'waking'
     // Activity · Status (a barrier the agent bumps into)
-    | 'blocked';
+    | 'blocked'
+    // Activity · Multi-Agent — the agent hands a token to a sub-agent (used while a sub-agent runs)
+    | 'delegate';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
@@ -93,6 +95,7 @@ const B_ACT: Partial<Record<AvatarMode, string>> = {
     plan: 'bPlan 3s ease-in-out infinite',
     waking: 'bWake 1.4s ease-out',          // plays ONCE then holds at rest; caller then switches to 'waiting'
     blocked: 'bBlocked 2.6s ease-in-out infinite',
+    delegate: 'bHandoff 2.6s ease-in-out infinite',
 };
 const E_ACT: Partial<Record<AvatarMode, string>> = {
     learn: 'eLearn 3s ease-in-out infinite',
@@ -104,8 +107,9 @@ const E_ACT: Partial<Record<AvatarMode, string>> = {
     plan: 'ePlan 3.5s ease-in-out infinite',
     waking: 'eWake 1.4s ease-out',
     blocked: 'eBlocked 2.6s ease-in-out infinite',
+    delegate: 'eHandoff 2.6s ease-in-out infinite',
 };
-const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking' || m === 'blocked';
+const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking' || m === 'blocked' || m === 'delegate';
 
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
@@ -166,7 +170,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const eyeSize = dim ? 14 : shown === 'talking' ? 15 : 14;
 
     return (
-        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative' }}>
+        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: shown === 'delegate' ? 88 : undefined, transition: 'width 0.25s ease' }}>
             {/* The agent is PERSISTENT — never destroyed, hidden, scaled or faded on a state
                 change. Only the running animation (body/eye) and the surrounding props swap, so the
                 figure stays in one piece. */}
@@ -294,11 +298,43 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     </span>
                 )}
 
+                {/* delegate — the avatar area is WIDER in this mode (root width above): the main agent stays
+                    full size on the LEFT, a sub-agent (peer) spawns in on the RIGHT with a real gap, and a
+                    token is handed across (arc) main -> sub. transform/opacity + static shadows = leak-safe. */}
+                {shown === 'delegate' && !dim && (
+                    <>
+                        {/* token flows main -> sub in an arc (after the peer has spawned) */}
+                        <span style={{
+                            position: 'absolute', left: 36, top: '50%', width: 6, height: 6, marginTop: -3, zIndex: 2,
+                            borderRadius: '50%', backgroundColor: overlay, boxShadow: overlayGlow, opacity: 0,
+                            animation: 'iToken 2.6s ease-in-out infinite 0.6s',
+                        }} />
+                        {/* sub-agent peer — a smaller second agent; its eye pulses when it receives the token */}
+                        <div style={{
+                            position: 'absolute', left: 66, top: '50%', width: 18, height: 18, marginTop: -9, zIndex: 3,
+                            transformOrigin: 'center', animation: 'iSpawnIn 0.6s ease-out both',
+                        }}>
+                            <div style={{
+                                position: 'absolute', inset: 0, borderRadius: 6, backgroundColor: '#111827',
+                                boxShadow: '0 3px 8px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)',
+                            }}>
+                                <span style={{
+                                    position: 'absolute', left: '50%', top: '50%', width: 8, height: 8, marginLeft: -4, marginTop: -4,
+                                    borderRadius: '50%', backgroundColor: '#fff', boxShadow: '0 0 5px 1px rgba(255,255,255,0.4)',
+                                    animation: 'iPeerRecv 2.6s ease-in-out infinite',
+                                }} />
+                            </div>
+                        </div>
+                    </>
+                )}
+
                 {/* AGENT STAGE — the persistent figure (body+eye). For `blocked` the agent keeps its FIXED
                     size and only GLIDES left (transform + transition only = leak-safe) to free room for the
-                    barrier on the right, like the showcase play: the agent is never shrunk, swapped or faded. */}
+                    barrier on the right, like the showcase play: the agent is never shrunk, swapped or faded.
+                    For `delegate` the stage is a 36px box on the LEFT (the root is wider); else it fills the root. */}
                 <div style={{
-                    position: 'absolute', inset: 0,
+                    position: 'absolute',
+                    ...(shown === 'delegate' ? { left: 0, top: 0, width: 36, height: 36 } : { inset: 0 }),
                     transform: shown === 'blocked' ? 'translateX(-15px)' : 'none',
                     transition: 'transform 0.3s ease',
                 }}>
@@ -307,7 +343,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         back to their rest pose, so the next animation starts from neutral. */}
                     <div style={{
                         position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
-                        boxShadow: shown === 'blocked'
+                        boxShadow: (shown === 'blocked' || shown === 'delegate')
                             ? '0 5px 14px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)'
                             : (lightBody ? '0 1px 4px rgba(0,0,0,0.08)' : 'none'),
                         transformOrigin: act ? 'center' : 'center bottom',

@@ -380,6 +380,15 @@
 /* barrier intro — fades + slides in once when blocked starts (transient transform/opacity = leak-safe) */
 @keyframes blkBarIn { from{opacity:0; transform:translateX(-3px);} to{opacity:1; transform:translateX(0);} }
 
+/* delegate (Multi-Agent) — the main agent hands a token to a sub-agent (handoff). All transform/opacity
+   only = leak-safe. bHandoff/eHandoff: subtle body lean + eye toward the sub-agent. iSpawnIn: the sub-agent
+   pops in once. iToken: the token arcs main->sub. iPeerRecv: the sub-agent's eye pulses on receipt. */
+@keyframes bHandoff { 0%,100%{transform:rotate(0);} 30%{transform:rotate(2deg);} 60%{transform:rotate(0);} }
+@keyframes eHandoff { 0%,100%{transform:translate(0,0);} 18%{transform:translate(2px,0);} 50%{transform:translate(3px,1px);} 82%{transform:translate(2px,0);} }
+@keyframes iSpawnIn { 0%{transform:scale(0); opacity:0;} 60%{transform:scale(1.12); opacity:1;} 100%{transform:scale(1); opacity:1;} }
+@keyframes iPeerRecv { 0%,80%,100%{transform:scale(1);} 88%{transform:scale(1.4);} 94%{transform:scale(1);} }
+@keyframes iToken { 0%{transform:translate(0,0); opacity:0;} 12%{opacity:1;} 50%{transform:translate(15px,-8px);} 88%{transform:translate(30px,0); opacity:1;} 100%{transform:translate(30px,0); opacity:0;} }
+
 /* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
    OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */
 .planbox { display:block; width:8px; height:8px; border:1.3px solid #111827; background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }

@@ -227,8 +227,20 @@ def _save_declined_entry(user_scope_id: Optional[str], question: str, user_reply
 
 
 def _is_refusal(text: str) -> bool:
-    """Return True if the user's reply is a refusal/decline."""
+    """Return True if the user's reply is a clear refusal/decline.
+
+    A reply that asks a question back — e.g. "nein habe ich nicht, wie kommst du darauf?" — is a
+    CLARIFICATION or a dispute of the premise, NOT a decline. The old crude substring match flagged it
+    as a refusal (it contains "nein"/"nicht") and the tracked request was silently dropped to 'declined',
+    so the main agent never properly answered. An interrogative question is therefore never a refusal."""
     t = (text or "").strip().lower()
+    if not t:
+        return False
+    # Clarification/dispute guard: a question back is not a decline.
+    _question_words = ("wie", "was", "warum", "wieso", "weshalb", "woher", "wozu", "welche",
+                       "how", "why", "what", "where", "huh")
+    if "?" in t and any(w in t for w in _question_words):
+        return False
     refusal_keywords = [
         "nein", "no", "nicht", "erstmal nicht", "later", "stop",
         "lass", "hör auf", "aufhören", "nie", "never", "don't",
@@ -1581,29 +1593,28 @@ def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> 
         return ""
 
 
-# Floor clear: PROACTIVE intelligence (Stufe 2). Mine memory + recent history for ONE genuinely useful
-# thing — prefer an AUTOMATION that takes recurring work off the user. The run hands the model a digest of
-# REAL retrieved memories AND lets it memory_search ONCE itself for specifics. Strictly evidence-grounded:
-# the suggestion is dropped unless `details` quotes the real memory it is based on. Forced (no prose churn).
+# Floor clear: PROACTIVE intelligence (Stufe 2). Offer ONE suggestion ONLY if the REAL retrieved memories
+# genuinely support it (every stated fact must come from them, quoted in `details`). This node is NOT forced
+# and carries NO "you must produce a suggestion" pressure: forcing a fact-containing message on an empty/thin
+# desk is exactly what made a strong model INVENT a routine to satisfy the mandate. If nothing is genuinely
+# grounded, the model defers and the next rung asks a fact-FREE get-to-know question (which states no fact and
+# can never be a fabrication). Facts may enter the chat ONLY through real grounding; everything else is a
+# question about the user.
 _PROMPT_PROACTIVE = (
     "Your housekeeping is clear — no open notes or todos. Now think proactively for the user. Below are "
-    "REAL memories retrieved for you; you may ALSO call memory_search ONCE with a precise query to dig into "
-    "ONE specific thing before you decide. Then find ONE genuinely useful thing they may not have thought "
-    "of. In priority order:\n"
-    "1. AUTOMATION OPPORTUNITY (best — take recurring work off them): is there something the user does or "
-    "asks for REPEATEDLY (evidence in the memories) that is NOT already covered by an existing automation "
-    "(you saw the list)? → propose automating it: ask_user(message=\"<e.g. 'Du fragst fast jeden Morgen "
-    "nach dem Wetter — soll ich dir das automatisch um 7:00 schicken?'>\", proposed_action=\"create "
-    "automation: <what + when>\", details=\"<QUOTE the exact repeated memory it is based on>\"). On yes, the "
-    "main agent builds it.\n"
-    "2. ELSE one other helpful, non-obvious suggestion grounded in the real memories → ask_user("
-    "message=\"<specific>\", details=\"<QUOTE the exact memory>\").\n"
-    "3. ELSE — only if you genuinely have NOTHING grounded — call thinking_done('Nothing grounded.') and "
-    "you will then ask the user a get-to-know question instead.\n"
-    "HARD RULES: at most ONE memory_search (for specifics), then EXACTLY ONE decisive tool call (ask_user "
-    "OR thinking_done) — no prose. You MUST put a VERBATIM quote of a real memory in `details` (paraphrasing "
-    "or inventing is rejected and dropped). Never generic ('can I help?'); never repeat a recent/declined "
-    "question."
+    "REAL memories retrieved for you; you may ALSO call memory_search ONCE with a precise query before you "
+    "decide. You have a CHOICE — there is NO pressure to produce a suggestion:\n"
+    "A) ONLY if these REAL memories genuinely support a specific, useful suggestion (e.g. something the user "
+    "actually does REPEATEDLY that you could automate, and that no existing automation covers): offer it — "
+    "ask_user(message=\"<e.g. 'Du fragst fast jeden Morgen nach dem Wetter — soll ich dir das automatisch um "
+    "7:00 schicken?'>\", proposed_action=\"create automation: <what + when>\", details=\"<QUOTE the exact real "
+    "memory it is based on>\"). EVERY fact in your message must come from the memories above.\n"
+    "B) OTHERWISE — if you are unsure, or making a suggestion would require inventing ANY detail (a habit, a "
+    "number, a routine, a preference the memories do not literally state) — do NOT force it: call "
+    "thinking_done('Nothing grounded.') and you will then ask ONE friendly get-to-know question instead.\n"
+    "HARD RULES: NEVER invent or embellish — a half-remembered, paraphrased, or 'probably' fact is an "
+    "invention; when in doubt choose B. Never generic ('can I help?'); never repeat a recent/declined "
+    "question. At most ONE memory_search, then EXACTLY ONE tool call (ask_user OR thinking_done) — no prose."
 )
 
 # Forced fallback: nothing grounded to suggest -> still NOT silence. Ask ONE question to get to know the
@@ -1756,6 +1767,11 @@ def _run_thinking_for_user(
     # Pass scope_key to thinking_note_add tool via env (tool reads VAF_THINKING_SCOPE_ID)
     os.environ["VAF_THINKING_SCOPE_ID"] = scope_key
     os.environ["VAF_THINKING_RUN_ID"] = run_id
+    # Background-task pro routing: the thinking run is a background task, so deepseek-auto must resolve
+    # to deepseek-v4-pro (the user's "background task = pro" design). A dedicated flag is used instead of
+    # VAF_IN_WORKFLOW_TERMINAL (which would make maybe_start_thinking_for_user SKIP the run) or
+    # VAF_IN_AUTOMATION (which carries other automation/buffer semantics). Cleared in the finally below.
+    os.environ["VAF_BACKGROUND_PRO"] = "1"
 
     # 🚀 COST EFFICIENCY: Use specific provider/model for thinking if configured
     t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
@@ -2041,19 +2057,18 @@ def _run_thinking_for_user(
                     # a run: silence is never the goal. Repeats are prevented by the recent/declined dedup
                     # prompts injected into the persistent system message; frequency by cooldown + quiet hours.)
                     prompt = _PROMPT_NOTHING_TODO
-                elif _proactive_step < 2:
-                    # PROACTIVE grounding (FORCED, two passes): find ONE grounded, useful suggestion (esp. an
-                    # automation opportunity). The model is handed a digest of REAL memories AND may
-                    # memory_search ONCE itself for specifics (allow_memory_search) — still read-capped, so no
-                    # churn; everything else stays blocked by the forced node. Two passes so a pass-1 search
-                    # can be turned into a grounded ask_user in pass 2. ask_user is evidence-gated; if nothing
-                    # grounds after both, step 2 asks a get-to-know question (silence is NOT the end).
+                elif _proactive_step < 1:
+                    # PROACTIVE grounding (ONE pass, NOT forced): offer ONE suggestion ONLY if the REAL
+                    # memories genuinely support it, ELSE defer to the fact-free get-to-know question. We do
+                    # NOT set force_tool_choice here: forcing a fact-containing message ("you must suggest
+                    # something") is exactly what pressured a strong model to INVENT a routine. The model is
+                    # handed a digest of REAL memories and may memory_search ONCE itself (still read-capped).
+                    # If it grounds nothing, it calls thinking_done and the next rung asks a fact-free question.
                     _digest_block = (
-                        "\n\nREAL MEMORIES about the user (quote ONE verbatim in `details`; or memory_search "
-                        "ONCE for specifics first):\n" + _proactive_digest
+                        "\n\nREAL MEMORIES about the user (every fact you state must come from these; quote "
+                        "the source in `details`):\n" + _proactive_digest
                     ) if _proactive_digest else ""
                     prompt = _PROMPT_PROACTIVE + _digest_block
-                    _force_tc = "required"
                     _allow_search = True
                     set_proactive_mode(user_scope_id, "grounded")
                     _proactive_step += 1
@@ -2355,6 +2370,7 @@ def _run_thinking_for_user(
     finally:
         os.environ.pop("VAF_THINKING_MODE", None)
         os.environ.pop("VAF_THINKING_SCOPE_ID", None)
+        os.environ.pop("VAF_BACKGROUND_PRO", None)   # don't leak the pro-routing flag into the main process
         clear_run_evidence(user_scope_id)   # drop the proactive evidence pool + phase flag (no cross-run leak)
         _set_last_run_completed(user_scope_id)
         try:

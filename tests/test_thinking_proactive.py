@@ -64,11 +64,13 @@ def test_proactive_decide_nudge_replaces_housekeeping_block(monkeypatch):
 
 
 def test_proactive_prompt_allows_one_self_search():
-    """The grounded prompt now lets the model dig into ONE specific thing with memory_search itself, then
-    must quote a real memory verbatim."""
+    """The proactive prompt lets the model dig into ONE specific thing with memory_search, but carries NO
+    pressure to produce a suggestion: every fact must come from the real memories (quote the source), and if
+    nothing is genuinely grounded it must NOT invent — it defers to the fact-free get-to-know question."""
     assert "memory_search" in tm._PROMPT_PROACTIVE
-    assert "VERBATIM" in tm._PROMPT_PROACTIVE
-    assert "thinking_done" in tm._PROMPT_PROACTIVE   # still falls back to get-to-know when nothing grounds
+    assert "QUOTE" in tm._PROMPT_PROACTIVE                      # facts must be grounded in a real memory
+    assert "NEVER invent" in tm._PROMPT_PROACTIVE              # the anti-fabrication core of the reframe
+    assert "thinking_done" in tm._PROMPT_PROACTIVE            # defers to the fact-free get-to-know question
 
 
 def test_proactive_gate_drops_ungrounded_keeps_grounded(monkeypatch, tmp_path):

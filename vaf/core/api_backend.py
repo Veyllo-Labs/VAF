@@ -839,6 +839,7 @@ class APIBackendManager:
                 os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_COMPACTION_IN_PROGRESS", "").strip() in ("1", "true", "yes")
+                or os.environ.get("VAF_BACKGROUND_PRO", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_TOOL_MODEL", "").strip().lower() == "deepseek-auto"
             )
             if _pro_context:
@@ -854,6 +855,20 @@ class APIBackendManager:
             if "reasoner" in m or "-r1" in m:
                 tools = None
                 tool_choice = "none"
+
+        # DeepSeek tool_choice restriction (UNIVERSAL — applies to every caller routed through this
+        # manager: main agent streaming/non-stream/fallback, thinking-mode forced nodes, sub-agents).
+        # DeepSeek (both deepseek-v4-flash and deepseek-v4-pro, internally reasoning models) reject
+        # tool_choice="required" and specific function-forcing dicts with HTTP 400 ("does not support
+        # this tool_choice"); only "auto"/"none" are accepted. Downgrade any forcing form to "auto" so
+        # forced-tool callers degrade gracefully — those callers already carry a prompt-level imperative
+        # to emit the tool call. "auto"/"none"/no-tools are left untouched. Runs AFTER the reasoner guard
+        # so its "none" is not re-touched. (coder.py keeps its own equivalent guard because it bypasses
+        # this manager and posts to the provider over HTTP directly.)
+        if self.provider_name == "deepseek" and tools and tool_choice is not None:
+            if (isinstance(tool_choice, str) and tool_choice.strip().lower() == "required") \
+                    or isinstance(tool_choice, dict):
+                tool_choice = "auto"
 
         # Execute via provider
         for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):

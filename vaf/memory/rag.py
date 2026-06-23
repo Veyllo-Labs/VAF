@@ -1013,6 +1013,18 @@ async def auto_capture_memory(
     return 1
 
 
+def _strip_think_reply(text: str) -> str:
+    """Remove reasoning-model <think>...</think> blocks before parsing MEMORY: lines. Without this, a
+    reasoning model (e.g. deepseek-v4-pro) drafts MEMORY: lines INSIDE its <think> trace and the raw
+    reasoning itself gets persisted as a memory (observed: 27 '<think>We are asked...' chunks in the DB).
+    Mirrors vaf/tools/learn_document._strip_think (the document path already does this); inlined here to
+    avoid a tools->memory import cycle. If an unclosed <think> remains (truncated output), drop from it on."""
+    t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+    if "<think>" in t.lower():
+        t = re.split(r"(?i)<think>", t)[0]
+    return t.strip()
+
+
 def _parse_memory_reply(reply: str) -> List[Tuple[str, List[str]]]:
     """
     Parse compaction LLM reply for MEMORY: "..." [tag1, tag2] or MEMORY: "..." lines.
@@ -1020,6 +1032,9 @@ def _parse_memory_reply(reply: str) -> List[Tuple[str, List[str]]]:
     Tags are optional; format: MEMORY: "content" [tag1, tag2]. If no tags, returns [].
     """
     if not reply or not reply.strip():
+        return []
+    reply = _strip_think_reply(reply)
+    if not reply.strip():
         return []
     reply_upper = reply.strip().upper()
     if "NO_REPLY" in reply_upper and "MEMORY:" not in reply_upper:
@@ -1235,6 +1250,11 @@ def run_session_compaction_sync(
                 "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
                 'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
                 "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
+                "GROUNDING (critical): store ONLY facts the user STATED explicitly or that are directly evidenced in the conversation. "
+                "Do NOT infer or invent habits, routines, schedules, preferences, or numbers that were not stated. "
+                "Do NOT turn an exploratory, hypothetical, or philosophical remark into a durable preference or routine. "
+                "Preserve the user's exact wording for named concepts; do not paraphrase or guess spellings. "
+                "If you are not sure a fact was actually stated, leave it out. "
                 "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
                 f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
                 "--- Conversation ---\n"

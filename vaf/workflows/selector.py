@@ -211,8 +211,14 @@ class WorkflowSelector:
         """
         input_lower = user_input.lower()
         
-        # Time extraction (HH:MM format)
-        if "time" in var_name.lower() or "uhr" in input_lower or ":" in user_input:
+        # Time extraction (HH:MM format) — only when THIS variable is a time variable. Gate on the
+        # variable (name/description), NOT on the input: the old `or "uhr" in input_lower or ":" in
+        # user_input` made the time branch fire for EVERY variable whenever the input contained "uhr" or
+        # any colon, so non-time variables (task_description, frequency, output_path, ...) were all filled
+        # with the first time token (e.g. a note "Erinnerung: Arzt um 9:00" gave every field "09:00").
+        _vn = var_name.lower()
+        _vd = (var_desc or "").lower()
+        if "time" in _vn or "uhr" in _vn or "zeit" in _vn or "hh:mm" in _vd:
             # Match patterns like "21:18", "21:07", "9:00", "09:00"
             time_match = re.search(r'\b(\d{1,2}):(\d{2})\b', user_input)
             if time_match:

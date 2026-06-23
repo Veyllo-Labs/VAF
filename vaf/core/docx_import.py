@@ -79,6 +79,11 @@ def import_docx_to_native_model(path: str | Path) -> NativeDocxDocument:
         elif isinstance(block, Table):
             current_section.blocks.append(_table_to_block(block, block_index))
         else:
+            if getattr(block, "tag", None) == qn("w:sectPr"):
+                # The trailing body <w:sectPr> is the document's final section properties — already captured
+                # from doc.sections (_section_properties_from_docx) and re-emitted on export. It is NOT
+                # content, so do not turn it into a read-only "Unsupported" placeholder (+ spurious warning).
+                continue
             current_section.blocks.append(
                 DocxUnsupportedBlock(
                     id=f"unsupported-{block_index}",

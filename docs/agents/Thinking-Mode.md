@@ -110,8 +110,9 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_no_progress_turns` | `5` | After this many turns with no decisive (act/ask/clear) tool, force a one-tool decision (no more searching). The run's turn budget is sized to give this room. |
 | `model_unload_idle_minutes` | `30` | **Desktop only.** Unload the local model after the user is *really* away (no message) this long — even with the WebUI open. Server/headless never unloads (no watchdog). |
 | `thinking_proactive_enabled` | `true` | When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2). |
-| `thinking_proactive_evidence_min_chars` | `24` | Evidence-gate: a proactive suggestion's `details` must quote ≥ this many chars verbatim from real retrieved memory/history, or it is dropped. |
-| `thinking_proactive_min_runs` | `6` | Min runs between proactive outreaches (anti-spam). |
+| `thinking_proactive_evidence_min_chars` | `24` | Evidence-gate (LOCAL/weak model): a proactive suggestion's `message` or `details` must quote ≥ this many chars verbatim from real retrieved memory/history, or it is dropped. |
+| `thinking_proactive_evidence_min_chars_api` | `12` | Evidence-gate when the thinking run uses a HOSTED/strong model (lenient bar; selected automatically by provider). |
+| `thinking_proactive_min_runs` | `6` | **Deprecated** — rate-limiting no longer silences runs; repeats are prevented by the recent/declined dedup prompts. Unused. |
 | `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
@@ -139,8 +140,10 @@ The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propos
 ## Proactive intelligence (Stufe 2)
 
 When the housekeeping floor is clear (no open notes/todos) and proactivity is enabled
-(`thinking_proactive_enabled`) and not rate-limited, the run runs a **forced proactive flow** —
-**silence is not the goal**, the run always ends by asking the user *something*:
+(`thinking_proactive_enabled`), the run runs a **forced proactive flow** — **silence is NEVER the goal**,
+the run ALWAYS ends by asking the user *something*. There is no rate-limit that silences a run: a run that
+recently reached out still reaches out again (just not a REPEAT — the recent/declined dedup prompts prevent
+that). Frequency is bounded by `thinking_cooldown_minutes` + `thinking_idle_minutes` + quiet hours.
 
 - **Real memories are handed to the model (not left to the weak 4B to fetch):** before the grounded
   turns, `_build_proactive_memory_digest` retrieves a targeted sample of the user's REAL memories **in
@@ -169,18 +172,30 @@ When the housekeeping floor is clear (no open notes/todos) and proactivity is en
   - **`off`** (gather / forced-resolution): a free message is **blocked** — this kills the generic turn-0
     floskel ("no tasks, I'm ready when you need me") that previously slipped through before the proactive
     flow even ran.
-  - **`grounded`** (proactive grounding passes): delivered only if `details` quote a verbatim, normalized
-    substring of ≥ `thinking_proactive_evidence_min_chars` from this run's REAL retrieved memory/history
+  - **`grounded`** (proactive grounding passes): delivered if the **`message` OR `details`** quotes a
+    verbatim, normalized substring of ≥ the evidence bar from this run's REAL retrieved memory/history
     (the per-run **evidence pool** = turn-0 `memory_context` + the pre-fetched proactive digest + recent
-    user messages + every `memory_search` result captured live, including the model's own searches).
-    Otherwise silently dropped — anti-fabrication.
+    user messages + every `memory_search` result captured live, including the model's own searches). The
+    normalizer folds punctuation/hyphens (so "Three-Second-Loop" matches "Three-Second Loop") but never
+    paraphrase. The bar is **provider-calibrated**: `thinking_proactive_evidence_min_chars` (24) for the
+    LOCAL/weak model, `thinking_proactive_evidence_min_chars_api` (12) for a HOSTED/strong model that
+    rarely fabricates. If neither field is grounded the suggestion is dropped — but the run then climbs to
+    the get-to-know step (it never goes silent). Anti-fabrication floor: a real memory substring is always
+    required.
   - **`open`** (get-to-know step): delivered (a question states no fact, so it cannot fabricate).
-  Housekeeping deliveries (carrying a source id) are always exempt. Better silent/blocked than fabricated.
-- **Anti-spam:** at most one proactive outreach per `thinking_proactive_min_runs` (a proactive request is
-  one with no source ids); the existing recent-requests + declined-questions prompts prevent repeats.
+  Housekeeping deliveries (carrying a source id) are always exempt. When the `grounded`/`open` gate drops a
+  FREE message, `ask_user` returns **mode-aware feedback**: in `off` it tells the model to call
+  `thinking_done` (do not retry); in `grounded` it tells the model to quote the real memory in
+  `message`/`details` — so the weak model stops churning.
+- **No spam ≠ silence:** repeats are prevented by the recent-requests + declined-questions prompts (injected
+  into the persistent system message), NOT by suppressing a whole run. `thinking_proactive_min_runs` is
+  **deprecated** (no longer silences). Frequency is bounded by cooldown + quiet hours.
+- **Race protection (start + deliver gate):** a thinking run does not START while the main agent is handling
+  a user turn (`_main_agent_busy` via `TaskQueue`, ALL providers), and if a user turn begins mid-run the
+  proactive message is recorded (request + `waiting_for_reply`) but its live push is **deferred** (it
+  surfaces on the user's next load) — never dropped.
 - **Honest limit:** with the local 4B the *cleverness* is model-bound — realistic output is surfacing a
-  real, citable thing + one concrete step, kept safe by the strict gate (a stronger thinking model would
-  raise quality; not enabled).
+  real, citable thing + one concrete step. On a hosted model the bar is relaxed and quality is higher.
 
 ---
 

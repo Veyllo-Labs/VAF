@@ -156,6 +156,70 @@ def test_no_double_send_within_one_run(monkeypatch, tmp_path):
     assert sent == ["Was beschäftigt dich gerade?"]    # only one emit to the Web UI
 
 
+def test_normalize_ev_folds_punctuation():
+    """E1: hyphens/punctuation fold to spaces so a quote with different separators still matches; umlauts
+    are preserved; fabrication still fails."""
+    pool = "User follows a Three-Second Loop philosophy and daily Mutivation routines."
+    assert tm._evidence_grounded("Three-Second-Loop philosophy and daily", pool, 24) is True  # hyphen vs space
+    assert tm._normalize_ev("Erinnerung über Wetter") == "erinnerung über wetter"             # umlaut kept
+    assert tm._evidence_grounded("the user loves skiing in the swiss alps today", pool, 24) is False
+
+
+def _force_provider(monkeypatch, value):
+    from vaf.core.config import Config
+    _real = Config.get
+    monkeypatch.setattr(Config, "get", lambda k, d=None: value if k == "provider" else _real(k, d))
+
+
+def test_grounded_via_message_when_details_empty(monkeypatch, tmp_path):
+    """E2: a suggestion whose verbatim memory quote is in the MESSAGE (details empty) is delivered — the
+    model often puts the quote in the user-facing message and forgets details. (local provider -> bar 24)"""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: "sid")
+    _force_provider(monkeypatch, "local")
+    scope = "u-msg"
+    tm.clear_run_evidence(scope)
+    tm.set_run_evidence(scope, "User follows a Three-Second Loop philosophy and daily routines.")
+    tm.set_proactive_mode(scope, "grounded")
+    out = tm.deliver_tracked_message(
+        scope,
+        "Du folgst einer Three-Second Loop philosophy and daily routines — soll ich das automatisieren?",
+        proposed_action="create automation",
+    )  # details intentionally omitted -> grounded via message
+    assert out is not None and len(tr.list_requests(scope, status="asked")) == 1
+
+
+def test_api_provider_uses_lenient_bar(monkeypatch, tmp_path):
+    """E3: on a HOSTED provider the evidence bar is lower (12), so a short real quote that the strict local
+    bar (24) would drop is delivered."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: "sid")
+    _force_provider(monkeypatch, "openai")
+    scope = "u-api"
+    tm.clear_run_evidence(scope)
+    tm.set_run_evidence(scope, "User follows a Three-Second Loop.")
+    tm.set_proactive_mode(scope, "grounded")
+    # "three second loop" normalizes to 17 chars: < 24 (local would drop) but >= 12 (api passes)
+    out = tm.deliver_tracked_message(scope, "Dein Three-Second-Loop — automatisieren?", proposed_action="x")
+    assert out is not None and len(tr.list_requests(scope)) == 1
+
+
+def test_ask_user_off_mode_feedback_no_retry(monkeypatch, tmp_path):
+    """A: in mode 'off' a dropped ask_user returns clear 'do not retry, call thinking_done' guidance
+    (not the misleading 'quote in details' that made the model churn)."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAF_THINKING_MODE", "1")
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    from vaf.tools.ask_user import AskUserTool
+    scope = "u-off"
+    tm.set_proactive_mode(scope, "off")
+    out = AskUserTool().run(message="Soll ich dir etwas vorschlagen?", user_scope_id=scope)
+    assert "not in a proactive step" in out and "retry" in out.lower() and "thinking_done" in out
+    assert tr.list_requests(scope) == []
+
+
 def test_proactive_rate_limited(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     scope = "u-rl"

@@ -1197,9 +1197,20 @@ def deliver_tracked_message(
             return None
         if _mode == "grounded":
             from vaf.core.config import Config
+            _pool = get_run_evidence(user_scope_id)
+            # Provider-calibrated evidence bar: strict for the weak LOCAL model (fabricates), lenient for a
+            # strong HOSTED model (rarely fabricates). Selected automatically by the active thinking provider.
+            _main_local = (Config.get("provider") or "local").strip().lower() == "local"
+            _t_prov = (Config.get("thinking_provider") or "inherit").strip().lower()
+            _think_local = _main_local if _t_prov == "inherit" else (_t_prov == "local")
             _min_chars = int(Config.get("thinking_proactive_evidence_min_chars", 24) or 24)
-            if not _evidence_grounded(details or "", get_run_evidence(user_scope_id), _min_chars):
-                logger.info("Thinking: proactive suggestion dropped — details not grounded in retrieved memory/history")
+            if not _think_local:
+                _min_chars = int(Config.get("thinking_proactive_evidence_min_chars_api", 12) or 12)
+            # Grounded if EITHER the user-facing message OR the details quotes real retrieved memory — the
+            # model often puts the verbatim quote in the message it shows the user and leaves details empty.
+            if not (_evidence_grounded(details or "", _pool, _min_chars)
+                    or _evidence_grounded(message or "", _pool, _min_chars)):
+                logger.info("Thinking: proactive suggestion dropped — neither message nor details grounded in retrieved memory")
                 return None
         # _mode == "open" -> allowed (get-to-know question)
 
@@ -1219,7 +1230,14 @@ def deliver_tracked_message(
         user_scope_id, username=uname, display_name=uname,
         question_text=message, request_id=req["id"],
     )
-    sid = emit_message_to_web_ui(user_scope_id, message)
+    # Deliver-gate: if the main agent is actively handling a user turn, do NOT push this live into the
+    # middle of that turn. The request is already recorded + waiting_for_reply set (and the run loop
+    # persists it to the session), so it surfaces on the user's next load. Defer the live emit, never drop.
+    if _main_agent_busy(user_scope_id):
+        logger.info("Thinking: main agent active — deferring live delivery (request %s recorded, surfaces on next visit)", req.get("id"))
+        sid = None
+    else:
+        sid = emit_message_to_web_ui(user_scope_id, message)
     req = dict(req)
     req["delivered"] = bool(sid)
     return req
@@ -1231,6 +1249,21 @@ def run_has_open_request(user_scope_id: Optional[str]) -> bool:
     from vaf.core import thinking_requests as treq
     cur = current_run_seq(user_scope_id)
     return bool(treq.list_requests(user_scope_id, within_runs=1, current_run_seq=cur))
+
+
+def _main_agent_busy(user_scope_id: Optional[str]) -> bool:
+    """True if the MAIN agent is actively handling (or has queued) a user turn — provider-independent. The
+    single headless worker marks a session in-flight for the whole turn (TaskQueue.get -> task_done), so
+    is_busy()/queue-size is the universal 'user turn in progress' signal that the 10-min idle gate misses.
+    The thinking run runs in its own thread and never enqueues, so this never self-suppresses. Used by the
+    start-gate (do not START a run mid-turn) and the deliver-gate (do not PUSH a message mid-turn). Fails
+    safe to NOT busy so an error never blocks delivery."""
+    try:
+        from vaf.core.task_queue import TaskQueue
+        _tq = TaskQueue()
+        return bool(_tq.is_busy() or _tq.get_queue_size() > 0)
+    except Exception:
+        return False
 
 
 # --- Proactive evidence pool (Stufe 2) ---------------------------------------------------------------
@@ -1280,7 +1313,11 @@ def get_proactive_mode(user_scope_id: Optional[str]) -> str:
 
 def _normalize_ev(s: str) -> str:
     import re
-    return re.sub(r"\s+", " ", (s or "").lower()).strip()
+    # Lowercase, then fold any run of non-alphanumerics (hyphens, punctuation, whitespace) to a single
+    # space — so "Three-Second-Loop" matches "Three-Second Loop". Latin letters/umlauts are preserved so
+    # German memories still match. Both sides pass through this, so the verbatim-substring check stays
+    # symmetric: only separators are tolerated, never paraphrase or invention.
+    return re.sub(r"[^0-9a-zÀ-ɏ]+", " ", (s or "").lower()).strip()
 
 
 def _evidence_grounded(details: str, pool: str, min_chars: int) -> bool:
@@ -1301,8 +1338,9 @@ def _evidence_grounded(details: str, pool: str, min_chars: int) -> bool:
 
 
 def proactive_rate_limited(user_scope_id: Optional[str], current_run_seq_val: int, min_runs: int) -> bool:
-    """True if a PROACTIVE request (a tracked request with no source note/todo) was raised within the last
-    `min_runs` runs — used to suppress proactive outreach and avoid idle-spam."""
+    """DEPRECATED — no longer called by the run loop. Silence is never the goal: a clear-floor run always
+    reaches out; repeats are prevented by the recent/declined dedup prompts, not by suppressing whole runs.
+    Kept for tests/back-compat. (True if a source-less proactive request was raised within `min_runs` runs.)"""
     if min_runs <= 0:
         return False
     from vaf.core import thinking_requests as treq
@@ -1349,7 +1387,7 @@ def deliver_thinking_done_fallback(
         return f" (message delivered to the user, tracked as request {req['id']})"
     if req:
         return f" (message recorded as request {req['id']}; it will surface on the user's next visit)"
-    return ""
+    return " (the fallback message was not grounded/eligible and was not sent)"
 
 
 def _try_emit_to_web_ui_and_wait(
@@ -1950,7 +1988,7 @@ def _run_thinking_for_user(
             # user history, so a proactive suggestion can be verified as grounded (not fabricated). The
             # agent's memory_search calls add to the pool live (see agent.chat_step). Phase off by default.
             _proactive_enabled = bool(Config.get("thinking_proactive_enabled", True))
-            _proactive_min_runs = int(Config.get("thinking_proactive_min_runs", 6) or 6)
+            # (rate-limit removed: a clear floor ALWAYS reaches out; repeats handled by dedup prompts.)
             # Proactive grounding turns: 0,1 = grounded (model also searches itself); 2 = get-to-know; 3 = done.
             _proactive_step = 0
             _proactive_digest = ""    # real memories retrieved in code, shown to the model + in the pool
@@ -1998,8 +2036,10 @@ def _run_thinking_for_user(
                     prompt = _PROMPT_FORCE_DECISION
                     _force_decision_pending = False
                     _force_tc = "required"
-                elif not _proactive_enabled or proactive_rate_limited(user_scope_id, _cur_seq, _proactive_min_runs):
-                    # Floor clear but proactive disabled or rate-limited -> just finish.
+                elif not _proactive_enabled:
+                    # Floor clear but proactivity DISABLED -> just finish. (Rate-limiting no longer silences
+                    # a run: silence is never the goal. Repeats are prevented by the recent/declined dedup
+                    # prompts injected into the persistent system message; frequency by cooldown + quiet hours.)
                     prompt = _PROMPT_NOTHING_TODO
                 elif _proactive_step < 2:
                     # PROACTIVE grounding (FORCED, two passes): find ONE grounded, useful suggestion (esp. an
@@ -2129,12 +2169,10 @@ def _run_thinking_for_user(
                             len(_unresolved),
                         )
                         break
-                    # Floor clear, but silence is NOT the end: if the proactive flow has not yet asked the
+                    # Floor clear, but silence is NEVER the end: if the proactive flow has not yet asked the
                     # user anything (no grounded suggestion delivered, get-to-know step not done), keep going
-                    # so the run still asks ONE question (grounded suggestion or a get-to-know question).
-                    if (_proactive_enabled
-                            and not proactive_rate_limited(user_scope_id, _cur_seq, _proactive_min_runs)
-                            and _proactive_step < 3):
+                    # so the run ALWAYS asks ONE question (grounded suggestion or a get-to-know question).
+                    if _proactive_enabled and _proactive_step < 3:
                         logger.info("Thinking: floor clear but proactive question still pending (step %d) — continuing", _proactive_step)
                         continue
                     logger.info("Thinking: breaking loop (thinking_done detected, ledger clear)")
@@ -2390,25 +2428,18 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
         logger.debug("Thinking skipped: workflow is currently running (VAF_IN_WORKFLOW_TERMINAL)")
         return False
 
-    # "Idle by last message" is not enough when everything runs on the one local server:
-    # the main agent may still be mid-task (a long generation / multi-step tools) from an
-    # older message, so the last-interaction timestamp looks idle while the local model is
-    # actually busy. Treat the main agent being busy as NOT idle -- but ONLY when the
-    # thinking run would share that local server. If the background agent runs on a separate
-    # provider (e.g. thinking via API while main is local, or vice versa) there is no
-    # contention, so we keep today's behaviour and let the thread run concurrently.
+    # "Idle by last message" is not enough: the main agent may still be mid-turn (a long generation /
+    # multi-step tools) from an older message, so the last-interaction timestamp looks idle while a user
+    # turn is actually running. Do NOT start a thinking run while the main agent is active — on ANY
+    # provider (start-gate). On local this also avoids model contention; on API it avoids tangling the UI
+    # with the user's live turn. The thinking run runs in its own thread and never enqueues, so this never
+    # self-suppresses.
     main_provider = (Config.get("provider") or "local").strip().lower()
     t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
     both_local = (main_provider == "local") and (t_provider in ("inherit", "local"))
-    if both_local:
-        try:
-            from vaf.core.task_queue import TaskQueue
-            _tq = TaskQueue()
-            if _tq.is_busy() or _tq.get_queue_size() > 0:
-                logger.debug("Thinking skipped: main agent active on the local server (not truly idle)")
-                return False
-        except Exception:
-            pass
+    if _main_agent_busy(user_scope_id):
+        logger.debug("Thinking skipped: main agent active (user turn in progress, both_local=%s)", both_local)
+        return False
 
     # Acquire internal lock
     run_id = acquire_lock(user_scope_id, max_duration_minutes=max_duration)

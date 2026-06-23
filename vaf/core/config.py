@@ -299,8 +299,9 @@ class Config:
         "thinking_no_progress_turns": 5,                     # After this many turns with no decisive (act/ask/clear) tool, force a single-tool decision
         "model_unload_idle_minutes": 30,                     # Desktop only: unload the local model after the user is really away (no message) this long, once thinking is idle. Server/headless never unloads.
         "thinking_proactive_enabled": True,                  # When the floor (notes/todos) is clear, run a proactive memory-mined suggestion scan (Stufe 2)
-        "thinking_proactive_evidence_min_chars": 24,         # Evidence-gate: a proactive suggestion's details must quote >= this many chars verbatim from real retrieved memory/history
-        "thinking_proactive_min_runs": 6,                    # Min runs between proactive outreaches (anti-spam)
+        "thinking_proactive_evidence_min_chars": 24,         # Evidence-gate (LOCAL/weak model): a proactive suggestion's message/details must quote >= this many chars verbatim from real retrieved memory/history
+        "thinking_proactive_evidence_min_chars_api": 12,     # Evidence-gate when the thinking run uses a HOSTED/strong model (fabricates rarely -> lenient bar); selected automatically by provider
+        "thinking_proactive_min_runs": 6,                    # DEPRECATED: rate-limiting no longer silences runs (silence is never the goal); repeats are prevented by the recent/declined dedup prompts. Unused.
         "thinking_proactive_memory_k": 4,                    # Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also memory_search once itself)
 
         # Garbage Collector Settings

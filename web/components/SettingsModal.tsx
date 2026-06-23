@@ -281,11 +281,13 @@ const CATEGORIES = [
 // from the backend's single source of truth (GET /api/provider-models →
 // Config.PROVIDER_MODELS). FALLBACK_PROVIDER_MODELS below is used only if that fetch
 // fails (offline / old backend). The live /v1/models list still wins in the UI.
+// Listed alphabetically by label so no provider is positioned preferentially.
+// ("Local" is prepended separately in the dropdown as the default option.)
 const PROVIDER_META: { id: string; label: string }[] = [
-    { id: 'openai', label: 'OpenAI' },
     { id: 'anthropic', label: 'Anthropic' },
     { id: 'deepseek', label: 'DeepSeek' },
     { id: 'google', label: 'Google' },
+    { id: 'openai', label: 'OpenAI' },
     { id: 'openrouter', label: 'OpenRouter' },
 ];
 
@@ -299,11 +301,12 @@ const FALLBACK_PROVIDER_MODELS: Record<string, ProviderModelInfo> = {
     openrouter: { default: 'anthropic/claude-sonnet-4.6', fallback: ['anthropic/claude-sonnet-4.6', 'openai/gpt-4o', 'google/gemini-2.5-flash'] },
 };
 
-// Vision-capable providers (no static model lists — models are fetched dynamically via refresh button)
+// Vision-capable providers (no static model lists — models are fetched dynamically via refresh button).
+// Alphabetical by label, same as the primary provider list.
 const VISION_PROVIDERS: { id: string; label: string }[] = [
-    { id: 'openai',     label: 'OpenAI' },
     { id: 'anthropic',  label: 'Anthropic' },
     { id: 'google',     label: 'Google' },
+    { id: 'openai',     label: 'OpenAI' },
     { id: 'openrouter', label: 'OpenRouter' },
 ];
 
@@ -1855,6 +1858,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('provider', v)}
                                         options={[
                                             { value: 'local', label: tAi('localLlama') },
+                                            // First-party Veyllo API server — placeholder (disabled) until it ships
+                                            { value: 'veyllo', label: 'Veyllo', disabled: true },
                                             ...PROVIDERS.map(p => ({ value: p.id, label: p.label }))
                                         ]}
                                     />
@@ -5420,7 +5425,7 @@ interface SelectProps {
     label: string;
     value: any;
     onChange: (value: string) => void;
-    options: { value: string; label: string }[];
+    options: { value: string; label: string; disabled?: boolean }[];
 }
 
 const Select = ({ label, value, onChange, options }: SelectProps) => {
@@ -5442,7 +5447,7 @@ const Select = ({ label, value, onChange, options }: SelectProps) => {
                         <option value={value}>{value} (Current)</option>
                     )}
                     {uniqueOptions.map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
+                        <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
                     ))}
                 </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">

@@ -19,7 +19,7 @@ VAF includes a persistent background service managed by a system tray applicatio
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.
 - **Single HTTP Backend**: The tray manages a single `llama-server` on `127.0.0.1:8080`. Other components reuse it instead of spawning duplicates.
 - **Hot-Reload Settings**: Changing `n_ctx` (context size) or `gpu_layers` in the Web UI settings automatically restarts the `llama-server` with the new values — no full app restart required.
-- **Provider Switch**: Switching provider triggers backend config reload (`RELOAD_CONFIG`) and updates local/API execution mode; local server lifecycle then follows normal tray/runtime management.
+- **Provider Switch**: Switching provider triggers backend config reload (`RELOAD_CONFIG`) and updates local/API execution mode. The tray's activity loop also reads the provider live and manages the local model: switching to a cloud/API provider **unloads** the local model immediately (frees RAM/VRAM), switching back to local **(re)loads** it — no waiting for the idle window.
 
 ## Usage
 
@@ -66,7 +66,7 @@ Certain settings trigger an automatic server restart when changed in the Web UI:
 | :--- | :--- |
 | `n_ctx`, `gpu_layers` | Stops and restarts `llama-server` with new values (local provider only). |
 | `local_network_enabled`, `local_network_port`, `local_network_port_frontend` | Restarts both uvicorn backend and Next.js frontend with new network binding. |
-| `provider` | Marks config refresh (`requires_refresh`) and triggers backend `RELOAD_CONFIG` path. |
+| `provider` | Marks config refresh (`requires_refresh`) and triggers backend `RELOAD_CONFIG`. The activity loop (not `on_config_changed`) then unloads the local model on a cloud/API provider and (re)loads it on switch back to local. |
 
 You can also toggle local network hosting and SSL from the CLI (no UI needed):
 

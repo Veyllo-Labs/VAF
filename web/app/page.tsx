@@ -5467,7 +5467,15 @@ function VAFDashboardContent() {
                                                     // Expanded while the latest turn is still running; collapses only when generation
                                                     // ENDS (so an intermediate answer line mid-turn no longer folds the rail while the
                                                     // agent is still working) and for all history — a manual click overrides either way.
-                                                    const timelineNaturalExpanded = isLatestBot && isGenerating;
+                                                    // A FINISHED turn must stay collapsed while a NEW prompt is pending, so it does not
+                                                    // briefly re-expand on send: detect a `user` message that comes AFTER the latest bot
+                                                    // turn (the just-sent prompt). During a live run no user message follows the latest
+                                                    // bot output, so the running turn — and its thinking block, which lives inside this
+                                                    // timeline — stay expanded for the whole run. We scan for a user message past
+                                                    // lastBotTrueIndex rather than checking the literal tail role: on send a status/system
+                                                    // message can be appended AFTER the user prompt, so the tail is not reliably `user`.
+                                                    const userPromptPending = messages.some((m, i) => i > lastBotTrueIndex && m.role === 'user');
+                                                    const timelineNaturalExpanded = isLatestBot && isGenerating && !userPromptPending;
                                                     const tlManual = timelineExpand.get(msg.timestamp);
                                                     const timelineExpanded = tlManual !== undefined ? tlManual : timelineNaturalExpanded;
                                                     const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {

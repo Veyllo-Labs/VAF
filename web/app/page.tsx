@@ -5467,7 +5467,11 @@ function VAFDashboardContent() {
                                                     // Expanded while the latest turn is still running; collapses only when generation
                                                     // ENDS (so an intermediate answer line mid-turn no longer folds the rail while the
                                                     // agent is still working) and for all history — a manual click overrides either way.
-                                                    const timelineNaturalExpanded = isLatestBot && isGenerating;
+                                                    // The `lastBotTrueIndex === last message` guard keeps a finished, collapsed turn
+                                                    // collapsed when the user sends a NEW prompt: in that brief window generation has
+                                                    // restarted but no new bot message exists yet, so the old turn is still the latest
+                                                    // bot — yet it is no longer the conversation tail (a trailing user message follows it).
+                                                    const timelineNaturalExpanded = isLatestBot && isGenerating && lastBotTrueIndex === messages.length - 1;
                                                     const tlManual = timelineExpand.get(msg.timestamp);
                                                     const timelineExpanded = tlManual !== undefined ? tlManual : timelineNaturalExpanded;
                                                     const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {

@@ -79,7 +79,7 @@ VAF includes secure capabilities to share the agent within your local network (L
 If the application fails to launch, consult these logs (in order of usefulness):
 
 - **`logs/tray_startup_YYYY-MM-DD.txt`** – Always written when the tray is started (shortcut or `vaf tray`). Shows whether the shortcut launched, singleton status, and any crashes. One file per day; old files are removed by the garbage collector after gc_max_age_hours.
-- **`logs/startup_trace.txt`** – Detailed trace (only when Debug Logs is enabled in Settings → Advanced).
+- **`logs/startup_trace.txt`** – Detailed trace (only when Debug Logs is enabled — on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`).
 
 **Tray icon hidden?** On Windows 10/11, the VAF icon may be in the overflow area. Click the `^` arrow in the system tray to see all icons.
 

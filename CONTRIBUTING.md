@@ -4,9 +4,9 @@ We love your input! We want to make contributing to VAF as easy and transparent 
 
 - Reporting a bug
 - Discussing the current state of the code
-- Submitting a fix
 - Proposing new features
-- Becoming a maintainer
+- Building your own tools and workflows
+- Sharing what you built with the community (e.g., a YouTube tutorial or write-up)
 
 ## How to Contribute
 
@@ -164,6 +164,9 @@ VAF uses a drop-in plugin system. To add a tool:
 
 ### Creating Workflows
 Create a python script in `vaf/workflows/workflows/` (e.g., `my_workflow.py`). Define the `WORKFLOW` dictionary with triggers and steps.
+
+### Sharing What You Built
+Built a tool or workflow you're proud of? Share it with the community - record a short YouTube walkthrough, write a blog post, or post a demo. Link it back here so others can learn from it. Showing how you use VAF is one of the most valuable contributions you can make.
 
 ## 📝 Style Guide
 

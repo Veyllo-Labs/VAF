@@ -6,6 +6,8 @@ VAF uses a **two-phase workflow system**: an LLM-powered router detects whether 
 
 With the **Agatic vNext** update, the Workflow Router is fully dynamic and "Plug & Play" — it discovers available workflows at runtime and maps user intent to capabilities without hardcoded rules.
 
+The same router pass also covers **skills** as a second tier: if no workflow matches, the router checks whether an Agent Skill (SKILL.md) matches and, if so, suggests it. See [Skills](SKILLS.md).
+
 ---
 
 ## Architecture
@@ -83,6 +85,11 @@ The router prompt includes **negative examples** to catch vague phrasings that m
 - User: "Fix the layout issue on the site"          → none  (fix/debug request)
 - User: "Analyze this website for errors"           → none  (analysis request)
 ```
+
+The router returns a single token: `workflow:<id>`, `skill:<id>`, or `none`. A
+`skill:<id>` result is surfaced as a `[SKILL SUGGESTION]` hint instead of a
+workflow hint (the two are mutually exclusive). Skill matching is described in
+[Skills](SKILLS.md); the rest of this document covers the workflow path.
 
 ### Step 3 — Workflow Hint Injection
 
@@ -329,6 +336,7 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ## Related Documentation
 
+- [Skills](SKILLS.md) — Agent Skills (SKILL.md), the second routing tier sharing this router
 - [Session Management](../memory/SESSION_MANAGEMENT.md) — `project_path` / `[SESSION WORKSPACE]`
 - [Coder Architecture](CODER_ARCHITECTURE.md) — `coding_agent` tool internals
 - [Context Management](../memory/CONTEXT_MANAGEMENT.md) — Intent Locking details
@@ -337,4 +345,4 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-06-23*

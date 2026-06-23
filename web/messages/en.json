@@ -309,6 +309,8 @@
       "mcpConnected": "{count} connected / {total} configured",
       "workflows": "Workflows",
       "workflowsAvailable": "{count} workflows available",
+      "skills": "Skills",
+      "skillsAvailable": "{count} skills available",
       "trustedSources": "Trusted sources",
       "trustedSourcesCategories": "{count} categories"
     },
@@ -565,6 +567,8 @@
       "viewCode": "View Code",
       "noToolsFound": "No tools found",
       "noToolsFoundHint": "Try adjusting your search terms.",
+      "empty": "No tools yet",
+      "emptyHint": "Create a custom tool to get started.",
       "refresh": "Refresh tool list"
     },
     "mcp": {
@@ -575,6 +579,8 @@
       "addServer": "Add Server",
       "adminRequired": "Admin permission required to manage MCP servers.",
       "noServers": "No MCP servers configured.",
+      "empty": "No MCP servers yet",
+      "emptyHint": "Add an MCP server to get started.",
       "tools": "{count} tools",
       "offline": "offline",
       "disabled": "disabled",
@@ -617,8 +623,24 @@
       "template": "Template",
       "noWorkflowsFound": "No workflows found",
       "noWorkflowsFoundHint": "Try adjusting your search terms.",
+      "empty": "No workflows yet",
+      "emptyHint": "Create a workflow to get started.",
       "flowVisualization": "Interactive Flow Visualization",
       "stepDefinition": "Step Definition"
+    },
+    "skills": {
+      "title": "Skills",
+      "available": "{count} skills available",
+      "searchPlaceholder": "Search skills…",
+      "invalid": "Broken",
+      "edit": "Edit",
+      "empty": "No skills yet",
+      "emptyHint": "Create a skill or upload a SKILL.md bundle to get started.",
+      "noneFound": "No skills found",
+      "noneFoundHint": "Try adjusting your search terms.",
+      "riskHigh": "Risk",
+      "riskMedium": "Caution",
+      "riskTitle": "Security scan: {level} risk (score {score}/100)"
     },
     "trustedSources": {
       "title": "Trusted Sources",

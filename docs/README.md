@@ -52,6 +52,7 @@ Docs are grouped into category folders. Full index by category:
 - [BROWSER_AGENT.md](agents/BROWSER_AGENT.md) — Browser automation agent.
 - [RESEARCH_AND_DOCUMENT_WORKFLOWS.md](agents/RESEARCH_AND_DOCUMENT_WORKFLOWS.md) — Research and document workflows.
 - [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md) — Workflow matching/selection.
+- [SKILLS.md](agents/SKILLS.md) — Agent Skills (SKILL.md): the second routing tier, `use_skill` progressive disclosure, and the security scanner.
 - [FRONT_OFFICE.md](agents/FRONT_OFFICE.md) — Front-office routing.
 - [THINKING_WORKSPACE.md](agents/THINKING_WORKSPACE.md) — Thinking-mode workspace.
 - [Thinking-Mode.md](agents/Thinking-Mode.md) — Background thinking mode when idle.
@@ -91,6 +92,7 @@ Docs are grouped into category folders. Full index by category:
 - [AUTOMATIONS.md](platform/AUTOMATIONS.md) — Automations, timers, planner.
 - [I18N.md](platform/I18N.md) — Internationalization.
 - [TRANSLATION_SYSTEM.md](platform/TRANSLATION_SYSTEM.md) — Translation system.
+- [VOCABULARY_BOOK.md](platform/VOCABULARY_BOOK.md) — Backend canned phrases (multilingual nudge, expandable).
 - [UUID.md](platform/UUID.md) — UUID/ID scheme.
 - [ABOUT.md](platform/ABOUT.md) — About VAF.
 

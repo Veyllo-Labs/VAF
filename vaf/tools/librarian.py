@@ -164,6 +164,35 @@ You have access to this filesystem map for fast navigation:
         return (time.time() - self.last_scan) > 300  # 5 min
 
     def run(self, **kwargs) -> str:
+        # Per-user filesystem jail: while this librarian run executes, is_safe_path additionally enforces
+        # that the agent can read only the caller's OWN data — their VAF_Projects/<uid8> (+ personal folders
+        # for the local admin / machine owner), never another user's. Scoped via a contextvar so no other
+        # tool is affected. user_scope_id is injected by the agent's tool dispatcher (in-process) or via env.
+        from vaf.tools.filesystem import set_librarian_scope, reset_librarian_scope
+        scope = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID") or None
+        token = set_librarian_scope(self._compute_jail(scope))
+        try:
+            return self._run_impl(**kwargs)
+        finally:
+            reset_librarian_scope(token)
+
+    def _compute_jail(self, user_scope_id):
+        """Librarian jail info. Local admin (no scope OR the local-admin scope) => full access; a remote
+        user => jailed to their own VAF_Projects/<uid8> only (no personal folders). Fail-closed on error."""
+        try:
+            from vaf.core.config import get_local_admin_scope_id
+            from vaf.core.session import get_user_projects_root
+            scope = str(user_scope_id or "")
+            local_admin = str(get_local_admin_scope_id() or "")
+            if (not scope) or (scope == local_admin):
+                return {"is_admin": True, "uid8": None, "allowed_roots": []}
+            own_root = get_user_projects_root(scope)
+            return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
+                    "allowed_roots": [own_root] if own_root else []}
+        except Exception:
+            return {"is_admin": False, "uid8": "", "allowed_roots": []}
+
+    def _run_impl(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()
         if not task:
             return "Error: No task provided."
@@ -193,6 +222,10 @@ You have access to this filesystem map for fast navigation:
             _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "librarian_agent"}
             if session_id:
                 _sub_env["VAF_SESSION_ID"] = session_id
+            # Carry the user scope into the child so its librarian jail (is_safe_path) applies there too.
+            _scope_for_child = kwargs.get("user_scope_id") or os.environ.get("VAF_USER_SCOPE_ID")
+            if _scope_for_child:
+                _sub_env["VAF_USER_SCOPE_ID"] = str(_scope_for_child)
 
             # Pass provider configuration to sub-agent (Best Practice: Inherit or override)
             use_separate_provider = Config.get("subagent_use_separate_provider", False)

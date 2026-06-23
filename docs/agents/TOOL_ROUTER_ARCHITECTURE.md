@@ -262,7 +262,7 @@ User: "What is the weather?"
 
 ## 8. Tool-use debug log (user-scope isolation)
 
-When **Debug Logs** are enabled (Advanced → Debug Logs), each tool execution is written to `logs/tool_use_YYYY-MM-DD.log` with:
+When **Debug Logs** are enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`), each tool execution is written to `logs/tool_use_YYYY-MM-DD.log` with:
 
 - `tool` — tool name
 - `session_id` — current chat session ID

@@ -507,6 +507,49 @@ async def _broadcast_tools_update(manager) -> None:
         )
 
 
+async def _broadcast_skills_update(manager) -> None:
+    """
+    Push a refreshed skills_list to every connected WebSocket client after any
+    skill mutation (create / update / delete / permissions / upload). Like
+    _broadcast_tools_update, each client gets a list filtered by their own
+    scope/role, so we send individual responses rather than one payload.
+    """
+    if not manager:
+        return
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        from vaf.skills.templates import list_skills
+
+        local_admin = get_local_admin_scope_id()
+        for ws in list(manager.active_connections):
+            try:
+                _scope = manager.get_connection_user(ws)
+                _role  = manager.get_connection_user_role(ws)
+                _is_admin = (
+                    _role == "admin"
+                    or (_scope is not None and str(_scope) == str(local_admin))
+                )
+                _filter_scope = None if _is_admin else _scope
+                # Admins manage all and also see invalid skills (so they can fix them).
+                skills = list_skills(user_scope_id=_filter_scope, include_invalid=_is_admin)
+                if _is_admin:
+                    from vaf.core import skills_registry as _skr_b
+                    for s in skills:
+                        s["can_manage"] = True
+                        s["source"] = _skr_b.get_skill_md_source(s["id"]) or ""
+                else:
+                    for s in skills:
+                        s["can_manage"] = False
+                await ws.send_json({"type": "skills_list", "skills": skills})
+            except Exception:
+                pass  # Ignore disconnected / errored sockets
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "_broadcast_skills_update failed: %s", exc
+        )
+
+
 def _scan_tool_modules() -> List[dict]:
     """
     Fallback tool list based on available Python modules.
@@ -1246,6 +1289,20 @@ async def get_session_workspace(
     """Browse the chat's workspace folder (feeds the WebUI workspace window)."""
     root = _resolve_session_workspace(sessionId, request)
     if not root:
+        # Orphan drill-in (central explorer): the session JSON is gone but the workspace folder may still
+        # exist under the caller's OWN uid8 root. Strictly scoped to the requester's own VAF_Projects/<uid8>.
+        try:
+            from vaf.api.config_routes import get_current_user_or_local_admin
+            from vaf.core.session import get_user_projects_root
+            import re as _re_orph
+            _scope = str((get_current_user_or_local_admin(request) or {}).get("user_scope_id") or "")
+            _uroot = get_user_projects_root(_scope)
+            _sid = _re_orph.sub(r'[^a-zA-Z0-9_-]', '', str(sessionId))[:32]
+            if _uroot and _sid and (_uroot / _sid).is_dir():
+                root = str(_uroot / _sid)
+        except Exception:
+            root = ""
+    if not root:
         return {"path": "", "name": "", "subpath": "", "dirs": [], "files": []}
     target = _resolve_workspace_subdir(root, subpath)
     dirs, files = [], []
@@ -1271,9 +1328,17 @@ async def get_session_workspace(
     except Exception:
         pass
     rel = os.path.relpath(target, root)
+    _live_title = None
+    try:
+        _live_title = getattr(session_mgr.load(sessionId), "name", None)
+    except Exception:
+        _live_title = None
+    from vaf.core.session import read_workspace_label, resolve_workspace_display_name
     return {
         "path": root,
         "name": os.path.basename(root),
+        "displayName": resolve_workspace_display_name(Path(root), os.path.basename(root), _live_title),
+        "label": read_workspace_label(Path(root)),
         "subpath": "" if rel == "." else rel.replace(os.sep, "/"),
         "dirs": dirs,
         "files": files,
@@ -1351,6 +1416,127 @@ async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: R
     return {"ok": True, "name": name}
 
 
+# ── Central per-user Data Explorer (all of a user's workspaces, incl. orphans) ───────────────────────
+# These endpoints operate on the per-user root VAF_Projects/<uid8>/ — derived ONLY from the AUTHENTICATED
+# user's scope, never a client-supplied value — so a user can only ever see/rename/delete their OWN
+# workspaces. Opaque session-id handles are returned, never absolute paths (keeps the /api/file surface
+# closed). Orphans = workspace folders whose chat session JSON was deleted (left on disk by design).
+
+@app.get("/api/workspaces")
+async def list_my_workspaces(request: Request):
+    """List ALL of the requesting user's chat workspaces (live + orphaned) for the central Data Explorer."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.session import get_user_projects_root, read_workspace_label, resolve_workspace_display_name
+    from datetime import datetime as _dt
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or "")
+    is_admin = scope == str(get_local_admin_scope_id())
+    root = get_user_projects_root(scope)
+    if not root or not root.is_dir():
+        return {"workspaces": [], "isAdmin": is_admin}
+    try:
+        live = {s["id"]: s for s in session_mgr.list(limit=100000, user_scope_id=scope)}
+    except Exception:
+        live = {}
+    out = []
+    try:
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith('.'):
+                continue
+            sid = child.name
+            live_sess = live.get(sid)
+            live_title = (live_sess or {}).get("name") if live_sess else None
+            fcount = dcount = 0
+            updated = ""
+            try:
+                latest = 0.0
+                for e in os.scandir(child):
+                    if e.name.startswith('.'):
+                        continue
+                    if e.is_dir():
+                        dcount += 1
+                    elif e.is_file():
+                        fcount += 1
+                    try:
+                        latest = max(latest, e.stat().st_mtime)
+                    except Exception:
+                        pass
+                if latest:
+                    updated = _dt.fromtimestamp(latest).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+            out.append({
+                "sessionId": sid,
+                "displayName": resolve_workspace_display_name(child, sid, live_title),
+                "label": read_workspace_label(child),
+                "liveTitle": live_title,
+                "orphan": live_sess is None,
+                "fileCount": fcount,
+                "folderCount": dcount,
+                "updated": updated,
+            })
+    except Exception:
+        pass
+    return {"workspaces": out, "isAdmin": is_admin}
+
+
+class WorkspaceLabelRequest(BaseModel):
+    sessionId: str
+    label: str
+
+
+@app.post("/api/workspaces/rename")
+async def rename_my_workspace(req: WorkspaceLabelRequest, request: Request):
+    """Set a workspace's DISPLAY label (rename = display label only; the on-disk folder stays == session_id)."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.session import get_user_projects_root, write_workspace_label
+    import re as _re_wl
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or "")
+    root = get_user_projects_root(scope)
+    if not root:
+        raise HTTPException(status_code=404, detail="No workspace store for this user")
+    sid = _re_wl.sub(r'[^a-zA-Z0-9_-]', '', str(req.sessionId))[:32]
+    folder = root / sid if sid else None
+    if not folder or not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if not write_workspace_label(folder, req.label):
+        raise HTTPException(status_code=500, detail="Could not set label")
+    return {"ok": True, "sessionId": sid, "label": (req.label or "").strip()[:200]}
+
+
+class WorkspaceFolderDeleteRequest(BaseModel):
+    sessionId: str
+
+
+@app.post("/api/workspaces/delete")
+async def delete_my_workspace(req: WorkspaceFolderDeleteRequest, request: Request):
+    """Delete a WHOLE workspace folder (orphans + manual cleanup). Boundary-guarded to the caller's own root."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.session import get_user_projects_root
+    import re as _re_wd, shutil as _sh
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or "")
+    root = get_user_projects_root(scope)
+    if not root:
+        raise HTTPException(status_code=404, detail="No workspace store for this user")
+    sid = _re_wd.sub(r'[^a-zA-Z0-9_-]', '', str(req.sessionId))[:32]
+    if not sid:
+        raise HTTPException(status_code=400, detail="Invalid sessionId")
+    root_norm = os.path.normpath(str(root))
+    target = os.path.normpath(os.path.join(root_norm, sid))
+    if target == root_norm or not target.startswith(root_norm + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid target")
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    try:
+        _sh.rmtree(target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+    return {"ok": True, "sessionId": sid}
+
+
 @app.get("/api/file")
 async def get_file(request: Request, path: str = Query(..., description="Absolute path to local file")):
     """Serve a local file by path (allowed roots: documents, downloads, data dir). Used by Web UI."""
@@ -1373,24 +1559,26 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
     # User isolation for generated projects: VAF_Projects/<uid[:8]>/... folders
     # belong to one user — only that user (or the local admin) may download
     # from them. Legacy flat projects (no user prefix) stay accessible.
-    try:
-        import re as _re_iso
-        _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
-        if target.is_relative_to(_projects_root):
-            _rel = target.relative_to(_projects_root)
-            _first_seg = _rel.parts[0] if _rel.parts else ""
-            if _re_iso.fullmatch(r"[0-9a-f]{8}", _first_seg):
+    import re as _re_iso
+    _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
+    if target.is_relative_to(_projects_root):
+        _rel = target.relative_to(_projects_root)
+        _first_seg = _rel.parts[0] if _rel.parts else ""
+        if _re_iso.fullmatch(r"[0-9a-f]{8}", _first_seg):
+            # FAIL-CLOSED: if ownership cannot be verified, deny (never serve a per-user file on error).
+            try:
                 from vaf.api.config_routes import get_current_user_or_local_admin
                 from vaf.core.config import get_local_admin_scope_id
                 _user = get_current_user_or_local_admin(request) or {}
                 _scope = str(_user.get("user_scope_id") or "")
                 _is_admin = _scope == str(get_local_admin_scope_id())
-                if not _is_admin and not _scope.replace("-", "").lower().startswith(_first_seg):
-                    raise HTTPException(status_code=403, detail="Access denied")
-    except HTTPException:
-        raise
-    except Exception:
-        pass
+                _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first_seg)
+            except HTTPException:
+                raise
+            except Exception:
+                _allowed = False
+            if not _allowed:
+                raise HTTPException(status_code=403, detail="Access denied")
     mime_type, _ = mimetypes.guess_type(str(target))
     return FileResponse(
         path=str(target),
@@ -4161,6 +4349,236 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
                         except Exception as e:
                             await websocket.send_json({"type": "workflow_error", "error": str(e)})
+
+                # ─────────────────────────────────────────────────────────────
+                # SKILLS (Anthropic Agent Skills / SKILL.md). The second routing
+                # tier under workflows: file I/O mirrors the workflow handlers;
+                # visibility/scoping mirrors the custom-tools handlers.
+                # ─────────────────────────────────────────────────────────────
+                elif type == "get_skills":
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.skills.templates import list_skills as _list_skills
+                        _sk_scope = manager.get_connection_user(websocket) if manager else None
+                        _sk_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _sk_is_admin = (
+                            _sk_role == "admin"
+                            or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
+                        )
+                        _filter_scope = None if _sk_is_admin else _sk_scope
+                        # Admins also see invalid skills so they can fix them in the editor.
+                        _skills = _list_skills(user_scope_id=_filter_scope, include_invalid=_sk_is_admin)
+                        if _sk_is_admin:
+                            from vaf.core import skills_registry as _skr_g
+                            for _s in _skills:
+                                _s["can_manage"] = True
+                                _s["source"] = _skr_g.get_skill_md_source(_s["id"]) or ""
+                        else:
+                            for _s in _skills:
+                                _s["can_manage"] = False
+                        await websocket.send_json({"type": "skills_list", "skills": _skills})
+                    except Exception as e:
+                        await websocket.send_json({"type": "skills_list", "skills": [], "error": str(e)})
+
+                elif type == "get_skill_source":
+                    # Return the raw SKILL.md text for the editor (admin-only).
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import skills_registry as _skr
+                        _ss_scope = manager.get_connection_user(websocket) if manager else None
+                        _ss_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _ss_is_admin = (
+                            _ss_role == "admin"
+                            or (_ss_scope is not None and str(_ss_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _ss_is_admin:
+                            await websocket.send_json({"type": "skill_error", "error": "Admin permission required to view skill source."})
+                        else:
+                            _ss_id = (cmd.get("skill_id") or "").strip()
+                            _ss_src = _skr.get_skill_md_source(_ss_id)
+                            await websocket.send_json({"type": "skill_source", "skill_id": _ss_id, "source": _ss_src or ""})
+                    except Exception as e:
+                        await websocket.send_json({"type": "skill_error", "error": str(e)})
+
+                elif type in ("create_skill", "update_skill"):
+                    from vaf.core.config import get_local_admin_scope_id
+                    _sk_scope = manager.get_connection_user(websocket)
+                    _sk_role  = manager.get_connection_user_role(websocket)
+                    _sk_is_admin = (
+                        _sk_role == "admin"
+                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
+                    )
+                    if not _sk_is_admin:
+                        await websocket.send_json({"type": "skill_error", "error": "Admin permission required to manage skills."})
+                    else:
+                        try:
+                            import yaml as _yaml_sk
+                            from vaf.core import skills_registry as _skr
+                            from vaf.skills.skill_md import parse_skill_md_text as _parse_text
+                            from vaf.skills.templates import reload_skills as _reload_sk
+
+                            _is_update = (type == "update_skill")
+                            _sk_id = _skr.validate_skill_id(cmd.get("skill_id") or "")
+
+                            # The editor may send raw SKILL.md, or name/description/body.
+                            _raw = (cmd.get("skill_md") or "").strip()
+                            if _raw:
+                                _content = _raw if _raw.endswith("\n") else _raw + "\n"
+                            else:
+                                _name = (cmd.get("name") or "").strip()
+                                _desc = (cmd.get("description") or "").strip()
+                                _body = cmd.get("body") or ""
+                                _fm = _yaml_sk.safe_dump(
+                                    {"name": _name, "description": _desc},
+                                    sort_keys=False, allow_unicode=True,
+                                ).strip()
+                                _content = f"---\n{_fm}\n---\n\n{_body}\n"
+
+                            # Validate BEFORE writing so a bad edit never clobbers a good skill.
+                            _parsed = _parse_text(_content, _sk_id)
+                            if not _parsed["valid"]:
+                                raise ValueError(f"invalid skill: {_parsed['error']}")
+
+                            _exists = (_skr.skill_folder(_sk_id) / "SKILL.md").exists()
+                            if _is_update and not _exists:
+                                raise ValueError(f"Skill '{_sk_id}' does not exist. Use create_skill.")
+                            if not _is_update and _exists:
+                                raise ValueError(f"Skill '{_sk_id}' already exists. Use update_skill to modify it.")
+
+                            # Security scan the instruction body. HIGH risk blocks unless the
+                            # admin explicitly overrides; the result is recorded either way.
+                            from vaf.skills.scanner import scan_skill_md_text as _scan_text_fn, format_findings as _fmt_findings
+                            _scan = _scan_text_fn(_content)
+                            _blocked = _scan["level"] == "high" and not cmd.get("override")
+                            if _blocked:
+                                await websocket.send_json({
+                                    "type": "skill_error",
+                                    "error": _fmt_findings(_scan),
+                                    "scan": {"score": _scan["score"], "level": _scan["level"], "findings": _scan["findings"]},
+                                    "can_override": True,
+                                })
+                            else:
+                                _skr.save_skill_md(_sk_id, _content)
+
+                                # shared_with: explicit value wins; on update keep existing if omitted.
+                                _shared = cmd.get("shared_with")
+                                if _shared is None:
+                                    _existing = _skr.get_skill_manifest_entry(_sk_id) or {}
+                                    _shared = _existing.get("shared_with", ["*"])
+                                _skr.register_skill(
+                                    _sk_id,
+                                    created_by=(manager.get_connection_username(websocket) or "admin"),
+                                    shared_with=_shared,
+                                    scan=_scan,
+                                )
+                                _reload_sk()
+                                await websocket.send_json({
+                                    "type": "skill_updated" if _is_update else "skill_created",
+                                    "skill_id": _sk_id,
+                                })
+                                await _broadcast_skills_update(manager)
+                        except Exception as e:
+                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+
+                elif type == "delete_skill":
+                    from vaf.core.config import get_local_admin_scope_id
+                    _sk_scope = manager.get_connection_user(websocket)
+                    _sk_role  = manager.get_connection_user_role(websocket)
+                    _sk_is_admin = (
+                        _sk_role == "admin"
+                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
+                    )
+                    if not _sk_is_admin:
+                        await websocket.send_json({"type": "skill_error", "error": "Admin permission required to delete skills."})
+                    else:
+                        try:
+                            from vaf.core import skills_registry as _skr
+                            from vaf.skills.templates import reload_skills as _reload_sk
+                            _sk_id = (cmd.get("skill_id") or "").strip()
+                            _skr.delete_skill(_sk_id)
+                            _reload_sk()
+                            await websocket.send_json({"type": "skill_deleted", "skill_id": _sk_id})
+                            await _broadcast_skills_update(manager)
+                        except Exception as e:
+                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+
+                elif type == "update_skill_permissions":
+                    # Change which users can see a skill (mirror update_custom_tool_permissions).
+                    try:
+                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core import skills_registry as _skr
+                        _sk_scope = manager.get_connection_user(websocket) if manager else None
+                        _sk_role  = manager.get_connection_user_role(websocket) if manager else None
+                        _sk_is_admin = (
+                            _sk_role == "admin"
+                            or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
+                        )
+                        if not _sk_is_admin:
+                            await websocket.send_json({"type": "skill_error", "error": "Admin permission required to change skill permissions."})
+                        else:
+                            _sk_id = (cmd.get("skill_id") or "").strip()
+                            _shared = cmd.get("shared_with", ["*"])
+                            _skr.update_skill_permissions(_sk_id, _shared)
+                            await websocket.send_json({"type": "skill_permissions_updated", "skill_id": _sk_id, "shared_with": _shared})
+                            await _broadcast_skills_update(manager)
+                    except Exception as e:
+                        await websocket.send_json({"type": "skill_error", "error": str(e)})
+
+                elif type == "upload_skill":
+                    # Import an uploaded skill .zip (folder bundle). Payload:
+                    #   { data: base64(zip), shared_with?: list[str] }
+                    from vaf.core.config import get_local_admin_scope_id
+                    _sk_scope = manager.get_connection_user(websocket)
+                    _sk_role  = manager.get_connection_user_role(websocket)
+                    _sk_is_admin = (
+                        _sk_role == "admin"
+                        or (_sk_scope is not None and str(_sk_scope) == str(get_local_admin_scope_id()))
+                    )
+                    if not _sk_is_admin:
+                        await websocket.send_json({"type": "skill_error", "error": "Admin permission required to upload skills."})
+                    else:
+                        _tmpzip = None
+                        try:
+                            import base64 as _b64m
+                            import os as _os_sk
+                            import tempfile as _tf_sk
+                            from vaf.core import skills_registry as _skr
+                            from vaf.skills.templates import reload_skills as _reload_sk
+                            from vaf.skills.scanner import SkillScanBlocked as _SkillScanBlocked
+
+                            _raw_bytes = _b64m.b64decode(cmd.get("data") or "")
+                            if not _raw_bytes:
+                                raise ValueError("no zip data received")
+                            _fd, _tmpzip = _tf_sk.mkstemp(suffix=".zip")
+                            with _os_sk.fdopen(_fd, "wb") as _f:
+                                _f.write(_raw_bytes)
+                            try:
+                                _sid = _skr.import_skill_zip(
+                                    _tmpzip,
+                                    created_by=(manager.get_connection_username(websocket) or "admin"),
+                                    shared_with=cmd.get("shared_with") or ["*"],
+                                    override=bool(cmd.get("override")),
+                                )
+                            except _SkillScanBlocked as _blk:
+                                await websocket.send_json({
+                                    "type": "skill_error",
+                                    "error": str(_blk),
+                                    "scan": {"score": _blk.scan["score"], "level": _blk.scan["level"], "findings": _blk.scan["findings"]},
+                                    "can_override": True,
+                                })
+                            else:
+                                _reload_sk()
+                                await websocket.send_json({"type": "skill_created", "skill_id": _sid})
+                                await _broadcast_skills_update(manager)
+                        except Exception as e:
+                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+                        finally:
+                            if _tmpzip:
+                                try:
+                                    import os as _os_sk2
+                                    _os_sk2.unlink(_tmpzip)
+                                except OSError:
+                                    pass
 
                 elif type == "get_trusted_sources":
                     try:

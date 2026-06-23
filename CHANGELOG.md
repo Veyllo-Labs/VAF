@@ -17,6 +17,9 @@ To update an installed VAF, run `vaf update`.
 - Tool input validation & repair before dispatch (`docs/agents/TOOL_INPUT_REPAIR.md`).
 - Self-update: `vaf update check` / `vaf update`, an opt-in startup
   update-available hint, and a tag-triggered GitHub release workflow.
+- Web search result cache: identical `web_search` queries are served from a
+  short-lived file cache (default 15 min; `web_search_cache_enabled` /
+  `web_search_cache_ttl_seconds`), skipping the providers and synthesis.
 
 ### Fixed
 - Filesystem alias resolution now matches only on a path boundary.

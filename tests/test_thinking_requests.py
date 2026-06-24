@@ -1,6 +1,6 @@
 """Background-request store: tracks questions/proposals the thinking run raised, with a status
-lifecycle (asked -> confirmed -> done / declined) and a 6-run recency window so the next run does not
-re-ask. Storage is isolated per test to a tmp vaf_dir."""
+lifecycle (asked -> replied -> done / declined; reconfirm re-opens to asked) and a 6-run recency window
+so the next run does not re-ask. Storage is isolated per test to a tmp vaf_dir."""
 import vaf.core.thinking_requests as tr
 from vaf.core.platform import Platform
 
@@ -18,6 +18,58 @@ def test_add_and_status_lifecycle(monkeypatch, tmp_path):
     assert tr.update_request_status(scope, e["id"], "confirmed")["status"] == "confirmed"
     assert tr.update_request_status(scope, e["id"], "done")["status"] == "done"
     assert tr.update_request_status(scope, e["id"], "bogus") is None  # invalid status ignored
+
+
+def test_record_reply_sets_replied_and_merges(monkeypatch, tmp_path):
+    """record_reply is called twice — once at pickup (user_reply), once at end-of-turn (main_reply) —
+    and must move the request to 'replied' while merging only the provided field (no clobber)."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-rr"
+    e = tr.add_request(scope, "Automate tests?", run_seq=1, proposed_action="create automation")
+    assert e["user_reply"] is None and e["main_reply"] is None and e["needs_reconfirm"] is False
+    r1 = tr.record_reply(scope, e["id"], user_reply="bin noch am umbau aber danke")
+    assert r1["status"] == "replied" and r1["user_reply"] == "bin noch am umbau aber danke"
+    assert r1["main_reply"] is None                       # second field not touched yet
+    r2 = tr.record_reply(scope, e["id"], main_reply="Alles gut, kein Thema.")
+    assert r2["status"] == "replied"
+    assert r2["user_reply"] == "bin noch am umbau aber danke"   # first field preserved
+    assert r2["main_reply"] == "Alles gut, kein Thema."
+    assert tr.record_reply(scope, "nope", user_reply="x") is None  # unknown id
+
+
+def test_reopen_for_reconfirm(monkeypatch, tmp_path):
+    """An undecidable 'replied' request re-opens to 'asked' with needs_reconfirm=True (followups kept)."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-rc"
+    e = tr.add_request(scope, "Automate tests?", run_seq=1)
+    tr.record_reply(scope, e["id"], user_reply="warum fragst du?")
+    rc = tr.reopen_for_reconfirm(scope, e["id"])
+    assert rc["status"] == "asked" and rc["needs_reconfirm"] is True and rc["reconfirmed"] is True
+    # A re-ask delivery clears the reconfirm flag.
+    b = tr.bump_followup(scope, e["id"], new_question="Hey sry, hatten wir das gemacht?", run_seq=2)
+    assert b["needs_reconfirm"] is False and b["followups"] == 1
+
+
+def test_replied_excluded_from_open_proactive(monkeypatch, tmp_path):
+    """A 'replied' request is awaiting classification and must NOT be picked as the open follow-up."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-ex"
+    e = tr.add_request(scope, "Automate tests?", run_seq=1)
+    assert tr.get_open_proactive_request(scope, current_run_seq=1) is not None  # 'asked' -> open
+    tr.record_reply(scope, e["id"], user_reply="hm")
+    assert tr.get_open_proactive_request(scope, current_run_seq=1) is None      # 'replied' -> not open
+    tr.reopen_for_reconfirm(scope, e["id"])
+    assert tr.get_open_proactive_request(scope, current_run_seq=1) is not None  # reopened -> open again
+
+
+def test_recent_prompt_has_replied_rule(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-rp"
+    e = tr.add_request(scope, "Reminder einrichten?", run_seq=9)
+    tr.record_reply(scope, e["id"], user_reply="ja")
+    p = tr.recent_requests_prompt(scope, current_run_seq=10, within_runs=6)
+    assert "[replied]" in p
+    assert "awaiting classification" in p
 
 
 def test_recency_window(monkeypatch, tmp_path):

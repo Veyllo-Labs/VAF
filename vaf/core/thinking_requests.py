@@ -4,9 +4,14 @@ lifecycle so (a) the next run does not re-ask, and (b) the main agent can pick u
 
 Status lifecycle:
     asked      -> the background run asked the user (waiting for a reply)
-    confirmed  -> the user agreed (main agent should carry it out)
-    done       -> the proposed action was carried out
+    replied    -> the user answered; the main agent captured the reply (+ its own reply); the NEXT
+                  thinking run classifies the outcome from that triple (replaces a keyword guess)
+    confirmed  -> (legacy) the user agreed; kept valid for backward-compat with old entries
+    done       -> the proposed action was carried out / the user accepted it
     declined   -> the user refused
+
+A 'replied' request that the classifier finds ambiguous is re-opened to 'asked' with
+needs_reconfirm=True, so the follow-up node asks ONE soft retrospective check-back.
 
 Stored per user under thinking_requests / <user_scope_id> (mirrors thinking_suggestions.py). Keyed by
 the raw scope id: both the thinking run and the main agent now operate under the user's real scope, so
@@ -22,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from vaf.core.platform import Platform
 
-STATUSES = ("asked", "confirmed", "done", "declined")
+STATUSES = ("asked", "replied", "confirmed", "done", "declined")
 _MAX_ENTRIES = 50  # keep the newest N per user
 
 
@@ -87,6 +92,10 @@ def add_request(
         "thinking_run_id": (thinking_run_id or "").strip() or None,
         "source_note_id": (source_note_id or "").strip() or None,
         "source_todo_id": (source_todo_id or "").strip() or None,
+        "user_reply": None,
+        "main_reply": None,
+        "needs_reconfirm": False,
+        "reconfirmed": False,   # a soft reconfirm fires at most ONCE; a later UNCLEAR then resolves declined
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -116,6 +125,56 @@ def update_request_status(user_scope_id: Optional[str], request_id: str, status:
     for e in items:
         if isinstance(e, dict) and e.get("id") == request_id:
             e["status"] = status
+            e["updated_at"] = _now()
+            updated = e
+            break
+    if updated is not None:
+        _save(path, items)
+    return updated
+
+
+def record_reply(
+    user_scope_id: Optional[str],
+    request_id: str,
+    user_reply: Optional[str] = None,
+    main_reply: Optional[str] = None,
+) -> Optional[dict]:
+    """Capture the user's reply (and/or the main agent's own reply) on a request and move it to
+    'replied' (awaiting classification by the next thinking run). Called twice per exchange: once at
+    reply pickup with `user_reply`, once at end-of-turn with `main_reply`. Only the provided field(s)
+    are written, so the second call never clobbers the first. Returns the updated entry or None."""
+    path = _path(user_scope_id)
+    items = _load(path)
+    updated = None
+    for e in items:
+        if isinstance(e, dict) and e.get("id") == request_id:
+            if user_reply is not None:
+                e["user_reply"] = str(user_reply).strip()[:1000]
+            if main_reply is not None:
+                e["main_reply"] = str(main_reply).strip()[:1000]
+            e["status"] = "replied"
+            e["updated_at"] = _now()
+            updated = e
+            break
+    if updated is not None:
+        _save(path, items)
+    return updated
+
+
+def reopen_for_reconfirm(user_scope_id: Optional[str], request_id: str) -> Optional[dict]:
+    """Re-open a 'replied' request whose outcome the classifier could not determine: back to 'asked'
+    with needs_reconfirm=True, so the follow-up node asks ONE soft retrospective check-back. Marks
+    `reconfirmed=True` so this happens at most once — if the reconfirm's answer is ALSO undecidable, the
+    classifier resolves it (declined) instead of looping. `followups` is left untouched, so the existing
+    follow-up cap still bounds it. Returns the updated entry or None."""
+    path = _path(user_scope_id)
+    items = _load(path)
+    updated = None
+    for e in items:
+        if isinstance(e, dict) and e.get("id") == request_id:
+            e["status"] = "asked"
+            e["needs_reconfirm"] = True
+            e["reconfirmed"] = True
             e["updated_at"] = _now()
             updated = e
             break
@@ -163,6 +222,8 @@ def bump_followup(
             if run_seq is not None:
                 e["run_seq"] = int(run_seq)
             e["status"] = "asked"
+            # A re-ask delivery satisfies any pending soft reconfirm.
+            e["needs_reconfirm"] = False
             e["updated_at"] = _now()
             updated = e
             break
@@ -207,7 +268,8 @@ def recent_requests_prompt(
         suffix = f" (action: {act})" if act else ""
         lines.append(f"- [{st}] \"{q}\"{suffix}")
     lines.append(
-        "Rules: 'asked'/'confirmed' are still in flight — do not repeat them. 'done' is finished — do not "
-        "mention it again. 'declined' was refused — never re-propose it."
+        "Rules: 'asked'/'confirmed' are still in flight — do not repeat them. 'replied' means the user "
+        "already answered and it is awaiting classification — do not re-ask it. 'done' is finished — do "
+        "not mention it again. 'declined' was refused — never re-propose it."
     )
     return "\n".join(lines)

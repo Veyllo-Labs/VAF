@@ -36,12 +36,23 @@ conservatively — a stronger `thinking_model` improves this.)
 When the agent asks the user something (via `ask_user`) it is recorded as a **request** with a status
 lifecycle, so the background run and the main agent stay coordinated and nothing is asked or done twice:
 
-- **Lifecycle:** `asked` → `confirmed` / `declined` → `done`. Stored per user in
-  `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`).
+- **Lifecycle:** `asked` → `replied` → `done` / `declined` (a `replied` outcome the next run finds
+  ambiguous re-opens to `asked` with `needs_reconfirm` for ONE soft check-back). Stored per user in
+  `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`). `confirmed` is a legacy
+  status kept valid for old entries.
 - **Handoff to the main agent:** the request is linked to `waiting_for_reply`. When the user replies in
   chat, `chat_step` loads the request, injects its `proposed_action` as context ("if they confirm, carry
-  it out now"), and advances the status — refusal → `declined`, agreement → `confirmed` → `done` once
-  handled. So the **main agent carries out** what the background agent proposed.
+  it out now") — so the **main agent still carries out** a clear "yes" immediately — and **captures** the
+  exchange: it records the user's reply (at pickup) and its own reply (at end-of-turn), moving the status
+  to `replied`. The main agent does NOT decide accepted-vs-declined here.
+- **Outcome classification (next run):** the background run that owns the question classifies each
+  `replied` request from the full triple {its question, the user's reply, the main agent's own reply
+  (capped)} via one small LLM call (`_classify_replied_requests` → `agent._generate_for_classification`):
+  `ACCEPTED` → `done` (+ any source note/todo marked handled), `DECLINED` → `declined` (+ the
+  declined-questions log), `UNCLEAR` → re-open to `asked` with `needs_reconfirm` so the follow-up node
+  asks ONE soft retrospective recap ("Hey, sorry — hatten wir das eigentlich gemacht?"). This LLM-based
+  decision replaces a former brittle keyword guess (substring match — "no" matched "noch"), which
+  silently mis-classified keyword-free declines as agreements.
   - **NOTE:** the WebUI message handler must NOT clear `waiting_for_reply` first — the main agent's
     `chat_step` needs it to build the reply context. (It was clearing it pre-emptively, which left the
     main agent with no context and an off-topic answer; observed 2026-06-22.)
@@ -59,7 +70,8 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   (e.g. `web_search`) rather than invent them.
 - **Don't re-ask:** every run injects the requests raised in the last `thinking_recent_request_runs`
   runs (default 6) with their status, so the agent does not repeat a question it already asked, follows
-  up on `confirmed` ones, and never re-proposes a `declined` one. This is also enforced at the gate
+  up on still-open ones, treats a `replied` one as awaiting classification (does not re-ask it), and
+  never re-proposes a `declined` one. This is also enforced at the gate
   level: `thinking_ledger.item_resolved(..., recent_runs=N)` treats an item with a request raised in the
   last N runs as handled-for-now, so the forced-resolution node does not re-ask it (and the completion
   gate does not block on it) while the user has not yet replied; it re-surfaces after the window.
@@ -316,13 +328,15 @@ Notes are stored in `thinking_notes.db` (SQLite, per-user isolated) and injected
 
 ## Declined questions
 
-When the user refuses a question the agent asked (replies with "Nein", "no", "nicht", etc.), the agent:
+When the next thinking run classifies a replied request as **DECLINED** (see *Outcome classification*
+above), it:
 - Records the question text + user reply in `thinking_declined_questions.json` (auto-expire 30 days, max 20 entries)
 - Injects a "DO NOT ask these again" section into the next run's system prompt
 
-A reply that *asks a question back* (e.g. "nein habe ich nicht, wie kommst du darauf?") is **not** treated as a refusal: `_is_refusal` skips any reply that contains an interrogative question, so a clarification or a dispute of the premise is handed to the main agent to answer rather than being silently logged as a decline and dropped.
-
-The actual sent question text is captured from the `send_telegram` / `send_whatsapp` / `send_discord` tool call arguments, not from a summary.
+This is no longer a keyword guess at reply time. A reply that asks a question back (e.g. "nein habe ich
+nicht, wie kommst du darauf?") is therefore never silently dropped as a decline: the LLM classifier weighs
+both the user's reply and the main agent's answer, and an outcome it cannot decide re-opens the request for
+one soft reconfirm instead of logging a refusal. The question text comes from the tracked request.
 
 ---
 
@@ -337,6 +351,13 @@ The actual sent question text is captured from the `send_telegram` / `send_whats
   - **Inactivity Protection:** No nudge is sent if the user was active on ANY channel within the last `thinking_nudge_activity_minutes` (default 5 min).
 - **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared
 - **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)` is called.
+- **Presence re-ask:** If a nudge was already sent (`nudge_sent_at_ts` set) and the user's reply is a
+  bare "I'm here" acknowledgement (`_is_presence_ack` — `ja`/`yes`/`da`/`bin wieder da`/👋, exact match
+  only), the reply is treated as a presence signal, NOT as the answer: `chat_step` re-arms the wait
+  (resets the nudge timer) and the main agent warmly **re-asks the original question**. A bare "ja" sent
+  straight to the question (no nudge yet), or any reply with real content (`ja mach das`, `nein!`), is
+  still handled as a normal answer. This stops a "yes" to "are you there?" from being mis-recorded as the
+  answer to the actual question.
 
 ### Automatic Cleanup ("Nudge Killer")
 
@@ -348,7 +369,8 @@ To ensure the background agent doesn't keep waiting (and nudging) while the user
 
 The reply is:
 - Injected as "User reply to your last question" in the next run's system prompt
-- If it is a refusal: saved to the declined questions log
+- Captured onto the tracked request (status → `replied`); the next run classifies the outcome, and a
+  `DECLINED` outcome is then saved to the declined-questions log
 
 ---
 
@@ -407,7 +429,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
 | `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
-| `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`confirmed`/`done`/`declined`) from `ask_user` or the `thinking_done(message=)` fallback. Fields incl. `proposed_action`, `details` (real content for the handoff), `source_note_id`/`source_todo_id` |
+| `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`replied`/`done`/`declined`; `confirmed` legacy) from `ask_user` or the `thinking_done(message=)` fallback. Fields incl. `proposed_action`, `details` (real content for the handoff), `source_note_id`/`source_todo_id`, `user_reply`/`main_reply` (the captured triple for outcome classification), `needs_reconfirm` |
 | `thinking_run_seq.json` | Per-user monotonic run counter (drives the "recently asked" window and the gate's "this run" boundary) |
 | `automation_planner/<scope>/notes.json` · `todos.json` | Per-user notes/todos — the Stufe-0 ledger source; a note is cleared by delete or `handled`, a todo by delete or `done` |
 | `workspaces/<scope_key>/` | Per-user Thinking Workspace (tasks, workspace files, handoffs, archives) |
@@ -425,10 +447,11 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | Loop & run | `vaf/core/thinking_mode.py` | `start_thinking_mode_background()`, `thinking_loop_iteration()`, `maybe_start_thinking_for_user()`, `_run_thinking_for_user()` |
 | Scope / key | `vaf/core/thinking_mode.py` | `_key()`, `get_idle_user_scope_ids()` |
 | Cooldown | `vaf/core/thinking_mode.py` | `_last_completed_path()`, `_set_last_run_completed()`, `_minutes_since_last_run()` |
-| Declined questions | `vaf/core/thinking_mode.py` | `_declined_path()`, `_save_declined_entry()`, `_is_refusal()`, `_get_declined_questions_prompt()` |
+| Declined questions | `vaf/core/thinking_mode.py` | `_declined_path()`, `_save_declined_entry()`, `_get_declined_questions_prompt()` |
+| Reply classification | `vaf/core/thinking_mode.py` | `_classify_replied_requests()`, `_classify_reply_outcome()`; `agent._generate_for_classification()` |
 | Waiting for reply | `vaf/core/thinking_mode.py` | `set_waiting_for_reply()`, `clear_waiting_for_reply()`, `get_waiting_for_reply()` |
 | Persistent notes | `vaf/core/thinking_notes.py` | `add_note()`, `get_notes()`, `build_notes_prompt()` |
-| Background requests | `vaf/core/thinking_requests.py` | `add_request()`, `update_request_status()`, `list_requests()`, `recent_requests_prompt()` |
+| Background requests | `vaf/core/thinking_requests.py` | `add_request()`, `record_reply()`, `reopen_for_reconfirm()`, `update_request_status()`, `list_requests()`, `recent_requests_prompt()` |
 | Run counter | `vaf/core/thinking_mode.py` | `next_run_seq()`, `current_run_seq()` |
 | Stufe-0 ledger & gate | `vaf/core/thinking_ledger.py` | `build_ledger()`, `item_resolved()`, `unresolved_items()`, `build_gate_nudge()` — the completion-gate logic (pure, unit-testable) |
 | Completion gate (loop) | `vaf/core/thinking_mode.py` | `_run_thinking_for_user()` outer loop — single-shot nudge before accepting `thinking_done` |

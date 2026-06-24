@@ -211,6 +211,20 @@ class Agent:
     # Defaults handled by Config, but fallback here
     DEFAULT_FILENAME = "VQ-1_Instruct-q4_k_m.gguf"
     
+    def _build_api_backend(self, provider):
+        """Construct an APIBackendManager, passing programmatic config overrides through.
+
+        When VAF is embedded as a library via Agent(config={...}), the api_key /
+        api_model from the override dict must reach the backend instead of being read
+        from ~/.vaf/config.json. The override api_key is RAW (never base64-decoded).
+        With no overrides (product mode) behaviour is byte-identical to before.
+        """
+        from vaf.core.api_backend import APIBackendManager
+        ov = getattr(self, "_config_overrides", None) or {}
+        api_key = ov.get(f"api_key_{provider}") if ov else None  # RAW, used as-is
+        cfg = self.config if ov else None                        # merged cfg only in embed mode
+        return APIBackendManager(provider, config=cfg, api_key=api_key)
+
     def __init__(self, verbose=False, register_signals=True, config_overrides=None):
         self.verbose = verbose
         self.config = Config.load()
@@ -220,6 +234,9 @@ class Agent:
         # Default None -> behaviour is byte-identical to before.
         if config_overrides:
             self.config = {**self.config, **config_overrides}
+        # Keep the raw overrides so the API backend can receive a programmatic
+        # api_key/api_model (RAW, not base64) when VAF is embedded as a library.
+        self._config_overrides = config_overrides or {}
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.models_dir = os.path.join(self.base_dir, "models")
         
@@ -262,8 +279,7 @@ class Agent:
         # Initialize API backend immediately if using API provider
         if self.provider != "local":
             try:
-                from vaf.core.api_backend import APIBackendManager
-                self.api_backend = APIBackendManager(self.provider)
+                self.api_backend = self._build_api_backend(self.provider)
             except Exception as e:
                 # If API backend fails, we'll fallback to local in load_model()
                 pass
@@ -2469,8 +2485,7 @@ class Agent:
         if self.provider != "local":
             UI.event("System", f"Initializing API Backend: {self.provider.upper()}...", style="warning")
             try:
-                from vaf.core.api_backend import APIBackendManager
-                self.api_backend = APIBackendManager(self.provider)
+                self.api_backend = self._build_api_backend(self.provider)
                 UI.event("Success", f"API Backend ready: {self.provider.upper()}", style="success")
                 
                 # Audit log
@@ -3700,6 +3715,51 @@ class Agent:
                 os.environ.pop("VAF_COMPACTION_IN_PROGRESS", None)
             else:
                 os.environ["VAF_COMPACTION_IN_PROGRESS"] = _prev_doc_ext_env
+        return (content or "").strip()
+
+    def _generate_for_classification(self, prompt: str) -> str:
+        """Single non-streaming, tiny LLM call used by the background thinking run to classify the
+        outcome of a proactive question (one word: ACCEPTED / DECLINED / UNCLEAR). Same provider routing
+        as _generate_for_document_extraction, deterministic. max_tokens has headroom because a reasoning
+        model (e.g. the background-pro DeepSeek) may emit <think> first; the caller scans the text for the
+        keyword, so trailing reasoning is harmless. Returns the raw text."""
+        temp_history = [{"role": "user", "content": prompt}]
+        content = ""
+        try:
+            if self.use_server:
+                import requests
+                payload = {
+                    "messages": temp_history,
+                    "max_tokens": 256,
+                    "temperature": 0.0,
+                    "stream": False,
+                }
+                res = requests.post(
+                    "http://127.0.0.1:8080/v1/chat/completions",
+                    json=payload,
+                    timeout=60,
+                ).json()
+                content = (res.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            elif self.api_backend:
+                chunks = list(
+                    self.api_backend.chat_completion(
+                        messages=temp_history,
+                        max_tokens=256,
+                        temperature=0.0,
+                        stream=False,
+                    )
+                )
+                content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+            elif self.llm:
+                output = self.llm.create_chat_completion(
+                    messages=temp_history,
+                    max_tokens=256,
+                    temperature=0.0,
+                )
+                content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Reply-classification LLM call failed: %s", e)
         return (content or "").strip()
 
     def manage_context(self):
@@ -5462,6 +5522,9 @@ class Agent:
         # Reset the thinking-reply context per turn so it persists across ALL generations of THIS turn
         # (set below from waiting_for_reply) but never leaks into the next turn.
         self._thinking_reply_context = None
+        # Set at reply pickup when the user answers a tracked background question; consumed once at the
+        # end-of-turn return to stash the main agent's own reply onto that request. Reset per turn here.
+        self._thinking_reply_pending = None
         
         try:
             append_domain_log("backend", "chat_step_start")
@@ -5470,78 +5533,87 @@ class Agent:
 
         self.context_manager.decay_state()
 
-        # 🔒 NUDGE KILLER & CONTEXT SYNC: Clear background waiting status on ANY user interaction
-        # Finalize a background request the PREVIOUS turn confirmed (it has now been handled) -> done.
-        _fin = getattr(self, "_thinking_request_to_finish", None)
-        if _fin:
-            try:
-                from vaf.core import thinking_requests as _treq
-                _treq.update_request_status(_fin[0], _fin[1], "done")
-            except Exception:
-                pass
-            self._thinking_request_to_finish = None
+        # 🔒 NUDGE KILLER & CONTEXT SYNC: Clear background waiting status on ANY user interaction.
         if user_input and not skip_input:
             try:
-                from vaf.core.thinking_mode import clear_waiting_for_reply, get_waiting_for_reply, _is_refusal
+                from vaf.core.thinking_mode import (
+                    clear_waiting_for_reply, get_waiting_for_reply, set_waiting_for_reply, _is_presence_ack,
+                )
                 _scope = getattr(self, "_current_user_scope_id", None)
 
                 # If we were waiting for a reply, store the original question as context so the Main
                 # Agent understands vague replies (e.g. "Yes, why?"). We do NOT modify user_input here —
                 # _prepare_messages() injects it as a system message the LLM sees but history never stores.
                 waiting = get_waiting_for_reply(_scope)
+                _presence_reentry = False
                 if waiting and (waiting.get("question_text") or "").strip():
                     q_text = waiting["question_text"].strip()
-                    # If this was a tracked background request (ask_user), let the Main Agent carry out
-                    # the proposal and advance its status: asked -> confirmed/declined (-> done next turn).
-                    _action = ""
                     _req_id = (waiting.get("request_id") or "").strip() or None
-                    if _req_id:
-                        try:
-                            from vaf.core import thinking_requests as _treq
-                            _req = _treq.get_request(_scope, _req_id)
-                            _action = (_req or {}).get("proposed_action") or ""
-                            if _is_refusal(user_input):
-                                _treq.update_request_status(_scope, _req_id, "declined")
-                            else:
-                                _treq.update_request_status(_scope, _req_id, "confirmed")
-                                self._thinking_request_to_finish = (_scope, _req_id)
-                                # Proposal stems from a note/todo -> mark it handled so it stops
-                                # re-surfacing in future background runs (the user agreed; it's handled).
-                                try:
-                                    from vaf.core import automation_planner as _ap
-                                    if (_req or {}).get("source_note_id"):
-                                        _ap.set_note_handled(_scope, _req["source_note_id"], True)
-                                    if (_req or {}).get("source_todo_id"):
-                                        _ap.update_todo(_scope, _req["source_todo_id"], done=True)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
-                    # Concrete content the background run gathered behind a teaser message (e.g. the actual
-                    # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
-                    # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
-                    # main agent invented incoherent cooling tips because the content was never passed).
-                    _details = (_req or {}).get("details") or ""
-                    if _details:
-                        _facts = (f" The concrete information behind that message — use THIS to answer their "
-                                  f"reply, do not invent new facts: {_details}.")
+                    if waiting.get("nudge_sent_at_ts") and _is_presence_ack(user_input):
+                        # The user replied to a PRESENCE nudge ("are you there?"), not the question itself.
+                        # Do NOT record it as the answer: re-arm the wait (resets the nudge timer) and have
+                        # the agent warmly RE-ASK its original question. The next real reply is captured
+                        # normally. This only triggers AFTER a nudge was sent — a bare "ja" straight to the
+                        # question (no nudge yet) is still handled as a normal answer below.
+                        _presence_reentry = True
+                        set_waiting_for_reply(
+                            _scope,
+                            username=waiting.get("username") or "admin",
+                            display_name=waiting.get("display_name") or waiting.get("username") or "admin",
+                            question_text=q_text,
+                            request_id=_req_id or None,
+                        )
+                        self._thinking_reply_context = (
+                            f"[Context: You earlier asked the user a background question and then sent a "
+                            f"presence nudge ('are you there?'). Their message below only signals they are "
+                            f"back — it is NOT an answer to your question. Warmly welcome them back and "
+                            f"RE-ASK your question in ONE short, friendly line: \"{q_text}\". Do not treat "
+                            f"their message as the answer, and do not start a new topic.]"
+                        )
                     else:
-                        _facts = (" You do not have the specifics on hand; if the user asks for details, look "
-                                  "them up (e.g. web_search) — do NOT make up facts.")
-                    self._thinking_reply_context = (
-                        f"[Context: The user's message below is a REPLY to a question YOUR background pass "
-                        f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
-                        f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
-                        f"are unrelated to this reply and must not be treated as the topic. The user's reply "
-                        f"follows immediately after this system note.]"
-                    )
+                        # If this was a tracked background request (ask_user): do NOT keyword-classify the
+                        # reply here. Capture it (status -> 'replied') and let the NEXT thinking run classify
+                        # the outcome from the full triple {question, user reply, the main agent's own reply}.
+                        # The main agent still ACTS immediately on a clear yes via _carry below — only the
+                        # accepted-vs-declined bookkeeping is deferred to the run that owns the question.
+                        _action = ""
+                        _req = None
+                        if _req_id:
+                            try:
+                                from vaf.core import thinking_requests as _treq
+                                _req = _treq.get_request(_scope, _req_id)
+                                _action = (_req or {}).get("proposed_action") or ""
+                                _treq.record_reply(_scope, _req_id, user_reply=user_input)
+                                self._thinking_reply_pending = {"scope": _scope, "request_id": _req_id}
+                            except Exception:
+                                pass
+                        _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
+                        # Concrete content the background run gathered behind a teaser message (e.g. the actual
+                        # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
+                        # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
+                        # main agent invented incoherent cooling tips because the content was never passed).
+                        _details = (_req or {}).get("details") or ""
+                        if _details:
+                            _facts = (f" The concrete information behind that message — use THIS to answer their "
+                                      f"reply, do not invent new facts: {_details}.")
+                        else:
+                            _facts = (" You do not have the specifics on hand; if the user asks for details, look "
+                                      "them up (e.g. web_search) — do NOT make up facts.")
+                        self._thinking_reply_context = (
+                            f"[Context: The user's message below is a REPLY to a question YOUR background pass "
+                            f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
+                            f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
+                            f"are unrelated to this reply and must not be treated as the topic. The user's reply "
+                            f"follows immediately after this system note.]"
+                        )
                 else:
                     self._thinking_reply_context = None
 
-                # If we're interacting, we're definitely not waiting anymore
-                # Pass the input text so it gets saved for the NEXT thinking run summary
-                clear_waiting_for_reply(_scope, user_reply_text=user_input)
+                # If we're interacting, we're definitely not waiting anymore — UNLESS we just re-armed the
+                # wait for a presence re-entry (then keep it open so the user's REAL answer is captured).
+                # Pass the input text so it gets saved for the NEXT thinking run summary.
+                if not _presence_reentry:
+                    clear_waiting_for_reply(_scope, user_reply_text=user_input)
             except Exception:
                 pass
 
@@ -8244,6 +8316,22 @@ class Agent:
                 append_domain_log("backend", f"after_history_append content_len={len(history_content)}")
             except Exception:
                 pass
+
+            # If this turn answered a tracked background question, stash the main agent's OWN reply onto
+            # the request RIGHT HERE — the moment the final answer is committed to history. This runs for
+            # every completed answer, BEFORE the pending-task auto-continue recursion below (whose nested
+            # chat_step resets the flag) and BEFORE the early returns. Capturing at the final `return`
+            # missed all of those paths, so main_reply was never written and the next run only ever saw
+            # half the triple. Consume + clear immediately so a continuation append cannot re-capture.
+            _pending = getattr(self, "_thinking_reply_pending", None)
+            if _pending:
+                try:
+                    from vaf.core import thinking_requests as _treq
+                    _mr = (self._clean_reasoning(history_content) or "").strip()
+                    _treq.record_reply(_pending["scope"], _pending["request_id"], main_reply=_mr[:150])
+                except Exception:
+                    pass
+                self._thinking_reply_pending = None
 
             # NOTE: Language mismatch auto-retry is currently disabled.
             # To re-enable, uncomment the block below.

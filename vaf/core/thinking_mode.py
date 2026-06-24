@@ -226,29 +226,6 @@ def _save_declined_entry(user_scope_id: Optional[str], question: str, user_reply
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _is_refusal(text: str) -> bool:
-    """Return True if the user's reply is a clear refusal/decline.
-
-    A reply that asks a question back — e.g. "nein habe ich nicht, wie kommst du darauf?" — is a
-    CLARIFICATION or a dispute of the premise, NOT a decline. The old crude substring match flagged it
-    as a refusal (it contains "nein"/"nicht") and the tracked request was silently dropped to 'declined',
-    so the main agent never properly answered. An interrogative question is therefore never a refusal."""
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    # Clarification/dispute guard: a question back is not a decline.
-    _question_words = ("wie", "was", "warum", "wieso", "weshalb", "woher", "wozu", "welche",
-                       "how", "why", "what", "where", "huh")
-    if "?" in t and any(w in t for w in _question_words):
-        return False
-    refusal_keywords = [
-        "nein", "no", "nicht", "erstmal nicht", "later", "stop",
-        "lass", "hör auf", "aufhören", "nie", "never", "don't",
-        "kein", "bitte nicht", "ich will nicht", "brauch ich nicht",
-    ]
-    return any(kw in t for kw in refusal_keywords)
-
-
 def _get_declined_questions_prompt(user_scope_id: Optional[str]) -> str:
     """Build prompt section listing declined questions so the agent knows not to ask them again."""
     entries = _load_declined(user_scope_id)
@@ -293,6 +270,24 @@ def _save_waiting(data: Dict[str, dict]) -> None:
     path = _waiting_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _is_presence_ack(text: str) -> bool:
+    """True only for a BARE 'I'm here' style reply to a presence nudge ('are you there?') — e.g. 'ja',
+    'yes', 'da', 'bin wieder da', a wave emoji. Used ONLY (and only after a nudge was actually sent) to
+    decide whether to re-ask the real question instead of mis-recording this as its answer. Deliberately
+    narrow via exact match: anything with real content ('ja mach das', 'nein!', 'für was?') is NOT a bare
+    ack and is handled as a normal answer. This is NOT the accepted/declined classifier (that is the
+    next-run LLM step) — just a 'did the user only signal they are back?' gate."""
+    t = (text or "").strip().lower().strip(" .!?…")
+    if not t or len(t) > 16:
+        return False
+    acks = {
+        "ja", "jo", "joa", "jap", "jup", "jep", "yes", "yep", "yup", "yo", "yeah", "jaa", "jaaa",
+        "hier", "da", "bin da", "bin wieder da", "wieder da", "bin zurück", "zurück",
+        "back", "i'm back", "im back", "here", "present", "anwesend", "👋", "👍", "🙋",
+    }
+    return t in acks
 
 
 def set_waiting_for_reply(
@@ -363,17 +358,10 @@ def clear_waiting_for_reply(
             replies = _load_user_replies()
             replies[last_sid] = {"reply": preview, "at": datetime.now().isoformat()}
             _save_user_replies(replies)
-        # If user declined, save the actual sent question + reply to declined-questions log
-        if _is_refusal(preview):
-            # Get the real question text from the waiting state (before we clear it)
-            waiting_data = _load_waiting()
-            waiting_entry = waiting_data.get(key) or {}
-            actual_question = (waiting_entry.get("question_text") or "").strip()
-            if not actual_question:
-                # Fallback: use last assistant summary if question_text wasn't stored
-                actual_question = _get_last_thinking_summary(user_scope_id, max_chars=500)
-            if actual_question:
-                _save_declined_entry(user_scope_id, actual_question, preview)
+        # NOTE: the decline decision (and the declined-questions dedup log) is no longer made here by a
+        # keyword guess. The reply is captured onto the tracked request (status 'replied'); the NEXT
+        # thinking run classifies the outcome from the full triple and writes the declined-log on DECLINED
+        # (see _classify_replied_requests).
     data = _load_waiting()
     if key in data:
         del data[key]
@@ -559,7 +547,7 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) 
                     sm.save(_sess)
                 except Exception:
                     pass
-                wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant")
+                wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant", kind="nudge")
                 wi.emit_session_unread(sid)
                 logger.info("Thinking nudge sent via Web UI session %s", sid)
                 return True
@@ -1163,7 +1151,7 @@ def emit_message_to_web_ui(user_scope_id: Optional[str], content: str) -> Option
             sm.save(_sess)
         except Exception:
             pass
-        wi.emit_agent_message_append(content=content, session_id=sid, role="assistant")
+        wi.emit_agent_message_append(content=content, session_id=sid, role="assistant", kind="thinking")
         wi.emit_session_unread(sid)
         logger.info("Thinking Mode: ask_user message emitted to Web UI session %s", sid)
         return sid
@@ -1673,9 +1661,21 @@ _PROMPT_NOTHING_TODO = (
 )
 
 
-def _build_followup_prompt(question: str) -> str:
-    """Re-ask the SAME open (unanswered) question, more pointed — instead of proposing a new topic."""
+def _build_followup_prompt(question: str, reconfirm: bool = False) -> str:
+    """Re-ask the SAME open question instead of proposing a new topic. Normally a pointed yes/no
+    follow-up (the user has not replied yet). When `reconfirm` is True the user DID reply once but
+    ambiguously and the run could not tell whether it got done, so ask a SOFT, retrospective check-back
+    (a recap) rather than a fresh pitch."""
     q = (question or "").strip().replace("\n", " ")[:300]
+    if reconfirm:
+        return (
+            "Earlier you asked the user about the thing below, and they DID reply — but it was ambiguous "
+            "and you could not tell whether this ended up happening:\n"
+            f"  \"{q}\"\n"
+            "Do NOT pitch it again from scratch. Ask ONE casual, friendly check-back, phrased as a RECAP in "
+            "the user's language — e.g. 'Hey, sorry — hatten wir das eigentlich gemacht/eingerichtet?'. "
+            "Emit EXACTLY ONE tool call: ask_user(message=\"<the check-back>\"). No other tools, no prose."
+        )
     return (
         "You earlier reached out to the user with the question below, and they have NOT replied yet:\n"
         f"  \"{q}\"\n"
@@ -1781,8 +1781,116 @@ def _extract_run_summary(agent_history: List[Dict[str, Any]]) -> str:
     
     if not summary_parts:
         return "No actionable items found."
-        
+
     return " | ".join(summary_parts)
+
+
+_PROMPT_CLASSIFY_REPLY = (
+    "A background suggestion was made to a user, and the user replied. Decide the OUTCOME.\n\n"
+    "Your question: \"{question}\"\n"
+    "Proposed action: \"{action}\"\n"
+    "The user replied: \"{user_reply}\"\n"
+    "The assistant then said to the user: \"{main_reply}\"\n\n"
+    "Use BOTH messages — the assistant's reply may reveal it already CARRIED OUT or DROPPED the task. "
+    "Answer with ONE word only:\n"
+    "ACCEPTED — the user agreed, or the task was taken over / already done.\n"
+    "DECLINED — the user said no, not now, or refused. A reply that clearly refuses (e.g. 'nein', 'no', "
+    "'nope', 'kein Bedarf', 'brauch ich nicht') is DECLINED even if it also asks a question (e.g. "
+    "'für was? nein!').\n"
+    "UNCLEAR — ONLY if neither message lets you tell; do not pick this just because the reply is short.\n"
+    "Answer:"
+)
+
+
+def _classify_reply_outcome(
+    agent: Any, question: str, action: str, user_reply: str, main_reply: str
+) -> Optional[str]:
+    """One isolated LLM call classifying a replied proactive request as ACCEPTED / DECLINED / UNCLEAR.
+    Lenient parse: the first decisive keyword found in the model's text wins (a reasoning model may emit
+    <think> first, or punctuate). Returns 'UNCLEAR' on an undecidable/empty answer, or None if the LLM
+    call itself FAILED — so the caller can leave the request 'replied' and retry on a later run rather
+    than prompting the user a reconfirm over a transient outage."""
+    prompt = _PROMPT_CLASSIFY_REPLY.format(
+        question=(question or "")[:500],
+        action=(action or "(none)")[:300],
+        user_reply=(user_reply or "")[:500],
+        main_reply=(main_reply or "(the assistant did not reply)")[:300],
+    )
+    try:
+        raw = agent._generate_for_classification(prompt) or ""
+    except Exception:
+        return None
+    up = raw.upper()
+    positions = {k: up.find(k) for k in ("ACCEPTED", "DECLINED", "UNCLEAR") if k in up}
+    if not positions:
+        return "UNCLEAR"
+    return min(positions, key=positions.get)
+
+
+def _classify_replied_requests(agent: Any, user_scope_id: Optional[str]) -> None:
+    """At the start of a run, classify any proactive questions the user has answered since the last run
+    (status 'replied') from the triple {question, user reply, the main agent's own reply}:
+      ACCEPTED -> 'done' (+ mark any source note/todo handled, since the user agreed),
+      DECLINED -> 'declined' (+ the declined-questions dedup log),
+      UNCLEAR  -> re-open to 'asked' with needs_reconfirm so the follow-up node asks ONE soft
+                  retrospective check-back next.
+    On any error the request stays 'replied' and is retried next run. This LLM-based step replaces the
+    old brittle `_is_refusal` keyword classifier; it owns the accepted-vs-declined decision."""
+    try:
+        from vaf.core import thinking_requests as _treq
+    except Exception:
+        return
+    try:
+        replied = _treq.list_requests(user_scope_id, status="replied")
+    except Exception:
+        return
+    for req in replied[:5]:  # newest first; cap the per-run burst (any stragglers resolve next run)
+        rid = req.get("id")
+        if not rid or not (req.get("user_reply") or "").strip():
+            continue  # nothing captured to classify yet
+        outcome = _classify_reply_outcome(
+            agent,
+            req.get("question") or "",
+            req.get("proposed_action") or "",
+            req.get("user_reply") or "",
+            req.get("main_reply") or "",
+        )
+        if outcome is None:
+            logger.info("Thinking reply-classify: request %s — LLM call failed, leaving 'replied'", rid)
+            continue  # the LLM call failed -> leave status 'replied', retry on a later run
+        logger.info(
+            "Thinking reply-classify: request %s -> %s | user_reply=%r main_reply=%r",
+            rid, outcome, (req.get("user_reply") or "")[:80], (req.get("main_reply") or "")[:80],
+        )
+        try:
+            if outcome == "ACCEPTED":
+                _treq.update_request_status(user_scope_id, rid, "done")
+                try:
+                    from vaf.core import automation_planner as _ap
+                    if (req.get("source_note_id") or "").strip():
+                        _ap.set_note_handled(user_scope_id, req["source_note_id"], True)
+                    if (req.get("source_todo_id") or "").strip():
+                        _ap.update_todo(user_scope_id, req["source_todo_id"], done=True)
+                except Exception:
+                    pass
+            elif outcome == "DECLINED":
+                _treq.update_request_status(user_scope_id, rid, "declined")
+                try:
+                    _save_declined_entry(user_scope_id, req.get("question") or "", req.get("user_reply") or "")
+                except Exception:
+                    pass
+            elif req.get("reconfirmed"):
+                # Already reconfirmed once and STILL undecidable -> stop pestering. Resolve to declined:
+                # never auto-act on a proposal the user did not clearly accept; they can raise it again.
+                _treq.update_request_status(user_scope_id, rid, "declined")
+                try:
+                    _save_declined_entry(user_scope_id, req.get("question") or "", req.get("user_reply") or "")
+                except Exception:
+                    pass
+            else:  # UNCLEAR (first time) -> ONE soft retrospective reconfirm next run
+                _treq.reopen_for_reconfirm(user_scope_id, rid)
+        except Exception:
+            continue  # leave status 'replied' -> retried next run
 
 
 def _run_thinking_for_user(
@@ -2051,6 +2159,15 @@ def _run_thinking_for_user(
             _no_progress_turns = 0      # consecutive turns with no decisive (act/ask/clear) tool
             _force_decision_pending = False
 
+            # Classify any proactive questions the user answered since the last run (status 'replied'),
+            # using the full triple {question, user reply, the main agent's own reply}. ACCEPTED -> done,
+            # DECLINED -> declined, UNCLEAR -> re-open for a soft reconfirm. Runs BEFORE the open-follow-up
+            # lookup below so a reconfirm-reopened request becomes this run's follow-up question.
+            try:
+                _classify_replied_requests(agent, user_scope_id)
+            except Exception:
+                pass
+
             # Proactive (Stufe 2): seed the evidence pool with this run's real retrieved memory + recent
             # user history, so a proactive suggestion can be verified as grounded (not fabricated). The
             # agent's memory_search calls add to the pool live (see agent.chat_step). Phase off by default.
@@ -2125,10 +2242,15 @@ def _run_thinking_for_user(
                     # prompts injected into the persistent system message; frequency by cooldown + quiet hours.)
                     prompt = _PROMPT_NOTHING_TODO
                 elif _open_followup is not None and _followup_action == "ask":
-                    # FOLLOW-UP: a previous proactive question is still unanswered -> re-ask THAT one (pointed,
-                    # yes/no) instead of proposing a new topic. The delivery bumps the original request's
-                    # follow-up counter (set_followup_context) rather than creating a duplicate.
-                    prompt = _build_followup_prompt(_open_followup.get("question") or "")
+                    # FOLLOW-UP: a previous proactive question is still open -> re-ask THAT one instead of a
+                    # new topic. Normally a pointed yes/no; if it was re-opened for reconfirm (the user
+                    # replied ambiguously and we could not tell if it got done), a SOFT retrospective recap.
+                    # The delivery bumps the original request's follow-up counter (set_followup_context)
+                    # rather than creating a duplicate.
+                    prompt = _build_followup_prompt(
+                        _open_followup.get("question") or "",
+                        reconfirm=bool(_open_followup.get("needs_reconfirm")),
+                    )
                     _force_tc = "required"
                     set_proactive_mode(user_scope_id, "open")
                     set_followup_context(user_scope_id, _open_followup.get("id"))

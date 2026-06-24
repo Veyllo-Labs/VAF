@@ -459,13 +459,25 @@
 @keyframes pktDrop { 0%{transform:translateY(-52px);opacity:0;} 15%{opacity:1;} 80%{opacity:1;} 100%{transform:translateY(0);opacity:0;} }
 @keyframes pktRise { 0%{transform:translateY(0);opacity:0;} 15%{opacity:1;} 80%{opacity:1;} 100%{transform:translateY(-52px);opacity:0;} }
 
-/* memory_save / recall — recall dots brighten (opacity only = leak-safe) */
+/* memory_save / recall — orbs surface: pop+overshoot, settle bounce, rise & fade; agent looks up eagerly.
+   Glow is STATIC (rasterized once); keyframes touch only opacity/transform = leak-safe. */
 .tsc.remembering .ag { left:76px; top:78px; } .tsc.remembering .bd { animation:bRemember 3s ease-in-out infinite; } .tsc.remembering .ey { animation:eRemember 3s ease-in-out infinite; }
-.tsc.remembering .mem { position:absolute; width:6px; height:6px; border-radius:50%; background:var(--ink); opacity:.2; }
-.tsc.remembering .mem.m1 { left:80px; top:42px; animation:iMemO 2.4s ease-in-out infinite; } .tsc.remembering .mem.m2 { left:96px; top:32px; animation:iMemO 2.4s ease-in-out infinite .4s; } .tsc.remembering .mem.m3 { left:112px; top:34px; animation:iMemO 2.4s ease-in-out infinite .8s; } .tsc.remembering .mem.m4 { left:124px; top:48px; animation:iMemO 2.4s ease-in-out infinite 1.2s; }
-@keyframes bRemember { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-1px);} }
-@keyframes eRemember { 0%,100%{transform:translate(0,-2px);} 50%{transform:translate(-1px,-3px);} }
-@keyframes iMemO { 0%,100%{opacity:.2;} 30%{opacity:1;} }
+.tsc.remembering .mem { position:absolute; border-radius:50%; background:var(--ink); box-shadow:0 0 5px 1px var(--glow); opacity:0; transform-origin:center; will-change:transform,opacity; }
+.tsc.remembering .mem.m1 { left:78px; top:46px; width:6px; height:6px; animation:iMem 2.8s ease-in-out infinite; }
+.tsc.remembering .mem.m2 { left:94px; top:34px; width:5px; height:5px; animation:iMem 2.8s ease-in-out infinite .45s; }
+.tsc.remembering .mem.m3 { left:112px; top:30px; width:6.5px; height:6.5px; animation:iMem 2.8s ease-in-out infinite .9s; }
+.tsc.remembering .mem.m4 { left:128px; top:38px; width:4.5px; height:4.5px; animation:iMem 2.8s ease-in-out infinite 1.35s; }
+.tsc.remembering .mem.m5 { left:118px; top:50px; width:5px; height:5px; animation:iMem 2.8s ease-in-out infinite 1.8s; }
+@keyframes bRemember { 0%,100%{transform:rotate(0) translateY(0);} 28%{transform:rotate(-4deg) translateY(-1px);} 62%{transform:rotate(3deg) translateY(0);} }
+@keyframes eRemember { 0%,100%{transform:translate(0,-2px) scale(1);} 22%{transform:translate(-2px,-4px) scale(1.1);} 55%{transform:translate(2px,-4px) scale(1.1);} 80%{transform:translate(1px,-3px) scale(1);} }
+@keyframes iMem {
+  0%   { opacity:0; transform:translateY(5px) scale(0); }
+  16%  { opacity:1; transform:translateY(1px) scale(1.4); }
+  28%  { transform:translateY(-1px) scale(.88); }
+  40%  { transform:translateY(-2px) scale(1.06); }
+  58%  { opacity:1; transform:translateY(-4px) scale(1); }
+  100% { opacity:0; transform:translateY(-11px) scale(.55); }
+}
 
 /* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
    OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */

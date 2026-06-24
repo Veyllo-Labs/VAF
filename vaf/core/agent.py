@@ -5562,6 +5562,7 @@ class Agent:
                             display_name=waiting.get("display_name") or waiting.get("username") or "admin",
                             question_text=q_text,
                             request_id=_req_id or None,
+                            session_id=waiting.get("session_id"),
                         )
                         self._thinking_reply_context = (
                             f"[Context: You earlier asked the user a background question and then sent a "

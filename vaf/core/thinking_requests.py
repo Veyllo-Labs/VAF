@@ -73,12 +73,15 @@ def add_request(
     source_note_id: Optional[str] = None,
     source_todo_id: Optional[str] = None,
     details: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """Record a new 'asked' request. source_note_id / source_todo_id link the request to the
     automation note/todo it came from, so that note/todo can be marked handled once the user
     confirms (and stops re-surfacing). `details` carries the concrete information behind a teaser
     message (e.g. the actual list of tips the run found) so the main agent can answer a follow-up with
-    the REAL facts instead of re-deriving them. Returns the created entry (with id)."""
+    the REAL facts instead of re-deriving them. `session_id` is the web session the question was
+    delivered to (the anchor), so a follow-up on a later run re-uses it instead of re-picking 'latest'.
+    Returns the created entry (with id)."""
     path = _path(user_scope_id)
     items = _load(path)
     entry = {
@@ -92,6 +95,7 @@ def add_request(
         "thinking_run_id": (thinking_run_id or "").strip() or None,
         "source_note_id": (source_note_id or "").strip() or None,
         "source_todo_id": (source_todo_id or "").strip() or None,
+        "session_id": (session_id or "").strip() or None,
         "user_reply": None,
         "main_reply": None,
         "needs_reconfirm": False,
@@ -175,6 +179,23 @@ def reopen_for_reconfirm(user_scope_id: Optional[str], request_id: str) -> Optio
             e["status"] = "asked"
             e["needs_reconfirm"] = True
             e["reconfirmed"] = True
+            e["updated_at"] = _now()
+            updated = e
+            break
+    if updated is not None:
+        _save(path, items)
+    return updated
+
+
+def set_request_session(user_scope_id: Optional[str], request_id: str, session_id: Optional[str]) -> Optional[dict]:
+    """Pin a request to the web session its question was delivered to (the anchor), so the nudge and a
+    later follow-up re-use it instead of re-picking the 'latest' session. Returns the updated entry or None."""
+    path = _path(user_scope_id)
+    items = _load(path)
+    updated = None
+    for e in items:
+        if isinstance(e, dict) and e.get("id") == request_id:
+            e["session_id"] = (session_id or "").strip() or None
             e["updated_at"] = _now()
             updated = e
             break

@@ -76,7 +76,7 @@ def test_proactive_prompt_allows_one_self_search():
 def test_proactive_gate_drops_ungrounded_keeps_grounded(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "u-pg"
     tm.clear_run_evidence(scope)
     tm.set_run_evidence(scope, "[Source 1] User asks for the Berlin weather most mornings around 7am.")
@@ -99,7 +99,7 @@ def test_proactive_gate_exempts_housekeeping(monkeypatch, tmp_path):
     """A delivery carrying a source_note_id/source_todo_id is housekeeping -> NOT evidence-gated."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "u-hk"
     tm.set_proactive_mode(scope, "grounded")
     tm.set_run_evidence(scope, "")   # even in grounded mode with NO evidence
@@ -112,7 +112,7 @@ def test_free_message_blocked_in_off_mode(monkeypatch, tmp_path):
     the turn-0 'no tasks, I'm ready when you need me' floskel that slipped through before."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "u-np"
     tm.set_proactive_mode(scope, "off")
     assert tm.deliver_tracked_message(scope, "Alles klar, ich bin bereit wenn du was brauchst", details="") is None
@@ -132,7 +132,7 @@ def test_get_to_know_question_delivers_in_open_mode(monkeypatch, tmp_path):
     (a question states no fact, so it cannot fabricate)."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "u-gtk"
     tm.set_proactive_mode(scope, "open")
     tm.set_run_evidence(scope, "")
@@ -148,7 +148,7 @@ def test_no_double_send_within_one_run(monkeypatch, tmp_path):
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
     sent = []
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
-                        lambda scope, content: (sent.append(content), "sid-1")[1])
+                        lambda scope, content, session_id=None: (sent.append(content), "sid-1")[1])
     scope = "u-dbl2"
     tm.set_proactive_mode(scope, "open")
     a = tm.deliver_tracked_message(scope, "Was beschäftigt dich gerade?")
@@ -178,7 +178,7 @@ def test_grounded_via_message_when_details_empty(monkeypatch, tmp_path):
     model often puts the quote in the user-facing message and forgets details. (local provider -> bar 24)"""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: "sid")
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid")
     _force_provider(monkeypatch, "local")
     scope = "u-msg"
     tm.clear_run_evidence(scope)
@@ -197,7 +197,7 @@ def test_api_provider_uses_lenient_bar(monkeypatch, tmp_path):
     bar (24) would drop is delivered."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: "sid")
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid")
     _force_provider(monkeypatch, "openai")
     scope = "u-api"
     tm.clear_run_evidence(scope)
@@ -213,7 +213,7 @@ def test_ask_user_off_mode_feedback_no_retry(monkeypatch, tmp_path):
     (not the misleading 'quote in details' that made the model churn)."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     from vaf.tools.ask_user import AskUserTool
     scope = "u-off"
     tm.set_proactive_mode(scope, "off")

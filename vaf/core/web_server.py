@@ -2506,6 +2506,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if role == "assistant":
                     content = clean_history_text(content)
                 entry = {"role": role, "content": content, "timestamp": timestamp}
+                _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
+                if _kind:
+                    entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
                 if role == "user" and meta and meta.get("images"):
                     entry["images"] = [
                         {
@@ -2664,6 +2667,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             if role == "assistant":
                                 content = clean_history_text(content)
                             entry = {"role": role, "content": content, "timestamp": timestamp}
+                            _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
+                            if _kind:
+                                entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
                             if role == "tool":
                                 # Try metadata dict first, then fall back to top-level keys
                                 # (backend stores tool info as top-level: name, tool_call_id)

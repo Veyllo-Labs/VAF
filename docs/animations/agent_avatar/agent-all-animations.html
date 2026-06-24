@@ -230,9 +230,12 @@
   @keyframes blink { 0%,46%{opacity:1;} 50%,96%{opacity:0;} 100%{opacity:1;} }
   @keyframes ringExpand { 0%{transform:scale(.3);opacity:0;} 30%{opacity:.55;} 100%{transform:scale(1.7);opacity:0;} }
   @keyframes iPulse { 0%,100%{opacity:.6;transform:scale(1);} 50%{opacity:1;transform:scale(1.12);} }
-  @keyframes bSearch { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(0);} }
-  @keyframes eSearch { 0%,100%{transform:translate(0,0);} 15%{transform:translate(2px,-1px);} 50%{transform:translate(3px,2px);} 85%{transform:translate(2px,-1px);} }
-  @keyframes iLens { 0%{transform:translate(0,0);} 25%{transform:translate(38px,2px);} 50%{transform:translate(8px,22px);} 75%{transform:translate(44px,24px);} 100%{transform:translate(0,0);} }
+  @keyframes bSearch { 0%,100%{transform:rotate(3deg) scale(1,1);} 30%{transform:rotate(-2deg) scale(1.05,.95);} 65%{transform:rotate(1deg) scale(.98,1.03);} }
+  @keyframes eSearch { 0%,100%{transform:translate(1px,0) scale(1);} 22%{transform:translate(4px,-2px) scale(1.12);} 55%{transform:translate(2px,3px) scale(1);} 80%{transform:translate(4px,0) scale(1.08);} }
+  @keyframes iLens { 0%{transform:translate(0,0) scale(1,1);} 18%{transform:translate(38px,3px) scale(1.16,.84);} 26%{transform:translate(35px,2px) scale(.93,1.09);} 31%{transform:translate(36px,3px) scale(1,1);} 49%{transform:translate(8px,24px) scale(1.16,.84);} 57%{transform:translate(10px,22px) scale(.95,1.07);} 73%{transform:translate(44px,23px) scale(1.1,.9);} 81%{transform:translate(44px,22px) scale(1.24,1.24);} 89%{transform:translate(44px,22px) scale(1,1);} 100%{transform:translate(0,0) scale(1,1);} }
+  @keyframes iGlint { 0%,73%{opacity:0;transform:scale(0);} 81%{opacity:1;transform:scale(1.5);} 91%{opacity:0;transform:scale(.6);} 100%{opacity:0;transform:scale(0);} }
+  @keyframes iPart { 0%,100%{opacity:0;transform:translateY(3px) scale(.5);} 45%{opacity:.5;transform:translateY(-4px) scale(1);} }
+  @keyframes iPartDark { 0%,100%{opacity:0;transform:translateY(3px) scale(.5);} 45%{opacity:.85;transform:translateY(-4px) scale(1);} }
   @keyframes bWrite { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-.5px);} }
   @keyframes eWrite { 0%,100%{transform:translate(0,0);} 15%{transform:translate(2px,1px);} 35%{transform:translate(3px,1px);} 60%{transform:translate(1px,1px);} 85%{transform:translate(2px,1px);} }
   @keyframes iType { 0%{width:0;} 70%{width:48px;} 100%{width:48px;} }
@@ -281,9 +284,9 @@
   @keyframes bLearn { 0%,100%{transform:scale(1,1);} 88%{transform:scale(1.08,.92);} 94%{transform:scale(.97,1.05);} }
   @keyframes eLearn { 0%,100%{transform:scale(1);} 50%{transform:scale(1.05);} 90%{transform:scale(1.1);} }
   @keyframes iAbsorb { 0%{transform:translate(var(--dx),var(--dy)) scale(1);opacity:0;} 20%{opacity:1;} 100%{transform:translate(0,0) scale(.3);opacity:0;} }
-  @keyframes bRemember { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-1px);} }
-  @keyframes eRemember { 0%,100%{transform:translate(0,0);} 18%{transform:translate(0,-3px);} 50%{transform:translate(-2px,-4px);} 82%{transform:translate(0,-3px);} }
-  @keyframes iMem { 0%,100%{opacity:.2;box-shadow:none;} 30%{opacity:1;box-shadow:0 0 6px 1px var(--glow);} }
+  @keyframes bRemember { 0%,100%{transform:rotate(0) translateY(0);} 28%{transform:rotate(-4deg) translateY(-1px);} 62%{transform:rotate(3deg) translateY(0);} }
+  @keyframes eRemember { 0%,100%{transform:translate(0,-2px) scale(1);} 22%{transform:translate(-2px,-4px) scale(1.1);} 55%{transform:translate(2px,-4px) scale(1.1);} 80%{transform:translate(1px,-3px) scale(1);} }
+  @keyframes iMem { 0%{opacity:0;transform:translateY(5px) scale(0);} 16%{opacity:1;transform:translateY(1px) scale(1.4);} 28%{transform:translateY(-1px) scale(.88);} 40%{transform:translateY(-2px) scale(1.06);} 58%{opacity:1;transform:translateY(-4px) scale(1);} 100%{opacity:0;transform:translateY(-11px) scale(.55);} }
   @keyframes bPlan { 0%,100%{transform:rotate(1deg);} 50%{transform:rotate(0);} }
   @keyframes ePlan { 0%,100%{transform:translate(0,0);} 18%{transform:translate(1px,0);} 60%{transform:translate(4px,0);} 85%{transform:translate(1px,0);} }
   /* Plan steps are driven by JS (see the script near the end) to match the app exactly: the active box
@@ -350,10 +353,17 @@
   .scene.nap .z1 { font-size:9px; animation: awayZzz 3.3s ease-out infinite; } .scene.nap .z2 { font-size:12px; animation: awayZzz 3.3s ease-out infinite 1.1s; } .scene.nap .z3 { font-size:15px; animation: awayZzz 3.3s ease-out infinite 2.2s; }
 
   /* ---- AKTIVITAET: pro Zustand ---- */
-  .scene.search .agent { left:24px; top:58px; } .scene.search .body { animation: bSearch 3.2s ease-in-out infinite; } .scene.search .eye { animation: eSearch 2.4s ease-in-out infinite; }
-  .scene.search .doc { position:absolute; left:92px; top:50px; width:72px; height:60px; border-radius:4px; border:1px solid var(--paper-edge); background:repeating-linear-gradient(0deg,rgba(40,48,66,.5) 0 1.5px,transparent 1.5px 8px),var(--paper); }
-  .scene.search .lens { position:absolute; left:96px; top:54px; width:18px; height:18px; border-radius:50%; border:2px solid var(--ink); box-shadow:0 0 0 1px var(--ink-fill); animation: iLens 3.4s ease-in-out infinite; }
-  .scene.search .lens::after { content:""; position:absolute; right:-6px; bottom:-5px; width:7px; height:2px; background:var(--ink); border-radius:2px; transform:rotate(45deg); }
+  .scene.search .agent { left:24px; top:58px; } .scene.search .body { animation: bSearch 2.6s ease-in-out infinite; transform-origin:50% 90%; } .scene.search .eye { animation: eSearch 2.6s ease-in-out infinite; }
+  .scene.search .lens { position:absolute; left:94px; top:48px; width:20px; height:20px; border-radius:50%; border:2.5px solid var(--ink); box-shadow:0 0 0 1px var(--ink-fill), inset 0 0 5px var(--ink-fill); animation: iLens 2.6s ease-in-out infinite; transform-origin:center; }
+  .scene.search .lens::after { content:""; position:absolute; right:-7px; bottom:-6px; width:9px; height:2.5px; background:var(--ink); border-radius:2px; transform:rotate(45deg); }
+  .scene.search .lens .glint { position:absolute; left:3.5px; top:3.5px; width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.9); opacity:0; animation: iGlint 2.6s ease-in-out infinite; }
+  .scene.search .pt { position:absolute; border-radius:50%; background:var(--ink-soft); opacity:0; will-change:transform,opacity; }
+  .scene.search .pt.dark { background:#111827; }
+  .scene.search .pt.a { left:120px; top:42px; width:6px; height:6px; animation: iPartDark 2.7s ease-in-out infinite; }
+  .scene.search .pt.b { left:144px; top:60px; width:4px; height:4px; animation: iPart 2.7s ease-in-out infinite .55s; }
+  .scene.search .pt.c { left:108px; top:76px; width:5px; height:5px; animation: iPart 2.7s ease-in-out infinite 1.1s; }
+  .scene.search .pt.d { left:152px; top:46px; width:3.5px; height:3.5px; animation: iPartDark 2.7s ease-in-out infinite 1.6s; }
+  .scene.search .pt.e { left:128px; top:86px; width:3.5px; height:3.5px; animation: iPart 2.7s ease-in-out infinite .85s; }
   .scene.write .agent { left:24px; top:58px; } .scene.write .body { animation: bWrite 1.6s ease-in-out infinite; } .scene.write .eye { animation: eWrite 1.8s ease-in-out infinite; }
   .scene.write .editor { position:absolute; left:92px; top:52px; width:80px; height:56px; border-radius:5px; border:1px solid var(--ink-soft); background:var(--ink-fill); background-image:repeating-linear-gradient(0deg,transparent 0 11px,var(--ink-faint) 11px 12px); }
   .scene.write .editor .tline { position:absolute; left:8px; top:20px; height:3px; width:0; background:var(--ink); border-radius:2px; animation: iType 2.4s steps(24,end) infinite; }
@@ -404,8 +414,12 @@
   .scene.learning .orb { position:absolute; left:97px; top:81px; width:6px; height:6px; border-radius:50%; background:var(--ink); box-shadow:0 0 4px 1px var(--glow); opacity:0; }
   .scene.learning .orb.o1 { --dx:-34px; --dy:-20px; animation: iAbsorb 1.8s ease-in infinite; } .scene.learning .orb.o2 { --dx:34px; --dy:-22px; animation: iAbsorb 1.8s ease-in infinite .45s; } .scene.learning .orb.o3 { --dx:-30px; --dy:24px; animation: iAbsorb 1.8s ease-in infinite .9s; } .scene.learning .orb.o4 { --dx:36px; --dy:18px; animation: iAbsorb 1.8s ease-in infinite 1.35s; }
   .scene.remembering .agent { left:76px; top:78px; } .scene.remembering .body { animation: bRemember 3s ease-in-out infinite; } .scene.remembering .eye { animation: eRemember 3s ease-in-out infinite; }
-  .scene.remembering .mem { position:absolute; width:6px; height:6px; border-radius:50%; background:var(--ink); opacity:.2; }
-  .scene.remembering .mem.m1 { left:80px; top:42px; animation: iMem 2.4s ease-in-out infinite; } .scene.remembering .mem.m2 { left:96px; top:32px; animation: iMem 2.4s ease-in-out infinite .4s; } .scene.remembering .mem.m3 { left:112px; top:34px; animation: iMem 2.4s ease-in-out infinite .8s; } .scene.remembering .mem.m4 { left:124px; top:48px; animation: iMem 2.4s ease-in-out infinite 1.2s; }
+  .scene.remembering .mem { position:absolute; border-radius:50%; background:var(--ink); box-shadow:0 0 5px 1px var(--glow); opacity:0; transform-origin:center; will-change:transform,opacity; }
+  .scene.remembering .mem.m1 { left:78px; top:46px; width:6px; height:6px; animation: iMem 2.8s ease-in-out infinite; }
+  .scene.remembering .mem.m2 { left:94px; top:34px; width:5px; height:5px; animation: iMem 2.8s ease-in-out infinite .45s; }
+  .scene.remembering .mem.m3 { left:112px; top:30px; width:6.5px; height:6.5px; animation: iMem 2.8s ease-in-out infinite .9s; }
+  .scene.remembering .mem.m4 { left:128px; top:38px; width:4.5px; height:4.5px; animation: iMem 2.8s ease-in-out infinite 1.35s; }
+  .scene.remembering .mem.m5 { left:118px; top:50px; width:5px; height:5px; animation: iMem 2.8s ease-in-out infinite 1.8s; }
   .scene.planning .agent { left:20px; top:60px; } .scene.planning .body { animation: bPlan 3s ease-in-out infinite; } .scene.planning .eye { animation: ePlan 5s ease-in-out infinite; }
   .scene.planning .psteps { position:absolute; left:92px; top:78px; display:flex; align-items:center; gap:5px; }
   .scene.planning .step { width:13px; height:13px; border:2px solid var(--ink); border-radius:3px; background:transparent; transform:scale(.8); opacity:.4; transition: background-color .45s ease, transform .45s ease, opacity .45s ease; }
@@ -552,7 +566,7 @@
   ];
   const ACT = [
     ['Tool & Action', [
-      ['search','Searches','magnifier over document', AGENT+'<div class="doc"></div><div class="lens"></div>'],
+      ['search','Searches','magnifier over document', AGENT+'<div class="lens"><span class="glint"></span></div><span class="pt a dark"></span><span class="pt b"></span><span class="pt c"></span><span class="pt d dark"></span><span class="pt e"></span>'],
       ['write','Writes / edits','types, cursor blinks', AGENT+'<div class="editor"><span class="tline"><span class="caret"></span></span></div>'],
       ['execute','Runs a command','terminal + spinner', AGENT+'<div class="term"><span class="prompt"></span><span class="cur"></span></div><div class="spinner"></div>'],
       ['browse','Browses the web','globe rotates', AGENT+'<div class="globe"></div>'],
@@ -577,7 +591,7 @@
       ['delegate','Delegates','sub-agent', AGENT+'<div class="mini">'+MINI+'</div>'],
       ['handoff','Handoff','passes on', AGENT+'<div class="peer">'+MINI+'</div><span class="token"></span>'],
       ['learning','Learns / trains','Whare Wananga', AGENT+'<div class="prog"></div><span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span><span class="orb o4"></span>'],
-      ['remembering','Remembers','memory access', AGENT+'<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span>'],
+      ['remembering','Remembers','memory access', AGENT+'<span class="mem m1"></span><span class="mem m2"></span><span class="mem m3"></span><span class="mem m4"></span><span class="mem m5"></span>'],
       ['planning','Plans','lays out steps', AGENT+'<div class="psteps"><span class="step"></span><span class="slnk"></span><span class="step"></span><span class="slnk"></span><span class="step"></span></div>'],
     ]],
   ];

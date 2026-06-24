@@ -133,7 +133,7 @@ const toolProps = (m: AvatarMode): React.ReactNode => {
         case 'writing': return (<div className="editor"><span className="tline" /><span className="caret" /></div>);
         case 'downloading':
         case 'uploading': return (<><span className="arrow" /><span className="pkt p1" /><span className="pkt p2" /><span className="pkt p3" /></>);
-        case 'remembering': return (<><span className="mem m1" /><span className="mem m2" /><span className="mem m3" /><span className="mem m4" /></>);
+        case 'remembering': return (<><span className="mem m1" /><span className="mem m2" /><span className="mem m3" /><span className="mem m4" /><span className="mem m5" /></>);
         default: return null;
     }
 };

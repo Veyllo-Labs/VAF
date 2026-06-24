@@ -452,6 +452,126 @@ if not is_trusted_dir(Path.cwd()):
 
 ---
 
+## Shipping a tool as a pip package (complete example)
+
+A third-party package can add tools to VAF without touching its source, via the
+`vaf.tools` entry-point group. Any installed package that declares this group is
+discovered at agent startup (a broken package is logged and skipped — it never breaks
+startup). This is the same mechanism summarised in
+[docs/EMBEDDING.md](../../docs/EMBEDDING.md); here is a full, copy-pasteable package.
+
+### Directory layout
+
+```
+vaf-weather/
+├── pyproject.toml
+├── src/
+│   └── vaf_weather/
+│       ├── __init__.py
+│       └── tools.py
+└── tests/
+    └── test_weather.py
+```
+
+### pyproject.toml
+
+```toml
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vaf-weather"
+version = "0.1.0"
+dependencies = []          # add "requests" etc. if your tool needs them
+# Do NOT depend on "vaf" here — the host app already provides it.
+
+[project.entry-points."vaf.tools"]
+get_weather = "vaf_weather.tools:WeatherTool"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+```
+
+The entry-point name (`get_weather`) is a label; what matters is that the value resolves
+to a `BaseTool` subclass. Declare several tools in the group if you ship more than one.
+
+### src/vaf_weather/__init__.py
+
+```python
+from vaf_weather.tools import WeatherTool
+
+__all__ = ["WeatherTool"]
+```
+
+### src/vaf_weather/tools.py
+
+```python
+from vaf.tools.base import BaseTool
+
+
+class WeatherTool(BaseTool):
+    name = "get_weather"
+    description = "Return the current weather for a city."
+
+    permission_level = "read"        # read | write | dangerous | system
+    side_effect_class = "none"       # none | reversible | irreversible
+    input_examples = [{"city": "Berlin"}]
+
+    parameters = {
+        "type": "object",
+        "properties": {"city": {"type": "string", "description": "City name"}},
+        "required": ["city"],
+    }
+
+    def run(self, **kwargs) -> str:
+        city = (kwargs.get("city") or "").strip()
+        if not city:
+            return "Error: 'city' is required."
+        # ... call your weather API here ...
+        return f"It is sunny in {city}, 22°C."
+```
+
+`run()` always returns a **string** — never raise; return an `"Error: ..."` string on
+failure so the agent can react.
+
+### tests/test_weather.py
+
+A tool is just a class, so you can unit-test it in isolation without running the agent:
+
+```python
+from vaf_weather.tools import WeatherTool
+
+
+def test_returns_weather_for_a_city():
+    out = WeatherTool().run(city="Berlin")
+    assert isinstance(out, str)
+    assert "Berlin" in out
+
+
+def test_missing_city_is_a_string_error():
+    out = WeatherTool().run()           # no args
+    assert out.startswith("Error:")     # never raises
+```
+
+```bash
+pip install -e .        # install the package (editable) into the same env as VAF
+pytest                  # run the tool's own tests
+```
+
+### Verify discovery
+
+After `pip install`, start VAF and confirm the tool is loaded — e.g. the model can call
+`list_tools` / `search_tools` and see `get_weather`, or check programmatically that it
+landed in the agent's tool registry:
+
+```python
+from vaf import Agent
+assert "get_weather" in Agent().core.tools
+```
+
+---
+
 ## 📚 Additional Resources
 
 - **BaseTool Documentation**: `vaf/tools/base.py`

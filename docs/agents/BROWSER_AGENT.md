@@ -533,12 +533,12 @@ When a CAPTCHA is encountered, the agent uses on-demand vision (`describe_page_v
 
 | File | Purpose |
 |---|---|
-| [vaf/tools/browser_agent.py](../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
-| [vaf/core/web_interface.py](../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` — WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
-| [web/components/SubAgentWindow.tsx](../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) — standalone runs |
-| [web/components/BrowserLiveTile.tsx](../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
-| [web/app/page.tsx](../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
-| [vaf/tools/_stealth_supplement.js](../vaf/tools/_stealth_supplement.js) | Fingerprint supplement injected via CDP (WebGL renderer realism + canvas/audio noise) |
-| [docker/browser/Dockerfile](../docker/browser/Dockerfile) | Browser container image definition (Chromium + Xvfb) |
-| [docker/browser/entrypoint.sh](../docker/browser/entrypoint.sh) | Headed Chromium launch under Xvfb + anti-detection flags + optional proxy |
-| [docker-compose.memory.yml](../docker-compose.memory.yml) | `vaf-browser` service definition (`VAF_BROWSER_PROXY` / `VAF_BROWSER_TZ` env) |
+| [vaf/tools/browser_agent.py](../../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
+| [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` — WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
+| [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) — standalone runs |
+| [web/components/BrowserLiveTile.tsx](../../web/components/BrowserLiveTile.tsx) | Tiled live view left of the Workflow Runtime window (browser-in-workflow) |
+| [web/app/page.tsx](../../web/app/page.tsx) | `browser_frame_update` handler, `subAgentState.browserFrame/browserUrl`, tile mount |
+| [vaf/tools/_stealth_supplement.js](../../vaf/tools/_stealth_supplement.js) | Fingerprint supplement injected via CDP (WebGL renderer realism + canvas/audio noise) |
+| [docker/browser/Dockerfile](../../docker/browser/Dockerfile) | Browser container image definition (Chromium + Xvfb) |
+| [docker/browser/entrypoint.sh](../../docker/browser/entrypoint.sh) | Headed Chromium launch under Xvfb + anti-detection flags + optional proxy |
+| [docker-compose.memory.yml](../../docker-compose.memory.yml) | `vaf-browser` service definition (`VAF_BROWSER_PROXY` / `VAF_BROWSER_TZ` env) |

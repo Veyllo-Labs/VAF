@@ -52,6 +52,10 @@ jobs:
         # Exit-zero treats all other errors as warnings
         ruff check . --exit-zero --exclude vaf/tools/coder_templates
 
+    - name: Check doc links
+      # Fail the build if any relative Markdown link points at a missing file.
+      run: python scripts/check_doc_links.py
+
     - name: Verify CLI Entry Point (Smoke Test)
       run: |
         # This checks if all imports work and requirements are met

@@ -9,10 +9,14 @@ Docs are grouped into category folders. Full index by category:
 ### overview — architecture & building on VAF
 - [ARCHITECTURE.md](ARCHITECTURE.md) — What VAF is: the framework/harness layering (engine, framework surface, product) and the public boundary (stable vs internal).
 - [EMBEDDING.md](EMBEDDING.md) — Install VAF as a slim library and build on it: `from vaf import Agent`, config, writing tools, shipping tools as pip packages.
+- [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md) — Configuration reference: all config keys by area, with defaults and which ones matter for embedding.
+- [TOOLS_CATALOG.md](agents/TOOLS_CATALOG.md) — Catalog of the built-in tools the agent loads, grouped by area.
 
 ### setup/ — install, services, deployment
 - [LINUX_SETUP.md](setup/LINUX_SETUP.md) — Linux setup and troubleshooting.
 - [WINDOWS_SETUP.md](setup/WINDOWS_SETUP.md) — Windows-specific setup.
+- [MACOS_SETUP.md](setup/MACOS_SETUP.md) — macOS setup (Apple Silicon/Intel, Metal, Homebrew).
+- [FIRST_RUN.md](setup/FIRST_RUN.md) — First-run setup wizard walkthrough (admin, Soul, connections, 2FA).
 - [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md) — TTS/STT/Gotenberg/DB/Redis containers.
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) — Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
 - [GATEWAY.md](setup/GATEWAY.md) — Persistent gateway server, multi-channel access.
@@ -42,6 +46,7 @@ Docs are grouped into category folders. Full index by category:
 - [WHARE_WANANGA.md](memory/WHARE_WANANGA.md) — Tool self-learning subsystem.
 
 ### agents/ — tools, sub-agents, workflows, reasoning
+- [AGENT_LOOP.md](agents/AGENT_LOOP.md) — High-level map of the main agent turn loop (`chat_step`).
 - [TOOL_ROUTER_ARCHITECTURE.md](agents/TOOL_ROUTER_ARCHITECTURE.md) — Tool router and per-turn scoping.
 - [TOOL_INPUT_REPAIR.md](agents/TOOL_INPUT_REPAIR.md) — Validating and repairing model-supplied tool arguments before dispatch.
 - [TOOL_SUPERVISION.md](agents/TOOL_SUPERVISION.md) — Tool supervision/safety.

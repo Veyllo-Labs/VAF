@@ -548,8 +548,8 @@ Planned improvements:
 
 - [Document Creation](../documents/DOCUMENT_CREATION.md) - Document Agent architecture
 - [Context Management](../memory/CONTEXT_MANAGEMENT.md) - How context overflow is prevented
-- [Research Agent](../vaf/tools/research_agent.py) - Research Agent implementation
-- [Document Agent](../vaf/tools/document_agent.py) - Document Agent implementation
+- [Research Agent](../../vaf/tools/research_agent.py) - Research Agent implementation
+- [Document Agent](../../vaf/tools/document_agent.py) - Document Agent implementation
 
 ## Conclusion
 

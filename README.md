@@ -16,6 +16,19 @@ An autonomous agent framework built on top of local and cloud LLMs. VAF runs as 
 
 ---
 
+## Start here
+
+Pick your path:
+
+| You want to… | Go to |
+|---|---|
+| **Run VAF** as a desktop app, server, or terminal | [Installation](#installation) below |
+| **Build on VAF** as a library (embed the agent in your app) | [docs/EMBEDDING.md](docs/EMBEDDING.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| **Write a tool** (extend the agent, ship it as a pip package) | [vaf/tools/README.md](vaf/tools/README.md) · [docs/EMBEDDING.md](docs/EMBEDDING.md) |
+| **Contribute to the engine** (the core agent loop) | [vaf/core/README.md](vaf/core/README.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+
+---
+
 ## Installation
 
 **Windows:**
@@ -287,6 +300,10 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 | Topic | Doc |
 |---|---|
+| Build on VAF (embed as a library) | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
+| Architecture (framework vs. harness) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Configuration reference (all config keys) | [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md) |
+| Write a tool (BaseTool, pip packaging) | [vaf/tools/README.md](vaf/tools/README.md) |
 | Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) |
 | Linux setup & GPU | [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) |
 | LLM backend (local vs API) | [docs/llm/LLM_BACKEND_FACTS.md](docs/llm/LLM_BACKEND_FACTS.md) |

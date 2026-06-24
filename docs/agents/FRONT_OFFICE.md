@@ -29,13 +29,13 @@ The same base system prompt is used (Soul, current time, session context, channe
 
 The anti-injection text can be overridden by placing a file at `{data_dir}/front_office_anti_injection.txt`. If that file exists, its content is used instead of the default constant in code. This allows you to paste custom text (e.g. from another project) without changing code. `data_dir` is the platform data directory (from `vaf.core.platform.Platform.data_dir()`).
 
-Implementation: [vaf/core/system_prompt.py](vaf/core/system_prompt.py) `build_prompt(..., front_office=False)`. The agent passes `front_office=getattr(self, "_front_office_mode", False)` when building the prompt.
+Implementation: [vaf/core/system_prompt.py](../../vaf/core/system_prompt.py) `build_prompt(..., front_office=False)`. The agent passes `front_office=getattr(self, "_front_office_mode", False)` when building the prompt.
 
 ## Tool restriction
 
 In Front Office, only an **allow-list** of tools is available. All other tools (code execution, owner identity updates, file/workspace writes, coder/librarian agents, etc.) are not exposed for that turn.
 
-**Allowed tools** (defined in [vaf/core/front_office_tools.py](vaf/core/front_office_tools.py)):
+**Allowed tools** (defined in [vaf/core/front_office_tools.py](../../vaf/core/front_office_tools.py)):
 
 - **Memory:** `memory_search`, `memory_save`
 - **Contacts:** `list_contacts`, `get_contact`

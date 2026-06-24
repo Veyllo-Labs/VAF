@@ -767,10 +767,15 @@ class GoogleProvider(BaseAIProvider):
 class APIBackendManager:
     """Refactored Manager using provider-specific classes."""
     
-    def __init__(self, provider: str):
+    def __init__(self, provider: str, *, config: Optional[dict] = None, api_key: Optional[str] = None):
+        # config/api_key are supplied only when VAF is embedded as a library
+        # (Agent(config={...})). The merged config and the RAW api_key then come from
+        # the agent and must NOT be re-read from disk. With both None (product mode)
+        # behaviour is byte-identical to before.
         self.provider_name = provider
-        self.config = Config.load()
-        self.api_key = Config.get_api_key(provider)
+        self._embedded = config is not None
+        self.config = config if config is not None else Config.load()
+        self.api_key = api_key if api_key is not None else Config.get_api_key(provider)
         self.provider = self._create_provider()
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
@@ -782,7 +787,7 @@ class APIBackendManager:
             # (port 8080, Docker/env-aware via get_llama_server_url) -- NOT Ollama's 11434, which is
             # nothing in a stock VAF install and made the browser agent fail with a connection error.
             # An explicit "local_api_url" (e.g. a real Ollama on :11434) still wins.
-            local_url = Config.get("local_api_url", "") or Config.get_llama_server_url("/v1")
+            local_url = self.config.get("local_api_url", "") or Config.get_llama_server_url("/v1")
             return OpenAIProvider("local", "ollama", base_url=local_url)
 
         if not self.api_key:
@@ -812,9 +817,13 @@ class APIBackendManager:
         default_models = {p: m["default"] for p, m in Config.PROVIDER_MODELS.items()}
         default_models["local"] = "llama3"
         if not model:
-            # Read fresh from disk so mid-session model changes (via Settings) take effect immediately
-            live_config = Config.load()
-            model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+            if getattr(self, "_embedded", False):
+                # Embedded: honour api_model from the programmatic config (no Settings UI here)
+                model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+            else:
+                # Product: read fresh from disk so mid-session model changes (via Settings) take effect immediately
+                live_config = Config.load()
+                model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
         # Guardrail: when using API providers, a stale local GGUF model value can be passed
         # (e.g. "Veyllo/VQ-1_Instruct-q4_k_m"), which causes provider errors and long retry loops.
         # In that case, force provider-specific model from config/default.

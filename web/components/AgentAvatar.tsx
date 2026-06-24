@@ -44,13 +44,16 @@ export type AvatarMode =
     // Activity · Multi-Agent — the agent hands a token to a sub-agent (used while a sub-agent runs)
     | 'delegate'
     // Activity · Tool scenes (agent + the running tool's prop, the whole showcase scene scaled to 36px)
-    | 'searching' | 'executing' | 'browsing' | 'writing' | 'downloading' | 'uploading' | 'remembering';
+    | 'searching' | 'executing' | 'browsing' | 'writing' | 'downloading' | 'uploading' | 'remembering'
+    // Away scenes — the agent passes the time while the user is away (one per nudge, rotating).
+    // GPU-safe (transform/opacity only): nap / coffee / stars / groove. TV + newspaper excluded.
+    | 'away_nap' | 'away_coffee' | 'away_stars' | 'away_groove';
 
 // eye (dot) animation per mode (matches agent-character-emotions.html). idle / activity handled
 // separately; activity drives the eye via E_ACT.
 const ANIM: Partial<Record<AvatarMode, string>> = {
     waiting: 'agentAvatarMorph 5.5s ease-in-out infinite, agentAvatarBreathe 4.0s ease-in-out infinite',
-    thinking: 'agentAvatarMorph 1.0s ease-in-out infinite, agentAvatarBreathe 0.7s ease-in-out infinite',
+    thinking: 'ponderGaze 4.2s ease-in-out infinite',   // Pondering: eye looks UP and holds (no morph)
     talking: 'agentAvatarTalk 0.75s ease-in-out infinite',
     surprised: 'emoSurprised 2.4s cubic-bezier(.34,1.56,.64,1) infinite',
     curious: 'emoCurious 4.0s ease-in-out infinite',
@@ -70,6 +73,7 @@ const ANIM: Partial<Record<AvatarMode, string>> = {
 
 // the square's subtle reaction per emotion (base states keep it still)
 const BODY_ANIM: Partial<Record<AvatarMode, string>> = {
+    thinking: 'ponderBody 4.2s ease-in-out infinite',   // Pondering: the square floats gently while the eye gazes up
     surprised: 'bodySurprised 2.4s cubic-bezier(.34,1.56,.64,1) infinite',
     curious: 'bodyCurious 4.0s ease-in-out infinite',
     confused: 'bodyConfused 2.8s ease-in-out infinite',
@@ -138,6 +142,28 @@ const toolProps = (m: AvatarMode): React.ReactNode => {
     }
 };
 
+// Away scenes: the full 200×160 away-stage (agent-away-scenes.html) scaled 0.75 so the 48px agent
+// renders ~36px. `l`/`t` offset the scaled scene so the agent sits at the avatar's LEFT (derived from
+// the source agent position × 0.75, negated); `w` lets the props lean RIGHT into the gutter like
+// TOOL_SCENES. Scene motion is CSS-class-driven (`.asc.<cls> .bd/.ey/...` in globals.css), so these
+// modes need NO ANIM/BODY_ANIM entries (they bypass the persistent figure). All keyframes are
+// transform/opacity only → leak-safe.
+const AWAY_SCENES: Record<string, { cls: string; l: number; t: number; w: number; h: number }> = {
+    away_nap: { cls: 'nap', l: -57, t: -52.5, w: 110, h: 36 },
+    away_coffee: { cls: 'coffee', l: -40.5, t: -43.5, w: 102, h: 36 },
+    away_stars: { cls: 'stars', l: -58.5, t: -63, w: 130, h: 54 },
+    away_groove: { cls: 'music', l: -57, t: -48, w: 110, h: 36 },
+};
+const awayProps = (m: AvatarMode): React.ReactNode => {
+    switch (m) {
+        case 'away_nap': return (<><div className="pillow" /><span className="z z1">z</span><span className="z z2">z</span><span className="z z3">z</span></>);
+        case 'away_coffee': return (<><div className="cup"><span className="handle" /></div><span className="steam s1" /><span className="steam s2" /><span className="steam s3" /></>);
+        case 'away_stars': return (<><span className="star st1" /><span className="star st2" /><span className="star st3" /><span className="star st4" /><span className="star st5" /><span className="star st6" /><span className="shoot" /></>);
+        case 'away_groove': return (<><span className="note n1">&#9834;</span><span className="note n2">&#9835;</span><span className="note n3">&#9833;</span></>);
+        default: return null;
+    }
+};
+
 // states whose squash/stretch should be grounded at the bottom
 const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 'sleepy', 'celebrate']);
 
@@ -147,7 +173,7 @@ const ORIGIN_BOTTOM = new Set<AvatarMode>(['curious', 'idea', 'happy', 'sad', 's
 // continuously for minutes (which the stage does). Compositor-only (transform/opacity) is safe.
 const LITE: Partial<Record<AvatarMode, string>> = {
     waiting: 'agentAvatarBreathe 4.0s ease-in-out infinite',
-    thinking: 'agentAvatarBreathe 0.7s ease-in-out infinite',
+    thinking: 'ponderGaze 4.2s ease-in-out infinite',   // gaze-up is transform-only → already leak-safe for the stage
     working: 'agentAvatarBreathe 0.8s ease-in-out infinite',
     talking: 'agentAvatarBreathe 0.5s ease-in-out infinite',
     confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
@@ -171,15 +197,87 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
         return () => clearTimeout(t);                 // debounce: a new change resets the settle
     }, [mode, shown]);
 
+    // The "living" Working satellite: while Working is shown, a rAF loop eases its angular speed toward a
+    // new random target every ~0.6–2s and occasionally (~40%) flips direction, so it speeds up / slows
+    // down / reverses organically (the second satellite stays a calm counter-clockwise anchor). Pure
+    // transform:rotate per frame = compositor-only → leak-safe. The loop runs ONLY in Working.
+    const livingOrbitRef = React.useRef<HTMLSpanElement | null>(null);
+    React.useEffect(() => {
+        if (shown !== 'working' || dim) return;
+        const el = livingOrbitRef.current;
+        if (!el) return;
+        const rng = (a: number, b: number) => a + Math.random() * (b - a);
+        let angle = rng(0, 360);
+        let speed = (Math.random() < 0.5 ? -1 : 1) * rng(110, 470);   // deg/s; sign = direction
+        let target = speed;
+        let nextRoll = 0;
+        let last = performance.now();
+        let raf = 0;
+        const reroll = (now: number) => {
+            let s = Math.sign(target) || 1;
+            if (Math.random() < 0.4) s = -s;                          // ~40% chance to reverse
+            target = s * rng(110, 470);
+            nextRoll = now + rng(600, 2000);                          // re-target every 0.6–2.0s
+        };
+        const frame = (now: number) => {
+            const dt = Math.min(0.05, (now - last) / 1000); last = now;
+            if (now >= nextRoll) reroll(now);
+            speed += (target - speed) * Math.min(1, dt * 3);          // ease toward target (no snapping)
+            angle += speed * dt;
+            el.style.transform = `rotate(${angle}deg)`;
+            raf = requestAnimationFrame(frame);
+        };
+        reroll(performance.now());
+        raf = requestAnimationFrame(frame);
+        return () => cancelAnimationFrame(raf);
+    }, [shown, dim]);
+
+    // Pondering glyph stream: while the agent is thinking, shapes/numbers/letters pop in above the head and
+    // float away (like racing thoughts). Short-lived nodes with transform/opacity animations (+ static
+    // shapes) = leak-safe. Skipped in `lite` (the long-running stage) to avoid minutes of DOM churn.
+    const thinkStreamRef = React.useRef<HTMLDivElement | null>(null);
+    React.useEffect(() => {
+        if (shown !== 'thinking' || dim || lite) return;
+        const stream = thinkStreamRef.current;
+        if (!stream) return;
+        const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+        const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+        const DIGITS = '0123456789'.split('');
+        const LETTERS = 'ABCDEFGHJKLMNPQRTXYZ'.split('');
+        const SHAPES = ['circle', 'ring', 'square', 'diamond', 'tri'];
+        const timer = setInterval(() => {
+            const kind = pick(['shape', 'num', 'letter']);
+            const el = document.createElement('span');
+            el.className = 'tgly';
+            const dur = rnd(0.95, 1.6);
+            el.style.setProperty('--x', rnd(-9, 9).toFixed(1) + 'px');
+            el.style.setProperty('--r', (rnd(-45, 45) | 0) + 'deg');
+            el.style.animation = `ponderPop ${dur.toFixed(2)}s cubic-bezier(.35,.7,.3,1) forwards`;
+            if (kind === 'shape') {
+                const s = pick(SHAPES); const sz = rnd(6, 9);
+                el.classList.add(s);
+                if (s !== 'tri') { el.style.width = sz.toFixed(1) + 'px'; el.style.height = sz.toFixed(1) + 'px'; }
+                if (s === 'diamond') el.style.setProperty('--r', '45deg');
+            } else {
+                el.textContent = kind === 'num' ? pick(DIGITS) : pick(LETTERS);
+                el.style.fontSize = rnd(8, 11).toFixed(1) + 'px';
+            }
+            stream.appendChild(el);
+            setTimeout(() => el.remove(), dur * 1000 + 80);
+        }, 200);
+        return () => { clearInterval(timer); stream.innerHTML = ''; };
+    }, [shown, dim, lite]);
+
     const active = shown !== 'idle';
     const act = isActivity(shown);
     const toolScene = TOOL_SCENES[shown];   // non-null while a tool runs → render the scaled scene instead of the plain body
+    const awayScene = AWAY_SCENES[shown];   // non-null for a nudge away-scene → render the scaled away stage
     // A tool scene (or delegate) extends a prop to the agent's RIGHT. Reserving that as layout WIDTH would
     // shove the whole content column (timeline / bubble) rightward every time a tool runs. Instead keep the
     // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
     // negative margin-left pulls the scene (and the agent with it) left, an equal margin-right restores the
     // margin-box so nothing to the RIGHT moves. Margins transition (not per-frame) → leak-safe.
-    const sceneWidth = toolScene ? toolScene.w : (shown === 'delegate' ? 88 : 0);
+    const sceneWidth = toolScene ? toolScene.w : awayScene ? awayScene.w : (shown === 'delegate' ? 88 : 0);
     const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
 
     const dotColor = invert ? '#111827' : '#ffffff';
@@ -227,17 +325,36 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         animation: `emoRing 2.4s ease-out ${i * 0.15}s infinite`,
                     }} />
                 ))}
-                {/* working — orbiting satellite */}
+                {/* working — TWO orbiting satellites. Both are WHITE (like the showcase original, not the
+                    dark overlay): the orbit radius (16px) is smaller than the body half-height (18px), so a
+                    satellite rides the dark body's edge and stays visible on the light surface. The TOP one
+                    is "living" (rAF-driven: random direction + tempo, see the effect above); the BOTTOM one
+                    (180° offset) is a calm fixed counter-clockwise anchor. */}
                 {shown === 'working' && !dim && (
-                    <span style={{
-                        position: 'absolute', left: '50%', top: '50%', width: 32, height: 32, marginLeft: -16, marginTop: -16, zIndex: 2,
-                        animation: 'emoOrbit 1.6s linear infinite',
-                    }}>
+                    <>
+                        <span ref={livingOrbitRef} style={{
+                            position: 'absolute', left: '50%', top: '50%', width: 32, height: 32, marginLeft: -16, marginTop: -16, zIndex: 2,
+                        }}>
+                            <span style={{
+                                position: 'absolute', top: -3, left: '50%', marginLeft: -3, width: 6, height: 6,
+                                borderRadius: '50%', backgroundColor: '#fff', boxShadow: '0 0 6px 2px rgba(255,255,255,0.5)',
+                            }} />
+                        </span>
                         <span style={{
-                            position: 'absolute', top: -3, left: '50%', marginLeft: -3, width: 6, height: 6,
-                            borderRadius: '50%', backgroundColor: overlay, boxShadow: overlayGlow,
-                        }} />
-                    </span>
+                            position: 'absolute', left: '50%', top: '50%', width: 32, height: 32, marginLeft: -16, marginTop: -16, zIndex: 2,
+                            animation: 'emoOrbit 2.4s linear infinite reverse',
+                        }}>
+                            <span style={{
+                                position: 'absolute', bottom: -3, left: '50%', marginLeft: -3, width: 6, height: 6,
+                                borderRadius: '50%', backgroundColor: '#fff', boxShadow: '0 0 6px 2px rgba(255,255,255,0.5)',
+                            }} />
+                        </span>
+                    </>
+                )}
+                {/* thinking (Pondering) — the glyph stream rises above the head (eye gazes up via ponderGaze).
+                    Glyphs are spawned into this container by the effect above; static container, leak-safe. */}
+                {shown === 'thinking' && !dim && !lite && (
+                    <div ref={thinkStreamRef} className="tgly-stream" />
                 )}
                 {/* learn — progress halo + knowledge orbs absorbed into the eye */}
                 {shown === 'learn' && !dim && (
@@ -372,11 +489,21 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     </div>
                 )}
 
+                {/* away scene — the agent passes the time (nap / coffee / stars / groove) while the user
+                    is away. The full away-stage scaled so the agent stays ~36px; props lean right.
+                    Rendered INSTEAD of the plain body, exactly like a tool scene. */}
+                {awayScene && !dim && (
+                    <div className={`asc ${awayScene.cls}`} style={{ left: awayScene.l, top: awayScene.t }}>
+                        <div className="ag"><div className="bd" /><div className="ey" /></div>
+                        {awayProps(shown)}
+                    </div>
+                )}
+
                 {/* AGENT STAGE — the persistent figure (body+eye). For `blocked` the agent keeps its FIXED
                     size and only GLIDES left (transform + transition only = leak-safe) to free room for the
                     barrier on the right, like the showcase play: the agent is never shrunk, swapped or faded.
                     For `delegate` the stage is a 36px box on the LEFT (the root is wider); else it fills the root. */}
-                {!toolScene && (
+                {!toolScene && (!awayScene || dim) && (
                 <div style={{
                     position: 'absolute',
                     ...(shown === 'delegate' ? { left: 0, top: 0, width: 36, height: 36 } : { inset: 0 }),

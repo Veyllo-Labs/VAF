@@ -2333,18 +2333,32 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     await websocket.close(code=4001, reason="Invalid token")
                     return
         except ImportError:
-            # Auth modules not available - still block non-localhost when disabled
-            if not local_network_enabled and not is_localhost_client:
-                log("API", f"WebSocket rejected: Local network disabled (auth module not available)")
-                await websocket.close(code=4003, reason="Local network feature is disabled")
+            # Auth modules unavailable in network mode: fail CLOSED for any non-localhost
+            # client (we cannot verify the token). Localhost stays trusted (desktop flow).
+            if not is_localhost_client:
+                log("API", f"WebSocket rejected: auth modules unavailable, cannot verify {client_ip}")
+                await websocket.close(code=4003, reason="Authentication error")
                 return
         except Exception as e:
             log("API", f"WebSocket auth error: {e}")
-            # Block non-localhost on error when local network is disabled
-            if not local_network_enabled and not is_localhost_client:
-                await websocket.close(code=4003, reason="Local network feature is disabled")
+            # Fail CLOSED: any auth-phase error for a non-localhost client must NOT fall
+            # through to an unscoped (None scope == global/admin) connection. Localhost stays trusted.
+            if not is_localhost_client:
+                await websocket.close(code=4003, reason="Authentication error")
                 return
-    
+
+    # Defense-in-depth: a non-localhost connection must NEVER be unscoped — a None scope
+    # is treated as global/admin by session.list() and rag search, so this is the final
+    # backstop against any future fall-through that left user_context unset.
+    if user_context is None and not is_localhost_client:
+        log("API", f"WebSocket rejected: no auth context for non-localhost {client_ip}")
+        try:
+            get_tracker().unregister_connection(connection_id)
+        except Exception:
+            pass
+        await websocket.close(code=4003, reason="Authentication error")
+        return
+
     try:
         await manager.connect(websocket)
         # Store user_scope_id for RAG/task metadata (memory_save, memory search). Fallback to user_id if no scope in token.

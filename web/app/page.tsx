@@ -429,6 +429,9 @@ function subAgentKindFromName(toolName: string): SubAgentKind | null {
 // The chat only ever renders the last MSG_TURNS user-turns, and the full history lives
 // in backend session storage, so trimming the tail is invisible to the user.
 const MAX_LIVE_MESSAGES = 1500;
+// Minimum time the running-tool avatar animation stays on screen, so fast tools (e.g. memory search)
+// don't flash by before the animation is readable.
+const TOOL_ANIM_MIN_MS = 1000;
 
 const WORKFLOW_ASYNC_REGEX = /\[WORKFLOW_ASYNC:([^:]+):([^\]]+)\]\s*Workflow\s+'([^']+)'[^\n]*(?:\n\n)?([\s\S]*)/;
 function parseWorkflowAsync(answer: string): { taskId: string; workflowId: string; name: string; rest: string } | null {
@@ -877,6 +880,12 @@ function toolAvatarMode(rawName: string): AvatarMode | null {
     return null;
 }
 
+// Away scenes the avatar plays on a NUDGE ("are you there?") bubble. Rotated per nudge but STABLE per
+// bubble (derived from the message timestamp), so a re-render never reshuffles the scene. A live nudge's
+// timestamp is Date.now(), so successive nudges land on different scenes.
+const AWAY_MODES: AvatarMode[] = ['away_nap', 'away_coffee', 'away_stars', 'away_groove'];
+const awayModeFor = (ts: number): AvatarMode => AWAY_MODES[Math.abs(Math.floor(ts || 0)) % AWAY_MODES.length];
+
 // One ▢ step box. The active box pops bigger + opaque and is RANDOMLY black-filled or just a crisp
 // outline; idle boxes are small, faint, hollow. Monochrome (no colours); fill toggles per tick.
 const PlanBox = ({ active, filled }: { active: boolean; filled: boolean }) => (
@@ -913,7 +922,7 @@ const SetupLine = ({ message }: { message: string }) => {
     return (
         <div className="flex gap-4 items-center w-full">
             <div className="w-9 shrink-0 flex justify-center">
-                <AgentAvatar mode="plan" />
+                <AgentAvatar mode="working" />
             </div>
             <div className="flex items-center gap-3 min-w-0 flex-1">
                 <span className="flex items-center gap-[3px] text-[#2a3142] shrink-0" aria-hidden="true">
@@ -927,6 +936,35 @@ const SetupLine = ({ message }: { message: string }) => {
                     <span className="font-semibold uppercase tracking-wider text-[10px] text-gray-600 shrink-0">{source}</span>
                     <span className="text-gray-900 font-medium truncate">{cleanText}</span>
                 </div>
+            </div>
+        </div>
+    );
+};
+
+// Chat-history loading indicator. The agent "works in the background" (Working: morphing eye + a white
+// orbiting satellite) while the step-boxes cycle to its right — same box sequence as SetupLine (one
+// stable element so the loop never restarts), but for the load phase instead of the setup phase.
+const ChatLoadingLine = () => {
+    const [active, setActive] = useState(0);
+    const [filled, setFilled] = useState(true);
+    useEffect(() => {
+        const t = setInterval(() => { setActive(a => (a + 1) % 3); setFilled(Math.random() >= 0.45); }, 800);
+        return () => clearInterval(t);
+    }, []);
+    return (
+        <div className="flex gap-4 items-center">
+            <div className="w-9 shrink-0 flex justify-center">
+                <AgentAvatar mode="working" />
+            </div>
+            <div className="flex items-center gap-3 min-w-0">
+                <span className="flex items-center gap-[3px] text-[#2a3142] shrink-0" aria-hidden="true">
+                    <PlanBox active={active === 0} filled={filled} />
+                    <span className="planlnk" />
+                    <PlanBox active={active === 1} filled={filled} />
+                    <span className="planlnk" />
+                    <PlanBox active={active === 2} filled={filled} />
+                </span>
+                <span className="text-sm text-gray-400">Chat wird geladen…</span>
             </div>
         </div>
     );
@@ -1105,6 +1143,11 @@ function VAFDashboardContent() {
     const [statusMessage, setStatusMessage] = useState(''); // RE-ADDED
     const [activeToolName, setActiveToolName] = useState(''); // Currently-running tool name for loading bubble
     const [activeToolMode, setActiveToolMode] = useState<AvatarMode | null>(null); // avatar animation for the running tool (web_search→searching, …)
+    // Some tools finish almost instantly (memory search hits a local pgvector in <100ms) — the avatar
+    // animation would flash by unseen. Hold the running-tool mode for at least TOOL_ANIM_MIN_MS so the
+    // animation is always legible; a NEW tool start cancels the pending release and takes over at once.
+    const toolModeStartRef = useRef<number>(0);
+    const toolModeClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const pendingCreateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
     const pendingUpdateAutomationResolveRef = useRef<((r: { ok: boolean; error?: string }) => void) | null>(null);
@@ -2333,13 +2376,19 @@ function VAFDashboardContent() {
                     const toolName = String(name || '').toLowerCase();
                     const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolName);
 
-                    // Track active tool for loading bubble + the avatar's tool animation
+                    // Track active tool for loading bubble + the avatar's tool animation. The mode is held
+                    // for at least TOOL_ANIM_MIN_MS so a fast tool's animation stays readable (see ref above).
                     if (subType === 'start') {
+                        if (toolModeClearTimerRef.current) { clearTimeout(toolModeClearTimerRef.current); toolModeClearTimerRef.current = null; }
+                        toolModeStartRef.current = Date.now();
                         setActiveToolName(String(name || '').replace(/_/g, ' '));
                         setActiveToolMode(toolAvatarMode(String(name || '')));
                     } else if (subType === 'end' || subType === 'error') {
-                        setActiveToolName('');
-                        setActiveToolMode(null);
+                        if (toolModeClearTimerRef.current) { clearTimeout(toolModeClearTimerRef.current); toolModeClearTimerRef.current = null; }
+                        const release = () => { setActiveToolName(''); setActiveToolMode(null); toolModeClearTimerRef.current = null; };
+                        const elapsed = Date.now() - toolModeStartRef.current;
+                        if (elapsed >= TOOL_ANIM_MIN_MS) release();
+                        else toolModeClearTimerRef.current = setTimeout(release, TOOL_ANIM_MIN_MS - elapsed);
                     }
 
                     if (subType === 'start' && isSubAgentTool) {
@@ -5178,11 +5227,11 @@ function VAFDashboardContent() {
                                         <span>Verbindung wird wiederhergestellt…</span>
                                     </div>
                                 )}
-                                {/* Chat history is being fetched and nothing is cached yet → spinner instead of a blank area */}
+                                {/* Chat history is being fetched and nothing is cached yet → the working
+                                    avatar + step-boxes (Option A) instead of a blank area */}
                                 {historyLoading && messages.length === 0 && (
-                                    <div className="min-h-[55vh] flex flex-col items-center justify-center gap-3 text-gray-400">
-                                        <Loader2 className="animate-spin" size={24} />
-                                        <span className="text-sm">Chat wird geladen…</span>
+                                    <div className="min-h-[55vh] flex items-center justify-center">
+                                        <ChatLoadingLine />
                                     </div>
                                 )}
                                 {/* Sub-Agent banner removed; reopen via tool cards or system log */}
@@ -5451,7 +5500,15 @@ function VAFDashboardContent() {
                                                     const liveThinking = hasTimeline
                                                         ? (answerMsg.content.includes('<think>') && !parsedAns.isThinkingComplete)
                                                         : (msg.content.includes('<think>') && !isThinkingComplete);
-                                                    const botAvatarMode: AvatarMode = (isLatestBot && !loading)
+                                                    // Per-bubble override for proactive background messages: a thinking-run message
+                                                    // plays `idea` ("found the solution"); a nudge ("are you there?") plays a rotating
+                                                    // away scene (stable per bubble via its timestamp). Applies whether or not the row is
+                                                    // latest — it dims via botAvatarDim like any other past bubble.
+                                                    const kindAvatar: AvatarMode | null =
+                                                        msg.kind === 'thinking' ? 'idea'
+                                                            : msg.kind === 'nudge' ? awayModeFor(msg.timestamp)
+                                                                : null;
+                                                    const botAvatarMode: AvatarMode = kindAvatar ?? ((isLatestBot && !loading)
                                                         // delegate has TOP priority: while a sub-agent runs it stays stable, so tool-outcome
                                                         // flashes (agentReaction) can't interrupt it and make the sub-agent re-spawn mid-run.
                                                         // a tool with its own scene wins (incl. browser_agent → globe); other sub-agents → delegate.
@@ -5462,7 +5519,7 @@ function VAFDashboardContent() {
                                                             : !isGenerating ? 'idle'
                                                             : liveThinking ? 'thinking'
                                                             : 'talking')
-                                                        : 'idle';
+                                                        : 'idle');
                                                     const botAvatarDim = !(isLatestBot && !loading);
                                                     // Expanded while the latest turn is still running; collapses only when generation
                                                     // ENDS (so an intermediate answer line mid-turn no longer folds the rail while the

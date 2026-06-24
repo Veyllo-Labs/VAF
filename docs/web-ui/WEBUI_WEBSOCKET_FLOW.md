@@ -40,6 +40,44 @@ flowchart TB
 5. Headless agent processes and streams `agent_message_update`.
 6. Frontend renders the assistant response and the `<think>` block if present.
 
+## WebSocket Authentication
+
+The `/ws` endpoint (`websocket_endpoint` in `vaf/core/web_server.py`) authenticates **inside the
+handler**, not via the HTTP `AuthMiddleware` — Starlette's `BaseHTTPMiddleware` never sees
+websocket-scope connections, so HTTP middleware cannot gate the handshake. The token is read from the
+`?token=<jwt>` query param or the `vaf_token` cookie.
+
+**Trust model.** Localhost (`127.0.0.1`/`::1`, and the Docker bridge `172.16.0.0/12`) is trusted,
+consistent with the HTTP localhost bypass. In **network mode** (`local_network_enabled=true`) a
+non-localhost client must come from an RFC1918 IP, present a valid `access` JWT, and have passed 2FA
+(unless it is an admin on localhost).
+
+**Gating (first match wins):**
+
+| Condition | Result |
+|-----------|--------|
+| Network disabled + non-localhost IP | reject — close `4003` |
+| Network disabled + localhost, missing/invalid token | reject — close `4001` |
+| Network enabled + non-RFC1918 IP | reject — close `4003` |
+| Network enabled + no token | reject — close `4001` |
+| Token expired / invalid | reject — close `4001` |
+| 2FA required and not verified (and not admin+localhost) | reject — close `4003` |
+| Auth-phase error (secret/import/other) for a **non-localhost** client | reject — close `4003` (fail-closed) |
+| Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
+
+**Fail-closed guarantee.** A non-localhost connection is **never** established without a resolved
+`user_scope_id`. An unscoped connection (`user_context is None`) is treated as global/admin by
+`session.list()` and RAG search, so the handler closes (`4003`) any non-localhost client that reaches
+the connect step without auth context (defense-in-depth guard before `manager.connect`). A localhost
+client whose auth phase hits a transient error still connects (trusted), so a desktop session is never
+bricked by a transient secret/import failure. Note: an `Upgrade: websocket` header on a plain HTTP
+request does **not** bypass HTTP auth — real WS handshakes are websocket-scope and never reach the HTTP
+middleware, so that header is treated as a normal (authenticated) HTTP request.
+
+On success, the connection's `user_scope_id` and role (from the JWT, via `set_connection_user`) scope
+all subsequent RAG/memory/session/automation operations for that socket (see the per-user handlers
+below).
+
 ## Session Scoping Rules
 
 All updates are scoped by `sessionId`. The frontend **must** keep `currentSessionId`

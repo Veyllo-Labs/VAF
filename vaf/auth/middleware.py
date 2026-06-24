@@ -102,10 +102,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if _is_auth_exempt(request.url.path):
             return await call_next(request)
 
-        # Skip WebSocket upgrade - the WS handler does its own auth
-        if request.headers.get("upgrade", "").lower() == "websocket":
-            return await call_next(request)
-
+        # NOTE: real WebSocket handshakes are scope=="websocket" and never reach this
+        # HTTP middleware (BaseHTTPMiddleware skips non-http scopes); the /ws route
+        # self-authenticates. An "Upgrade: websocket" header on an HTTP-scope request
+        # is therefore only ever an auth-bypass attempt — it must NOT skip auth.
         client_ip = request.client.host if request.client else "unknown"
 
         # Localhost is always allowed without token

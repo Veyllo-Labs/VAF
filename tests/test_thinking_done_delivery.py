@@ -14,7 +14,7 @@ def _isolate(monkeypatch, tmp_path):
 def test_fallback_delivers_and_tracks(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "user-x"
     note = tm.deliver_thinking_done_fallback(
         scope, "Soll ich dir eine Erinnerung einrichten?",
@@ -34,7 +34,7 @@ def test_details_are_stored_for_the_main_agent(monkeypatch, tmp_path):
     agent can answer a follow-up with the REAL content instead of re-deriving it."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     scope = "user-d"
     tm.deliver_tracked_message(
         scope, "Ich habe 3 Kühl-Tipps gefunden – willst du sie?",
@@ -62,7 +62,7 @@ def test_fallback_does_not_double_send(monkeypatch, tmp_path):
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
     sent = []
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
-                        lambda scope, content: (sent.append(content), "sid-1")[1])
+                        lambda scope, content, session_id=None: (sent.append(content), "sid-1")[1])
     scope = "user-z"
     tm.set_proactive_mode(scope, "open")   # allow the free message to deliver, then test the double-send guard
     tm.deliver_thinking_done_fallback(scope, "Erste Frage?")
@@ -77,7 +77,7 @@ def test_thinking_done_tool_uses_fallback(monkeypatch, tmp_path):
     agent.chat_step now mirrors inline)."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
     from vaf.tools.thinking_done import ThinkingDoneTool
     scope = "user-td"
     out = ThinkingDoneTool().run(summary="did the thing", message="Frage?", source_note_id="n9",

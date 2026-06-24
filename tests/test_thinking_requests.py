@@ -110,6 +110,59 @@ def test_status_filter(monkeypatch, tmp_path):
     assert {e["id"] for e in tr.list_requests(scope, status="declined")} == {b["id"]}
 
 
+def test_session_id_anchor_field_and_pin(monkeypatch, tmp_path):
+    """The request stores the web-session anchor; set_request_session updates it; a follow-up keeps it."""
+    _isolate(monkeypatch, tmp_path)
+    scope = "u-sid"
+    e = tr.add_request(scope, "Automate?", run_seq=1, session_id="sess-A")
+    assert e["session_id"] == "sess-A" and tr.get_request(scope, e["id"])["session_id"] == "sess-A"
+    tr.set_request_session(scope, e["id"], "sess-B")
+    assert tr.get_request(scope, e["id"])["session_id"] == "sess-B"
+    tr.bump_followup(scope, e["id"], new_question="still?", run_seq=2)
+    assert tr.get_request(scope, e["id"])["session_id"] == "sess-B"   # follow-up does NOT change the anchor
+    assert tr.add_request(scope, "q2", run_seq=1)["session_id"] is None   # default
+
+
+def test_waiting_state_carries_session_id(monkeypatch, tmp_path):
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
+    import vaf.core.thinking_mode as tm
+    tm.set_waiting_for_reply("u-w", username="mert", question_text="q", request_id="r1", session_id="sess-A")
+    assert tm.get_waiting_for_reply("u-w").get("session_id") == "sess-A"
+    tm.set_waiting_for_reply("u-w2", username="mert", question_text="q")   # default omits it
+    assert tm.get_waiting_for_reply("u-w2").get("session_id") is None
+
+
+def test_emit_message_pins_anchor_and_falls_back(monkeypatch, tmp_path):
+    """emit_message_to_web_ui delivers to the anchor session when present; when the anchor is gone it
+    falls back to the latest web session and RETURNS the fallback sid (so the caller can re-pin)."""
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
+    import vaf.core.thinking_mode as tm
+
+    class _FakeSession:
+        def add_message(self, *a, **k): pass
+    class _FakeSM:
+        def list(self, **k): return [{"id": "latest", "metadata": {}}]
+        def load(self, sid):
+            if sid == "dead":
+                raise FileNotFoundError(sid)
+            return _FakeSession()
+        def save(self, s): pass
+    emits = []
+    class _FakeWI:
+        def emit_agent_message_append(self, **k): emits.append(("append", k.get("session_id")))
+        def emit_session_unread(self, sid): emits.append(("unread", sid))
+    monkeypatch.setattr("vaf.core.session.SessionManager", _FakeSM)
+    monkeypatch.setattr("vaf.core.web_interface.get_web_interface", lambda: _FakeWI())
+
+    assert tm.emit_message_to_web_ui("u", "hi", session_id="sess-A") == "sess-A"   # anchor alive
+    assert tm.emit_message_to_web_ui("u", "hi", session_id="dead") == "latest"     # anchor gone -> fallback
+    assert ("append", "latest") in emits and ("unread", "latest") in emits
+
+
 def test_ask_user_tool_creates_request_and_waiting(monkeypatch, tmp_path):
     """The ask_user tool records a tracked request (asked) and links it into waiting_for_reply, so the
     main agent can pick it up. Web UI delivery is stubbed out (no session in tests)."""
@@ -118,7 +171,7 @@ def test_ask_user_tool_creates_request_and_waiting(monkeypatch, tmp_path):
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
     import vaf.core.thinking_mode as tm
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
 
     from vaf.tools.ask_user import AskUserTool
     scope = "user-xyz"
@@ -148,7 +201,7 @@ def test_thinking_done_message_delivers_and_tracks(monkeypatch, tmp_path):
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path))
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
     import vaf.core.thinking_mode as tm
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: None)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: None)
 
     from vaf.tools.thinking_done import ThinkingDoneTool
     scope = "user-td"
@@ -177,7 +230,7 @@ def test_thinking_done_does_not_double_send_after_ask_user(monkeypatch, tmp_path
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
     import vaf.core.thinking_mode as tm
     sent = []
-    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content: (sent.append(content), "sid-1")[1])
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: (sent.append(content), "sid-1")[1])
 
     from vaf.tools.ask_user import AskUserTool
     from vaf.tools.thinking_done import ThinkingDoneTool

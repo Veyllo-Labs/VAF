@@ -296,9 +296,12 @@ def set_waiting_for_reply(
     display_name: str = "",
     question_text: str = "",
     request_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> None:
     """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min.
-    request_id links to the thinking_requests entry so the main agent can pick up the proposal and update its status."""
+    request_id links to the thinking_requests entry so the main agent can pick up the proposal and update its status.
+    session_id is the web session the question was delivered to (the anchor), so the nudge lands in the SAME chat
+    instead of re-picking the 'latest' session."""
     key = _key(user_scope_id)
     data = _load_waiting()
     data[key] = {
@@ -308,6 +311,7 @@ def set_waiting_for_reply(
         "display_name": (display_name or username or "admin").strip() or "admin",
         "question_text": (question_text or "")[:500],
         "request_id": (request_id or "").strip() or None,
+        "session_id": (session_id or "").strip() or None,
     }
     _save_waiting(data)
 
@@ -479,8 +483,10 @@ def pop_user_reply_for_session(session_id: str) -> Optional[Dict[str, Any]]:
     return entry
 
 
-def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) -> bool:
-    """Send a short nudge via main_messenger (e.g. 'Hey Mert, bist du da?'). Returns True if sent."""
+def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, session_id: Optional[str] = None) -> bool:
+    """Send a short nudge via main_messenger (e.g. 'Hey Mert, bist du da?'). Returns True if sent. The web
+    fallback delivers to `session_id` (the anchor session the question was asked in) when given and still
+    present, so the nudge lands in the SAME chat as the question — not whatever chat is currently 'latest'."""
     try:
         from vaf.core.messaging_connections import (
             get_messaging_connections,
@@ -526,25 +532,37 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str) 
                     from vaf.core.discord_send import send_discord_dm
                     if send_discord_dm(bot_token, user_id, nudge, chunk=True):
                         return True
-        # Fallback: no messenger configured — push to the user's latest Web UI session
+        # Fallback: no messenger configured — push to the ANCHOR Web UI session (the chat the question
+        # was asked in), falling back to the latest web session only if the anchor is gone.
         try:
             from vaf.core.web_interface import get_web_interface
             from vaf.core.session import SessionManager
             wi = get_web_interface()
+            if not wi:
+                return False
             sm = SessionManager()
-            all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
-            web_sessions = [
-                s for s in all_sessions
-                if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
-            ]
-            if wi and web_sessions:
-                sid = web_sessions[0]["id"]
-                # Append + persist (not emit_agent_message, which overwrites the
-                # last assistant bubble and is lost on refresh).
+            sid = None
+            _sess = None
+            if (session_id or "").strip():
                 try:
-                    _sess = sm.load(sid)
-                    _sess.add_message("assistant", nudge)
-                    sm.save(_sess)
+                    _sess = sm.load(session_id.strip())
+                    sid = session_id.strip()
+                except Exception:
+                    _sess = None
+            if not sid:
+                sid = _latest_web_session_id(user_scope_id)
+                if sid:
+                    try:
+                        _sess = sm.load(sid)
+                    except Exception:
+                        _sess = None
+            if sid:
+                # Append + persist (not emit_agent_message, which overwrites the last assistant bubble
+                # and is lost on refresh). kind drives the away-scene avatar animation.
+                try:
+                    if _sess is not None:
+                        _sess.add_message("assistant", nudge, kind="nudge")
+                        sm.save(_sess)
                 except Exception:
                     pass
                 wi.emit_agent_message_append(content=nudge, session_id=sid, role="assistant", kind="nudge")
@@ -605,6 +623,7 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
             user_scope_id,
             w.get("username") or "admin",
             w.get("display_name") or w.get("username") or "admin",
+            session_id=w.get("session_id"),
         ):
             data = _load_waiting()
             key = _key(user_scope_id)
@@ -1124,10 +1143,29 @@ def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
     return removed
 
 
-def emit_message_to_web_ui(user_scope_id: Optional[str], content: str) -> Optional[str]:
-    """Push a clean, final agent message to the user's latest Web UI chat session (used by the
-    `ask_user` tool). Returns the session id, or None if it could not be delivered. This NEVER inspects
-    or emits raw assistant chain-of-thought — the caller passes the exact, user-facing text."""
+def _latest_web_session_id(user_scope_id: Optional[str]) -> Optional[str]:
+    """The id of the user's latest non-thinking, non-messenger Web UI session, or None. SessionManager.list
+    is sorted newest-first and skips hidden sessions, so [0] is the genuine latest visible web chat."""
+    try:
+        from vaf.core.session import SessionManager
+        sm = SessionManager()
+        all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
+        web_sessions = [
+            s for s in all_sessions
+            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
+        ]
+        return web_sessions[0]["id"] if web_sessions else None
+    except Exception:
+        return None
+
+
+def emit_message_to_web_ui(
+    user_scope_id: Optional[str], content: str, session_id: Optional[str] = None
+) -> Optional[str]:
+    """Push a clean, final agent message to a Web UI chat session (used by the `ask_user` tool). When
+    `session_id` (the anchor) is given and that session still exists, deliver THERE so a question and its
+    later nudge/follow-up stay in the same chat; otherwise fall back to the latest web session. Returns the
+    session id ACTUALLY used (so the caller can re-pin), or None. NEVER inspects raw chain-of-thought."""
     content = (content or "").strip()
     if not content:
         return None
@@ -1135,20 +1173,31 @@ def emit_message_to_web_ui(user_scope_id: Optional[str], content: str) -> Option
         from vaf.core.web_interface import get_web_interface
         from vaf.core.session import SessionManager
         wi = get_web_interface()
-        sm = SessionManager()
-        all_sessions = sm.list(limit=10, user_scope_id=user_scope_id)
-        web_sessions = [
-            s for s in all_sessions
-            if (s.get("metadata") or {}).get("source") not in ("thinking", "telegram", "discord", "whatsapp")
-        ]
-        if not wi or not web_sessions:
+        if not wi:
             return None
-        sid = web_sessions[0]["id"]
-        # Persist + stream as a new bubble (survives a chat refresh).
+        sm = SessionManager()
+        # Prefer the anchor session if it still exists; else the latest web session.
+        sid = None
+        _sess = None
+        if (session_id or "").strip():
+            try:
+                _sess = sm.load(session_id.strip())
+                sid = session_id.strip()
+            except Exception:
+                _sess = None
+        if not sid:
+            sid = _latest_web_session_id(user_scope_id)
+            if not sid:
+                return None
+            try:
+                _sess = sm.load(sid)
+            except Exception:
+                _sess = None
+        # Persist + stream as a new bubble (survives a chat refresh). kind drives the avatar animation.
         try:
-            _sess = sm.load(sid)
-            _sess.add_message("assistant", content)
-            sm.save(_sess)
+            if _sess is not None:
+                _sess.add_message("assistant", content, kind="thinking")
+                sm.save(_sess)
         except Exception:
             pass
         wi.emit_agent_message_append(content=content, session_id=sid, role="assistant", kind="thinking")
@@ -1244,9 +1293,13 @@ def deliver_tracked_message(
             details=(details or "").strip() or None,
         )
     uname = (username or "").strip() or get_local_admin_username()
+    # Anchor the question to ONE web session: a follow-up reuses the original request's session; a new
+    # question resolves the latest web session NOW. The nudge + later follow-up reuse this anchor (via the
+    # waiting state / the request) instead of independently re-picking 'latest', so they stay in the same chat.
+    _anchor_sid = (req.get("session_id") if req else None) or _latest_web_session_id(user_scope_id)
     set_waiting_for_reply(
         user_scope_id, username=uname, display_name=uname,
-        question_text=message, request_id=req["id"],
+        question_text=message, request_id=req["id"], session_id=_anchor_sid,
     )
     # Deliver-gate: if the main agent is actively handling a user turn, do NOT push this live into the
     # middle of that turn. The request is already recorded + waiting_for_reply set (and the run loop
@@ -1255,7 +1308,19 @@ def deliver_tracked_message(
         logger.info("Thinking: main agent active — deferring live delivery (request %s recorded, surfaces on next visit)", req.get("id"))
         sid = None
     else:
-        sid = emit_message_to_web_ui(user_scope_id, message)
+        sid = emit_message_to_web_ui(user_scope_id, message, session_id=_anchor_sid)
+    # Pin the request to the session actually used (or the resolved anchor when deferred), so a later run's
+    # follow-up reuses it. If the live emit fell back to a different session (anchor was gone), re-pin the
+    # waiting state too so the nudge targets the same chat the user now sees the question in.
+    _effective_sid = sid or _anchor_sid
+    if _effective_sid and req.get("session_id") != _effective_sid:
+        treq.set_request_session(user_scope_id, req["id"], _effective_sid)
+        req = treq.get_request(user_scope_id, req["id"]) or req
+    if sid and sid != _anchor_sid:
+        set_waiting_for_reply(
+            user_scope_id, username=uname, display_name=uname,
+            question_text=message, request_id=req["id"], session_id=sid,
+        )
     req = dict(req)
     req["delivered"] = bool(sid)
     return req

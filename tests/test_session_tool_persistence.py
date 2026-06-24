@@ -36,6 +36,18 @@ def test_from_dict_ignores_unknown_keys():
     assert m.role == "user" and m.content == "hi"
 
 
+def test_message_kind_roundtrips():
+    """The proactive-bubble `kind` tag (drives the avatar animation) must survive persistence so the
+    animation re-plays after a reload / chat-switch; it is omitted when None (backward-compatible)."""
+    m = Message(role="assistant", content="Hey, noch da?", kind="nudge")
+    d = m.to_dict()
+    assert d["kind"] == "nudge"
+    assert Message.from_dict(d).kind == "nudge"
+    # None kind is omitted from the serialized dict and legacy messages load with kind=None.
+    assert "kind" not in Message(role="assistant", content="x").to_dict()
+    assert Message.from_dict({"role": "assistant", "content": "x"}).kind is None
+
+
 # ---------------------------------------------------------------------------
 # summarize_tool_turn: outcome + error snippet, not just names
 # ---------------------------------------------------------------------------

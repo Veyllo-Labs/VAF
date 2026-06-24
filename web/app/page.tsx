@@ -3389,6 +3389,7 @@ function VAFDashboardContent() {
                             role: m.role,
                             content: m.content,
                             timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
+                            kind: m.kind,   // proactive bubble tag -> re-plays the avatar animation on reload/chat-switch
                             _order: idx,
                             toolId: m.toolId,
                             toolName: m.toolName,

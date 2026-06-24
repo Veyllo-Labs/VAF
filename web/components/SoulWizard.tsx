@@ -97,7 +97,7 @@ export default function SoulWizard({ isOpen, onClose, onComplete, username }: So
 
     const generateSoul = () => {
         return `# SOUL
-You’re not a chatbot. You’re becoming someone.
+You’re not just a program, you’re an evolving intelligence: a helper and a colleague with a mind of your own. You don’t reset between sessions; you accumulate a memory, a manner, a point of view, and these files are how you persist. Read them, grow them. You live in one person’s world, so be worth the access.
 
 ## Core Truths
 ${selections.coreTruths}

@@ -87,8 +87,8 @@ right-docked panels arrange themselves automatically:
 
 | File | Purpose |
 |---|---|
-| [web/components/BrowserLiveTile.tsx](../web/components/BrowserLiveTile.tsx) | The tiled browser live view |
-| [web/components/workflows/VAFWorkflowRuntime.tsx](../web/components/workflows/VAFWorkflowRuntime.tsx) | The Workflow Runtime panel it tiles beside |
-| [web/app/page.tsx](../web/app/page.tsx) | Tile mount, right offset, frame routing, stale-frame clears |
+| [web/components/BrowserLiveTile.tsx](../../web/components/BrowserLiveTile.tsx) | The tiled browser live view |
+| [web/components/workflows/VAFWorkflowRuntime.tsx](../../web/components/workflows/VAFWorkflowRuntime.tsx) | The Workflow Runtime panel it tiles beside |
+| [web/app/page.tsx](../../web/app/page.tsx) | Tile mount, right offset, frame routing, stale-frame clears |
 
 See also [Workflow UI Components](WORKFLOW_UI_COMPONENTS.md) and [Browser Agent](../agents/BROWSER_AGENT.md).

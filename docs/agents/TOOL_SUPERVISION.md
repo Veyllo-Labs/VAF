@@ -157,12 +157,12 @@ delivery.
 
 | File | Role |
 |---|---|
-| [vaf/core/bounded_run.py](../vaf/core/bounded_run.py) | bounded, stop-aware in-process execution + per-agent timeouts |
-| [vaf/workflows/engine.py](../vaf/workflows/engine.py) | `_await_subagent` — bounded IPC wait + liveness + kill for subprocess steps |
-| [vaf/core/platform.py](../vaf/core/platform.py) | spawned-child registry; `stop_webui_subagent_processes` / `_by_task` kill-tree |
-| [vaf/core/subagent_ipc.py](../vaf/core/subagent_ipc.py) | IPC queue, heartbeats, `check_zombies`, active-task status |
-| [vaf/api/supervisor_routes.py](../vaf/api/supervisor_routes.py) | watchdog status + per-unit cancel API |
-| [vaf/core/task_queue.py](../vaf/core/task_queue.py) | per-session serialization, fairness, per-session stop flags |
-| [vaf/core/headless_runner.py](../vaf/core/headless_runner.py) | worker pool (`parallel_main_workers`) |
+| [vaf/core/bounded_run.py](../../vaf/core/bounded_run.py) | bounded, stop-aware in-process execution + per-agent timeouts |
+| [vaf/workflows/engine.py](../../vaf/workflows/engine.py) | `_await_subagent` — bounded IPC wait + liveness + kill for subprocess steps |
+| [vaf/core/platform.py](../../vaf/core/platform.py) | spawned-child registry; `stop_webui_subagent_processes` / `_by_task` kill-tree |
+| [vaf/core/subagent_ipc.py](../../vaf/core/subagent_ipc.py) | IPC queue, heartbeats, `check_zombies`, active-task status |
+| [vaf/api/supervisor_routes.py](../../vaf/api/supervisor_routes.py) | watchdog status + per-unit cancel API |
+| [vaf/core/task_queue.py](../../vaf/core/task_queue.py) | per-session serialization, fairness, per-session stop flags |
+| [vaf/core/headless_runner.py](../../vaf/core/headless_runner.py) | worker pool (`parallel_main_workers`) |
 
 See also [Sub-Agent IPC](SUBAGENT_IPC.md) and [Browser Agent](BROWSER_AGENT.md).

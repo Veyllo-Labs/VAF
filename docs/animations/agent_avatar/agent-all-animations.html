@@ -153,7 +153,11 @@
   .avatar.celebrate .ring.r2 { animation: emoRing 2.4s ease-out infinite .15s; }
   .avatar .orbit { position:absolute; z-index:1; inset:0; margin:auto; width:32px; height:32px; opacity:0; }
   .avatar .orbit .satellite { position:absolute; top:-3px; left:50%; margin-left:-3px; width:6px; height:6px; border-radius:50%; background:#fff; box-shadow:0 0 6px 2px rgba(255,255,255,.5); }
-  .avatar.working .orbit { opacity:1; animation: emoOrbit 1.6s linear infinite; }
+  .avatar .orbit.o-fixed .satellite { top:auto; bottom:-3px; }                 /* 180deg offset from the living one */
+  /* Working = TWO satellites: one "living" (JS-driven: random direction + tempo) + one calm fixed
+     counter-clockwise anchor. The live orbit gets NO css animation (driven per-frame in JS below). */
+  .avatar.working .orbit { opacity:1; }
+  .avatar.working .orbit.o-fixed { animation: emoOrbit 2.4s linear infinite reverse; }
 
   .avatar.idle .dot { animation: agentAvatarIdleFloat 15s ease-in-out infinite .4s, wink 9s ease-in-out infinite; }
   .avatar.waiting .dot { animation: agentAvatarMorph 5.5s ease-in-out infinite, agentAvatarBreathe 4.0s ease-in-out infinite; }
@@ -189,6 +193,30 @@
   .avatar.search .body { animation: bodySearchAv 3.4s ease-in-out infinite; }
   .avatar.celebrate .body { animation: bodyCelebrate 2.4s cubic-bezier(.3,.7,.3,1) infinite; }
   .avatar.working .body { animation: bodyWorkingAv 1.6s ease-in-out infinite; }
+
+  /* ---------------- Pondering (Nachdenken): eye looks UP and holds + a rising glyph stream ----------------
+     The eye gazes up (never re-centering) while shapes/numbers/letters pop above the head and float away.
+     Sizes are in the avatar's 36px space (so they scale with the tile). The glyph colour adapts to the
+     showcase theme. Pure transform/opacity (+ static shapes) → leak-safe; only .ponder spawns into .tstream. */
+  .avatar.ponder .dot  { animation: ponderGaze 4.2s ease-in-out infinite; box-shadow:0 0 11px 3px rgba(255,255,255,.45); }
+  .avatar.ponder .body { animation: ponderBody 4.2s ease-in-out infinite; }
+  .avatar .tstream { position:absolute; left:50%; bottom:calc(100% - 4px); transform:translateX(-50%); width:60px; height:48px; pointer-events:none; --glyph:#e8ebf2; }
+  body.lite .avatar .tstream { --glyph:#2a3142; }
+  .tstream .tg { position:absolute; bottom:0; left:50%; display:block; color:var(--glyph); font:800 6px ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1; will-change:transform,opacity; }
+  .tg.circle  { border-radius:50%; background:var(--glyph); }
+  .tg.ring    { border-radius:50%; border:1px solid var(--glyph); box-sizing:border-box; }
+  .tg.square  { border-radius:1px; background:var(--glyph); }
+  .tg.diamond { border-radius:1px; background:var(--glyph); }
+  .tg.tri     { width:0!important; height:0!important; background:none!important; border-left:3.5px solid transparent; border-right:3.5px solid transparent; border-bottom:6px solid var(--glyph); }
+  .cell.tall .box { min-height:210px; align-items:flex-end; padding-bottom:8px; }
+  @keyframes ponderGaze { 0%,100%{transform:translate(-2.2px,-4.5px)} 34%{transform:translate(.4px,-5px)} 68%{transform:translate(2.2px,-4.2px)} }
+  @keyframes ponderBody { 0%,100%{transform:translateY(0) scale(1,1)} 50%{transform:translateY(-.4px) scale(1.015,1.015)} }
+  @keyframes ponderPop {
+    0%  { opacity:0; transform:translate(calc(-50% + var(--x)), 4px)   scale(.2)  rotate(var(--r)); }
+    16% { opacity:1; transform:translate(calc(-50% + var(--x)), 0)     scale(1)   rotate(0); }
+    70% { opacity:.9; transform:translate(calc(-50% + var(--x)), -24px) scale(1)   rotate(0); }
+    100%{ opacity:0; transform:translate(calc(-50% + var(--x)), -33px) scale(.55) rotate(0); }
+  }
 
   /* ============================================================
      KOERPER+AUGE-MODELL — Keyframes
@@ -531,7 +559,7 @@
 
 <script>
   // ---------- PUNKT-MODELL (Basis + Emotionen) ----------
-  const AV = '<div class="body"></div><div class="aura"></div><div class="ring"></div><div class="ring r2"></div><div class="orbit"><div class="satellite"></div></div><div class="dot"></div>';
+  const AV = '<div class="body"></div><div class="aura"></div><div class="ring"></div><div class="ring r2"></div><div class="orbit o-live"><div class="satellite"></div></div><div class="orbit o-fixed"><div class="satellite"></div></div><div class="dot"></div><div class="tstream"></div>';
   function avatar(cls, scale) {
     const sc = document.createElement('div'); sc.className='scaler'; sc.style.setProperty('--scale',scale);
     const a = document.createElement('div'); a.className='avatar '+cls; a.innerHTML=AV; sc.appendChild(a); return sc;
@@ -545,6 +573,7 @@
     ['Feelings',   [['happy','Happy','is glad'],['excited','Excited','full of energy'],['sad','Dejected','something went wrong'],['sleepy','Resting / Tired','relaxed']]],
     ['Response',    [['nod','Agreement','Yes'],['shake','Refusal','No'],['listening','Listening','takes it in'],['search','Searching / Scanning','searches']]],
     ['Highlights',[['celebrate','Success','done'],['working','Working','in the background']]],
+    ['Thinking',[['ponder','Pondering','looks up, ideas flicker by']]],
   ];
 
   // ---------- KOERPER+AUGE (Away + Aktivitaet) ----------
@@ -615,6 +644,32 @@
   BASE.forEach(([cls,l,s])=>gb.appendChild(cell(avatar(cls,2.6),l,s)));
   // Emotionen (gruppiert)
   grouped(document.getElementById('g-emo'), EMO, ([cls,l,s])=>cell(avatar(cls,2.6),l,s));
+  // Pondering: give its cell extra height (the glyphs rise high) and stream shapes/numbers/letters above it.
+  document.querySelectorAll('.avatar.ponder').forEach(a => a.closest('.cell')?.classList.add('tall'));
+  (function(){
+    const rnd=(a,b)=>a+Math.random()*(b-a), pick=a=>a[Math.floor(Math.random()*a.length)];
+    const DIGITS='0123456789'.split(''), LETTERS='ABCDEFGHJKLMNPQRTXYZ'.split(''), SHAPES=['circle','ring','square','diamond','tri'];
+    function spawn(stream){
+      const kind=pick(['shape','num','letter']);
+      const el=document.createElement('span'); el.className='tg';
+      const dur=rnd(0.95,1.6);
+      el.style.setProperty('--x', rnd(-11,11).toFixed(1)+'px');
+      el.style.setProperty('--r', (rnd(-45,45)|0)+'deg');
+      el.style.animation='ponderPop '+dur.toFixed(2)+'s cubic-bezier(.35,.7,.3,1) forwards';
+      if(kind==='shape'){
+        const s=pick(SHAPES), sz=rnd(3,9);
+        el.classList.add(s);
+        if(s!=='tri'){ el.style.width=sz.toFixed(1)+'px'; el.style.height=sz.toFixed(1)+'px'; }
+        if(s==='diamond') el.style.setProperty('--r','45deg');
+      } else {
+        el.textContent = kind==='num' ? pick(DIGITS) : pick(LETTERS);
+        el.style.fontSize = rnd(3,11).toFixed(1)+'px';
+      }
+      stream.appendChild(el);
+      setTimeout(()=>el.remove(), dur*1000+80);
+    }
+    setInterval(()=>{ document.querySelectorAll('.avatar.ponder .tstream').forEach(spawn); }, 200);
+  })();
   // Away
   const ga=document.getElementById('g-away');
   AWAY.forEach(([t,l,s,html])=>ga.appendChild(cell(scene('away',t,1.05,html),l,s)));
@@ -697,6 +752,37 @@
     document.querySelectorAll('.scene').forEach(s=>s.classList.toggle('light',lite));
     tb.textContent='Background: '+(lite?'light':'dark');
   });
+
+  // ---------- Working: the "living" satellite ----------
+  // Each .o-live orbit eases its angular speed toward a new random target every ~0.6-2s and occasionally
+  // (~40%) flips direction, so it speeds up / slows down / reverses organically. The .o-fixed satellite
+  // stays a calm counter-clockwise anchor (css above). Pure transform:rotate per frame. ensure() picks up
+  // orbits whenever they appear (grid or play view); detached ones are pruned so nothing accumulates.
+  (function(){
+    const rng=(a,b)=>a+Math.random()*(b-a);
+    const states=[];
+    function ensure(){
+      document.querySelectorAll('.avatar.working .orbit.o-live').forEach(el=>{
+        if(el.__live) return; el.__live=true;
+        states.push({el, angle:rng(0,360), speed:(Math.random()<0.5?-1:1)*rng(110,470), target:0, next:0});
+      });
+    }
+    let last=performance.now(), tick=0;
+    function frame(now){
+      const dt=Math.min(0.05,(now-last)/1000); last=now;
+      if((tick=(tick+1)%20)===0) ensure();                 // refresh the orbit list a few times a second
+      for(let i=states.length-1;i>=0;i--){
+        const s=states[i];
+        if(!s.el.isConnected){ s.el.__live=false; states.splice(i,1); continue; }
+        if(now>=s.next){ let sg=Math.sign(s.target||s.speed)||1; if(Math.random()<0.4) sg=-sg; s.target=sg*rng(110,470); s.next=now+rng(600,2000); }
+        s.speed += (s.target-s.speed)*Math.min(1,dt*3);
+        s.angle += s.speed*dt;
+        s.el.style.transform='rotate('+s.angle+'deg)';
+      }
+      requestAnimationFrame(frame);
+    }
+    ensure(); requestAnimationFrame(frame);
+  })();
 </script>
 </body>
 </html>

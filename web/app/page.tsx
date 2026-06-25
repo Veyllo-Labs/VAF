@@ -1293,10 +1293,10 @@ function VAFDashboardContent() {
     // never leave an infinite reaction running on the avatar.
     const [agentReaction, setAgentReaction] = useState<AvatarMode | null>(null);
     const agentReactionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const fireAgentReaction = useCallback((m: AvatarMode) => {
+    const fireAgentReaction = useCallback((m: AvatarMode, durationMs = 2200) => {
         setAgentReaction(m);
         if (agentReactionTimer.current) clearTimeout(agentReactionTimer.current);
-        agentReactionTimer.current = setTimeout(() => setAgentReaction(null), 2200);
+        agentReactionTimer.current = setTimeout(() => setAgentReaction(null), durationMs);
     }, []);
     useEffect(() => () => { if (agentReactionTimer.current) clearTimeout(agentReactionTimer.current); }, []);
     const [chainAlert, setChainAlert] = useState(false);
@@ -2872,6 +2872,15 @@ function VAFDashboardContent() {
                     if (!data.sessionId || data.sessionId === activeSessionId) {
                         setIsGenerating(false);
                         setIsStoppingGeneration(false);
+                        // Final-answer punctuation reaction: a trailing '?' replays the "permission" asking
+                        // animation, a trailing '!' the "exclaim" twin — each for 3s — to punctuate the close.
+                        try {
+                            const finalContent = String(data.content ?? '')
+                                || (messagesRef.current.filter(m => m.role === 'assistant').pop()?.content ?? '');
+                            const lastCh = parseThinkBlocks(finalContent).answer.trim().slice(-1);
+                            if (lastCh === '?') fireAgentReaction('permission', 3000);
+                            else if (lastCh === '!') fireAgentReaction('exclaim', 3000);
+                        } catch { /* cosmetic only */ }
                         // Attach any pending file_created chips to the last assistant message bubble
                         setCreatedFiles(pending => {
                             if (pending.length > 0) {

@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import logging
+import secrets
 import uuid as uuid_module
 from datetime import datetime, timezone
 
@@ -168,7 +169,6 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
                 )
 
             # Generate password if not provided
-            import secrets
             password = data.password or secrets.token_urlsafe(12)
 
             # Create user

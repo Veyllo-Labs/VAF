@@ -353,7 +353,8 @@ class Config:
         "memory_compaction_interval": 15,                           # Run compaction every N user/assistant turns
         "memory_compaction_max_tokens": 4000,                       # Max tokens for compaction LLM reply (more MEMORY: lines; API/local/server)
         "resume_compaction_enabled": True,                          # Append deterministic resume block after context compression/checkpoint
-        "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # PostgreSQL connection URL
+        "memory_db_url": "postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory",  # App DATA connection (per-user). At the RLS cutover this becomes the non-superuser role.
+        "memory_db_owner_url": "",                                  # Owner/superuser DSN for DDL/migrations/global stats. Empty -> falls back to memory_db_url (correct before cutover); at cutover set this to the OWNER dsn while memory_db_url switches to the non-super role.
         "memory_encryption_key": "",                               # AES-256 key (Base64, auto-generated if empty)
         "memory_embedding_model": "all-MiniLM-L6-v2",             # Sentence-transformers model
         "memory_auto_connect_threshold": 0.7,                      # Cosine similarity threshold for auto-connections

@@ -340,17 +340,26 @@ class GraphManager:
         
         return connection
     
-    async def remove_connection(self, source_id: UUID, target_id: UUID) -> bool:
+    async def remove_connection(self, source_id: UUID, target_id: UUID, user_scope_id: Optional[UUID] = None) -> bool:
         """
         Remove a connection between two memories.
-        
+
         Args:
             source_id: Source memory UUID
             target_id: Target memory UUID
-            
+            user_scope_id: when set, the source memory must be owned by this scope before the edge is
+                deleted. The connections table has no RLS, so a JOIN-less delete would otherwise be able
+                to remove another user's edge.
+
         Returns:
-            True if connection was removed, False if not found
+            True if connection was removed, False if not found or not owned
         """
+        if user_scope_id is not None:
+            owned = await self.db.execute(
+                select(Memory.id).where(and_(Memory.id == source_id, Memory.user_scope_id == user_scope_id))
+            )
+            if owned.scalar_one_or_none() is None:
+                return False
         result = await self.db.execute(
             select(Connection).where(
                 and_(
@@ -433,18 +442,28 @@ class GraphManager:
     async def get_memory_connections(
         self,
         memory_id: UUID,
-        direction: str = "both"
+        direction: str = "both",
+        user_scope_id: Optional[UUID] = None
     ) -> List[Connection]:
         """
         Get all connections for a memory.
-        
+
         Args:
             memory_id: Memory UUID
             direction: "outgoing", "incoming", or "both"
-            
+            user_scope_id: when set, the pivot memory must be owned by this scope or an empty list is
+                returned. The connections table has no RLS, so a JOIN-less read would otherwise surface
+                another user's edges.
+
         Returns:
             List of Connection objects
         """
+        if user_scope_id is not None:
+            owned = await self.db.execute(
+                select(Memory.id).where(and_(Memory.id == memory_id, Memory.user_scope_id == user_scope_id))
+            )
+            if owned.scalar_one_or_none() is None:
+                return []
         if direction == "outgoing":
             query = select(Connection).where(Connection.source_id == memory_id)
         elif direction == "incoming":

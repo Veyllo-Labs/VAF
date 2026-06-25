@@ -108,6 +108,15 @@ VAF_MASTER_PASSPHRASE="<a long, unique passphrase>"
 
 With the passphrase set, the encrypted fallback cannot be opened without it — even by someone who can read the files. Keep it out of `config.json` and shell history; supply it via the service environment. If the passphrase is lost, the stored credentials cannot be recovered and the affected accounts must be re-linked.
 
+## Memory isolation (Row-Level Security)
+
+The memory database (`vaf_memory`) enforces PostgreSQL Row-Level Security on the `memories` table, so one user cannot read or write another user's memories at the database layer — independent of the application-level scope filter. The application's data connection (`memory_db_url`) uses a non-superuser role (`vaf_app`, `NOSUPERUSER`/`NOBYPASSRLS`); a separate owner connection (`memory_db_owner_url`, role `vaf`) handles DDL, migrations and global stats. The policy is fail-closed: a row is visible/writable only when its `user_scope_id` equals the per-transaction `app.current_user_scope_id` GUC.
+
+- **Enable / cut over an existing install:** apply `scripts/rls_app_role.sql` (creates the `vaf_app` role + grants), then `scripts/rls_enforce.sql` (fail-closed policy + `ENABLE`/`FORCE`); set `memory_db_url` to the `vaf_app` DSN and `memory_db_owner_url` to the `vaf` DSN, then restart. Fresh installs get the role and policy from `init_db` automatically — only the DSN switch is needed to enforce.
+- **Roll back:** set `memory_db_url` back to the owner (`vaf`) DSN and restart — the superuser bypasses RLS, so all rows are visible again. Optionally run `scripts/rls_disable.sql`. No data is mutated.
+
+See [USER_ISOLATION.md](../security/USER_ISOLATION.md) for the full model.
+
 ## Reverting to Desktop Mode
 
 To switch back to desktop mode:

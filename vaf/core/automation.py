@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from vaf.core.log_helper import append_domain_log
+from vaf.core.log_helper import append_domain_log, append_domain_log_always
 
 # Cross-platform scheduler
 try:
@@ -744,11 +744,21 @@ vaf automation delete <id>   # Delete task
         self.tasks[task.id] = task
         self._save_task(task)
         self._sync_workspace_automation_state(task, event="automation_created")
-        
-        # If scheduler is already running, schedule this task immediately
-        if self._running:
-            self._schedule_task(task)
-        
+
+        # Arm the new task with the running scheduler immediately (no restart needed). The web/agent
+        # create path constructs a FRESH AutomationManager whose own scheduler is not running, so arming
+        # via this instance (self._running) alone is skipped and the task would never fire until the next
+        # restart (and a one-time task whose time passes meanwhile would never fire at all).
+        # refresh_scheduler_from_disk re-reads disk and rebuilds the jobs on the process-global running
+        # scheduler instead — the same mechanism update() already uses. Best-effort: the task is persisted
+        # regardless, so a scheduler hiccup must never fail creation. The self._running fallback covers the
+        # CLI flow where this instance IS the (about-to-start) scheduler.
+        try:
+            if not refresh_scheduler_from_disk(origin=f"create:{task.id}") and self._running:
+                self._schedule_task(task)
+        except Exception as e:
+            self._log_scheduler_event(f"CREATE_ARM_FAILED task_id={task.id} error={e!r}")
+
         return task
 
     def should_skip_daily_catch_up_run(self, new_task: AutomationTask) -> tuple[bool, str]:
@@ -1111,7 +1121,6 @@ vaf automation delete <id>   # Delete task
         lock_id = f"automation_{task.id}"
         if not LockManager.acquire(lock_id):
             msg = f"[LOCK] Automation '{task.name}' ({task.id}) is already running. Skipping."
-            from vaf.core.log_helper import append_domain_log_always
             append_domain_log_always("backend", msg)
             return msg
 
@@ -1170,12 +1179,23 @@ vaf automation delete <id>   # Delete task
                 agent = Agent(verbose=False)
                 agent.load_model()
                 agent.init_chat()
+                # Background run: this agent must stay SILENT — its tool_update emits must never broadcast
+                # into a live user's chat (a scheduled automation has no own web session, so the global
+                # session fallback would otherwise route its tool bubbles to whoever is the active web user).
+                agent._background_run = True
                 # User isolation: workflow runs with task owner's scope (tools + memory)
                 agent._current_user_scope_id = task.user_scope_id
                 if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
                     agent._current_username = get_local_admin_username()
                 else:
-                    agent._current_username = "admin"
+                    # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
+                    # username, never the literal "admin" — the username keys UserWorkspace
+                    # (~/.vaf/users/<username>), which feeds the system-prompt <user_context> and the
+                    # username-keyed calendar/contacts/mail tools. Reuse the thinking-mode resolver so a
+                    # non-admin automation can never inject the admin's identity/profile.
+                    from vaf.core.thinking_mode import _resolve_username_for_scope
+                    _resolved = _resolve_username_for_scope(task.user_scope_id)
+                    agent._current_username = _resolved or ("scope_" + str(task.user_scope_id).replace("-", "")[:8])
 
                 # Get all available tools
                 all_tools = {**agent.tools}
@@ -1326,27 +1346,52 @@ vaf automation delete <id>   # Delete task
                 agent = Agent(verbose=False)
                 agent.load_model()
                 agent.init_chat()
+                # Background run: stay SILENT — tool_update emits must never broadcast into a live user's
+                # chat (no own web session -> the global session fallback would route tool bubbles to the
+                # active web user; observed as an automation leaking into a LAN client's chat).
+                agent._background_run = True
                 # So calendar and create_automation tools use the correct user (same scope as this task).
                 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
                 agent._current_user_scope_id = task.user_scope_id
                 if not task.user_scope_id or str(task.user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
                     agent._current_username = get_local_admin_username()
                 else:
-                    agent._current_username = "admin"
+                    # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
+                    # username, never the literal "admin" — the username keys UserWorkspace
+                    # (~/.vaf/users/<username>), which feeds the system-prompt <user_context> and the
+                    # username-keyed calendar/contacts/mail tools. Reuse the thinking-mode resolver so a
+                    # non-admin automation can never inject the admin's identity/profile.
+                    from vaf.core.thinking_mode import _resolve_username_for_scope
+                    _resolved = _resolve_username_for_scope(task.user_scope_id)
+                    agent._current_username = _resolved or ("scope_" + str(task.user_scope_id).replace("-", "")[:8])
 
                 # Tell the agent it is the same agent, just running an automation in the background.
                 if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
                     automation_notice = (
                         "\n\n## AUTOMATION MODE\n"
                         "You are the **main agent**. You are currently **executing an automation in the background** (autonomous / selbständig). "
-                        "Act on your own to complete the task given in the user message below."
+                        "Act on your own to complete the task given in the user message below.\n"
+                        "This runs silently: the user sees only your final result, not your steps. "
+                        "If you need the user, use `ask_user` — but this is a HIGH BAR: ONLY for a genuine blocker "
+                        "or an important clarification you truly cannot resolve on your own, NEVER for status "
+                        "('starting', 'working on it'). If you can proceed on a reasonable assumption, do so and "
+                        "note the assumption in your result instead of asking. When you do call `ask_user`, your "
+                        "full working context is handed to the user's main agent, which continues the task after "
+                        "they reply — so ask once, clearly, then stop."
                     )
                     if agent.history and agent.history[0].get("role") == "system":
                         agent.history[0]["content"] = (agent.history[0]["content"] or "") + automation_notice
 
-                # Capture response but filter out internal thinking
+                # Capture response. We keep TWO buffers:
+                #  - raw_parts: the untouched stream, so a <think>...</think> block stays INTACT for the
+                #    final reasoning strip. Stripping the tags per-chunk (as below) would only remove the
+                #    markers and leave the reasoning TEXT, which the heuristic cleaner cannot then detect
+                #    (esp. non-English reasoning) — that is exactly how a CoT preamble leaked into a result.
+                #  - response_parts: the legacy tag-stripped buffer, kept only as a fallback.
+                raw_parts = []
                 response_parts = []
                 def capture(text):
+                    raw_parts.append(text)
                     # Filter out internal thinking tags and formatting
                     # Remove Rich markup tags like [white dim]...[/]
                     filtered = re.sub(r'\[/?[^\]]+\]', '', text)
@@ -1388,10 +1433,19 @@ vaf automation delete <id>   # Delete task
                     memory_context=memory_context or None,
                 )
                 raw_result = "".join(response_parts)
-                
-                # Extract only the final clean answer (remove all internal thinking)
-                result = self._extract_clean_answer(raw_result, agent.history)
-                
+
+                # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses
+                # (agent._clean_reasoning): it removes whole <think>...</think> blocks (content included),
+                # so reasoning is stripped structurally and language-agnostically — not by brittle, English-
+                # only phrase heuristics. Fall back to the legacy extractor only if that yields nothing.
+                result = ""
+                try:
+                    result = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
+                except Exception:
+                    result = ""
+                if not result:
+                    result = self._extract_clean_answer(raw_result, agent.history)
+
                 agent.shutdown()
             
             # Save output if path specified
@@ -1559,7 +1613,6 @@ vaf automation delete <id>   # Delete task
             # it on the next refresh/restart (showing up as "next run tomorrow").
             if task.frequency == Frequency.ONCE and task.id in self.tasks:
                 try:
-                    from vaf.core.log_helper import append_domain_log_always
                     self.delete(task.id, permanent=True)
                     append_domain_log_always(
                         "backend",

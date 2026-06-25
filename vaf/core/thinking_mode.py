@@ -44,6 +44,117 @@ def _key(user_scope_id: Any) -> str:
     return str(user_scope_id).strip()
 
 
+def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
+    """Resolve the real account username for a user_scope_id from the local_users store.
+
+    SECURITY: a non-admin thinking run must NEVER be given the literal username "admin".
+    The username drives username-keyed file stores (UserWorkspace -> ~/.vaf/users/<username>/
+    user_identity.json, contacts, mail, calendar). Handing a non-admin the string "admin"
+    injects the ADMIN's personal identity/profile (name, preferences, dos/donts, timezone)
+    into that user's thinking context (system_prompt.py <user_context> block + RAG query seed)
+    — a cross-user data leak. Returns the real username when the scope maps to a local account,
+    a synthetic per-scope username (scope_<8hex>) when the scope is unknown, and None on error
+    so callers can decide a safe fallback. NEVER returns "admin" for a non-admin scope.
+    """
+    if not user_scope_id:
+        return None
+    try:
+        import asyncio
+        from sqlalchemy import select
+        from vaf.auth.models import LocalUser
+        from vaf.auth.database import get_auth_db
+
+        async def _lookup() -> Optional[str]:
+            async with get_auth_db() as db:
+                res = await db.execute(
+                    select(LocalUser.username).where(
+                        LocalUser.user_scope_id == str(user_scope_id)
+                    )
+                )
+                row = res.first()
+                return row[0] if row else None
+
+        try:
+            asyncio.get_running_loop()
+            running = True
+        except RuntimeError:
+            running = False
+
+        username: Optional[str] = None
+        if running:
+            # Already inside an event loop (rare for the thinking thread) — run in a side thread.
+            result_box: List[Optional[str]] = [None]
+
+            def _run_in_thread() -> None:
+                try:
+                    result_box[0] = asyncio.run(_lookup())
+                except Exception:
+                    result_box[0] = None
+
+            t = threading.Thread(target=_run_in_thread, daemon=True)
+            t.start()
+            t.join(timeout=10)
+            username = result_box[0]
+        else:
+            username = asyncio.run(_lookup())
+
+        if username and str(username).strip():
+            return str(username).strip()
+    except Exception as e:
+        logger.debug("scope->username lookup failed for %s: %s", user_scope_id, e)
+
+    # Unknown scope: never fall back to "admin". Use a synthetic, non-privileged, scope-derived
+    # username so UserWorkspace resolves to an isolated (empty) workspace, not the admin's.
+    try:
+        return "scope_" + str(user_scope_id).replace("-", "")[:8]
+    except Exception:
+        return None
+
+
+def _registered_scope_ids() -> set:
+    """Return the set of user_scope_id strings for REGISTERED local accounts (local_users).
+
+    Used to distinguish an infrequent-but-real LAN user from a stale orphan web-session UUID in the
+    dead-session cap: a registered account is a real user and must not be dropped just for being idle
+    past the cap, whereas an unknown orphan UUID should be. Returns an empty set on any error (the
+    caller then falls back to the previous admin-vs-nonadmin behaviour, never crashing the scheduler).
+    """
+    try:
+        import asyncio
+        from sqlalchemy import select
+        from vaf.auth.models import LocalUser
+        from vaf.auth.database import get_auth_db
+
+        async def _lookup() -> set:
+            async with get_auth_db() as db:
+                res = await db.execute(select(LocalUser.user_scope_id))
+                return {str(r[0]).strip() for r in res.all() if r[0]}
+
+        try:
+            asyncio.get_running_loop()
+            running = True
+        except RuntimeError:
+            running = False
+
+        if running:
+            box: List[set] = [set()]
+
+            def _run_in_thread() -> None:
+                try:
+                    box[0] = asyncio.run(_lookup())
+                except Exception:
+                    box[0] = set()
+
+            t = threading.Thread(target=_run_in_thread, daemon=True)
+            t.start()
+            t.join(timeout=10)
+            return box[0]
+        return asyncio.run(_lookup())
+    except Exception as e:
+        logger.debug("registered-scope lookup failed: %s", e)
+        return set()
+
+
 def _load_locks() -> Dict[str, dict]:
     path = _locks_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -721,6 +832,10 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
         max_idle_age_hours = float(Config.get("thinking_max_idle_age_hours", 168) or 0)
         max_idle_age_sec = max_idle_age_hours * 3600 if max_idle_age_hours > 0 else None
         local_admin_scope = str(get_local_admin_scope_id()).strip()
+        # Registered accounts (local_users) are REAL users, not orphan web-session UUIDs. The
+        # dead-session cap below must only drop truly unknown orphans; a registered but infrequent
+        # LAN user (e.g. checks in weekly) must keep getting proactive runs, the same as the admin.
+        registered_scopes = _registered_scope_ids() if max_idle_age_sec is not None else set()
 
         # Step 1: Map all known scope IDs to logical users.
         # Logical ID -> newest TS seen. (None = local admin)
@@ -784,10 +899,17 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
             if (now - ts_float) < 120:
                 continue
 
-            # Dead-session cap: a non-admin scope that has been silent past the max idle age is an
-            # orphan (e.g. an old web-session UUID), not a real idle user -> never run for it. The
-            # local admin (logical_id None) is exempt so a genuinely long-away admin still works.
-            if max_idle_age_sec is not None and logical_id is not None and (now - ts_float) > max_idle_age_sec:
+            # Dead-session cap: a scope silent past the max idle age that is NOT a registered account
+            # is an orphan (e.g. an old web-session UUID), not a real idle user -> never run for it.
+            # The local admin (logical_id None) is exempt so a genuinely long-away admin still works,
+            # AND any registered local_users account is exempt so a real but infrequent LAN user is
+            # not mistaken for a stale orphan (fairness). Only truly UNKNOWN idle UUIDs are dropped.
+            if (
+                max_idle_age_sec is not None
+                and logical_id is not None
+                and str(logical_id).strip() not in registered_scopes
+                and (now - ts_float) > max_idle_age_sec
+            ):
                 continue
 
             result.append(logical_id)
@@ -1338,12 +1460,29 @@ def run_has_open_request(user_scope_id: Optional[str]) -> bool:
 
 
 def _main_agent_busy(user_scope_id: Optional[str]) -> bool:
-    """True if the MAIN agent is actively handling (or has queued) a user turn — provider-independent. The
-    single headless worker marks a session in-flight for the whole turn (TaskQueue.get -> task_done), so
-    is_busy()/queue-size is the universal 'user turn in progress' signal that the 10-min idle gate misses.
-    The thinking run runs in its own thread and never enqueues, so this never self-suppresses. Used by the
-    start-gate (do not START a run mid-turn) and the deliver-gate (do not PUSH a message mid-turn). Fails
-    safe to NOT busy so an error never blocks delivery."""
+    """True if the MAIN agent is actively handling (or has queued) a turn FOR THIS SAME USER —
+    provider-independent. The single headless worker marks a session in-flight for the whole turn
+    (TaskQueue.get -> task_done), so the in-flight/queued metadata scope is the universal 'this user's
+    turn in progress' signal that the 10-min idle gate misses. The thinking run runs in its own thread
+    and never enqueues, so this never self-suppresses.
+
+    FAIRNESS: scoped to THIS user (was previously global is_busy()/queue-size, which let one busy
+    LAN user or the admin block every other user's background runs and deliveries). Admin aliases
+    (None/'default'/local-admin-UUID) collapse via _key so the admin's own turn still self-gates.
+    Used by the start-gate (do not START a run mid-turn) and the deliver-gate (do not PUSH a message
+    mid-turn). Fails safe to NOT busy so an error never blocks delivery."""
+    try:
+        from vaf.core.task_queue import TaskQueue
+        _tq = TaskQueue()
+        return bool(_tq.is_busy_for_scope(_key(user_scope_id), _key))
+    except Exception:
+        return False
+
+
+def _any_agent_busy() -> bool:
+    """True if ANY user's turn is in-flight/queued (global). Used ONLY as an extra start-gate when the
+    main and thinking providers are both the single local model — concurrent runs would contend on one
+    model. NOT used for delivery or on API/server providers (that would starve non-admins)."""
     try:
         from vaf.core.task_queue import TaskQueue
         _tq = TaskQueue()
@@ -2018,7 +2157,15 @@ def _run_thinking_for_user(
         if not user_scope_id or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
             agent._current_username = get_local_admin_username()
         else:
-            agent._current_username = "admin"
+            # SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account
+            # username, never the literal "admin". The username keys UserWorkspace
+            # (~/.vaf/users/<username>/user_identity.json) which feeds the system-prompt
+            # <user_context> block and the RAG query seed below — giving a non-admin the string
+            # "admin" injected the local admin's personal identity/profile into their thinking
+            # context. Resolve the real username from local_users; on unknown scope fall back to
+            # a synthetic per-scope username (never "admin"), so the workspace stays isolated.
+            _resolved = _resolve_username_for_scope(user_scope_id)
+            agent._current_username = _resolved or ("scope_" + str(user_scope_id).replace("-", "")[:8])
         agent.init_chat()
 
         # Load the user's main chat session so the thinking agent sees the full conversation history.
@@ -2641,6 +2788,12 @@ def _run_thinking_for_user(
         os.environ.pop("VAF_THINKING_MODE", None)
         os.environ.pop("VAF_THINKING_SCOPE_ID", None)
         os.environ.pop("VAF_BACKGROUND_PRO", None)   # don't leak the pro-routing flag into the main process
+        os.environ.pop("VAF_THINKING_RUN_ID", None)  # don't leak the run id into the main process / next run
+        # VAF_PROVIDER / VAF_MODEL_OVERRIDE are process-global: if thinking_provider/thinking_model are
+        # configured, leaving them set would silently re-route the MAIN agent and EVERY other user's
+        # subsequent turns to the thinking provider/model for the rest of the process lifetime.
+        os.environ.pop("VAF_PROVIDER", None)
+        os.environ.pop("VAF_MODEL_OVERRIDE", None)
         clear_run_evidence(user_scope_id)   # drop the proactive evidence pool + phase flag (no cross-run leak)
         clear_followup_context(user_scope_id)   # don't leak the follow-up target into a later run
         _set_last_run_completed(user_scope_id)
@@ -2724,8 +2877,15 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     main_provider = (Config.get("provider") or "local").strip().lower()
     t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
     both_local = (main_provider == "local") and (t_provider in ("inherit", "local"))
+    # Per-user start-gate: don't start a run while THIS user's own turn is in flight (fairness — a
+    # different user's busy turn must not block this user). Additionally, when the main and thinking
+    # providers are the same single local model, keep a GLOBAL gate to avoid loading that one model
+    # with two concurrent generations (model contention). On API/server, no global gate.
     if _main_agent_busy(user_scope_id):
-        logger.debug("Thinking skipped: main agent active (user turn in progress, both_local=%s)", both_local)
+        logger.debug("Thinking skipped: this user's turn in progress (both_local=%s)", both_local)
+        return False
+    if both_local and _any_agent_busy():
+        logger.debug("Thinking skipped: shared local model busy with another turn (model contention)")
         return False
 
     # Acquire internal lock

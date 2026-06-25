@@ -34,8 +34,14 @@ import atexit
 import signal
 
 def _emit_to_web_ui() -> bool:
-    """False when running in thinking mode (background) – do not push tool/log updates into any chat session."""
-    return os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes")
+    """False when running a background pass (thinking mode or a scheduled automation) – do not push
+    tool/log/status updates into any live chat session. Automations deliver only their final result
+    (via _push_result_to_web_ui); the live progress noise must stay out of whoever is the active user."""
+    if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+        return False
+    if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+        return False
+    return True
 
 
 def _extract_action_text(text: str):
@@ -1489,10 +1495,14 @@ class Agent:
                                 continue
                             self.tools[instance.name] = instance
                             continue
-                        # ask_user: ONLY in thinking mode — the explicit, tracked channel to contact the
-                        # user (a clean message; the chain-of-thought never leaks; status is tracked).
+                        # ask_user: the explicit, tracked channel to contact the user (a clean message; the
+                        # chain-of-thought never leaks; status is tracked). Available in thinking mode AND in
+                        # a scheduled automation — a background automation that hits a genuine blocker hands
+                        # off via this same channel (it then carries a handoff bundle; see ask_user routing).
                         if instance.name == "ask_user":
-                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                            _thinking = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                            _automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
+                            if not (_thinking or _automation):
                                 continue
                             self.tools[instance.name] = instance
                             continue
@@ -5493,8 +5503,52 @@ class Agent:
         # Logic: If it's meta-talk AND has no relation to the user's keywords, it's a drift
         if is_meta and keyword_hits < 1:
             return False
-            
+
         return True
+
+    def _render_handoff_bundle(self, scope, req) -> str:
+        """For a reply to a background AUTOMATION handoff: load the linked bundle (THIS scope only) and
+        render a BOUNDED digest of the automation's working context — its summary (the curated findings)
+        plus a short tail of recent steps — for the main agent to continue with. Marks the bundle resolved.
+        Returns '' when there is no bundle / it is missing / expired / for another scope (then the caller
+        falls back to the normal thinking-reply path). The full history stays in the bundle for reference;
+        only a bounded digest is injected, so the user's chat is never raw-dumped."""
+        bundle_id = (req or {}).get("bundle_id") or ""
+        if not bundle_id:
+            return ""
+        try:
+            from vaf.core import handoff_bundle as _hb
+            bundle = _hb.load(scope, bundle_id)
+        except Exception:
+            return ""
+        if not bundle:
+            return ""
+        parts = []
+        summary = (bundle.get("summary") or "").strip()
+        if summary:
+            parts.append("What the background run worked out (use THIS, do not re-derive): " + summary[:2000])
+        steps = []
+        for m in (bundle.get("history") or []):
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role in (None, "system", "user"):
+                continue
+            content = m.get("content")
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
+            content = content.strip().replace("\n", " ")
+            if not content:
+                continue
+            label = m.get("name") or role
+            steps.append(f"- {label}: {content[:300]}")
+        if steps:
+            parts.append("Recent steps it took:\n" + "\n".join(steps[-8:])[:4000])
+        try:
+            _hb.update_status(scope, bundle_id, "resolved")
+        except Exception:
+            pass
+        return "\n".join(parts).strip()
 
     def chat_step(
         self,
@@ -5592,24 +5646,43 @@ class Agent:
                             except Exception:
                                 pass
                         _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
-                        # Concrete content the background run gathered behind a teaser message (e.g. the actual
-                        # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
-                        # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
-                        # main agent invented incoherent cooling tips because the content was never passed).
-                        _details = (_req or {}).get("details") or ""
-                        if _details:
-                            _facts = (f" The concrete information behind that message — use THIS to answer their "
-                                      f"reply, do not invent new facts: {_details}.")
+                        # If this request came from a background AUTOMATION handoff, it links to a bundle that
+                        # holds the automation agent's FULL working context. Load it (same scope only) and
+                        # integrate it deliberately: a concise note + a BOUNDED digest of the run's summary +
+                        # recent steps — so the main agent continues with full context, not a raw transcript
+                        # dumped into the chat. A missing/expired/wrong-scope bundle falls back to the normal
+                        # reply path below (no bundle context).
+                        _bundle_ctx = self._render_handoff_bundle(_scope, _req) if _req else ""
+                        if _bundle_ctx:
+                            self._thinking_reply_context = (
+                                f"[Context: The user's message below is a REPLY to a question a BACKGROUND "
+                                f"AUTOMATION of yours raised: \"{q_text}\". That automation could not finish on "
+                                f"its own and handed you its full working context. CONTINUE the task now using "
+                                f"THIS context — do not invent facts and do not restart from scratch.{_carry}\n"
+                                f"{_bundle_ctx}\n"
+                                f"Answer about THAT task only. For THIS turn, IGNORE any earlier <user_intent> or "
+                                f"working-memory <Plan> shown above — they are unrelated. The user's reply follows "
+                                f"immediately after this system note.]"
+                            )
                         else:
-                            _facts = (" You do not have the specifics on hand; if the user asks for details, look "
-                                      "them up (e.g. web_search) — do NOT make up facts.")
-                        self._thinking_reply_context = (
-                            f"[Context: The user's message below is a REPLY to a question YOUR background pass "
-                            f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
-                            f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
-                            f"are unrelated to this reply and must not be treated as the topic. The user's reply "
-                            f"follows immediately after this system note.]"
-                        )
+                            # Concrete content the background run gathered behind a teaser message (e.g. the actual
+                            # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
+                            # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
+                            # main agent invented incoherent cooling tips because the content was never passed).
+                            _details = (_req or {}).get("details") or ""
+                            if _details:
+                                _facts = (f" The concrete information behind that message — use THIS to answer their "
+                                          f"reply, do not invent new facts: {_details}.")
+                            else:
+                                _facts = (" You do not have the specifics on hand; if the user asks for details, look "
+                                          "them up (e.g. web_search) — do NOT make up facts.")
+                            self._thinking_reply_context = (
+                                f"[Context: The user's message below is a REPLY to a question YOUR background pass "
+                                f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
+                                f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
+                                f"are unrelated to this reply and must not be treated as the topic. The user's reply "
+                                f"follows immediately after this system note.]"
+                            )
                 else:
                     self._thinking_reply_context = None
 
@@ -7579,13 +7652,23 @@ class Agent:
                     # process-wide VAF_THINKING_MODE env var, which can be set by a concurrent
                     # background thinking process — blocking tool_update for active WebUI sessions.
                     # broadcast routes updates by session_id, so this is always safe.
+                    # EXCEPTION — a background run (scheduled automation): it has no own web session, so the
+                    # get_current_session_id() fallback would route this tool bubble to whoever is the active
+                    # web user (observed: an automation's web_search bubbles leaked into a LAN user's chat).
+                    # The per-agent flag is race-free, unlike the process-wide env a concurrent real turn trips.
                     try:
-                        from vaf.core.web_interface import get_web_interface
-                        _tool_session = getattr(self, 'current_session_id', None)
-                        if not _tool_session:
-                            from vaf.core.subagent_ipc import get_current_session_id
-                            _tool_session = get_current_session_id()
-                        get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=_tool_session)
+                        if not getattr(self, '_background_run', False):
+                            from vaf.core.web_interface import get_web_interface
+                            _tool_session = getattr(self, 'current_session_id', None)
+                            if not _tool_session:
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _tool_session = get_current_session_id()
+                            get_web_interface().emit_tool_update('start', function_name, tc['id'], data=json.dumps(arguments), session_id=_tool_session)
+                        else:
+                            # Proof line: a silent background run suppressed this live tool bubble (it would
+                            # otherwise have broadcast into the active web user's chat). Background runs only.
+                            from vaf.core.log_helper import append_domain_log
+                            append_domain_log("backend", f"[SILENT-RUN] tool_update 'start' SUPPRESSED (background agent) tool={function_name}")
                     except Exception:
                         pass
                     
@@ -7679,7 +7762,14 @@ class Agent:
                         # Truncate + sanitize: remove surrogate chars that break json.dumps
                         _r_raw = r_str[:800] + (f"\n[…+{len(r_str)-800} chars]" if len(r_str) > 800 else "")
                         _r_ui = _r_raw.encode('utf-8', errors='replace').decode('utf-8')
-                        get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session)
+                        # A background run (scheduled automation) stays silent — see the Tool Start note:
+                        # its tool bubbles must not broadcast into the active web user's chat. Mark it
+                        # "emitted" so the later not-yet-emitted fallback also stays silent.
+                        if not getattr(self, '_background_run', False):
+                            get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session)
+                        else:
+                            from vaf.core.log_helper import append_domain_log
+                            append_domain_log("backend", f"[SILENT-RUN] tool_update '{'error' if is_err else 'end'}' SUPPRESSED (background agent) tool={function_name}")
                         _tool_end_emitted = True
                         log_timeline_event('tool_end', tool=function_name, call_id=_tl_call_id,
                                            session=str(_tool_session or ''),
@@ -8878,6 +8968,14 @@ class Agent:
                     tool_args["user_scope_id"] = scope_id
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
+                if name == "ask_user" and os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+                    # A background automation handing off to the user's main agent: give the tool the live
+                    # agent (so it can snapshot the full working history into a handoff bundle) + the real
+                    # scope/username. Scoped to the automation run, so the thinking-mode ask_user call (which
+                    # resolves its scope inside deliver_tracked_message) stays byte-identical.
+                    tool_args["_agent"] = self
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("update_intent", "update_working_memory"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("set_timer", "list_timers", "cancel_timer"):

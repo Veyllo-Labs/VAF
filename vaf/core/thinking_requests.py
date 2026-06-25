@@ -77,6 +77,7 @@ def add_request(
     source_todo_id: Optional[str] = None,
     details: Optional[str] = None,
     session_id: Optional[str] = None,
+    bundle_id: Optional[str] = None,
 ) -> dict:
     """Record a new 'asked' request. source_note_id / source_todo_id link the request to the
     automation note/todo it came from, so that note/todo can be marked handled once the user
@@ -84,6 +85,8 @@ def add_request(
     message (e.g. the actual list of tips the run found) so the main agent can answer a follow-up with
     the REAL facts instead of re-deriving them. `session_id` is the web session the question was
     delivered to (the anchor), so a follow-up on a later run re-uses it instead of re-picking 'latest'.
+    `bundle_id` links the request to a handoff bundle (a background automation's full working context),
+    so the main agent loads that context when the user replies (None for thinking-mode requests).
     Returns the created entry (with id)."""
     path = _path(user_scope_id)
     items = _load(path)
@@ -99,6 +102,7 @@ def add_request(
         "source_note_id": (source_note_id or "").strip() or None,
         "source_todo_id": (source_todo_id or "").strip() or None,
         "session_id": (session_id or "").strip() or None,
+        "bundle_id": (bundle_id or "").strip() or None,
         "user_reply": None,
         "main_reply": None,
         "needs_reconfirm": False,

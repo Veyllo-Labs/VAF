@@ -26,7 +26,12 @@ class AskUserTool(BaseTool):
         "einrichten, deine Kleidung zu checken?'). Put ONLY the final, polished text in `message` — no "
         "reasoning, no tool talk, no 'I should…'. Use this at most once per run and only when you "
         "genuinely need the user's decision. The system delivers it, tracks it as a request, and waits "
-        "for the reply; do not also write the question as plain text."
+        "for the reply; do not also write the question as plain text. "
+        "In a scheduled automation this is a HIGH BAR: use it ONLY for a genuine blocker or an important "
+        "clarification you cannot resolve on your own — NEVER for status ('starting', 'working on it'). If "
+        "you can proceed on a reasonable assumption, do so and note the assumption in your result instead "
+        "of asking. When you do ask, your full working context is handed to the user's main agent, which "
+        "continues the task after they reply."
     )
     parameters = {
         "type": "object",
@@ -74,9 +79,18 @@ class AskUserTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
+        import os
+
         message = (kwargs.get("message") or "").strip()
         if not message:
             return "Error: message must not be empty."
+
+        # In a scheduled automation, this is a background handoff to the user's MAIN agent: store the
+        # automation agent's FULL working context as a bundle, record the linked request, then end. The
+        # main agent loads the bundle and continues when the user replies. (The thinking-mode path below
+        # is untouched.)
+        if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+            return self._run_automation_handoff(**kwargs)
 
         try:
             # Single shared delivery path (also used by the thinking_done fallback): records a tracked
@@ -125,4 +139,46 @@ class AskUserTool(BaseTool):
         return (
             f"Recorded your question (request {req['id']}) and set the waiting state, but the user's chat "
             "was not reachable right now; it will surface on their next visit. Call thinking_done now."
+        )
+
+    def _run_automation_handoff(self, **kwargs) -> str:
+        """A scheduled automation that hit a genuine blocker hands off its FULL working context to the
+        user's main agent. Stores the agent history as a handoff bundle + records the linked request, then
+        ends — the main agent loads the bundle and continues with full context when the user replies."""
+        message = (kwargs.get("message") or "").strip()
+        try:
+            from vaf.core.handoff_bundle import deliver_handoff
+        except Exception as e:  # pragma: no cover - defensive
+            return f"Error: ask_user handoff is unavailable: {e}"
+
+        _agent = kwargs.get("_agent")
+        _history = None
+        if _agent is not None:
+            try:
+                _history = list(getattr(_agent, "history", None) or [])
+            except Exception:
+                _history = None
+
+        # session_id left as injected (None for automations) -> deliver_handoff anchors to the user's
+        # latest real web session, so the question lands in the main chat where the reply is picked up.
+        req = deliver_handoff(
+            kwargs.get("user_scope_id"),
+            message=message,
+            proposed_action=kwargs.get("proposed_action"),
+            details=kwargs.get("details"),
+            history=_history,
+            session_id=kwargs.get("session_id"),
+            username=kwargs.get("username"),
+        )
+        if not req:
+            return "Error: the handoff message was empty and was not sent."
+        if req.get("delivered"):
+            return (
+                f"Handoff delivered to the user (request {req['id']}, bundle {req.get('bundle_id')}). Stop "
+                "now — your full working context is saved; the user's main agent continues with it when they "
+                "reply. Do not ask or do anything else."
+            )
+        return (
+            f"Handoff recorded (request {req['id']}, bundle {req.get('bundle_id')}); the user's chat was not "
+            "reachable right now, so it surfaces on their next visit. Stop now — do not ask anything else."
         )

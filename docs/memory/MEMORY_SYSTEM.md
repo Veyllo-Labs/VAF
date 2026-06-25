@@ -26,6 +26,12 @@ The memory system is **self-learning**: it improves with use. The more you chat 
 - **Better recall over time:** RAG retrieval runs before each reply. As more memories are stored (from compaction and `memory_save`), semantic search returns more relevant context, so answers become more personalized and consistent across sessions.
 - **Scope:** Learning is per user (`user_scope_id`). Only the main user’s Web UI conversations are compacted; contact chats (Telegram, WhatsApp, Discord) are not written to RAG for data protection.
 
+#### User isolation (retrieval is per-user and fails closed)
+
+Memory **retrieval** is per-user, not just writes. Both retrieval lanes — the vector lane and the lexical/hybrid lane — filter on `Memory.user_scope_id == user_scope_id` (the caller's scope). The isolation is **fail-closed**: a missing or empty scope returns **no results**, never a "search all" fallback, and an unparseable scope is treated as a deny rather than a wildcard.
+
+Server-vs-local resolution: `run_memory_search_sync` denies (`RAG_DENY` / `SEARCH_DENIED`) for a missing scope in server mode, and floors to the local-admin scope only in single-user/local mode. See [USER_ISOLATION.md](../security/USER_ISOLATION.md) for the full isolation model.
+
 See [Session Compaction (background)](#session-compaction-background) and the `memory_save` / `memory_search` tools for implementation details. For a high-level overview of self-learning in VAF (including future extensions), see [SELF_LEARNING.md](SELF_LEARNING.md).
 
 ## Overview
@@ -239,6 +245,8 @@ The agent can **learn a document** into long-term memory via the **`learn_docume
 Implementation: `vaf/tools/learn_document.py`; ingestion uses the same `RagPipeline.ingest()` as other memories with `type=document`, `source=learn_document`, and `tags=[doc-<title>]`. See the memory graph legend: **Document** = purple.
 
 ## API Reference
+
+**Authentication and scope.** In server mode the memory endpoints derive `user_scope_id` via `get_current_user_scope`, and an unauthenticated request **fails closed** — it returns no results. A valid access JWT is required to see your own memories; the scope is taken from the token, never from the request body. The plain unauthenticated `curl` examples below only return data in single-user/local mode, where the endpoints fall back to the local-admin scope.
 
 ### Endpoints
 
@@ -511,6 +519,7 @@ This incident showed that component-level stability can still fail in compositio
 2. **Use system keyring** for encryption key storage instead of config file
 3. **Network isolation**: The Docker container only exposes port 5432 to localhost
 4. **Backup encryption keys** separately from data backups
+5. **User isolation — application filter is primary, RLS is a backstop**: `get_db(user_scope_id=...)` sets the `app.current_user_scope_id` GUC so PostgreSQL Row-Level Security (the `user_isolation_memories` policy) engages as defense-in-depth. RLS is a **backstop only**: it **fails open** — the policy allows all rows when the GUC is unset/empty or when a row's `user_scope_id IS NULL`. The application-layer fail-closed scope filter (see [User isolation](#user-isolation-retrieval-is-per-user-and-fails-closed)) remains the primary isolation guard; do not rely on RLS as the isolation guarantee.
 
 ## Performance
 

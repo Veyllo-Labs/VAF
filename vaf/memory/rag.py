@@ -372,10 +372,14 @@ class RagPipeline:
                 )
             )
 
-        # Apply scope filter
-        if user_scope_id:
-            filters.append(Memory.user_scope_id == user_scope_id)
-        # If no user_scope_id provided, search ALL memories (no filter applied)
+        # USER ISOLATION: the scope is mandatory and this fails CLOSED. An empty scope used to mean
+        # "search ALL memories (no filter)", which returned one user's chunks/tags to another (the
+        # reported cross-user leak). Refuse instead. A deliberate shared/global corpus must be modelled
+        # with an explicit sentinel scope + opt-in flag, never an implicit unscoped query.
+        if not user_scope_id:
+            logger.warning("RagPipeline.search called without user_scope_id - returning no results (fail-closed isolation)")
+            return []
+        filters.append(Memory.user_scope_id == user_scope_id)
 
         stmt = select(
             Chunk,
@@ -452,8 +456,9 @@ class RagPipeline:
                     Memory.meta["source"].astext != ATTACHMENT_EPHEMERAL_SOURCE,
                 )
             )
-        if user_scope_id:
-            lexical_filters.append(Memory.user_scope_id == user_scope_id)
+        # Scope is guaranteed here (the vector lane above already fails closed on an empty scope), but
+        # filter unconditionally so the lexical lane can never widen past the caller's scope.
+        lexical_filters.append(Memory.user_scope_id == user_scope_id)
 
         if query_tokens:
             token_ors = [Chunk.text.ilike(f"%{tok}%") for tok in query_tokens[:8]]
@@ -1568,6 +1573,33 @@ def run_memory_search_sync(
         _rag_timing_log("RAG_SKIP reason=memory_disabled")
         return ""
 
+    # USER ISOLATION: resolve a concrete scope before any retrieval; never search unscoped.
+    # A missing scope previously fell through to a fail-open "search ALL memories" query that leaked
+    # other users' snippets/tags. Policy:
+    #   - server/multi-user mode + no scope -> DENY (we cannot assume the caller is the admin);
+    #   - genuine single-user/local mode + no scope -> fall back to the local-admin scope (the bootstrap
+    #     sets this to the admin's real account UUID, so the desktop keeps seeing its own memories).
+    # search() additionally fails closed on an empty scope as a backstop.
+    if not user_scope_id:
+        try:
+            _server_mode = bool(Config.get("local_network_enabled", False))
+        except Exception:
+            _server_mode = False
+        if _server_mode:
+            _rag_timing_log(f"RAG_DENY caller={caller or 'unknown'} reason=no_user_scope_in_server_mode")
+            append_domain_log("rag", f"SEARCH_DENIED caller={caller or 'unknown'} reason=no_user_scope (server mode; refusing to search unscoped)")
+            return ""
+        from vaf.core.config import get_local_admin_scope_id
+        user_scope_id = get_local_admin_scope_id()
+    # Normalize to UUID for the DB comparison and the RLS GUC; an unparseable scope is a deny.
+    try:
+        from uuid import UUID as _UUID
+        user_scope_id = user_scope_id if isinstance(user_scope_id, _UUID) else _UUID(str(user_scope_id))
+    except (ValueError, TypeError):
+        _rag_timing_log(f"RAG_DENY caller={caller or 'unknown'} reason=invalid_user_scope")
+        append_domain_log("rag", f"SEARCH_DENIED caller={caller or 'unknown'} reason=invalid_user_scope")
+        return ""
+
     # Truncate at entry so we never pass long strings to encoder (avoids 10GB+ RAM spike)
     # Also strip <think> blocks to prevent recursive loops
     from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
@@ -1609,7 +1641,9 @@ def run_memory_search_sync(
     threshold = max(0.0, min(1.0, threshold))
 
     async def _search() -> str:
-        async with get_db() as db:
+        # Pass the resolved scope into get_db so RLS (app.current_user_scope_id) is actually engaged
+        # for this transaction as defense-in-depth, not just the SQLAlchemy filter.
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             sources = await pipeline.search(
                 query, k=k, threshold=threshold, metadata_filter=metadata_filter, user_scope_id=user_scope_id

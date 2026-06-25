@@ -188,7 +188,7 @@ After login, go to /settings/billing and return the current plan name and next r
 
 By default every `browser_agent` call starts with a completely clean browser profile — no cookies, no login state. This is safe but means the agent must re-login on every task.
 
-With `persistent=true`, VAF saves the browser's cookies and storage state to `~/.vaf/browser_sessions/{session}.json` after each task and restores it at the start of the next call with the same session name.
+With `persistent=true`, VAF saves the browser's cookies and storage state to `~/.vaf/browser_sessions/<scope>/{session}.json` after each task and restores it at the start of the next call with the same session name. The `<scope>` segment is the caller's sanitized user_scope_id (or the local-admin scope in single-user mode) — see [Per-user session isolation](#per-user-session-isolation).
 
 ### First call — login
 
@@ -200,7 +200,7 @@ With `persistent=true`, VAF saves the browser's cookies and storage state to `~/
 }
 ```
 
-After this call, `~/.vaf/browser_sessions/tipico.json` contains the session cookies.
+After this call, `~/.vaf/browser_sessions/<scope>/tipico.json` (where `<scope>` is the caller's user_scope_id) contains the session cookies.
 
 ### Subsequent calls — already logged in
 
@@ -218,16 +218,28 @@ The agent navigates directly to the page — no login step needed.
 
 ```
 ~/.vaf/browser_sessions/
-├── tipico.json
-├── amazon.json
-└── banking.json
+└── <scope>/                 # one directory per user_scope_id
+    ├── tipico.json
+    ├── amazon.json
+    └── banking.json
 ```
 
 Each file is a Playwright `storage_state` JSON — contains cookies, localStorage, and sessionStorage for all domains visited during the session.
 
+### Per-user session isolation
+
+The `<scope>` directory segment keys saved sessions to a single VAF user, so saved logins and cookies are never shared across users. The scope value is resolved by this precedence:
+
+1. an explicit caller `user_scope_id`, when one is passed;
+2. otherwise the `VAF_USER_SCOPE_ID` environment variable (the child-process fallback);
+3. otherwise `get_local_admin_scope_id()` (single-user / local install);
+4. otherwise the literal `default`.
+
+The resolved value is sanitized to `[A-Za-z0-9_-]` before it is used as the directory name. An operator inspecting `~/.vaf/browser_sessions/` therefore sees one opaque per-user subdirectory per scope rather than a flat list of session files.
+
 ### Security note
 
-Session files contain login cookies in plain text. They are stored in `~/.vaf/browser_sessions/` which is only accessible to the OS user running VAF. Do not commit these files to version control.
+Session files contain login cookies in plain text. They are stored per user under `~/.vaf/browser_sessions/<scope>/`, keyed by user_scope_id, so two VAF users sharing the same OS account cannot read or share each other's saved logins and cookies. OS-user file permissions on `~/.vaf/` remain an additional layer, not the only guard. Do not commit these files to version control.
 
 ---
 
@@ -450,7 +462,7 @@ The container runs a single persistent Chromium process **headed under a virtual
 
 **Default behaviour:** each task starts with a clean browser profile — no cookies, no login state.
 
-**Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/{session}.json` after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
+**Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/<scope>/{session}.json` (one subdirectory per user_scope_id) after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
 
 ### Rebuild after Dockerfile changes
 

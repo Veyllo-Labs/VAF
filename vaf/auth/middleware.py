@@ -108,63 +108,71 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # is therefore only ever an auth-bypass attempt — it must NOT skip auth.
         client_ip = request.client.host if request.client else "unknown"
 
-        # Localhost is always allowed without token
         try:
             from vaf.network.binding import is_localhost
         except ImportError:
             def is_localhost(ip: str) -> bool:
                 return ip in ("127.0.0.1", "::1", "localhost")
 
-        if is_localhost(client_ip):
-            return await call_next(request)
-
-        # --- Network client: require valid JWT ---
         token = _extract_token(request)
-        if not token:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication required"},
-            )
 
-        try:
-            from vaf.auth.crypto import decode_token
-            payload = decode_token(token)
-            if not payload or payload.get("type") != "access":
+        # Honor a presented JWT regardless of the peer IP. The integrated HTTPS proxy forwards LAN
+        # clients to the backend over loopback (the backend binds 127.0.0.1), so a "localhost" peer
+        # may actually be a remote user. Previously a localhost peer returned here BEFORE the token
+        # was read, so an authenticated LAN user's token was ignored and downstream fell back to the
+        # local admin scope — that is the cross-user data leak (one user seeing another's RAG/sessions).
+        # Now: a valid token always establishes the real identity. request.state.user is left unset for
+        # a tokenless localhost request, so internal loopback IPC and the single-user desktop keep
+        # working without a token (those non-user-data paths do not rely on an identity).
+        if token:
+            payload = None
+            try:
+                from vaf.auth.crypto import decode_token
+                payload = decode_token(token)
+            except Exception as e:
+                logger.warning("Auth middleware token decode error for %s: %s", client_ip, e)
+                payload = None
+
+            if payload and payload.get("type") == "access":
+                # Optional: enforce 2FA verification
+                require_2fa = Config.get("local_network_require_2fa", True)
+                if require_2fa and payload.get("requires_2fa_setup"):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "2FA setup required before accessing resources"},
+                    )
+
+                # Attach user info to request state for downstream handlers
+                request.state.user_id = payload.get("sub")
+                request.state.username = payload.get("username")
+                request.state.role = payload.get("role")
+                request.state.user_scope_id = payload.get("user_scope_id")
+
+                # Consolidated dict for API route handlers (they read request.state.user)
+                request.state.user = {
+                    "user_id": payload.get("sub"),
+                    "username": payload.get("username"),
+                    "role": payload.get("role"),
+                    "user_scope_id": payload.get("user_scope_id"),
+                }
+                return await call_next(request)
+
+            # Token present but invalid/expired: a network client is rejected; a localhost client
+            # (local desktop with a stale cookie) is not locked out — it falls through to the
+            # tokenless localhost path below rather than getting a hard 401.
+            if not is_localhost(client_ip):
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or expired token"},
                 )
 
-            # Optional: enforce 2FA verification
-            require_2fa = Config.get("local_network_require_2fa", True)
-            if require_2fa and payload.get("requires_2fa_setup"):
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "2FA setup required before accessing resources"},
-                )
-
-            # Attach user info to request state for downstream handlers
-            request.state.user_id = payload.get("sub")
-            request.state.username = payload.get("username")
-            request.state.role = payload.get("role")
-            request.state.user_scope_id = payload.get("user_scope_id")
-
-            # Consolidated dict for API route handlers (they read request.state.user)
-            request.state.user = {
-                "user_id": payload.get("sub"),
-                "username": payload.get("username"),
-                "role": payload.get("role"),
-                "user_scope_id": payload.get("user_scope_id"),
-            }
-
-        except Exception as e:
-            logger.warning("Auth middleware error for %s: %s", client_ip, e)
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication failed"},
-            )
-
-        return await call_next(request)
+        # No valid identity established.
+        if is_localhost(client_ip):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+        )
 
 
 def _extract_token(request: Request) -> str | None:

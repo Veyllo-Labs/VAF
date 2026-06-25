@@ -149,3 +149,66 @@ def test_tool_reports_duplicate_add_not_re_added(tmp_path):
     assert "already" in r.lower()
     after = MainPersistenceManager(base, session_id=ct._current_session_id()).get_working_memory()
     assert len(after["tasks"]) == 1
+
+
+# ── mark_task_done robustness: marking an already-done / out-of-range index must NOT return a silent
+#    "✅ updated" — it must warn and redirect to the real open step. This is the EuroJackpot loop: the
+#    agent marked [0] (already done) while [1] (the actual buy) stayed pending, so the rendered
+#    "CURRENT STEP" header kept driving a real-money re-purchase. Warn-only: never auto-change status.
+
+def test_mark_task_done_already_done_redirects_to_open_step(tmp_path):
+    import vaf.tools.context_tools as ct
+    ct._TASK_OVERWRITE_CONFIRM.clear()
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+
+    tool.run(base_dir=base, add_task="Zahlen waehlen")
+    tool.run(base_dir=base, add_task="Kauf abschliessen")
+    tool.run(base_dir=base, mark_task_done=0)          # [0] done -> [1] is now the open step
+    r = tool.run(base_dir=base, mark_task_done=0)      # the bug: re-mark the already-done [0]
+
+    assert "already done" in r.lower()
+    assert "[1]" in r and "Kauf abschliessen" in r     # redirected to the genuinely-open step
+    assert "✅ Working Memory updated." not in r        # NOT a silent success
+    # warn-only: the tool must never have auto-changed any status
+    wm = MainPersistenceManager(base, session_id=ct._current_session_id()).get_working_memory()
+    assert wm["tasks"][1]["status"] == "pending"
+
+
+def test_mark_task_done_out_of_range_redirects(tmp_path):
+    import vaf.tools.context_tools as ct
+    ct._TASK_OVERWRITE_CONFIRM.clear()
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+
+    tool.run(base_dir=base, add_task="only step")
+    r = tool.run(base_dir=base, mark_task_done=5)      # no task [5]; [0] is the open step
+    assert "no task [5]" in r.lower()
+    assert "[0]" in r
+    assert "✅ Working Memory updated." not in r
+
+
+def test_mark_task_done_happy_path_unchanged(tmp_path):
+    import vaf.tools.context_tools as ct
+    ct._TASK_OVERWRITE_CONFIRM.clear()
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+
+    tool.run(base_dir=base, add_task="the step")
+    r = tool.run(base_dir=base, mark_task_done=0)      # marks the genuinely-pending step
+    assert "✅ Working Memory updated." in r            # normal success preserved
+    wm = MainPersistenceManager(base, session_id=ct._current_session_id()).get_working_memory()
+    assert wm["tasks"][0]["status"] == "done"
+
+
+def test_mark_already_done_when_all_complete_is_positive(tmp_path):
+    import vaf.tools.context_tools as ct
+    ct._TASK_OVERWRITE_CONFIRM.clear()
+    tool = ct.UpdateWorkingMemoryTool()
+    base = str(tmp_path)
+
+    tool.run(base_dir=base, add_task="the step")
+    tool.run(base_dir=base, mark_task_done=0)          # done; nothing pending now
+    r = tool.run(base_dir=base, mark_task_done=0)      # already done + all complete
+    assert "all tasks are complete" in r.lower()
+    assert "⚠️" not in r                                # positive close-out, not a warning

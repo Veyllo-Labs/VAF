@@ -723,32 +723,49 @@ async def startup_event():
     sm.on_speech_start = on_tts_start
     sm.on_speech_end = on_tts_end
     
-    # Setup firewall rules if local network and firewall are enabled
+    # Setup firewall rules if local network and firewall are enabled.
+    # IMPORTANT: run OFF the startup critical path in a daemon thread. Firewall setup shells out to sudo;
+    # a blocking sudo password prompt on the controlling TTY would otherwise stall this startup handler
+    # and delay port 8001 readiness (the "Backend not ready after 30s" symptom). firewall.py now passes
+    # 'sudo -n' so it fails fast instead of prompting, and this thread guarantees startup is never
+    # blocked regardless. (Correct LAN port + firewalld/pkexec elevation are handled separately.)
     if Config.get("local_network_enabled", False) and Config.get("local_network_firewall_enabled", True):
-        try:
-            from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
-            import platform as _platform
-            tls_on = bool(Config.get("local_network_tls_enabled", False))
-            if tls_on:
-                access_port = int(Config.get("local_network_https_port", 443) or 443)
-                # Keep behavior aligned with tray/proxy: Windows defaults to 8443 when configured 443.
-                if _platform.system() == "Windows" and access_port == 443:
-                    access_port = 8443
-                port = access_port
-                # Keep backend port rule too for compatibility with current internal routing.
-                port_frontend = int(Config.get("local_network_port", 8001) or 8001)
-            else:
-                port = int(Config.get("local_network_port", 8001) or 8001)
-                port_frontend = int(Config.get("local_network_port_frontend", 3000) or 3000)
-            
-            success = setup_firewall(port, port_frontend)
-            if success:
-                register_cleanup_on_exit()
-                log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
-            else:
-                log("WebServer", f"Firewall setup failed for ports {port}, {port_frontend} - may need elevated privileges (Run as Administrator)")
-        except Exception as e:
-            log("WebServer", f"Firewall setup error: {e}")
+        def _setup_firewall_bg():
+            try:
+                import time as _time
+                from vaf.network.firewall import setup_firewall, register_cleanup_on_exit
+                tls_on = bool(Config.get("local_network_tls_enabled", False))
+                if tls_on:
+                    # Open the port the integrated proxy ACTUALLY bound (e.g. 8443 after the 443→8443
+                    # fallback), NOT the configured 443. Wait briefly for the proxy thread to report it.
+                    from vaf.network import runtime_status
+                    access_port = None
+                    for _ in range(20):  # up to ~10s for the proxy to bind + report
+                        st = runtime_status.get_proxy_status()
+                        if st.get("bound") and st.get("effective_https_port"):
+                            access_port = int(st["effective_https_port"])
+                            break
+                        _time.sleep(0.5)
+                    if access_port is None:
+                        configured = int(Config.get("local_network_https_port", 443) or 443)
+                        # Proxy hasn't reported yet → assume its standard 443→8443 fallback.
+                        access_port = 8443 if configured == 443 else configured
+                    port = access_port
+                    port_frontend = int(Config.get("local_network_port", 8001) or 8001)
+                else:
+                    port = int(Config.get("local_network_port", 8001) or 8001)
+                    port_frontend = int(Config.get("local_network_port_frontend", 3000) or 3000)
+
+                success = setup_firewall(port, port_frontend)
+                if success:
+                    register_cleanup_on_exit()
+                    log("WebServer", f"Firewall rules created for ports {port}, {port_frontend}")
+                else:
+                    log("WebServer", f"Firewall setup skipped for ports {port}, {port_frontend} - needs elevated privileges (no passwordless sudo). Open the port manually or use the in-app firewall step.")
+            except Exception as e:
+                log("WebServer", f"Firewall setup error: {e}")
+        import threading as _threading
+        _threading.Thread(target=_setup_firewall_bg, daemon=True, name="vaf-firewall-setup").start()
 
     # Start garbage collector (logs, temp, cache, old thinking sessions) when running without tray
     try:
@@ -2163,7 +2180,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     # Use cookie if frontend didn't pass token in URL (e.g. after login from same host)
     if not token and hasattr(websocket, "cookies") and websocket.cookies:
         token = websocket.cookies.get(VAF_TOKEN_COOKIE)
-    client_ip = websocket.client.host if websocket.client else "unknown"
+    # Prefer X-Forwarded-For (set by the integrated HTTPS proxy) so a LAN device shows its REAL IP in the
+    # network map, not 127.0.0.1 (the proxy). Fall back to the direct peer for the desktop/localhost path.
+    _xff = ""
+    try:
+        _xff = (websocket.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
+    except Exception:
+        _xff = ""
+    client_ip = _xff or (websocket.client.host if websocket.client else "unknown")
     print(f"[WebSocket] Connection attempt from {client_ip}")
     log("API", f"WebSocket connection attempt from {client_ip}")
     

@@ -419,7 +419,7 @@
 .tsc { position:absolute; transform:scale(.75); transform-origin:top left;
   --ink:#2a3142; --ink-soft:rgba(30,36,52,.55); --ink-fill:rgba(30,36,52,.06); --ink-faint:rgba(30,36,52,.14); --glow:rgba(30,36,52,.16); --paper:#fbfcfe; --paper-edge:rgba(30,36,52,.22); }
 .tsc .ag { position:absolute; width:48px; height:48px; }
-.tsc .bd { position:absolute; inset:0; background:#111827; border-radius:16px; box-shadow:0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05); transform-origin:center; }
+.tsc .bd { position:absolute; inset:0; background:#111827; border-radius:16px; box-shadow:0 2px 5px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.05); transform-origin:center; }
 .tsc .ey { position:absolute; left:50%; top:50%; width:17px; height:17px; margin:-8.5px 0 0 -8.5px; border-radius:50%; background:#fff; box-shadow:0 0 9px 2px rgba(255,255,255,.42); transform-origin:center; }
 /* web_search — the agent eagerly hunts with a magnifier (Disney/Pixar: squash-&-stretch on
    landings, overshoot, eye-tracking, a "found it!" glint + search dust). No document frame.
@@ -507,7 +507,7 @@
 .asc { position:absolute; transform:scale(.75); transform-origin:top left;
   --ink:#2a3142; --ink-soft:rgba(30,36,52,.55); --ink-fill:rgba(30,36,52,.06); --line:rgba(30,36,52,.20); --glow:rgba(30,36,52,.16); }
 .asc .ag { position:absolute; width:48px; height:48px; }
-.asc .bd { position:absolute; inset:0; background:#111827; border-radius:16px; box-shadow:0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05); transform-origin:center bottom; }
+.asc .bd { position:absolute; inset:0; background:#111827; border-radius:16px; box-shadow:0 2px 5px rgba(0,0,0,.16), inset 0 0 0 1px rgba(255,255,255,.05); transform-origin:center bottom; }
 .asc .ey { position:absolute; left:50%; top:50%; width:17px; height:17px; margin:-8.5px 0 0 -8.5px; border-radius:50%; background:#fff; box-shadow:0 0 9px 2px rgba(255,255,255,.42); }
 /* nap — dozed off waiting: pillow + rising z's, heavy slow breathing, eyes nearly shut */
 .asc.nap .ag { left:76px; top:70px; } .asc.nap .bd { animation:bodyNap 4s ease-in-out infinite; } .asc.nap .ey { animation:eyeNap 4s ease-in-out infinite; }
@@ -580,4 +580,16 @@
 @keyframes stopRipple {
   0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.65; }
   100% { transform: translate(-50%,-50%) scale(3.2); opacity: 0; }
+}
+
+/* Network Map (Local Network tab): the nodes are presentational cards, not editable graph
+   nodes, so hide ReactFlow's connection-handle dots (the small dark/orange dots that otherwise
+   show on each node border and on the connection origin). Edges keep rounded ends so the
+   host -> device links look clean. */
+.vaf-netmap .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.vaf-netmap .react-flow__edge-path {
+  stroke-linecap: round;
 }

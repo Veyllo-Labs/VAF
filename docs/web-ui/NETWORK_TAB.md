@@ -1,6 +1,6 @@
-# Local Network & Secure Access Portal (Dummy UI Documentation)
+# Local Network & Secure Access Portal
 
-This document provides a detailed overview of the **Local Network** tab in the settings and the associated **Login Portal**. Currently implemented as a high-fidelity Dummy UI, these components serve as the blueprint for the upcoming local network functionality of VAF.
+This document provides a detailed overview of the **Local Network** tab in the settings and the associated **Login Portal**. The core network functionality — LAN hosting via the integrated HTTPS proxy, automatic firewall opening, user management, and the live Network Map — is implemented and live. A few presentational elements (the Server Info cards, parts of the Login Portal) are still illustrative placeholders and are called out as such below.
 
 ---
 
@@ -8,38 +8,51 @@ This document provides a detailed overview of the **Local Network** tab in the s
 
 The **Local Network** tab is the central command center for managing local network access to the VAF instance. It allows the main user (Admin) to configure who can access the agent from other devices in the same network.
 
-### 1.1 UI Structure & Current (Dummy) Features
+### 1.1 UI Structure & Features
 
 #### **A. Global Toggle**
 *   **Element:** "Enable Local Network Hosting" Switch.
-*   **Current Behavior:** Visually enables/disables the underlying sections (opacity change).
-*   **Future Logic:** Starts/Stops the internal Next.js server binding to `0.0.0.0` and opens the configured port in the local firewall.
+*   **Behavior:** Starts/Stops the integrated HTTPS proxy that fronts VAF for the LAN. The Next.js frontend stays bound to `127.0.0.1` (localhost only); LAN devices reach VAF exclusively via the proxy at `https://<LAN-IP>:8443`. The proxy binds the configured `local_network_https_port` (default 443) and automatically falls back to `8443` on any platform (Linux/macOS/Windows) when 443 is privileged/unbindable by a non-root user; the effective bound port is what the UI displays. On Linux the firewall port is opened automatically: VAF prefers `firewalld` and adds a rich rule scoped to the LAN subnet for the effective proxy port (e.g. `8443`), elevating via a `pkexec` polkit password prompt in a desktop session (or `sudo -n` headless); `iptables`/`ufw` are the fallback when firewalld is not running. Disabling hosting truly stops the proxy and the internal plain channel so LAN access closes (the permanent firewall rule remains, harmless, as nothing then listens on the port).
+*   **Access URL for other devices:** The tab shows the full copyable LAN URL — including `https://` and the effective proxy port (e.g. `https://192.168.1.50:8443`) — that other devices open. The backend port (8001) is shown for reference but binds `127.0.0.1` and is unreachable from the LAN. The values come from `GET /api/network/access-url`.
 *   **CLI alternative:** The same behavior can be triggered from the terminal: `vaf server on` (enable hosting + SSL), `vaf server off` (disable), `vaf server status` (show status and network URLs). The Tray observes config changes and restarts backend/frontend automatically.
 
 #### **B. Network Topology Visualization**
 *   **Element:** "Open Network Map" Button & Full-Screen Modal.
-*   **Visualization:** Interactive node graph (`ReactFlow`) showing the host and connected devices (Desktop, Laptop, Mobile).
-*   **Indicators:** 
-    *   **Online/Offline:** Color-coded status dots (Green = Connected, Gray = Offline).
-    *   **Device Type:** Specific icons for quick identification.
-    *   **Identity:** Formatted as `username@device` (e.g., `admin@Main-Station`).
-*   **Future Logic:** Real-time WebSocket connection tracking to visualize active sessions and bandwidth usage per node.
+*   **Visualization:** Interactive node graph (`ReactFlow`) with the VAF Host at the centre and one node per remote device that currently has a live connection. The map polls `GET /api/network/connections` (every 4s while the full-screen map modal is open, 15s while the tab is open), de-duplicates by IP (keeping the most recently active connection), and filters out localhost/the host itself — so a device only appears while it is actually connected, and there is no separate offline state on map nodes.
+*   **Device type:** Derived from each connection's User-Agent — `mobile` maps to a Smartphone icon (pink), `tablet` to a Laptop icon (purple), and everything else/desktop/unknown to a Monitor icon (green). Edges from the host to each device are animated blue lines.
+*   **Identity:** Each device node shows the logged-in user's name (their alias, or an em dash if none) above the device's real internal IP in monospace; the central VAF Host node shows `host:port` (or `localhost` when no LAN host is known). The real client IP reaches the backend because the HTTPS proxy forwards it via the `X-Forwarded-For` header.
+*   **Active devices count:** The count on the "Open Network Map" card reports connected remote devices only — it excludes the central host node and floors at 0.
+*   **Future Logic:** Per-node bandwidth visualization remains future work.
 
 #### **C. User Management (CRUD)**
-*   **Element:** Searchable Data Table.
-*   **Columns:** Username, Role, Last Active, Status, Actions.
+*   **Element:** Searchable data table (columns centered).
+*   **Columns:** Username, Role, Last active, Status, Actions.
+*   **Status / Last active are REAL (not the account flag):** a user shows `Active` (green dot) when they currently have a live WebSocket connection; `Last active` shows `now` while online, otherwise the last login time (or `—`). Source: `GET /api/users` returns an `online` field computed from the connection manager's live user scopes (with an admin-scope fallback so the local admin is detected reliably). This is distinct from the `is_active` account-enabled flag.
 *   **Actions:**
-    *   **Create User:** Modal to add new local accounts with specific permissions.
+    *   **Create User:** Modal to add a local account (see Access presets below).
     *   **Edit User:** Update email, role, or reset credentials.
     *   **Delete User:** Remove access permanently.
-*   **Detail View:** Clicking a user reveals a comprehensive profile showing:
-    *   **Authorized Tools:** (e.g., Web Search, File System) - currently checkboxes.
-    *   **Workflows:** Active automation scripts allowed for this user.
-    *   **Memory DB:** Stats on the user's dedicated vector store usage.
+*   **Detail view:** Clicking a user reveals their profile (authorized tools, workflows, Memory DB usage).
+
+##### Create User — Access presets
+
+Instead of ticking ~95 individual tool checkboxes (overwhelming for a non-expert), the Add-User modal offers a single **Access** level. Presets are computed from the LIVE tool/workflow lists, so the admin's own **custom** tools/workflows are covered automatically — the rules match on the tool name, not a fixed list.
+
+| Preset | Tools granted | Workflows granted |
+| --- | --- | --- |
+| **Standard** (default) | all tools EXCEPT destructively-named ones (name contains `delete` / `remove` / `drop` / `clear` / `reset` / `uninstall` / `kill` / `destroy` / `wipe` / `purge` / `revoke`) | all workflows |
+| **Full** | every tool, including custom ones | every workflow |
+| **Read-only** | only viewing/reading tools (`list` / `read` / `get` / `search` / `view` / `show` / `fetch` / `find` / `query` / `describe` / `status` / `info` / `count`), excluding any destructively-named tool | none |
+| **Custom** | reveals the granular tool + workflow checkbox grids for manual selection | manual |
+
+The selected preset writes the resolved tool names and workflow ids into the user's `permissions` (`{"tools": [...], "workflows": [...]}`). **Full** therefore stores the complete current set of all tools and all workflows that exist; the default of **Standard** replaces the previous behaviour where a new user was created with zero tools selected.
+
+> Note: these per-user tool/workflow permissions are currently STORED but not yet enforced at agent runtime — `evaluate_tool_policy` gates on admin-only, channel restrictions, and the confirmation level, not on the per-user list. Treat the presets as the intended access model; runtime enforcement of the per-user list is a separate, still-open step.
 
 #### **D. Server Info**
 *   **Display:** Status cards for "Container Name", "Port", "Uptime".
-*   **Future Logic:** Real Docker container stats streamed via IPC.
+*   **Live LAN status:** While hosting is enabled the tab polls `GET /api/network/status` (every 3s) and shows the real proxy state as a status dot — amber pulsing while the proxy comes up, green once it has actually bound, or red with the bind error if it failed to bind. The "authentication required" and "no public access" lines stay green.
+*   **Future Logic:** Real Docker container stats (Container Name / Uptime) streamed via IPC.
 
 ---
 
@@ -50,7 +63,7 @@ The Login Portal is the entry point for other devices on the network. It simulat
 ### 2.1 Authentication Flow
 
 #### **Step 1: Primary Authentication**
-*   **URL:** `http://<HOST_IP>:3000/login`
+*   **URL (LAN devices):** `https://<LAN-IP>:8443/login` (TLS via the integrated HTTPS proxy; accept the self-signed certificate once). The desktop app reaches the local UI directly at `http://127.0.0.1:3000`; port 3000 is localhost-only and not reachable from the LAN.
 *   **UI:** Clean, branded login form.
 *   **Inputs:** Username & Password.
 *   **Logic:**
@@ -154,7 +167,7 @@ To turn these Dummy UIs into functional features, the following backend logic is
 *   Store `totp_secret` encrypted in the database.
 
 ### **Phase 4: Docker Networking**
-*   Update `docker-compose.yml` to expose ports securely.
+*   Update `docker-compose.yml` to expose ports securely. The integrated HTTPS proxy port (`8443`) is the only port exposed to the LAN; the backend (`8001`) and frontend (`3000`) stay bound to `127.0.0.1` and are not LAN-reachable.
 *   Implement a helper script to detect and display the Host Machine's LAN IP address automatically in the Settings UI.
 
 ---
@@ -164,7 +177,7 @@ To turn these Dummy UIs into functional features, the following backend logic is
 The goal is a security model suitable for a local application.
 
 1.  **Admin** opens Settings on their PC, enables "Local Network", creates a user `colleague`.
-2.  **Colleague** opens `http://192.168.1.X:3000` on their iPad.
+2.  **Colleague** opens `https://<LAN-IP>:8443` on their iPad (TLS via the integrated HTTPS proxy) and accepts the self-signed certificate once.
 3.  **Colleague** logs in with temp password.
 4.  **Colleague** is forced to scan a QR code with their iPhone.
 5.  **Colleague** enters the code and gains access to the specific Tools/Memories allowed by the Admin.

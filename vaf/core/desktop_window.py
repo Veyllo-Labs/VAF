@@ -566,6 +566,63 @@ def _install_download_print_handlers() -> None:
                 _log.debug("[DesktopWindow] could not arm print handlers: %s", e)
 
 
+_clipboard_hooked: set = set()
+
+
+def _install_clipboard_permissions() -> None:
+    """Make the WebUI's copy buttons work AND stop the pywebview feature-permission crash.
+
+    1) QtWebEngine gates JS clipboard access behind JavascriptCanAccessClipboard (default OFF), so
+       navigator.clipboard.writeText() in the WebUI silently did nothing — the copy buttons (e.g. the LAN
+       access URL) appeared dead. We enable it (+ JavascriptCanPaste) so copy works.
+    2) pywebview's onFeaturePermissionRequested calls setFeaturePermission(url, feature, <int 1/2>), but
+       PyQt6 6.x requires the QWebEnginePage.PermissionPolicy ENUM, not an int — so every non-media
+       permission request raised `TypeError: argument 3 has unexpected type 'int'` in the terminal. We
+       replace that slot with an enum-correct one (grant media like pywebview intended, deny the rest).
+    Idempotent per page."""
+    try:
+        from webview.platforms.qt import BrowserView
+        from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+    except Exception as e:                          # pragma: no cover - backend/version differences
+        _log.debug("[DesktopWindow] clipboard/permission hook unavailable: %s", e)
+        return
+    Attr = QWebEngineSettings.WebAttribute
+    Pol = QWebEnginePage.PermissionPolicy
+    Feat = QWebEnginePage.Feature
+    _media = (Feat.MediaAudioCapture, Feat.MediaVideoCapture, Feat.MediaAudioVideoCapture)
+    for bv in list(getattr(BrowserView, "instances", {}).values()):
+        view = getattr(bv, "webview", None)
+        page = view.page() if view is not None else None
+        if page is None:
+            continue
+        try:
+            s = page.settings()
+            s.setAttribute(Attr.JavascriptCanAccessClipboard, True)
+            s.setAttribute(Attr.JavascriptCanPaste, True)
+        except Exception as e:                      # pragma: no cover
+            _log.debug("[DesktopWindow] enabling clipboard access failed: %s", e)
+        if id(page) in _clipboard_hooked:
+            continue
+        _clipboard_hooked.add(id(page))
+
+        def _on_feature(url, feature, _page=page):
+            try:
+                policy = Pol.PermissionGrantedByUser if feature in _media else Pol.PermissionDeniedByUser
+                _page.setFeaturePermission(url, feature, policy)
+            except Exception as e:                  # pragma: no cover
+                _log.debug("[DesktopWindow] feature permission handler error: %s", e)
+
+        try:
+            page.featurePermissionRequested.disconnect()   # drop pywebview's int-passing (crashing) slot
+        except Exception:
+            pass
+        try:
+            page.featurePermissionRequested.connect(_on_feature)
+            _log.info("[DesktopWindow] clipboard access enabled + feature-permission handler fixed")
+        except Exception as e:                      # pragma: no cover
+            _log.debug("[DesktopWindow] could not install feature-permission handler: %s", e)
+
+
 def _on_loaded() -> None:
     """Inject link-interception JS after every page load, and arm renderer crash recovery."""
     if _window:
@@ -575,6 +632,7 @@ def _on_loaded() -> None:
             _log.debug("[DesktopWindow] JS inject failed: %s", e)
     _install_crash_recovery()
     _install_download_print_handlers()
+    _install_clipboard_permissions()
     # Create the offscreen PDF renderer here so it lives on the Qt main thread
     # (render_pdf is invoked from a pywebview worker thread and only marshals to it).
     _ensure_pdf_renderer()

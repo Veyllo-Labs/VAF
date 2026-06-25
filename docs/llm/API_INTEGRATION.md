@@ -441,13 +441,15 @@ These endpoints support the Local Network Hosting feature.
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the URL other devices on the LAN should use. When TLS is enabled, the port is that of the integrated HTTPS proxy (443 or 8443 on Windows); the response uses `https`.
+Returns the URL other devices on the LAN should use. The port is the integrated HTTPS proxy's effective bound port — 443 when bindable, otherwise 8443 after the automatic cross-platform fallback (Linux/macOS/Windows); the response always uses `https` (server mode is always TLS). `backend_port` is informational — the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
 
 **Response (TLS on):**
 ```json
 {
   "host": "192.168.1.50",
   "port": 8443,
+  "backend_port": 8001,
+  "ports": { "access": 8443, "backend": 8001 },
   "url": "https://192.168.1.50:8443"
 }
 ```
@@ -470,3 +472,33 @@ Returns a list of currently connected devices for the Network Topology map.
   }
 ]
 ```
+
+### 3. Get Network Status
+**GET** `/api/network/status`
+
+Returns the real runtime state of LAN hosting — whether the integrated HTTPS proxy actually bound and on which port (after any 443->8443 fallback), the resulting LAN URL, and the last bind error if it failed. The Local Network status dot in the UI reads this.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "tls": true,
+  "host": "192.168.1.50",
+  "configured_https_port": 443,
+  "effective_https_port": 8443,
+  "proxy_bound": true,
+  "error": null,
+  "url": "https://192.168.1.50:8443"
+}
+```
+
+`effective_https_port` is the port the proxy actually bound; `proxy_bound`/`error` report whether binding succeeded (e.g. `error` is set with `proxy_bound: false` when the port is taken or blocked).
+
+### 4. Get WebSocket Config
+**GET** `/api/network/ws-config`
+
+Tells the caller which WebSocket transport to use; the answer differs per client so the same frontend build works on the desktop and over the LAN. Three branches:
+
+- TLS off -> `{ "useWss": false, "port": 8001 }` (plain backend port).
+- TLS on, request carries `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`.
+- TLS on, no such header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` — the internal plain channel, since the desktop's QtWebEngine rejects the proxy's self-signed certificate.

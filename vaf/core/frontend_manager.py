@@ -383,56 +383,89 @@ class FrontendManager:
                     time.sleep(0.1)
 
         else:
-            # Unix/Mac: terminate process group with escalating signals
-            if self.process:
-                try:
-                    import signal
-                    # Try SIGTERM first (graceful)
+            # Unix/Mac: terminate the frontend's process GROUP — but with two hard safety rules, because a
+            # mistake here SIGKILLs the tray ITSELF (the "Killed" right after "Stopping frontend..." crash):
+            #   1. If the frontend already exited, just REAP it — never killpg a PID that may have been
+            #      recycled. A dead frontend's PID can be reused by one of our own children, and killpg on
+            #      that PID's group would then signal the tray's own group and take VAF down.
+            #   2. Never killpg our OWN process group. If the frontend somehow shares it (start_new_session
+            #      failed, or PID reuse), signal only its own PID, never the group.
+            proc = self.process
+            if proc:
+                import signal
+                if proc.poll() is not None:
+                    # Already dead → reap and signal nothing.
                     try:
-                        os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                        proc.wait(timeout=1)
                     except Exception:
                         pass
-                    
-                    # Wait briefly for graceful shutdown
-                    time.sleep(0.5)
-                    
-                    # If process still alive, use SIGKILL
+                else:
                     try:
-                        if self.process.poll() is None:
-                            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                        pgid = os.getpgid(proc.pid)
                     except Exception:
-                        pass
-                    
-                    # Also terminate the process directly as fallback
+                        pgid = None
                     try:
-                        self.process.terminate()
-                        time.sleep(0.2)
-                        if self.process.poll() is None:
-                            self.process.kill()
+                        our_pgid = os.getpgid(0)
                     except Exception:
-                        pass
-                except Exception:
-                    pass
+                        our_pgid = None
+                    if pgid is not None and pgid != our_pgid:
+                        # Frontend is isolated in its own session/group → safe to kill the whole group.
+                        try:
+                            os.killpg(pgid, signal.SIGTERM)
+                        except Exception:
+                            pass
+                        time.sleep(0.5)
+                        try:
+                            if proc.poll() is None:
+                                os.killpg(pgid, signal.SIGKILL)
+                        except Exception:
+                            pass
+                    else:
+                        # Shares our group (or pgid unknown) → kill ONLY its own PID, never the group.
+                        try:
+                            proc.terminate()
+                            time.sleep(0.2)
+                            if proc.poll() is None:
+                                proc.kill()
+                        except Exception:
+                            pass
             
-            # Mac-specific: Kill process on port using lsof + kill
+            # Free the port if a stale frontend server is still LISTENING on it. CRITICAL: use
+            # -sTCP:LISTEN so we only ever target the LISTENER, never a process merely CONNECTED to
+            # :3000. A plain `lsof -ti :3000` returns connected clients too — and the tray's OWN process
+            # is connected to :3000 (its integrated proxy forwards "/" there, and the QtWebEngine webview
+            # renders it), so `kill -9` on those pids killed VAF itself ("Killed" right after "Stopping
+            # frontend..." on every LIVE restart). We also never kill our own pid or process group.
             if stopped_port:
                 try:
-                    # Find process using the port
                     result = subprocess.run(
-                        ["lsof", "-ti", f":{stopped_port}"],
+                        ["lsof", "-ti", f":{stopped_port}", "-sTCP:LISTEN"],
                         capture_output=True,
                         text=True,
                         timeout=2
                     )
                     if result.returncode == 0 and result.stdout.strip():
-                        pids = result.stdout.strip().split('\n')
-                        for pid in pids:
-                            if pid.strip():
-                                try:
-                                    # Kill process group
-                                    subprocess.run(["kill", "-9", pid], timeout=1)
-                                except Exception:
-                                    pass
+                        my_pid = os.getpid()
+                        try:
+                            my_pgid = os.getpgid(0)
+                        except Exception:
+                            my_pgid = None
+                        for pid_s in result.stdout.strip().split('\n'):
+                            pid_s = pid_s.strip()
+                            if not pid_s.isdigit():
+                                continue
+                            pid = int(pid_s)
+                            if pid == my_pid:
+                                continue  # never kill ourselves
+                            try:
+                                if my_pgid is not None and os.getpgid(pid) == my_pgid:
+                                    continue  # never kill a process in our own group (e.g. the webview)
+                            except Exception:
+                                pass
+                            try:
+                                subprocess.run(["kill", "-9", str(pid)], timeout=1)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 

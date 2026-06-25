@@ -148,11 +148,15 @@ const toolProps = (m: AvatarMode): React.ReactNode => {
 // TOOL_SCENES. Scene motion is CSS-class-driven (`.asc.<cls> .bd/.ey/...` in globals.css), so these
 // modes need NO ANIM/BODY_ANIM entries (they bypass the persistent figure). All keyframes are
 // transform/opacity only → leak-safe.
+// `w` here ONLY drives the leftward lean (leanLeft = w − 36) so the scene's RIGHT-leaning props don't
+// push the chat content. Away props are small and mostly ABOVE the agent (z's, stars, notes) or a small
+// cup, so they barely reach right — keep `w` ≈ the prop's real rightmost extent, NOT the full stage width,
+// or the agent drifts way too far left (the props aren't that big).
 const AWAY_SCENES: Record<string, { cls: string; l: number; t: number; w: number; h: number }> = {
-    away_nap: { cls: 'nap', l: -57, t: -52.5, w: 110, h: 36 },
-    away_coffee: { cls: 'coffee', l: -40.5, t: -43.5, w: 102, h: 36 },
-    away_stars: { cls: 'stars', l: -58.5, t: -63, w: 130, h: 54 },
-    away_groove: { cls: 'music', l: -57, t: -48, w: 110, h: 36 },
+    away_nap: { cls: 'nap', l: -57, t: -52.5, w: 48, h: 36 },
+    away_coffee: { cls: 'coffee', l: -40.5, t: -43.5, w: 54, h: 36 },
+    away_stars: { cls: 'stars', l: -58.5, t: -63, w: 56, h: 54 },
+    away_groove: { cls: 'music', l: -57, t: -48, w: 56, h: 36 },
 };
 const awayProps = (m: AvatarMode): React.ReactNode => {
     switch (m) {
@@ -277,7 +281,9 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
     // negative margin-left pulls the scene (and the agent with it) left, an equal margin-right restores the
     // margin-box so nothing to the RIGHT moves. Margins transition (not per-frame) → leak-safe.
-    const sceneWidth = toolScene ? toolScene.w : awayScene ? awayScene.w : (shown === 'delegate' ? 88 : 0);
+    // Only when the scene is actually drawn: a DIMMED bubble (non-latest) renders just the plain 36px figure,
+    // so it must NOT lean — otherwise the dim dot gets shoved ~74-94px left, detached from its bubble.
+    const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (shown === 'delegate' ? 88 : 0));
     const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
 
     const dotColor = invert ? '#111827' : '#ffffff';

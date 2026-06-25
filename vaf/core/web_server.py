@@ -174,6 +174,42 @@ log("WebServer", "SmartAutoSuggest will be lazy loaded...")
 autosuggest = None
 tray_context = TrayContext()
 
+
+def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=False):
+    """Ownership gate for WebSocket session commands (chat / load / delete / rename / hide / artifact_edit).
+
+    Returns (allowed: bool, loaded_session_or_None). The storage layer is scope-agnostic (only list()
+    filters by scope), so this is the single enforcement point — a WS command must never act on a session
+    that belongs to another user. Factored out of the original load_session check so every handler shares
+    one rule.
+
+    Policy (strict): a session whose metadata records a different user_scope_id is denied; a session with
+    NO recorded scope is treated as ADMIN-ONLY (legacy/pre-isolation sessions belong to the local admin),
+    not open to everyone. Admin is detected role-aware (connection role == 'admin' OR connection scope ==
+    the local-admin scope) so the desktop/admin is never locked out even when its scope is None. With
+    allow_missing=True a not-yet-created session id passes (the chat first-message-into-a-new-session
+    flow); otherwise a missing/corrupt/0-byte session denies for a non-admin (a mutate command has nothing
+    legitimate to act on).
+    """
+    from vaf.core.config import get_local_admin_scope_id
+    user_scope_id = manager.get_connection_user(websocket)
+    role = manager.get_connection_user_role(websocket)
+    is_admin = (str(role or "").lower() == "admin") or (
+        user_scope_id is not None and str(user_scope_id) == str(get_local_admin_scope_id())
+    )
+    if loaded is None:
+        try:
+            loaded = session_mgr.load(session_id)
+        except Exception:
+            # Session does not exist or is unreadable: a brand-new chat target is allowed; any other
+            # command (or a non-admin) is denied rather than acting on a phantom/foreign id.
+            return (bool(allow_missing) or is_admin, None)
+    if is_admin:
+        return (True, loaded)
+    session_scope = (getattr(loaded, "metadata", None) or {}).get("user_scope_id")
+    allowed = session_scope is not None and str(session_scope) == str(user_scope_id)
+    return (allowed, loaded)
+
 # Mount Memory System routes if enabled
 if Config.get("memory_enabled", True):
     try:
@@ -2649,21 +2685,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     sid = cmd.get("id")
                     user_scope_id = manager.get_connection_user(websocket)
                     try:
-                        # 1. Load from disk (to check ownership before subscribing)
-                        loaded = session_mgr.load(sid)
-                        
-                        # Verify ownership: matches OR session has no scope (legacy) OR user is local admin
-                        session_scope = (loaded.metadata or {}).get("user_scope_id")
-                        from vaf.core.config import get_local_admin_scope_id
-                        local_admin_scope = get_local_admin_scope_id()
-                        
-                        is_owner = not session_scope or str(session_scope) == str(user_scope_id)
-                        is_admin = str(user_scope_id) == str(local_admin_scope)
-                        
-                        if not is_owner and not is_admin:
-                            log("API", f"Access denied: Session {sid} (scope {session_scope}) does not belong to user {user_scope_id}")
+                        # 1. Load from disk + verify ownership before subscribing (strict, role-aware gate).
+                        allowed, loaded = _ws_session_owner_ok(websocket, sid)
+                        if not allowed:
+                            log("API", f"Access denied: load_session {sid} does not belong to user {user_scope_id}")
                             await websocket.send_json({"type": "error", "message": "Access denied"})
                             continue
+                        if loaded is None:
+                            loaded = session_mgr.load(sid)
 
                         # Subscribe this connection to the session for scoped updates
                         manager.subscribe_to_session(websocket, sid)
@@ -2836,6 +2865,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "delete_session":
                     sid = cmd.get("id")
                     user_scope_id = manager.get_connection_user(websocket)
+                    allowed, _ = _ws_session_owner_ok(websocket, sid)
+                    if not allowed:
+                        log("API", f"Access denied: delete_session {sid} not owned by {user_scope_id}")
+                        await websocket.send_json({"type": "error", "message": "Access denied"})
+                        continue
                     session_mgr.delete(sid)
                     # Broadcast update ONLY to this user's connections
                     sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
@@ -2851,6 +2885,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "hide_session":
                     sid = cmd.get("id")
                     user_scope_id = manager.get_connection_user(websocket)
+                    allowed, _ = _ws_session_owner_ok(websocket, sid)
+                    if not allowed:
+                        log("API", f"Access denied: hide_session {sid} not owned by {user_scope_id}")
+                        await websocket.send_json({"type": "error", "message": "Access denied"})
+                        continue
                     if sid and session_mgr.hide(sid):
                         sessions = session_mgr.list(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
                         web_sessions = _web_ui_sessions(sessions)
@@ -2903,6 +2942,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     new_name = cmd.get("newName")
                     user_scope_id = manager.get_connection_user(websocket)
                     if sid and new_name:
+                        allowed, _ = _ws_session_owner_ok(websocket, sid)
+                        if not allowed:
+                            log("API", f"Access denied: rename_session {sid} not owned by {user_scope_id}")
+                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                            continue
                         session_mgr.rename(sid, new_name)
                         # Notify Main Loop to update in-memory object
                         from vaf.core.task_queue import TaskQueue
@@ -3331,6 +3375,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Use user-scoped default to prevent crosstalk
                         safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                         session_id = f"web-default-{safe_scope}"
+                    allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                    if not allowed:
+                        log("API", f"Access denied: artifact_edit {session_id} not owned by {user_scope_id}")
+                        await websocket.send_json({"type": "error", "message": "Access denied"})
+                        continue
                     file = cmd.get("file", "")
                     code = cmd.get("code", "")
                     source = cmd.get("source", "web")
@@ -3446,6 +3495,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # Use user-scoped default to prevent crosstalk
                             safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
                             session_id = f"web-default-{safe_scope}"
+
+                        # Ownership gate: never subscribe to / enqueue into a session owned by another user
+                        # (subscribe itself leaks the live stream). allow_missing lets the first message into
+                        # a brand-new session through.
+                        _chat_allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
+                        if not _chat_allowed:
+                            log("API", f"Access denied: chat into {session_id} not owned by {user_scope_id}")
+                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                            continue
 
                         # Ensure this connection is subscribed to the session we're queueing for,
                         # so streaming (agent_message_update) reaches this client (fixes non-admin/LAN).

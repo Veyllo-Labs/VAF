@@ -80,7 +80,7 @@ agent.load_session_context(task.session_id)
 # ... then process task.input_text (chat) or _handle_command (system command)
 ```
 
-For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools.
+For channel-origin tasks (Telegram/WhatsApp/Discord), the queue task metadata is authoritative for user identity (`user_scope_id`, `username`, `role`). After loading session context, the runner re-applies these metadata fields to avoid stale session metadata overriding channel routing or user-scoped tools. The `username` and channel ids are re-applied unconditionally, but `user_scope_id` is now re-stamped onto the session only when the session has no scope yet — an already-owned session is never relabeled, so a queued chat cannot take it over (takeover hardening).
 
 For channel-origin tasks, the runtime prompt context is additionally bounded to a recent history window (default: `15`, configurable via `channel_history_window_messages`):
 
@@ -116,7 +116,7 @@ def _push_session_update(self, session_id: str, data: dict):
 ### 5. User isolation (multi-user)
 
 - **Session list:** The backend filters sessions by the connection's `user_scope_id` (`SessionManager.list(..., user_scope_id=...)`). Users only see their own sessions and legacy sessions (no scope).
-- **Load session:** Before subscribing to a session, the backend checks ownership: the session's `metadata.user_scope_id` must match the current user, or the user must be the local admin. Otherwise the server responds with `Access denied`.
+- **Session-command ownership:** A single shared gate verifies ownership before the first side effect of every Web UI session command — chat (before subscribing), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or local-admin scope). A session with no recorded scope is treated as admin-only (unlike the session list, which still shows no-scope sessions to all users). On denial the server replies `Access denied` and keeps the connection open.
 - **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a single global `web-default`.
 
 ### 6. Initial Session Bootstrap

@@ -76,7 +76,8 @@ print(agent.run("In one sentence, what is Python?"))
 | `vision_model` | `""` | Model for the vision fallback; empty = provider default. |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |
 | `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
-| `api_retry_attempts` | `2` | VAF-level retries on a transient 5xx/timeout for OpenAI-compatible providers (atop the SDK's own retries; only before any token is streamed, so output is never duplicated). |
+| `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout or connection drop — for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |
+| `api_retry_after_max` | `30` | Cap (s) on a honored `Retry-After` header from a 429, so a large/hostile value cannot stall a worker. Admin-only. |
 | `api_timeout_connect` | `20.0` | OpenAI-compatible client connect timeout (s). |
 | `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) — bounds large image uploads. |
 | `api_timeout_read` | `600.0` | Read timeout (s); kept generous so long reasoning streams are not cut off. |
@@ -99,7 +100,9 @@ These are sent only on the local path; cloud APIs ignore them.
 | `top_k` | `40` | Top-k sampling. |
 | `max_generation_tokens` | `10000` | Per-call output cap on local generation. |
 | `model_unload_idle_minutes` | `30` | Unload the local model after this idle time. |
-| `parallel_main_workers` | `1` | Concurrent main-agent workers. |
+| `parallel_main_workers` | `1` | Concurrent main-agent workers (admin-only). `1` = serialized (default). When > 1, the effective count is clamped per provider (see the two keys below) and different users' turns run concurrently while a single user's turns stay serialized. Pair with `queue_policy: weighted_fair` for lane fairness. |
+| `max_parallel_api_workers` | `5` | Effective worker cap for API providers (admin-only). |
+| `max_parallel_local_workers` | `2` | Effective worker cap for `provider=local` (admin-only); also clamped to the llama-server `--parallel` slots (`n_parallel`) to avoid VRAM exhaustion. |
 
 ## Tool router & agent guardrails
 
@@ -250,7 +253,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `gc_enabled` | `True` | Background garbage collection of stale data. |
 | `gc_interval_hours` | `12` | GC interval. |
 | `gc_max_age_hours` | `48` | Max age before GC. |
-| `queue_policy` | `"legacy"` | Request queue policy. |
+| `queue_policy` | `"legacy"` | Request queue policy (admin-only): `legacy` (single priority heap) or `weighted_fair` (lane fairness across interactive/automation/background). Recommended `weighted_fair` when `parallel_main_workers > 1`. |
 | `queue_weight_interactive/automation/background` | `5` / `3` / `1` | Queue priorities. |
 | `update_check_on_start` | `True` | One-line "update available" hint at startup. |
 | `config_format_version` | `1` | Bumped by config migrations. |

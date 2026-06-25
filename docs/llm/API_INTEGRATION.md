@@ -208,7 +208,7 @@ Providers that support multimodal (image) input:
 
 ### Request Timeouts & Retries (API providers)
 
-The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation — HTTP 5xx, timeout, or connection drop — VAF retries the call a few times with backoff. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of the OpenAI SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts` and `api_timeout_*`.
+The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout, or connection drop — VAF retries the call a few times with backoff. This covers **all** providers (OpenAI/DeepSeek/OpenRouter/local, Anthropic, Google), not just the OpenAI-compatible path. A 429's `Retry-After` header is honored, capped by `api_retry_after_max` (default 30 s) so a large value cannot stall a worker; otherwise the backoff is exponential. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of each SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts`, `api_retry_after_max` and `api_timeout_*`.
 
 ### Multi-Tool Wrapper Compatibility
 

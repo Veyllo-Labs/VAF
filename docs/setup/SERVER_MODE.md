@@ -117,6 +117,52 @@ The memory database (`vaf_memory`) enforces PostgreSQL Row-Level Security on the
 
 See [USER_ISOLATION.md](../security/USER_ISOLATION.md) for the full model.
 
+## Concurrency and throughput
+
+VAF serves many users from one process, in two layers that behave differently:
+
+- **Transport is async and never blocks.** All WebSocket connections share one event loop. A chat message
+  is enqueued onto a shared `TaskQueue` and the connection returns immediately, so other users' I/O and
+  token streaming keep flowing while a model call runs.
+- **Execution runs in a worker pool.** Worker threads pull turns from the queue and run them. The default is
+  **one** worker (`parallel_main_workers: 1`), so turns execute strictly one at a time — a long reasoning
+  turn by one user blocks the others until it finishes.
+
+To run users concurrently, raise the pool (admin-only keys; restart to apply):
+
+```json
+"parallel_main_workers": 5,
+"queue_policy": "weighted_fair"
+```
+
+The requested count is **clamped per provider**, so it is safe to set high:
+
+| Provider | Effective workers | Cap key |
+|----------|-------------------|---------|
+| API (openai/anthropic/deepseek/google/openrouter) | `min(requested, max_parallel_api_workers)` — default 5 | `max_parallel_api_workers` |
+| `local` (one shared llama-server) | `min(requested, max_parallel_local_workers, n_parallel slots)` — default 2 | `max_parallel_local_workers` |
+
+`local` is a single llama-server process, so its concurrency is bounded by its `--parallel` decode slots and
+VRAM; the cap prevents oversubscribing the GPU. API providers have no local GPU limit — there the cap exists
+to stay within provider rate limits.
+
+**Isolation under concurrency.** Each worker builds its own `Agent`, and the queue never hands the same
+session to two workers at once. So a single user's turns always run in order while *different* users run in
+parallel; `weighted_fair` additionally schedules the interactive / automation / background task classes
+fairly. The per-session guarantee holds under the `legacy` policy too — `weighted_fair` only adds lane
+fairness.
+
+**Rate limits.** With several workers hitting one provider, transient `429`s are expected. VAF retries them
+for every provider, honoring a `Retry-After` header capped by `api_retry_after_max` — see
+[API_INTEGRATION.md](../llm/API_INTEGRATION.md).
+
+**Known limitations with more than one worker.** Editing a custom tool in Settings hot-reloads worker #1
+only (the others pick it up on the next restart); the "session active" hint shown on reconnect reflects
+worker #1's last task (cosmetic — live status and Stop are per-session).
+
+Mechanics: [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md#worker-and-queue-model). Config keys:
+[CONFIG_SCHEMA.md](CONFIG_SCHEMA.md).
+
 ## Reverting to Desktop Mode
 
 To switch back to desktop mode:

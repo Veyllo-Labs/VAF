@@ -225,7 +225,7 @@ async def create_memory(
     - Auto-connects to similar memories (optional)
     """
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             
             parent_uuid = UUID(request.parent_id) if request.parent_id else None
@@ -266,7 +266,7 @@ async def list_memories(
 ):
     """List memories with pagination and filters (scoped to current user)."""
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
 
             tag_filter = [tag] if tag else None
@@ -337,7 +337,7 @@ async def get_graph(
             if graph_data is not None:
                 return GraphResponse(**graph_data)
 
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             graph_manager = GraphManager(db)
             graph_data = await graph_manager.get_graph_data(
                 limit=limit,
@@ -366,7 +366,7 @@ async def get_memory(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             memory = await pipeline.get_memory(memory_uuid, decrypt=include_content, user_scope_id=user_scope_id)
             
@@ -394,7 +394,7 @@ async def update_memory(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             memory = await pipeline.update_memory(
                 memory_uuid,
@@ -433,7 +433,7 @@ async def delete_by_doc_tag(
     Default: soft delete. Pass ?hard=true for permanent deletion.
     """
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             count = await pipeline.delete_by_tag(doc_tag, soft=not hard, user_scope_id=user_scope_id)
             await get_cache().invalidate_graph()
@@ -461,7 +461,7 @@ async def delete_memory(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             deleted = await pipeline.delete_memory(memory_uuid, soft=not hard, user_scope_id=user_scope_id)
 
@@ -490,7 +490,7 @@ async def update_connections(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             graph_manager = GraphManager(db)
 
             connections = await graph_manager.update_connections(
@@ -523,7 +523,7 @@ async def add_tag_to_memory(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
 
             # Get current memory (decrypt=False since we only need metadata)
@@ -577,7 +577,7 @@ async def remove_tag_from_memory(
         raise HTTPException(status_code=400, detail="Invalid memory ID")
 
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
 
             # Get current memory (decrypt=False since we only need metadata)
@@ -640,7 +640,7 @@ async def rag_query(
         if cached is not None:
             return RagQueryResponse(**cached)
 
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
 
             result = await pipeline.query(
@@ -695,7 +695,7 @@ async def rag_query_stream(
     """
     async def generate():
         try:
-            async with get_db() as db:
+            async with get_db(user_scope_id=user_scope_id) as db:
                 pipeline = RagPipeline(db)
                 
                 first = True
@@ -751,7 +751,7 @@ async def semantic_search(
     Returns relevant memory chunks ranked by similarity.
     """
     try:
-        async with get_db() as db:
+        async with get_db(user_scope_id=user_scope_id) as db:
             pipeline = RagPipeline(db)
             
             sources = await pipeline.search(

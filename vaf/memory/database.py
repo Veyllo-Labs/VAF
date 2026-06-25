@@ -32,6 +32,8 @@ _main_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 _main_thread_id: Optional[int] = None
 _engine_lock = threading.Lock()
 _migrations_attempted = False
+# Owner/superuser engine (DDL, migrations, global stats) — kept separate from the app data engine.
+_owner_engine: Optional[AsyncEngine] = None
 
 # Track which thread is the main thread
 def _is_main_thread() -> bool:
@@ -53,6 +55,24 @@ def get_database_url() -> str:
     elif not url.startswith("postgresql+asyncpg://"):
         url = f"postgresql+asyncpg://{url}"
 
+    return url
+
+
+def get_owner_database_url() -> str:
+    """
+    Owner/superuser DSN used for DDL, schema migrations and genuinely-global maintenance queries
+    (e.g. get_db_stats, which counts across all users).
+
+    Kept separate from the app data DSN (get_database_url) so that at the RLS cutover the app/data
+    connection can switch to a NON-superuser role (which RLS actually enforces) while DDL and the
+    global stats query keep working as the table owner. Empty config -> falls back to the app DSN,
+    which is correct today because both are still the owner role 'vaf'.
+    """
+    url = (Config.get("memory_db_owner_url") or "").strip() or get_database_url()
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif not url.startswith("postgresql+asyncpg://"):
+        url = f"postgresql+asyncpg://{url}"
     return url
 
 
@@ -125,14 +145,39 @@ async def get_engine() -> AsyncEngine:
             _migrations_attempted = True
             run_migrations = True
 
-    # Run migrations only once per process (best effort).
+    # Run migrations only once per process (best effort). DDL must run as the OWNER, not the app data
+    # role, so it keeps working after the app DSN is cut over to a non-superuser RLS role.
     if run_migrations and _main_engine is not None:
         try:
-            await _run_schema_migrations(_main_engine)
+            await _run_schema_migrations(await get_owner_engine())
         except Exception:
             pass  # Already migrated or error - continue anyway
 
     return _main_engine
+
+
+async def get_owner_engine() -> AsyncEngine:
+    """
+    Engine on the owner/superuser DSN (get_owner_database_url). Used ONLY for DDL, schema migrations
+    and genuinely-global maintenance queries (get_db_stats). NEVER use it for per-user data — that goes
+    through get_db(user_scope_id=...) on the app engine so RLS applies. Daemon threads get a throwaway
+    NullPool engine (disposed by the caller); the main thread caches a tiny pool.
+    """
+    global _owner_engine
+    url = get_owner_database_url()
+    if not _is_main_thread():
+        return create_async_engine(url, echo=False, poolclass=NullPool)
+    with _engine_lock:
+        if _owner_engine is None:
+            _owner_engine = create_async_engine(
+                url,
+                echo=Config.get("memory_db_echo", False),
+                pool_size=1,
+                max_overflow=2,
+                pool_timeout=30,
+                pool_recycle=300,
+            )
+    return _owner_engine
 
 
 async def get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -209,19 +254,46 @@ async def get_db(user_scope_id: Optional[str] = None) -> AsyncGenerator[AsyncSes
                 pass
 
 
+@asynccontextmanager
+async def get_owner_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Session on the OWNER engine (no RLS GUC) for genuinely-global maintenance queries such as
+    cross-user stats. NEVER use this for per-user data — that goes through get_db(user_scope_id=...)
+    on the app engine so RLS applies.
+    """
+    engine = await get_owner_engine()
+    session = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+    )()
+    is_daemon = not _is_main_thread()
+    try:
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+        if is_daemon:
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
+
+
 async def init_db(drop_existing: bool = False):
     """
     Initialize the database schema.
-    
+
     Creates:
     - pgvector extension
     - All tables from models
     - HNSW indexes for vector search
-    
+
     Args:
         drop_existing: If True, drop existing tables first (DANGEROUS!)
     """
-    engine = await get_engine()
+    engine = await get_owner_engine()
     
     async with engine.begin() as conn:
         # Enable pgvector extension
@@ -252,6 +324,23 @@ async def init_db(drop_existing: bool = False):
             USING hnsw (embedding vector_cosine_ops)
             WITH (m = 16, ef_construction = 64)
         """))
+
+        # Non-superuser application role for per-user data access (the role RLS actually enforces).
+        # Idempotent; created with the dev-default password only if absent (production overrides the
+        # password out-of-band). The app keeps connecting as the owner until the RLS cutover, so this
+        # changes nothing until memory_db_url is switched to this role.
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vaf_app') THEN
+                    CREATE ROLE vaf_app LOGIN PASSWORD 'vaf_app_dev_secret'
+                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+                END IF;
+            END $$;
+        """))
+        await conn.execute(text("GRANT USAGE ON SCHEMA public TO vaf_app"))
+        await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON memories, chunks, connections TO vaf_app"))
+        await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vaf_app"))
 
         # Enable Row-Level Security on memories table (defense-in-depth)
         await conn.execute(text("ALTER TABLE memories ENABLE ROW LEVEL SECURITY"))
@@ -305,7 +394,9 @@ async def get_db_stats() -> dict:
     Returns:
         Dict with memory count, chunk count, connection count
     """
-    async with get_db() as db:
+    # Global counts across all users -> run on the OWNER engine (bypasses RLS by design), so the
+    # stats stay correct after the app data role is cut over to the non-superuser RLS role.
+    async with get_owner_db() as db:
         from vaf.memory.models import Memory, Chunk, Connection
         from sqlalchemy import func, select
         

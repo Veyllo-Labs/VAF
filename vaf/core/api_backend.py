@@ -98,7 +98,20 @@ class OpenAIProvider(BaseAIProvider):
         super().__init__(provider_name, api_key)
         try:
             from openai import OpenAI
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            # Explicit timeouts: bound connect/write so a large image upload can't hang,
+            # but keep `read` generous — reasoning models (o-series / gpt-5) stream for
+            # minutes and a short read timeout would cut them off. All overridable via config.
+            try:
+                import httpx
+                _timeout = httpx.Timeout(
+                    connect=float(Config.get("api_timeout_connect", 20.0) or 20.0),
+                    write=float(Config.get("api_timeout_write", 120.0) or 120.0),
+                    read=float(Config.get("api_timeout_read", 600.0) or 600.0),
+                    pool=float(Config.get("api_timeout_pool", 20.0) or 20.0),
+                )
+                self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout)
+            except Exception:
+                self.client = OpenAI(api_key=api_key, base_url=base_url)
         except ImportError:
             self.client = None
             logger.error("OpenAI SDK not installed. Please run: pip install openai")
@@ -117,6 +130,35 @@ class OpenAIProvider(BaseAIProvider):
             return True
         name = m.rsplit("/", 1)[-1]  # strip openrouter-style "openai/" prefix
         return name.startswith(("o1", "o3", "o4"))
+
+    @staticmethod
+    def _is_retryable_error(e: Exception) -> bool:
+        """True for transient errors worth retrying (5xx, timeouts, connection drops)."""
+        code = getattr(e, "status_code", None) or getattr(e, "status", None)
+        if isinstance(code, int) and 500 <= code < 600:
+            return True
+        try:
+            import openai
+            return isinstance(e, (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError))
+        except Exception:
+            return False
+
+    def _create_with_retry(self, kwargs: Dict):
+        """chat.completions.create with a bounded retry on transient 5xx/timeout errors.
+        Retries ONLY the request initiation (where a 500 surfaces, before any token) —
+        never already-streamed output — so it can never duplicate tokens. Sits on top of
+        the SDK's own retries to also ride out longer transient outages."""
+        import time as _time
+        max_retries = max(0, int(Config.get("api_retry_attempts", 2) or 0))
+        attempt = 0
+        while True:
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except Exception as e:
+                if attempt >= max_retries or not self._is_retryable_error(e):
+                    raise
+                attempt += 1
+                _time.sleep(min(2 ** (attempt - 1), 4))  # ~1s, 2s, capped 4s
 
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
@@ -159,7 +201,7 @@ class OpenAIProvider(BaseAIProvider):
                 
                 # DeepSeek Reasoner & R1: output primarily in reasoning_content; must yield both
                 is_reasoning = False
-                response = self.client.chat.completions.create(**kwargs)
+                response = self._create_with_retry(kwargs)
                 for chunk in response:
                     if len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
@@ -198,7 +240,7 @@ class OpenAIProvider(BaseAIProvider):
                 if is_reasoning:
                     yield "</think>"
             else:
-                response = self.client.chat.completions.create(**kwargs)
+                response = self._create_with_retry(kwargs)
                 msg = response.choices[0].message
                 reasoning = getattr(msg, "reasoning_content", None) or ""
                 content = msg.content or ""

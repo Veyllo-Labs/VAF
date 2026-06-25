@@ -8891,6 +8891,10 @@ class Agent:
                     # Drives the per-user filesystem jail (is_safe_path) so the librarian only reads the
                     # caller's own data, never another user's VAF_Projects/<uid8>.
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name == "browser_agent":
+                    # Scope the persistent cookie/login store per user so one user's browser logins are
+                    # never shared with or readable by another (the store dir is keyed by user_scope_id).
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "use_skill":
                     # Scope skill visibility to the calling user (None = admin).
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
@@ -9561,11 +9565,16 @@ class Agent:
                     blocks: List[Dict] = []
                     if text:
                         blocks.append({"type": "text", "text": text})
+                    from vaf.core.image_utils import downscale_image_b64 as _downscale_img
+                    _img_max_edge = int(Config.get("vision_image_max_edge", 2000) or 2000)
+                    _img_quality = int(Config.get("vision_image_jpeg_quality", 85) or 85)
                     for img in imgs:
                         raw = img.get("data", "")
                         mime = img.get("mime_type", "image/jpeg")
                         if raw.startswith("data:"):
                             raw = raw.split(",", 1)[1] if "," in raw else raw
+                        # Shrink oversized images: full-res photos make OpenAI 500 and waste tokens.
+                        raw, mime = _downscale_img(raw, mime, _img_max_edge, _img_quality)
                         blocks.append({
                             "type": "image_url",
                             "image_url": {"url": f"data:{mime};base64,{raw}"},
@@ -9598,11 +9607,15 @@ class Agent:
                             _vb_blocks: List[Dict] = []
                             if text:
                                 _vb_blocks.append({"type": "text", "text": text})
+                            from vaf.core.image_utils import downscale_image_b64 as _downscale_img
+                            _img_max_edge = int(Config.get("vision_image_max_edge", 2000) or 2000)
+                            _img_quality = int(Config.get("vision_image_jpeg_quality", 85) or 85)
                             for _vi in imgs:
                                 _raw = _vi.get("data", "")
                                 _mime = _vi.get("mime_type", "image/jpeg")
                                 if _raw.startswith("data:"):
                                     _raw = _raw.split(",", 1)[1] if "," in _raw else _raw
+                                _raw, _mime = _downscale_img(_raw, _mime, _img_max_edge, _img_quality)
                                 _vb_blocks.append({
                                     "type": "image_url",
                                     "image_url": {"url": f"data:{_mime};base64,{_raw}"},

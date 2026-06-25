@@ -90,6 +90,70 @@ class BaseAIProvider(ABC):
         """Execute a chat completion request."""
         pass
 
+    # ── Shared transient-error retry (429/5xx/timeout), inherited by every provider ─────────────────
+    # Retries ONLY request INITIATION (before any token streams), so output is never duplicated.
+    @staticmethod
+    def _is_retryable_error(e: Exception) -> bool:
+        """True for transient errors worth retrying: HTTP 429 (rate limit), 5xx, timeouts, connection drops."""
+        code = getattr(e, "status_code", None) or getattr(e, "status", None) or getattr(e, "code", None)
+        if isinstance(code, int) and (code == 429 or 500 <= code < 600):
+            return True
+        for mod_name in ("openai", "anthropic"):
+            try:
+                mod = __import__(mod_name)
+                types = tuple(
+                    getattr(mod, n) for n in
+                    ("RateLimitError", "APITimeoutError", "APIConnectionError", "InternalServerError")
+                    if hasattr(mod, n)
+                )
+                if types and isinstance(e, types):
+                    return True
+            except Exception:
+                pass
+        try:  # google-genai: ServerError (5xx) is transient; a 429 ClientError is caught by the code check above
+            from google.genai import errors as _g_errors
+            if isinstance(e, getattr(_g_errors, "ServerError", ())):
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _retry_after_seconds(e: Exception) -> Optional[float]:
+        """Parse a Retry-After header (integer seconds) off the error's HTTP response, capped by
+        api_retry_after_max. Returns None when absent/unparseable so the caller uses exponential backoff."""
+        try:
+            headers = getattr(getattr(e, "response", None), "headers", None)
+            if not headers:
+                return None
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+            if raw is None:
+                return None
+            secs = float(int(str(raw).strip()))  # seconds form only; HTTP-date form -> ValueError -> None
+            cap = float(Config.get("api_retry_after_max", 30) or 30)
+            return max(0.0, min(secs, cap))
+        except Exception:
+            return None
+
+    def _with_retry(self, make_request):
+        """Run make_request() with a bounded retry on transient errors (429/5xx/timeout). Honors a capped
+        Retry-After when present, else exponential backoff. Wraps ONLY request initiation (before any token),
+        so it can never duplicate streamed output. Sits on top of each SDK's own retries."""
+        import time as _time
+        max_retries = max(0, int(Config.get("api_retry_attempts", 2) or 0))
+        attempt = 0
+        while True:
+            try:
+                return make_request()
+            except Exception as e:
+                if attempt >= max_retries or not self._is_retryable_error(e):
+                    raise
+                attempt += 1
+                wait = self._retry_after_seconds(e)
+                if wait is None:
+                    wait = min(2 ** (attempt - 1), 4)  # ~1s, 2s, capped 4s
+                _time.sleep(wait)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # OPENAI PROVIDER (also used for DeepSeek & OpenRouter)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -134,34 +198,10 @@ class OpenAIProvider(BaseAIProvider):
         name = m.rsplit("/", 1)[-1]  # strip openrouter-style "openai/" prefix
         return name.startswith(("o1", "o3", "o4"))
 
-    @staticmethod
-    def _is_retryable_error(e: Exception) -> bool:
-        """True for transient errors worth retrying (5xx, timeouts, connection drops)."""
-        code = getattr(e, "status_code", None) or getattr(e, "status", None)
-        if isinstance(code, int) and 500 <= code < 600:
-            return True
-        try:
-            import openai
-            return isinstance(e, (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError))
-        except Exception:
-            return False
-
     def _create_with_retry(self, kwargs: Dict):
-        """chat.completions.create with a bounded retry on transient 5xx/timeout errors.
-        Retries ONLY the request initiation (where a 500 surfaces, before any token) —
-        never already-streamed output — so it can never duplicate tokens. Sits on top of
-        the SDK's own retries to also ride out longer transient outages."""
-        import time as _time
-        max_retries = max(0, int(Config.get("api_retry_attempts", 2) or 0))
-        attempt = 0
-        while True:
-            try:
-                return self.client.chat.completions.create(**kwargs)
-            except Exception as e:
-                if attempt >= max_retries or not self._is_retryable_error(e):
-                    raise
-                attempt += 1
-                _time.sleep(min(2 ** (attempt - 1), 4))  # ~1s, 2s, capped 4s
+        """chat.completions.create with a bounded retry on transient errors (429/5xx/timeout). Initiation-only
+        (before any token streams), so it can never duplicate output. Uses the shared BaseAIProvider retry."""
+        return self._with_retry(lambda: self.client.chat.completions.create(**kwargs))
 
     def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
         if not self.client:
@@ -483,7 +523,8 @@ class AnthropicProvider(BaseAIProvider):
 
             if stream:
                 in_think = False
-                with self.client.messages.stream(**kwargs) as response:
+                _stream_cm = self._with_retry(lambda: self.client.messages.stream(**kwargs))
+                with _stream_cm as response:
                     for event in response:
                         if event.type != "content_block_delta":
                             continue
@@ -505,7 +546,7 @@ class AnthropicProvider(BaseAIProvider):
                     final_msg = response.get_final_message()
                     yield from self._emit_final(final_msg, thinking_active)
             else:
-                response = self.client.messages.create(**kwargs)
+                response = self._with_retry(lambda: self.client.messages.create(**kwargs))
                 for content_block in response.content:
                     if content_block.type == "thinking":
                         yield "<think>" + getattr(content_block, "thinking", "") + "</think>\n\n"
@@ -759,9 +800,9 @@ class GoogleProvider(BaseAIProvider):
             if stream:
                 in_think = False
                 last = None
-                for chunk in self.client.models.generate_content_stream(
+                for chunk in self._with_retry(lambda: self.client.models.generate_content_stream(
                     model=model, contents=contents, config=config
-                ):
+                )):
                     last = chunk
                     for part in self._iter_parts(chunk):
                         if getattr(part, "thought", False) and getattr(part, "text", None):
@@ -783,9 +824,9 @@ class GoogleProvider(BaseAIProvider):
                     yield "</think>"
                 self._record_usage(last)
             else:
-                resp = self.client.models.generate_content(
+                resp = self._with_retry(lambda: self.client.models.generate_content(
                     model=model, contents=contents, config=config
-                )
+                ))
                 for part in self._iter_parts(resp):
                     if getattr(part, "thought", False) and getattr(part, "text", None):
                         yield "<think>" + part.text + "</think>\n\n"

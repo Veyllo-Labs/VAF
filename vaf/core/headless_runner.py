@@ -370,11 +370,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 input_tokens = 0
                 output_tokens = 0
                 if api_backend:
-                    usage = api_backend.session_usage
+                    usage = api_backend.last_request_usage
                     input_tokens = int(usage.get("input_tokens", 0))
                     output_tokens = int(usage.get("output_tokens", 0))
                     # NOTE: Do NOT overwrite `used` with session_usage here.
-                    # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                    # input/output_tokens come from last_request_usage (THIS turn only) -> no cross-user mixing.
                     # get_token_usage() already returns the correct context snapshot.
                 stats = {
                     "used": used,
@@ -428,20 +428,35 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     from vaf.core.config import Config
     _lifecycle("Config imported, ready for main loop")
 
-    # Optional parallel worker pool (safe rollout via config).
+    # Optional parallel worker pool (safe rollout via config). The effective worker count is the admin's
+    # requested parallel_main_workers, CLAMPED per provider: API providers up to max_parallel_api_workers,
+    # the single shared local llama-server to max_parallel_local_workers (and its --parallel slots) to avoid
+    # VRAM OOM. Default parallel_main_workers=1 -> effective=1 -> no spawn -> identical to legacy behavior.
     if worker_id == 1 and total_workers == 1:
         try:
             cfg = Config.load()
             policy = str(cfg.get("queue_policy", "legacy") or "legacy").strip().lower()
-            worker_count = int(cfg.get("parallel_main_workers", 1) or 1)
-            if policy == "weighted_fair" and worker_count > 1:
-                for wid in range(2, worker_count + 1):
+            requested = int(cfg.get("parallel_main_workers", 1) or 1)
+            provider = str(cfg.get("provider", "local") or "local").strip().lower()
+            if provider == "local":
+                slots = int(cfg.get("n_parallel", 0) or 0)  # 0 = auto-detect
+                local_cap = int(cfg.get("max_parallel_local_workers", 2) or 2)
+                cap = min(local_cap, slots) if slots > 0 else local_cap
+            else:
+                cap = int(cfg.get("max_parallel_api_workers", 5) or 5)
+            effective = max(1, min(requested, cap))
+            # Per-session serialization (task_queue) holds in BOTH policies, so >1 worker is safe under
+            # 'legacy' too; weighted_fair only adds lane fairness. Imply the parallel spawn when effective>1.
+            if effective > 1:
+                if policy != "weighted_fair":
+                    append_domain_log_always("headless", "[STARTUP] parallel workers on with queue_policy='legacy' (FIFO/priority); set 'weighted_fair' for lane fairness across interactive/automation/background")
+                for wid in range(2, effective + 1):
                     threading.Thread(
                         target=run_headless_agent,
-                        kwargs={"worker_id": wid, "total_workers": worker_count},
+                        kwargs={"worker_id": wid, "total_workers": effective},
                         daemon=True,
                     ).start()
-                append_domain_log_always("headless", f"[STARTUP] Spawned {worker_count - 1} additional worker(s)")
+                append_domain_log_always("headless", f"[STARTUP] Spawned {effective - 1} additional worker(s) (provider={provider}, requested={requested}, cap={cap})")
         except Exception as e:
             append_domain_log_always("headless", f"[STARTUP] Worker spawn skipped: {e}")
 
@@ -828,11 +843,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     input_tokens = 0
                     output_tokens = 0
                     if api_backend:
-                        usage = api_backend.session_usage
+                        usage = api_backend.last_request_usage
                         input_tokens = int(usage.get("input_tokens", 0))
                         output_tokens = int(usage.get("output_tokens", 0))
                         # NOTE: Do NOT overwrite `used` with session_usage here.
-                        # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                        # input/output_tokens come from last_request_usage (THIS turn only) -> no cross-user mixing.
                         # get_token_usage() already returns the correct context snapshot.
                     stats = {
                         "used": used,
@@ -1328,6 +1343,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     source_channel = str(task_source).strip().lower()
                     prev_webui_active = os.environ.get("VAF_WEBUI_ACTIVE")
                     force_webui_active = origin_channel == "web" or source_channel == "web"
+                    # Under a multi-worker pool, mutating this process-global env per-turn races across workers
+                    # (one worker's finally clears it mid-turn for another). web_server sets it to "1" at startup
+                    # (web_server.py:2486), so with >1 worker we leave it untouched.
+                    _manage_webui_env = force_webui_active and total_workers <= 1
                     _task_images = task_meta_for_env.get("images") or None
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary
                     # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
@@ -1347,7 +1366,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except Exception:
                             pass
                     try:
-                        if force_webui_active:
+                        if _manage_webui_env:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"
                         response = agent.chat_step(
                             user_input=effective_input,
@@ -1360,7 +1379,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")
                     finally:
-                        if force_webui_active:
+                        if _manage_webui_env:
                             if prev_webui_active is None:
                                 os.environ.pop("VAF_WEBUI_ACTIVE", None)
                             else:
@@ -1662,11 +1681,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         input_tokens = 0
                         output_tokens = 0
                         if api_backend:
-                            usage = api_backend.session_usage
+                            usage = api_backend.last_request_usage
                             input_tokens = int(usage.get("input_tokens", 0))
                             output_tokens = int(usage.get("output_tokens", 0))
                             # NOTE: Do NOT overwrite `used` with session_usage here.
-                            # session_usage is CUMULATIVE (billing) and grows unboundedly.
+                            # input/output_tokens come from last_request_usage (THIS turn only) -> no cross-user mixing.
                             # get_token_usage() already returns the correct context snapshot.
                         stats = {
                             "used": used,

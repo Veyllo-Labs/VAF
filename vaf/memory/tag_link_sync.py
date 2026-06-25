@@ -35,7 +35,7 @@ async def sync_memories_for_tag_link(
     updated = 0
     batch_size = 200
 
-    async with get_db() as db:
+    async with get_db(user_scope_id=user_scope_id) as db:
         pipeline = RagPipeline(db)
 
         for tag, add_tag in [(a, b), (b, a)]:

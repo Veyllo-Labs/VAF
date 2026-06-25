@@ -998,7 +998,7 @@ async def auto_capture_memory(
     if "<relevant-memories>" in candidate or "[Source " in candidate:
         return 0
 
-    async with get_db() as db:
+    async with get_db(user_scope_id=user_scope_id) as db:
         pipeline = RagPipeline(db)
         # Dedupe: if very similar chunk exists, skip
         try:
@@ -1300,7 +1300,7 @@ def run_session_compaction_sync(
             threading.Thread(target=_refresh_bg, daemon=True).start()
             return
         async def _ingest_all() -> None:
-            async with get_db() as db:
+            async with get_db(user_scope_id=user_scope_id) as db:
                 pipeline = RagPipeline(db)
                 for content, tags in memory_tuples:
                     if not content or not content.strip():

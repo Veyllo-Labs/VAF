@@ -553,12 +553,23 @@ class MemorySaveTool(BaseTool):
                 "Good tags make memories retrievable later."
             )
         user_scope_id = kwargs.get("user_scope_id")
-        # Allow None = global scope (e.g. Web UI without login); memories still stored and visible on /memory
         if user_scope_id is not None and isinstance(user_scope_id, str):
             try:
                 user_scope_id = UUID(user_scope_id)
             except (ValueError, TypeError):
                 return "Error: Invalid user_scope_id."
+        # USER ISOLATION: never store an unscoped (global/NULL) memory. Resolve a concrete owner like the
+        # search path — in server/multi-user mode a missing scope is denied (the caller must be an
+        # authenticated user); in single-user/local mode fall back to the local-admin scope so the desktop
+        # still owns what it saves. This keeps every row scoped so RLS can enforce isolation (no NULL rows).
+        if user_scope_id is None:
+            try:
+                from vaf.core.config import Config as _Cfg, get_local_admin_scope_id as _admin_scope
+                if bool(_Cfg.get("local_network_enabled", False)):
+                    return "Error: cannot save a memory without an authenticated user in server mode."
+                user_scope_id = UUID(str(_admin_scope()))
+            except Exception:
+                return "Error: could not resolve a user scope for memory_save."
         title = (kwargs.get("title") or "").strip() or None
         metadata = {"source": "memory_save", "type": "note"}
         if title:
@@ -569,7 +580,7 @@ class MemorySaveTool(BaseTool):
         async def _ingest() -> str:
             from vaf.memory.database import get_db
             from vaf.memory.rag import RagPipeline
-            async with get_db() as db:
+            async with get_db(user_scope_id=user_scope_id) as db:
                 pipeline = RagPipeline(db)
                 await pipeline.ingest(
                     content=content,

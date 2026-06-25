@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Shared log directory and domain log writers for VAF.
 Consolidates logs into one file per domain (rag, memory, webui, prompt, headless, backend) with timestamps.

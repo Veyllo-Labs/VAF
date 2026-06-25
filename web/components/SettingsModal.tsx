@@ -1,4 +1,7 @@
 'use client';
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { useState, useEffect, useCallback, lazy, Suspense, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
@@ -3407,6 +3410,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <p className="text-[11px] text-blue-700 leading-relaxed">
                                                     {tAbout('vafLicenseDesc')}
                                                 </p>
+                                                <a
+                                                    href="https://github.com/Veyllo-Labs/VAF"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 mt-2 text-[11px] font-medium text-blue-600 hover:underline"
+                                                >
+                                                    {tAbout('vafSourceCode')} ↗
+                                                </a>
                                             </div>
                                         </div>
 

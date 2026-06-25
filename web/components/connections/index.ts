@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 export { default as ConnectionsPanel, CONNECTION_APPS, CATEGORIES } from './ConnectionsPanel';
 export type { ConnectionApp } from './ConnectionsPanel';
 export { default as DiscordSetupWizard } from './DiscordSetupWizard';

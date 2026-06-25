@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Per-user log of questions/proposals the background thinking run raised with the user, with a status
 lifecycle so (a) the next run does not re-ask, and (b) the main agent can pick up a confirmed proposal.

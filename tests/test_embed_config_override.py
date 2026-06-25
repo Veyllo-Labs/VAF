@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Embedding config passthrough: Agent(config={...}) must reach the API backend.
 
 Pins the fix for the critical embedding bug where APIBackendManager re-read the

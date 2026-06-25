@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Persistent store for WhatsApp messages (SQLite).
 Stores incoming and outgoing messages so the agent can search and read chat history.

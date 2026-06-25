@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Tests for the shared section-based contextual ingestion (vaf/tools/learn_document.py).
 
 Covers the pure helpers (JSON parse + fallback) and the orchestration of `ingest_document_knowledge`

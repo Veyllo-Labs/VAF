@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Get one contact by name from the central contact list.
 Returns channel IDs (whatsapp_phone, telegram_user_id, email) and personal file (language, how to address, birthday, notes).

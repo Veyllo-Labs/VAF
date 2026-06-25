@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Setup script for VAF (Veyllo Agentic Framework)
 """
@@ -85,8 +88,10 @@ EXTRAS = {
     "desktop": [
         "pystray>=0.19.5", "pillow>=10.0.0", "pywebview>=4.3.0",
         "pyobjc-framework-Cocoa>=9.0; sys_platform == 'darwin'",
-        # PySide6 (LGPLv3), NOT PyQt6 (GPLv3-or-commercial): GPL is incompatible with
-        # VAF's source-available MIT + Commons Clause license. PySide6 bundles Qt WebEngine.
+        # PySide6 (LGPLv3) is the official Qt for Python binding. VAF is AGPL-3.0, so PyQt6
+        # (GPLv3) would be license-compatible; we pick PySide6 because its weak copyleft keeps
+        # the Qt *binding* itself unencumbered (dynamically linked, user-replaceable). VAF's own
+        # AGPL obligations are independent of this choice. PySide6 bundles Qt WebEngine.
         "PySide6>=6.7.0; sys_platform == 'linux'",
         "qtpy>=2.0.0; sys_platform == 'linux'",
     ],
@@ -126,7 +131,9 @@ setup(
     description="VAF - Veyllo Agentic Framework: Local AI tool for developers",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Veyllo Labs",
+    author="Veyllo GmbH",
+    author_email="legal@veyllo.io",
+    license="AGPL-3.0-or-later",
     url="https://github.com/Veyllo-Labs/VAF",
     packages=find_packages(),
     python_requires=">=3.10",
@@ -148,7 +155,7 @@ setup(
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

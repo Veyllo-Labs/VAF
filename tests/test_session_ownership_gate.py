@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Regression: the WebSocket session commands (chat/load/delete/rename/hide/artifact_edit) must enforce
 ownership. Previously only load_session checked; the siblings trusted the client-supplied sessionId, so a
 crafted LAN client could read/rename/delete/hide/take over another user's session.

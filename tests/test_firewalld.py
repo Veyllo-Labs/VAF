@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """firewalld LAN opening: the rule must be scoped to the LAN subnet (RFC1918), and elevation must use
 pkexec on the desktop (native password dialog) but never an interactive sudo prompt headless."""
 import vaf.network.firewall as fw

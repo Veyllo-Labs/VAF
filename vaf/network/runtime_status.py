@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """In-process runtime status of the integrated HTTPS proxy.
 
 The UI used to display a LAN URL/port computed purely from config (e.g. "https://<ip>:443"), even when

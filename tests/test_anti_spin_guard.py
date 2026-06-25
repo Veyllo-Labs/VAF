@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Anti-spin guard: stop a weak model from churning the bookkeeping tools
 (update_working_memory / update_intent / add_task) forever without ever acting.
 

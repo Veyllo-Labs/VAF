@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import typer
 import inquirer
 from rich.table import Table
@@ -1064,14 +1067,15 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     UI.print()
     
     panel_text = (
-        "[bold]MIT License (Modified with Commons Clause v1.0)[/bold]\n\n"
-        "Copyright (c) 2025 Mert Can Elsner / Veyllo Labs\n\n"
-        "This software is source-available but carries specific restrictions on:\n"
-        "- Selling VAF as a standalone product.\n"
-        "- Offering VAF as a hosted cloud service.\n\n"
-        "[bold green]✅ You CAN:[/bold green] Use for any purpose (personal/commercial), modify code, distribute copies, create/sell custom Workflows/plugins.\n\n"
-        "[bold red]❌ You CANNOT:[/bold red] Sell VAF itself or offer it as SaaS.\n\n"
-        "See [bold]README.md[/bold] and [bold]LICENSE[/bold] for full legal text."
+        "[bold]Dual-licensed: GNU AGPL-3.0-or-later or Commercial License[/bold]\n\n"
+        "Copyright (c) 2026 Veyllo GmbH\n\n"
+        "[bold green]✅ Under the AGPL (free):[/bold green] use for any purpose (personal/commercial), "
+        "modify, and distribute. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted.\n\n"
+        "[bold yellow]⚠ Copyleft:[/bold yellow] if you distribute VAF or run a [bold]modified[/bold] version "
+        "as a network service (SaaS), you must make your source available under the AGPL.\n\n"
+        "[bold blue]🏢 Commercial License:[/bold blue] for closed-source products or proprietary SaaS "
+        "without AGPL copyleft. Contact legal@veyllo.io.\n\n"
+        "See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]COMMERCIAL.md[/bold] for full terms."
     )
     
     from rich.panel import Panel

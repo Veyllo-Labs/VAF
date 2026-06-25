@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Unit tests for the pure Gemma-4 tool-call parser (vaf.core.agent._parse_gemma4_tool_calls).
 
 The parser must be delimiter-aware: commas and braces INSIDE a quoted <|"|>...<|"|> value must be

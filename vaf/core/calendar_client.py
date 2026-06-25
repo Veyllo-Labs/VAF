@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 VAF Calendar Client - List, create, update, delete events via Google Calendar API and Microsoft Graph.
 Uses the same OAuth tokens as email (get_valid_access_token from oauth_pkce); no separate credentials.

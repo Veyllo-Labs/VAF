@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """VAF Vocabulary Book — multilingual canned phrases for backend-generated agent messages.
 
 The frontend i18n (next-intl) localizes UI strings only; backend/CLI text is explicitly out of scope

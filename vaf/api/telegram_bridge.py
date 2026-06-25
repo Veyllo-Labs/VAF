@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Long-lived Telegram bridge: receives messages from Telegram, enqueues tasks with
 user_scope_id/username from whitelist, and sends replies via the telegram_reply hook.

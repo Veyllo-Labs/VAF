@@ -417,8 +417,9 @@
       "frontend": "Frontend",
       "developedBy": "Developed by",
       "vafLicense": "VAF License",
-      "vafLicenseType": "MIT License + Commons Clause 1.0",
-      "vafLicenseDesc": "Applies to original code by Veyllo GmbH. Prohibits commercial resale of the software itself without a separate license.",
+      "vafLicenseType": "GNU AGPL-3.0-or-later · or Commercial License",
+      "vafLicenseDesc": "Dual-licensed. Free under the AGPL: use, modify, and distribute, but distributing VAF or running a modified version as a network service requires sharing your source. A commercial license removes the copyleft obligations for proprietary or SaaS use.",
+      "vafSourceCode": "Source code (AGPL §13)",
       "thirdPartyLicenses": "Third-Party Components",
       "thirdPartyDesc": "All third-party libraries and frameworks remain under their original licenses (MIT, Apache 2.0, BSD, etc.).",
       "showFullLicense": "Show Full License"

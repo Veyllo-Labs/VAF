@@ -319,8 +319,15 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## License
 
-MIT License with Commons Clause v1.0. Source-available; commercial redistribution and SaaS use require a separate license. See [LICENSE](LICENSE) for full terms.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-**Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSE](LICENSE).
+VAF is **dual-licensed**:
 
-For business and OEM licensing, contact Veyllo Labs.
+- **Open source — [GNU AGPL-3.0-or-later](LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use — even commercial — triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
+- **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](COMMERCIAL.md)**.
+
+See **[LICENSING.md](LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.
+
+**Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSING.md](LICENSING.md).
+
+For commercial and OEM licensing, contact **legal@veyllo.io** · **https://veyllo.io**.

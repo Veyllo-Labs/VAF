@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import typer
 import sys
 import os
@@ -126,12 +129,13 @@ def about():
     UI.print()
     
     UI.print("[bold]License:[/bold]")
-    UI.print("Distributed under the [bold]MIT License, modified with the Commons Clause v1.0[/bold].")
-    UI.print("See [bold]LICENSE[/bold] file for full terms.")
+    UI.print("Dual-licensed: [bold]GNU AGPL-3.0-or-later[/bold] (open source) or a [bold]Commercial License[/bold].")
+    UI.print("See [bold]LICENSE[/bold], [bold]LICENSING.md[/bold], and [bold]COMMERCIAL.md[/bold] for full terms.")
+    UI.print("Commercial / OEM licensing: [bold]legal@veyllo.io[/bold]")
     UI.print()
     
     UI.print("[bold]Links:[/bold]")
-    UI.print("🌐 Website: https://vaf.ai")
+    UI.print("🌐 Website: https://veyllo.io")
     UI.print("💻 GitHub:  https://github.com/Veyllo-Labs/VAF")
 
 @app.command("install-gpu")

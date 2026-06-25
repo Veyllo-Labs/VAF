@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Reply-outcome classification: when the user answers a proactive question, the main agent only
 captures the exchange (status 'replied'); the NEXT thinking run classifies the outcome from the triple
 {question, user reply, the main agent's own reply} via an LLM call — replacing the old `_is_refusal`

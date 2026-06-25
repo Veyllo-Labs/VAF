@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Central per-user Data Explorer: workspace-label helpers + the librarian per-user jail.
 
 Pins the security-critical pieces: the per-user root derivation, the display-label store (which survives

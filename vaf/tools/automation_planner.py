@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 VAF Automation Planner Tools - Notes and todos for the automation calendar.
 Per-user storage; user_scope_id is injected by the agent from the current session.

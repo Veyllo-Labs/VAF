@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Background-request store: tracks questions/proposals the thinking run raised, with a status
 lifecycle (asked -> replied -> done / declined; reconfirm re-opens to asked) and a 6-run recency window
 so the next run does not re-ask. Storage is isolated per test to a tmp vaf_dir."""

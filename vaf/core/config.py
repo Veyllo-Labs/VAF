@@ -124,6 +124,7 @@ class Config:
         "api_timeout_write": 120.0,         # s — bound the upload (request body) phase
         "api_timeout_read": 600.0,          # s — KEEP generous: reasoning models stream for minutes
         "api_timeout_pool": 20.0,           # s — connection-pool acquire
+        "api_retry_after_max": 30,          # s — cap honored on a 429 Retry-After header (avoid huge sleeps)
 
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
@@ -286,6 +287,9 @@ class Config:
         "queue_weight_interactive": 5,         # Used when queue_policy=weighted_fair
         "queue_weight_automation": 3,          # Used when queue_policy=weighted_fair
         "queue_weight_background": 1,          # Used when queue_policy=weighted_fair
+        # Per-provider hard cap on effective concurrent workers (clamps parallel_main_workers by provider).
+        "max_parallel_api_workers": 5,         # API providers: up to N users' turns run at once
+        "max_parallel_local_workers": 2,       # local llama.cpp: keep <= server --parallel slots (VRAM safety)
         "server_idle_timeout": 15,             # Unload local model after idle seconds (Web UI / CLI)
         "telegram_idle_timeout": 120,          # Keep model loaded this long after last Telegram prompt when no Web connections (seconds)
         "telegram_debounce_seconds": 5,        # Wait this long for follow-up messages; combine into one prompt per chat
@@ -570,6 +574,9 @@ class Config:
         "redis_url", "redis_enabled", "use_docker",
         "local_admin_scope_id", "local_admin_username",
         "channel_ingress_policy",
+        # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
+        "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
+        "api_retry_attempts", "api_retry_after_max",
     ])
 
     @classmethod

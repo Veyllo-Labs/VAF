@@ -50,7 +50,8 @@ Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
 
 Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces this:
 
-- **Localhost Bypass**: Connections from `127.0.0.1` are allowed without a token (backward-compatible with single-user desktop mode).
+- **Token First, IP Second**: A presented access token is validated **before** any peer-IP branching. If a request carries a valid JWT (`Authorization: Bearer <token>` header or `vaf_token` cookie), the authenticated user's identity and scope are applied regardless of the source IP. This matters when a LAN user is proxied over loopback (the request arrives from `127.0.0.1` but belongs to a remote user): they get **their own** scope, not the local admin's.
+- **Localhost Bypass (tokenless only)**: A **tokenless** request from `127.0.0.1` is allowed without authentication (internal IPC and single-user desktop mode). This bypass applies only when no token is presented. A present-but-invalid token rejects a network client with HTTP 401, while a localhost client with an invalid token falls through to the tokenless localhost path.
 - **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
 - **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token.
 - **2FA Enforcement**: If `local_network_require_2fa` is enabled, tokens from users who haven't completed 2FA setup are rejected with HTTP 403.
@@ -76,7 +77,10 @@ request.state.user = {
 }
 ```
 
-All API route files (`config_routes`, `email_routes`, `cloud_routes`, `whatsapp_routes`, `telegram_routes`, `contact_routes`, `user_persona_routes`, `memory/routes`) read `request.state.user` as a dict to extract the current user's identity. When running in localhost mode (no authentication), `request.state.user` is not set and routes fall back to the local admin defaults.
+All API route files (`config_routes`, `email_routes`, `cloud_routes`, `whatsapp_routes`, `telegram_routes`, `contact_routes`, `user_persona_routes`, `memory/routes`) read `request.state.user` as a dict to extract the current user's identity. When `request.state.user` is not set, the fallback is **mode-dependent**:
+
+- **Single-user / local mode**: routes fall back to the local-admin defaults (no network exposure, so the local user owns everything).
+- **LAN server mode**: an unauthenticated request is **denied** for memory reads — it resolves to an empty scope and sees **no** memories (fail-closed). The local-admin floor is applied only in genuine single-user/local mode, never to an anonymous network client. The memory scope resolver (`get_current_user_scope` in `vaf/memory/routes.py`) is server-aware and chooses the fallback based on the running mode.
 
 ### OAuth Session Binding (Network Mode)
 
@@ -159,7 +163,7 @@ If you see "2FA was reset (e.g. after config or restart)" when entering your cod
 ### Identity vs. Memory Scoping
 
 - **Global Personality (Soul)**: The agent's identity (Name, Emoji) and behavioral rules (Soul) are defined by the **Administrator** and are global for all users. This ensures a consistent experience across the network.
-- **Isolated Memory (RAG)**: While the personality is shared, the **RAG memory is strictly isolated per user**. Facts and history stored by a user are only accessible to them, preventing data leakage between connected devices.
+- **Isolated Memory (RAG)**: While the personality is shared, the **RAG memory is strictly isolated per user**. Facts and history stored by a user are only accessible to them, preventing data leakage between connected devices. This isolation is **fail-closed**: an unresolved or empty user scope yields **no results** rather than searching across all users, so an unauthenticated network request returns nothing instead of leaking another user's memories. Only a genuine single-user/local request floors to the local-admin scope.
 
 ### Connection Tracking
 
@@ -419,6 +423,8 @@ Uvicorn + FastAPI (127.0.0.1:8005)
     v
 Route Handler (reads request.state.user for identity & scoping)
 ```
+
+The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the WebSocket it relays. This lets oversized frames pass through untouched — for example a `history_update` that embeds inline base64 images can exceed the default WebSocket frame limit. The effective upper bound is the backend's own `ws_max_size` (configured at roughly 200 MB in `vaf/core/web_server.py`), not the library's 16 MB default. Without this, the relay raised `PayloadTooBig` on the oversized frame and the LAN Web UI reconnect-flapped with a "connection lost" loop.
 
 ---
 

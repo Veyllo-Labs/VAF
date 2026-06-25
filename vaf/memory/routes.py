@@ -35,7 +35,9 @@ async def get_current_user_scope(request: Request) -> Optional[UUID]:
     Get the user_scope_id from the request.
 
     - If authenticated (via AuthMiddleware), returns user.user_scope_id.
-    - If local (no auth): returns None to search ALL memories (global search).
+    - If no identity was established: in SERVER/multi-user mode returns None so the RAG layer fails
+      CLOSED (an unscoped request must never see another user's data); in genuine single-user/local
+      mode falls back to the local-admin scope so the desktop still sees its own memories.
     """
     user = getattr(request.state, "user", None)
     if user and user.get("user_scope_id"):
@@ -43,8 +45,14 @@ async def get_current_user_scope(request: Request) -> Optional[UUID]:
             return UUID(user["user_scope_id"])
         except ValueError:
             pass
-    # Local mode: return None to search all memories (both scoped and unscoped)
-    return None
+    # No authenticated identity.
+    try:
+        from vaf.core.config import Config as _Config, get_local_admin_scope_id as _admin_scope
+        if bool(_Config.get("local_network_enabled", False)):
+            return None  # server mode: fail closed (RagPipeline.search returns nothing for None)
+        return UUID(_admin_scope())
+    except (ValueError, TypeError):
+        return None
 
 
 # Pydantic models for request/response

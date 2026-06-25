@@ -158,6 +158,9 @@ const AWAY_SCENES: Record<string, { cls: string; l: number; t: number; w: number
     away_stars: { cls: 'stars', l: -58.5, t: -63, w: 56, h: 54 },
     away_groove: { cls: 'music', l: -57, t: -48, w: 56, h: 36 },
 };
+// Scene modes (tool + away) render a SEPARATE scaled DOM (.tsc/.asc) instead of the persistent body, so
+// a swap to/from one can't morph in place — without help it would POP. We cross-dissolve those transitions.
+const isSceneMode = (m: AvatarMode): boolean => !!TOOL_SCENES[m] || !!AWAY_SCENES[m];
 const awayProps = (m: AvatarMode): React.ReactNode => {
     switch (m) {
         case 'away_nap': return (<><div className="pillow" /><span className="z z1">z</span><span className="z z2">z</span><span className="z z3">z</span></>);
@@ -285,6 +288,10 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // so it must NOT lean — otherwise the dim dot gets shoved ~74-94px left, detached from its bubble.
     const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (shown === 'delegate' ? 88 : 0));
     const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
+    // Cross-dissolve transitions that involve a scene mode (e.g. thinking → web search): during the settle
+    // window the whole content fades OUT, the DOM swaps while invisible, then the new scene/body fades IN —
+    // so the separate .tsc/.asc DOM no longer pops. Normal↔normal keeps its in-place morph (no fade here).
+    const sceneFade = settling && (isSceneMode(shown) || isSceneMode(mode));
 
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';
@@ -313,7 +320,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
             {/* The agent is PERSISTENT — never destroyed, hidden, scaled or faded on a state
                 change. Only the running animation (body/eye) and the surrounding props swap, so the
                 figure stays in one piece. */}
-            <div style={{ position: 'absolute', inset: 0 }}>
+            <div style={{ position: 'absolute', inset: 0, opacity: sceneFade ? 0 : 1, transition: 'opacity 0.18s ease' }}>
                 {/* idle aura — soft static halo */}
                 {!active && !dim && (
                     <span style={{

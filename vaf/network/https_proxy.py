@@ -205,7 +205,13 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     if websocket.client and websocket.client.host:
         extra_headers.append(("X-Forwarded-For", websocket.client.host))
     try:
-        async with websockets.connect(backend_uri, additional_headers=extra_headers or None) as backend_ws:
+        # Relay large frames untouched. The backend's history_update can embed inline base64 images,
+        # so a single frame easily exceeds the websockets client default max_size (1 MB). The default
+        # would raise PayloadTooBig on that frame, tear the relay down, and the WebUI would reconnect
+        # into an endless flap (auto-loading the same heavy session each time → "connection lost").
+        # The backend is trusted and already bounded by uvicorn's own ws_max_size, so disable the
+        # intermediate limit here.
+        async with websockets.connect(backend_uri, additional_headers=extra_headers or None, max_size=None) as backend_ws:
             async def from_backend():
                 try:
                     async for msg in backend_ws:

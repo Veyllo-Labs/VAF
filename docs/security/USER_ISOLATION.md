@@ -15,6 +15,7 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │  ┌──────────────────────────────────────────────────────────┐      │
 │  │  JWT token → request.state.user → user_scope_id (UUID)  │      │
 │  │  Server-side extraction only (never trust client)        │      │
+│  │  Access JWT honored before any localhost short-circuit   │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                              │                                     │
 │  Layer 2: Application Logic (FastAPI)                              │
@@ -32,7 +33,7 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │  Layer 4: Database (PostgreSQL + RLS)                              │
 │  ┌──────────────────────────────────────────────────────────┐      │
 │  │  Row-Level Security on memories table                    │      │
-│  │  SET LOCAL app.current_user_scope_id per transaction     │      │
+│  │  set_config('app.current_user_scope_id', ..., true)      │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                              │                                     │
 │  Layer 5: Filesystem                                               │
@@ -81,9 +82,15 @@ if user_state and isinstance(user_state, dict):
 context.pop("user_scope_id", None)  # Never trust client-sent scope
 ```
 
+The integrated HTTPS proxy relays WebSocket traffic to the backend with `max_size=None` so large `history_update` frames are not truncated; this loopback-proxy path is where the JWT-over-loopback identity handling lives. See [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md) and [WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md) for the transport detail.
+
 The `server_user_scope_id` is then passed into `run_agent_step()` and propagated to all downstream services (memory, tools, automations).
 
+**Token before localhost short-circuit.** `AuthMiddleware` now extracts and honors a presented access JWT **before** any localhost short-circuit, so a valid token always establishes the real identity regardless of peer IP. A tokenless localhost request leaves `request.state.user` unset (internal IPC / single-user desktop). This is the linchpin that lets a LAN user proxied over loopback by the integrated HTTPS proxy get **their** scope instead of the local admin's: the old behavior returned early on the localhost branch before reading the token, which leaked the local-admin identity onto remote users coming in over the loopback proxy.
+
 ### Local mode fallback
+
+The local-admin floor for a missing scope applies **only in genuine single-user/local mode** (`local_network_enabled` false). In server/multi-user mode a missing scope **denies** rather than flooring to the admin scope, so an unauthenticated request never inherits the admin's data.
 
 When running locally without authentication (CLI or Web UI without JWT), VAF uses the scope and username from config:
 
@@ -113,6 +120,10 @@ To bridge the gap between strict multi-tenant isolation and a low-friction local
 
 The memory system is the most data-sensitive component. Every memory operation is scoped.
 
+### Fail-closed scope resolution
+
+Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes — a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well. This replaces a prior fail-open path where a missing scope could return every user's memories.
+
 ### CRUD Operations (`vaf/memory/rag.py`)
 
 All memory access methods accept and enforce `user_scope_id`:
@@ -122,7 +133,7 @@ All memory access methods accept and enforce `user_scope_id`:
 | `get_memory(id)` | Filters by `Memory.user_scope_id == user_scope_id` |
 | `update_memory(id)` | Filters by scope before allowing update |
 | `delete_memory(id)` | Filters by scope before soft-delete |
-| `search_memories()` | Filters query results by scope |
+| `search_memories()` | Filters query results by scope; an empty scope returns `[]` (fail-closed) in both vector and lexical/hybrid lanes — never "search all" |
 | `store_memory()` | Stamps `user_scope_id` on new records |
 | `get_all_memories()` | Filters listing by scope |
 
@@ -155,7 +166,7 @@ async def get_memory(
 ):
 ```
 
-The `get_current_user_scope` dependency reads from `request.state.user` (the consolidated dict set by `AuthMiddleware`). When no user is authenticated (localhost mode), this dict is absent and the dependency falls back to the local admin scope.
+The `get_current_user_scope` dependency reads the scope from `request.state.user` when a JWT identity was established. When no user is authenticated, the fallback is mode-dependent: in server/multi-user mode (`local_network_enabled` true) it returns `None` so the RAG layer fails **closed** (an unscoped request must never see another user's data), and only in genuine single-user/local mode does it fall back to `local_admin_scope_id`. A malformed scope is treated defensively as no scope.
 
 ### Web UI session isolation
 
@@ -201,15 +212,16 @@ CREATE POLICY user_isolation_memories ON memories
 
 ### How it works
 
-1. Before each database transaction, the application sets a session-local variable:
+1. Before each database transaction, the application sets a transaction-scoped variable:
    ```python
    await session.execute(
-       text("SET LOCAL app.current_user_scope_id = :scope"),
+       text("SELECT set_config('app.current_user_scope_id', :scope, true)"),
        {"scope": str(user_scope_id)}
    )
    ```
+   `set_config(..., true)` is the transaction-scoped form of `SET LOCAL`. It is used instead of a literal `SET LOCAL app.current_user_scope_id = :scope` because asyncpg rejects bind parameters in a literal `SET LOCAL` statement.
 2. The RLS policy checks this variable against each row's `user_scope_id`.
-3. Rows belonging to other users are invisible — even if application-level filtering has a bug.
+3. When a concrete scope GUC is set, rows belonging to other users are invisible — even if application-level filtering has a bug. (See the caveat below: with no scope set, the policy fails open.)
 
 ### Policy logic
 
@@ -220,7 +232,9 @@ CREATE POLICY user_isolation_memories ON memories
 | Set to UUID                  | Same UUID           | Yes |
 | Set to UUID                  | Different UUID      | **No** |
 
-**Important**: The RLS policy uses `SET LOCAL`, which is scoped to the current transaction. This prevents scope leakage between concurrent requests sharing a connection pool.
+**Important**: The RLS policy uses `set_config(..., true)` (transaction-scoped), which is scoped to the current transaction. This prevents scope leakage between concurrent requests sharing a connection pool.
+
+**Note**: this RLS policy is a backstop only and deliberately fails **open** — it allows all rows when `app.current_user_scope_id` is empty/unset (an unscoped transaction) or when a row's `user_scope_id` IS NULL. RLS therefore does not protect an unscoped transaction; the application-layer scope filter (now fail-closed, see Section 2) remains the primary guard.
 
 ## 5. Filesystem Isolation
 
@@ -324,6 +338,10 @@ workdir = f"/tmp/vaf_{scope_prefix}_{exec_id}"
 
 This prevents users from reading each other's temporary files within the shared sandbox container.
 
+### Browser agent session store (`vaf/tools/browser_agent.py`)
+
+The persistent cookie/login store for the browser agent is keyed by user scope at `~/.vaf/browser_sessions/<scope_seg>/<session>.json` (not the old flat shared path), so one user's saved logins are never readable by another even on the same OS account. The agent injects the caller's `user_scope_id` for `browser_agent` calls and propagates it to the killable child process via the `VAF_USER_SCOPE_ID` environment variable, so the child writes and reads under the correct per-user store. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
+
 ## 6. Connection-Level Isolation
 
 ### WhatsApp
@@ -377,6 +395,7 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Central Data Explorer (`/api/workspaces`) | Per-user root derived from authenticated scope; lists/renames/deletes only the caller's own workspaces (incl. orphans); opaque handles, not paths | Application |
 | Librarian agent (filesystem read) | Per-user jail (contextvar over `is_safe_path`): remote user confined to own `VAF_Projects/<uid[:8]>/`, local admin full; another user's tree always denied, fail-closed | OS |
 | Sandbox | Per-user working directory in Docker | Container |
+| Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id | OS |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
@@ -441,7 +460,7 @@ When creating new tables that hold user data:
 
 1. Add a `user_scope_id` column (UUID, nullable for system/shared data).
 2. Add an RLS policy mirroring the `memories` table pattern.
-3. In `get_db()`, ensure `SET LOCAL app.current_user_scope_id` is called (already handled globally).
+3. In `get_db()`, ensure `set_config('app.current_user_scope_id', ..., true)` (transaction-scoped) is called (already handled globally).
 
 ```sql
 -- Example for a new table

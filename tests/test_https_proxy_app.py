@@ -63,3 +63,64 @@ def test_stop_https_proxy_signals_exit_and_resets_status():
     assert srv.should_exit is True
     assert proxy._running_server is None
     assert runtime_status.get_proxy_status()["bound"] is False
+
+
+def test_forward_websocket_relays_large_frames_without_size_cap():
+    """The backend's history_update can embed inline base64 images, producing a single WS frame far
+    over the websockets client default max_size (1 MB). The relay MUST connect with max_size=None,
+    otherwise it raises PayloadTooBig on that frame, drops the LAN connection, and the WebUI reconnects
+    into an endless flap (auto-loading the same heavy session each time → "connection lost")."""
+    import websockets as _ws
+
+    captured = {}
+
+    class _BackendWS:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def send(self, _):
+            pass
+
+    def _fake_connect(uri, **kwargs):
+        captured.update(kwargs)
+        captured["uri"] = uri
+        return _BackendWS()
+
+    class _ClientWS:
+        url = type("U", (), {"query": ""})()
+        scope = {"headers": []}
+        client = type("C", (), {"host": "192.168.1.50"})()
+
+        async def accept(self):
+            pass
+
+        async def send_text(self, _):
+            pass
+
+        async def send_bytes(self, _):
+            pass
+
+        async def receive_text(self):
+            raise RuntimeError("client gone")  # ends the from_client relay loop
+
+        async def close(self):
+            pass
+
+    orig = _ws.connect
+    _ws.connect = _fake_connect
+    try:
+        asyncio.run(proxy._forward_websocket(_ClientWS()))
+    finally:
+        _ws.connect = orig
+
+    assert "max_size" in captured and captured["max_size"] is None
+    assert str(captured.get("uri", "")).startswith("ws://127.0.0.1:8005/ws")

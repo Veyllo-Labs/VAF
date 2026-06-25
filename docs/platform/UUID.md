@@ -148,9 +148,12 @@ request.state.user = {
 }
 ```
 
+**Flow order:** the token is extracted **before** the IP check, so an authenticated client is identified regardless of whether its peer IP looks like loopback. 2FA enforcement lives **inside** the valid access-token branch: when `local_network_require_2fa` is set and the token carries `requires_2fa_setup`, the request is rejected with `403 "2FA setup required before accessing resources"` before any identity is attached. A token that is present but invalid/expired rejects a network client with `401`, but a localhost client falls through to the tokenless localhost path instead of being hard-locked (a stale desktop cookie does not lock the local user out).
+
 **Rules:**
 - All downstream code reads `request.state.user` — never re-parses the JWT.
-- Localhost bypass (no JWT) means `request.state.user` is NOT set. Routes must handle this and fall back to `local_admin_scope_id`.
+- A presented valid access JWT is honored regardless of the peer IP. The integrated HTTPS proxy forwards LAN clients to the loopback-bound backend, so a "localhost" peer may actually be a remote user — a valid token therefore always sets `request.state.user` to the real identity, including for a LAN user proxied over loopback. Only a **tokenless** localhost request leaves `request.state.user` unset (internal loopback IPC and the single-user desktop, which carry no user-data identity).
+- When `request.state.user` is unset, routes resolve the floor per mode: in genuine single-user / local mode they fall back to `local_admin_scope_id`; in server mode user-scoped reads (RAG, sessions) fail closed (`None`, no admin fallback) rather than leaking another user's data.
 - Never trust `username` from the request body or query params for scoping. Always use `request.state.user`.
 
 ### Layer 3: WebSocket & Task Queue
@@ -191,13 +194,17 @@ The agent injects identity into tool arguments before calling `tool.run()`:
 if name in ("memory_save", "memory_search"):
     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
 
+# Browser tool → user_scope_id (UUID) — keys the per-user browser session store
+if name == "browser_agent":
+    tool_args["user_scope_id"] = self._current_user_scope_id
+
 # Email/messaging tools → username (string)
 if name in ("mail_inbox", "send_mail", ...):
     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
 ```
 
 **Rules:**
-- Memory tools receive `user_scope_id` (UUID). They never use `username`.
+- Scope-injected tools (receiving `user_scope_id` UUID, never `username`): `memory_save` / `memory_search` (RAG isolation), `browser_agent` (per-user browser session store), `librarian_agent` (per-user filesystem jail), and `use_skill` (per-user skill visibility). The agent attaches `_current_user_scope_id` to each before `tool.run()`.
 - Communication tools (email, WhatsApp, contacts) receive `username` (string) for config/credential lookup.
 - **Target state:** Communication tools should ALSO receive `user_scope_id` and use it as the primary key, with `username` only for filesystem paths.
 
@@ -468,6 +475,7 @@ When building a new feature that handles user data:
 | WhatsApp Store | `vaf/core/whatsapp_message_store.py` | `scopes/{scope_id}/whatsapp_messages.db` |
 | Contact Store | `vaf/core/contacts_store.py` | `scopes/{scope_id}/contacts.json`, all CRUD + lookup functions |
 | Credential Store | `vaf/core/credential_store.py` | `email:{provider}:{scope_id}:{account_id}` |
+| Browser Sessions | `vaf/tools/browser_agent.py` | `browser_sessions/<scope>/<session>.json` (resolved arg → `VAF_USER_SCOPE_ID` → local-admin) |
 | Config Routes | `vaf/api/config_routes.py` | `get_current_scope_id()`, `user_scope_id` in user dict |
 | Contact Routes | `vaf/api/contact_routes.py` | All CRUD endpoints pass `user_scope_id` |
 | OAuth PKCE | `vaf/core/oauth_pkce.py` | `get_valid_access_token(user_scope_id=...)` for token refresh |

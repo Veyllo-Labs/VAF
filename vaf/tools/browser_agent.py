@@ -658,6 +658,10 @@ class BrowserAgentTool(BaseTool):
                 _sub_env = {"VAF_TASK_ID": task_id, "VAF_AGENT_TYPE": "browser_agent"}
                 if _sid:
                     _sub_env["VAF_SESSION_ID"] = _sid
+                _us = kwargs.get("user_scope_id")
+                if _us:
+                    # Keep the per-user browser cookie/login store scoped in the child process too.
+                    _sub_env["VAF_USER_SCOPE_ID"] = str(_us)
                 _parts = [_sys.executable, '-m', 'vaf.main', 'subagent', 'run', 'browser_agent',
                           '--task', task, '--task-id', task_id]
                 if Platform.is_windows():
@@ -695,6 +699,7 @@ class BrowserAgentTool(BaseTool):
                     allowed_domains=allowed_domains,
                     persistent=persistent,
                     session=session,
+                    user_scope_id=kwargs.get("user_scope_id"),
                 )
             )
         except ImportError as e:
@@ -719,6 +724,7 @@ class BrowserAgentTool(BaseTool):
         allowed_domains: Optional[list],
         persistent: bool = False,
         session: str = "default",
+        user_scope_id: Optional[str] = None,
     ) -> str:
         import os
         from browser_use import Agent
@@ -734,7 +740,18 @@ class BrowserAgentTool(BaseTool):
         # ── Persistent session: resolve cookie store path ─────────────────────
         session_file: Optional[str] = None
         if persistent:
-            sessions_dir = os.path.join(os.path.expanduser("~"), ".vaf", "browser_sessions")
+            # USER ISOLATION: key the cookie/login store by user_scope_id so one user's persistent
+            # browser logins are never shared with (or readable by) another. Resolve the scope from the
+            # explicit arg, the child-process env, or the local-admin scope (single-user/local mode).
+            _scope = user_scope_id or os.environ.get("VAF_USER_SCOPE_ID")
+            if not _scope:
+                try:
+                    from vaf.core.config import get_local_admin_scope_id
+                    _scope = get_local_admin_scope_id()
+                except Exception:
+                    _scope = "default"
+            scope_seg = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(_scope)) or "default"
+            sessions_dir = os.path.join(os.path.expanduser("~"), ".vaf", "browser_sessions", scope_seg)
             os.makedirs(sessions_dir, exist_ok=True)
             # Sanitise session name: only alphanumeric, dash, underscore
             safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in session)

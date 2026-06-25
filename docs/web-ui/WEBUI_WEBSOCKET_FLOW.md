@@ -66,9 +66,12 @@ non-localhost client must come from an RFC1918 IP, present a valid `access` JWT,
 | Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
 
 **Fail-closed guarantee.** A non-localhost connection is **never** established without a resolved
-`user_scope_id`. An unscoped connection (`user_context is None`) is treated as global/admin by
-`session.list()` and RAG search, so the handler closes (`4003`) any non-localhost client that reaches
-the connect step without auth context (defense-in-depth guard before `manager.connect`). A localhost
+`user_scope_id`. RAG no longer treats a missing scope as global/admin: for an unscoped/`None` request
+`RagPipeline.search()` returns `[]`, and `run_memory_search_sync` denies in server mode (and floors to
+the local-admin scope in single-user mode), so an unscoped RAG query yields nothing rather than the
+whole corpus. As a defense-in-depth guard the handler still closes (`4003`) any non-localhost client
+that reaches the connect step without auth context (`user_context is None`), before `manager.connect`,
+since `session.list()` would otherwise see no scope. A localhost
 client whose auth phase hits a transient error still connects (trusted), so a desktop session is never
 bricked by a transient secret/import failure. Note: an `Upgrade: websocket` header on a plain HTTP
 request does **not** bypass HTTP auth — real WS handshakes are websocket-scope and never reach the HTTP
@@ -269,6 +272,7 @@ If the tool card expands but the panel does not open:
 | Messages in wrong order after reload | Timestamp sort mixed client/server times; orphan cache messages misplaced | Removed timestamp sort; added turn-based role sort as safety net |
 | Automation result not shown in WebUI (only created files appear) | Result delivered via streaming `agent_message_update`, which overwrote/dropped the bubble when no live turn was active; the `session_unread` fallback was filtered out by the cross-session guard | Deliver results via `agent_message_append` (always appends a new bubble); allow `session_unread` and `agent_message_append` through the cross-session filter |
 | Chat empty after app start until switching sessions and back | `session_list` auto-select sent `load_session` via the `ws` STATE variable, which the `onmessage` closure captured as `null` on the first connect — the send silently did nothing | Handlers send via `wsSocketRef.current` (set before `onopen`) instead of the captured state |
+| LAN WebUI keeps reconnecting / connection lost on a heavy session | Oversized `history_update` frame (inline base64 images) exceeded the proxy relay's default 1 MB per-frame cap (`PayloadTooBig`), tearing down the relay | Proxy relay connects to the backend with `max_size=None`; backend bounded by uvicorn `ws_max_size` |
 
 ## Message Ordering (history_update)
 
@@ -286,6 +290,16 @@ When the frontend receives `history_update`, it applies a multi-step pipeline to
 ## WebSocket Connection Role Storage
 
 When a WebSocket connection is established, the user's role from the JWT token is stored via `manager.set_connection_user(websocket, user_id, username=..., role=...)`. The `get_config` and `save_config` handlers use `manager.get_connection_user_role(websocket)` to determine admin status, in addition to the legacy scope-based check. This ensures that the admin role from the JWT is respected even if the scope ID does not match the local admin scope.
+
+## WebSocket Frame Sizing
+
+The proxy WS relay (`vaf/network/https_proxy.py`) connects to the backend with `max_size=None`.
+A `history_update` frame can embed inline base64 images, which pushes a single frame past the
+`websockets` library default of 1 MB per frame. Without `max_size=None`, the relay raises
+`PayloadTooBig` and tears down the connection, so a LAN client reconnect-loops with "connection
+lost" on a heavy session. The backend side remains bounded by uvicorn's `ws_max_size`
+(`vaf/core/web_server.py`), so frames are not unbounded — the relay just stops capping below the
+backend's limit.
 
 ## Key Files
 

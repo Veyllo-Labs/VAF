@@ -814,6 +814,22 @@ export default function NativeDocxEditor({
     return null;
   }, [allPages, selectedBlock]);
 
+  // Which page currently holds the selected block. The content-visibility virtualization on each page
+  // (in the render below) also applies paint containment, which would clip an inline table/image editor
+  // that extends past the page edge. The selected page is therefore exempted from virtualization so its
+  // editors are never clipped; every other page is virtualized.
+  const selectedPageIndex = useMemo(() => {
+    if (!selectedBlock) return -1;
+    for (let i = 0; i < allPages.length; i++) {
+      const page = allPages[i];
+      if (page.sectionIndex !== selectedBlock.sectionIndex) continue;
+      if (selectedBlock.kind === 'header') { if (page.pageIndexInSection === 0) return i; }
+      else if (selectedBlock.kind === 'footer') { if (page.pageIndexInSection === page.totalPagesInSection - 1) return i; }
+      else if (page.blocks.some((b) => b.originalIndex === selectedBlock.blockIndex)) return i;
+    }
+    return -1;
+  }, [selectedBlock, allPages]);
+
   const getMarkIndices = (part: 'header' | 'body' | 'footer', sectionIndex: number, blockIndex: number, paragraphIndex: number | null): number[] => {
     if (!insertedSelections.length || !blockRanges.length) return [];
     const range = blockRanges.find((r) =>
@@ -870,6 +886,11 @@ export default function NativeDocxEditor({
       el.style.background = '#fff';
       el.style.boxShadow = 'none';
       el.style.margin = '0';
+      // On screen the pages use content-visibility to skip off-screen rendering. The export must contain
+      // every page, so force them all visible here (otherwise a print engine that honours the culling
+      // could emit blank pages for whatever was off-screen at export time).
+      el.style.contentVisibility = 'visible';
+      el.style.removeProperty('contain-intrinsic-size');
     });
     const css = `
       @page { size: A4; margin: 0; }
@@ -1138,7 +1159,7 @@ export default function NativeDocxEditor({
       {/* Document area -- full width, A4 pages on the same gray canvas as the A4 editor */}
       <div className="min-h-0 flex-1 overflow-auto bg-[#e5e7eb] p-4" onClick={(e) => { if (e.target === e.currentTarget) setSelectedBlock(null); }}>
         <div ref={previewRef} className="mx-auto flex w-[210mm] flex-col gap-6">
-          {allPages.map((page) => {
+          {allPages.map((page, pageIdx) => {
             const { sectionIndex: si, section, pageIndexInSection, totalPagesInSection, globalPageNumber, blocks: pageBlocks } = page;
             const isFirstPage = pageIndexInSection === 0;
             const isLastPage = pageIndexInSection === totalPagesInSection - 1;
@@ -1155,6 +1176,13 @@ export default function NativeDocxEditor({
                   width: `${layout.pageWidthMm}mm`,
                   height: `${layout.pageHeightMm}mm`,
                   boxSizing: 'border-box',
+                  // Virtualize off-screen pages: the browser skips layout/paint/compositing for pages out
+                  // of view, so a long document keeps only the visible pages as live GPU layers. This is the
+                  // big win on open, scroll and teardown (closing a 100+ page doc no longer freezes the UI).
+                  // The page sizes are fixed (A4), so scroll geometry stays exact. The page holding the
+                  // current selection is exempted (undefined) so its inline editors are never paint-clipped.
+                  contentVisibility: pageIdx === selectedPageIndex ? undefined : 'auto',
+                  containIntrinsicSize: `${layout.pageWidthMm}mm ${layout.pageHeightMm}mm`,
                   breakAfter: globalPageNumber === allPages.length ? 'auto' : 'page',
                   pageBreakAfter: globalPageNumber === allPages.length ? 'auto' : 'always',
                 }}

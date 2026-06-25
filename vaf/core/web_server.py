@@ -1070,6 +1070,7 @@ class WorkflowUpdate(BaseModel):
     # document_ready payload (from notify_document_created)
     filePath: Optional[str] = None
     title: Optional[str] = None
+    openMode: Optional[str] = None  # "viewer" routes research reports to the Document Viewer; else editor
 
 class Heartbeat(BaseModel):
     client_id: str
@@ -1086,12 +1087,62 @@ async def healthcheck():
     """Health check endpoint for Docker/monitoring."""
     return {"status": "ok", "healthy": True}
 
+async def _open_report_in_viewer(session_id: str, file_path: str, title: Optional[str]) -> None:
+    """Open a freshly-created report (e.g. from research_agent) in the Document Viewer (sidebar) rather
+    than the editor: render + RAG-index it like an attachment and broadcast sidebar_documents_set so the
+    read-only viewer shows it. Mirrors the set_sidebar_documents WS handler. Existing sidebar attachments
+    are preserved (merge + de-dup by name); falls back silently if anything fails."""
+    try:
+        from pathlib import Path as _Path
+        from vaf.core.session import Session as _Session
+        import base64 as _b64, mimetypes as _mt
+        p = _Path(file_path)
+        if not p.exists():
+            return
+        name = title or p.name
+        data_b64 = _b64.b64encode(p.read_bytes()).decode("ascii")
+        mime = _mt.guess_type(p.name)[0] or "application/octet-stream"
+        contents = await process_files_to_sidebar_list([{"name": name, "data": data_b64, "mimeType": mime}])
+        if not contents:
+            return
+        try:
+            loaded = session_mgr.load(session_id)
+        except Exception:
+            loaded = _Session(id=session_id, name=f"Session {session_id}")
+        if not getattr(loaded, "runtime_state", None):
+            loaded.runtime_state = {}
+        user_scope_id = (getattr(loaded, "metadata", None) or {}).get("user_scope_id") or None
+        existing = [d for d in (loaded.runtime_state.get("sidebar_documents") or []) if d.get("name") != name]
+        # Persist a SLIM copy (drop the big base64 'data') to keep the session JSON small, but BROADCAST the
+        # full contents WITH 'data' (the Gotenberg-rendered PDF). Without 'data' the viewer falls back to the
+        # raw extracted text; with it, the docx renders natively as A4 pages -- exactly like a manual attach.
+        slim_new = [{k: v for k, v in c.items() if k != "data"} for c in contents]
+        loaded.runtime_state["sidebar_documents"] = existing + slim_new
+        session_mgr.save(loaded, sync_state=False)
+        if bool(Config.get("attachment_rag_enabled", False)):
+            try:
+                await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
+                _spawn_attachment_index(manager, session_id, user_scope_id, contents)
+            except Exception as e:
+                log("WebServer", f"report viewer RAG index failed: {e}")
+        await manager.broadcast_to_session(session_id, {
+            "type": "sidebar_documents_set",
+            "contents": existing + contents,
+            "sessionId": session_id,
+        })
+    except Exception as e:
+        append_domain_log("webui", f"[ERROR] open report in viewer failed: {e}")
+
+
 @app.post("/api/workflow/update")
 async def receive_workflow_update(update: WorkflowUpdate):
     """Receive workflow updates from external processes (like separate terminals)."""
     data = update.dict(exclude_none=True)
     try:
-        if update.sessionId:
+        if update.type == "document_ready" and update.openMode == "viewer" and update.sessionId and update.filePath:
+            # research_agent reports open read-only in the Document Viewer (sidebar + RAG), not the editor.
+            await _open_report_in_viewer(update.sessionId, update.filePath, update.title)
+        elif update.sessionId:
             await manager.broadcast_to_session(update.sessionId, data)
         else:
             await manager.broadcast(data)

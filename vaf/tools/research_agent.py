@@ -1350,7 +1350,9 @@ class ResearchAgentTool(BaseTool):
                 if webui_mode and session_id:
                     try:
                         from vaf.core.web_interface import notify_document_created
-                        notify_document_created(session_id, str(output_path), title=output_path.name)
+                        # Research reports open read-only in the Document Viewer (sidebar + RAG),
+                        # not the editable Document Editor (which document_agent still uses).
+                        notify_document_created(session_id, str(output_path), title=output_path.name, open_mode="viewer")
                     except Exception:
                         pass
 
@@ -1424,12 +1426,14 @@ class ResearchAgentTool(BaseTool):
                 session_id = os.environ.get("VAF_SESSION_ID", "").strip()
                 open_result = {"done": False, "ok": False}
 
-                # In WebUI mode, push the report directly into the Document Editor panel.
+                # In WebUI mode, push the report directly into the Document Viewer panel.
                 # This avoids an extra "read file ..." sub-agent roundtrip just to show the report.
                 if webui_mode and session_id:
                     try:
                         from vaf.core.web_interface import notify_document_created
-                        notify_document_created(session_id, str(output_path), title=output_path.name)
+                        # Research reports open read-only in the Document Viewer (sidebar + RAG),
+                        # not the editable Document Editor (which document_agent still uses).
+                        notify_document_created(session_id, str(output_path), title=output_path.name, open_mode="viewer")
                     except Exception:
                         pass
 

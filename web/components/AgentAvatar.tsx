@@ -37,7 +37,7 @@ export type AvatarMode =
     // Activity · Tool & Action (body+eye+compact prop)
     | 'write'
     // Activity · Status & Outcome (icon above the head)
-    | 'warning' | 'permission'
+    | 'warning' | 'permission' | 'exclaim'
     // Activity · Multi-Agent & Learning
     | 'plan'
     // Activity · Lifecycle (used on the 2FA / login screen)
@@ -101,6 +101,7 @@ const B_ACT: Partial<Record<AvatarMode, string>> = {
     error: 'bError 2.2s ease-in-out infinite',
     warning: 'bWarn 2s ease-in-out infinite',
     permission: 'bAsk 2.6s ease-in-out infinite',
+    exclaim: 'bAsk 2.6s ease-in-out infinite',   // same asking pose as permission, but a "!" glyph
     plan: 'bPlan 3s ease-in-out infinite',
     waking: 'bWake 1.4s ease-out',          // plays ONCE then holds at rest; caller then switches to 'waiting'
     blocked: 'bBlocked 2.6s ease-in-out infinite',
@@ -113,12 +114,13 @@ const E_ACT: Partial<Record<AvatarMode, string>> = {
     error: 'eError 2.2s ease-in-out infinite',
     warning: 'eWarn 2s ease-in-out infinite',
     permission: 'eAsk 1.6s ease-in-out infinite',
+    exclaim: 'eAsk 1.6s ease-in-out infinite',
     plan: 'ePlan 3.5s ease-in-out infinite',
     waking: 'eWake 1.4s ease-out',
     blocked: 'eBlocked 2.6s ease-in-out infinite',
     delegate: 'eHandoff 2.6s ease-in-out infinite',
 };
-const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'plan' || m === 'waking' || m === 'blocked' || m === 'delegate';
+const isActivity = (m: AvatarMode) => m === 'learn' || m === 'success' || m === 'error' || m === 'write' || m === 'warning' || m === 'permission' || m === 'exclaim' || m === 'plan' || m === 'waking' || m === 'blocked' || m === 'delegate';
 
 // Tool-activity scenes: the whole showcase scene scaled 0.75 (agent stays 36px) + the tool's prop.
 // `l`/`t` = wrapper offset (showcase agent position × 0.75, negated) so the agent sits at the avatar's
@@ -441,13 +443,14 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         <circle cx="13" cy="18.6" r="1.3" fill="currentColor" />
                     </svg>
                 )}
-                {/* permission — a "?" above the head; the body leans/asks (bAsk) */}
-                {shown === 'permission' && !dim && (
+                {/* permission — a "?" above the head; exclaim — the SAME asking pose with a "!" instead.
+                    Both lean/ask via bAsk + iPulse the glyph. */}
+                {(shown === 'permission' || shown === 'exclaim') && !dim && (
                     <span style={{
                         position: 'absolute', left: '50%', bottom: '100%', width: 14, marginLeft: -7, marginBottom: 2, textAlign: 'center',
                         lineHeight: 1, fontSize: 17, fontWeight: 800, color: overlay, zIndex: 2, transformOrigin: 'center bottom',
                         animation: 'iPulse 1.4s ease-in-out infinite',
-                    }}>?</span>
+                    }}>{shown === 'exclaim' ? '!' : '?'}</span>
                 )}
 
                 {/* blocked — a striped road-block barrier appears to the RIGHT, SEPARATE from the agent
@@ -510,7 +513,10 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     Rendered INSTEAD of the plain body, exactly like a tool scene. */}
                 {awayScene && !dim && (
                     <div className={`asc ${awayScene.cls}`} style={{ left: awayScene.l, top: awayScene.t }}>
-                        <div className="ag"><div className="bd" /><div className="ey" /></div>
+                        {/* eye is NESTED in the body (like the showcase .agent>.body>.eye) so it tracks the
+                            body's motion. The coffee `bodySip` lurches the body ~22px toward the cup; with a
+                            flat .bd+.ey the eye stayed put and detached (broken). Nesting keeps them together. */}
+                        <div className="ag"><div className="bd"><div className="ey" /></div></div>
                         {awayProps(shown)}
                     </div>
                 )}

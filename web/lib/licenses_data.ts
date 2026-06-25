@@ -62,7 +62,9 @@ export const thirdPartyLicenses = [
   { name: 'pyotp', license: 'MIT', url: 'https://github.com/pyauth/pyotp' },
   { name: 'argon2-cffi', license: 'MIT', url: 'https://github.com/hynek/argon2-cffi' },
   // Networking
-  { name: 'websockets', license: 'BSD-3-Clause', url: 'https://github.com/python-websockets/websockets' }
+  { name: 'websockets', license: 'BSD-3-Clause', url: 'https://github.com/python-websockets/websockets' },
+  // Desktop window (Linux) — Qt WebEngine WebView. PySide6 is LGPL-3.0 (not PyQt6/GPL); see LICENSE.
+  { name: 'PySide6 (Qt for Python)', license: 'LGPL-3.0', url: 'https://doc.qt.io/qtforpython/' }
 ];
 
 export const vafLicenseText = `MIT License

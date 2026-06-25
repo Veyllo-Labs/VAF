@@ -754,7 +754,12 @@ export default function SubAgentWindow({
     const librarianLoading = !librarian;
     const browserLoading = !browser && !browserFrame;
 
-    if (!isOpen && mode === 'overlay') return null;
+    // When the window is closed the outer dock panel is already w-0/opacity-0/invisible, so render
+    // nothing rather than building the full (un-virtualized) research/document report DOM and arming its
+    // typewriter + ResizeObserver. The old `&& mode === 'overlay'` made this guard dead code: the only
+    // caller uses mode="dock", so the heavy view was still built while invisible and then thrashed for
+    // minutes when revealed (e.g. closing the editor after a research run re-mounts this view).
+    if (!isOpen) return null;
 
     if (mode === 'dock' && agentKind === 'document') {
         // ── Document view for the document agent: A4 paper growing section by

@@ -216,19 +216,21 @@ if name in ("mail_inbox", "send_mail", ...):
 -- Every memory belongs to exactly one user
 SELECT * FROM memories WHERE user_scope_id = :scope;
 
--- Row-Level Security enforces this at the DB level
+-- Row-Level Security enforces this at the DB level (fail-closed, ENABLED + FORCED).
+-- A row is visible/writable ONLY when its user_scope_id equals the per-transaction GUC;
+-- an unset/empty GUC matches nothing (deny) and a NULL-scope row is not blanket-visible.
+ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memories FORCE  ROW LEVEL SECURITY;
 CREATE POLICY user_isolation_memories ON memories
-    USING (
-        COALESCE(current_setting('app.current_user_scope_id', true), '') = ''
-        OR user_scope_id IS NULL
-        OR user_scope_id = current_setting('app.current_user_scope_id', true)::uuid
-    );
+    USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+    WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid);
+-- The app connects as the non-superuser role vaf_app (NOSUPERUSER, NOBYPASSRLS), so this is enforced.
 ```
 
 **Rules:**
 - Every user-owned table MUST have a `user_scope_id UUID` column.
 - Every query MUST filter by `user_scope_id` at the application level.
-- RLS provides defense-in-depth, not primary enforcement.
+- RLS is enforced at the database as a fail-closed second layer: the policy is forced on `memories` and the app connects as a non-superuser role (`vaf_app`, `NOBYPASSRLS`), so an unscoped or cross-user transaction is denied at the DB even if an application-level filter has a bug. The application-level `user_scope_id` filter remains the first line of defense.
 
 #### Redis (Cache)
 
@@ -447,7 +449,7 @@ When building a new feature that handles user data:
 - [ ] **Never compare `username` to `local_admin_username`** for data scoping — use `user_scope_id == local_admin_scope_id`
 - [ ] **Handle `user_scope_id = None`** gracefully (means local/unauthenticated mode)
 - [ ] **Add `user_scope_id` column** to any new database table holding user data
-- [ ] **Add RLS policy** mirroring the `memories` table pattern for new tables
+- [ ] **Add RLS policy** mirroring the fail-closed `memories` pattern (`user_scope_id = NULLIF(GUC,'')::uuid` in USING + WITH CHECK, plus ENABLE and FORCE ROW LEVEL SECURITY), and GRANT DML on the new table to `vaf_app`; for child tables without their own scope column, isolate by JOINing `memories`
 - [ ] **Test with 2+ users** to verify isolation
 - [ ] **Return 404 (not 403)** when a user tries to access another user's resource
 
@@ -463,7 +465,7 @@ When building a new feature that handles user data:
 | Memory Model | `vaf/memory/models.py` | `user_scope_id` column on `memories` table |
 | Graph Operations | `vaf/memory/graph.py` | Scope filter on auto-connect |
 | Cache Keys | `vaf/memory/cache.py` | `scope={user_scope_id}` in key |
-| Database RLS | `vaf/memory/database.py` | `SET LOCAL app.current_user_scope_id` |
+| Database RLS | `vaf/memory/database.py` | `get_db(user_scope_id=...)` sets `app.current_user_scope_id` per transaction on the app engine (role `vaf_app`, `memory_db_url`); a separate owner engine (`memory_db_owner_url`) handles DDL and global maintenance |
 | Memory Routes | `vaf/memory/routes.py` | `Depends(get_current_user_scope)` |
 | Agent RAG | `vaf/core/agent.py` | `_current_user_scope_id` for memory_save/search |
 | Sandbox | `vaf/tools/python_sandbox.py` | `/tmp/vaf_{scope_prefix}_{exec_id}` |

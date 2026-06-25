@@ -32,8 +32,8 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │                              │                                     │
 │  Layer 4: Database (PostgreSQL + RLS)                              │
 │  ┌──────────────────────────────────────────────────────────┐      │
-│  │  Row-Level Security on memories table                    │      │
-│  │  set_config('app.current_user_scope_id', ..., true)      │      │
+│  │  Row-Level Security (forced, fail-closed) on memories    │      │
+│  │  App connects as non-superuser vaf_app (RLS enforced)    │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                              │                                     │
 │  Layer 5: Filesystem                                               │
@@ -198,17 +198,15 @@ Without this, User A could receive cached search results or graph data that was 
 
 ## 4. Database-Level Security (PostgreSQL RLS)
 
-As a defense-in-depth measure, PostgreSQL Row-Level Security (RLS) is enabled on the `memories` table:
+PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table and is enforced for every memory data path. The application data connection uses a non-superuser role (`vaf_app`, `NOSUPERUSER`, `NOBYPASSRLS`) via `memory_db_url`, so the policy cannot be bypassed by the app; a separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used only for DDL, migrations, and global maintenance. The policy is fail-closed:
 
 ```sql
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memories FORCE  ROW LEVEL SECURITY;
 
 CREATE POLICY user_isolation_memories ON memories
-    USING (
-        COALESCE(current_setting('app.current_user_scope_id', true), '') = ''
-        OR user_scope_id IS NULL
-        OR user_scope_id = current_setting('app.current_user_scope_id', true)::uuid
-    );
+    USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+    WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid);
 ```
 
 ### How it works
@@ -222,20 +220,20 @@ CREATE POLICY user_isolation_memories ON memories
    ```
    `set_config(..., true)` is the transaction-scoped form of `SET LOCAL`. It is used instead of a literal `SET LOCAL app.current_user_scope_id = :scope` because asyncpg rejects bind parameters in a literal `SET LOCAL` statement.
 2. The RLS policy checks this variable against each row's `user_scope_id`.
-3. When a concrete scope GUC is set, rows belonging to other users are invisible — even if application-level filtering has a bug. (See the caveat below: with no scope set, the policy fails open.)
+3. A row is visible or writable only when its `user_scope_id` equals the per-transaction GUC. With a concrete scope set, other users' rows are invisible even if application-level filtering has a bug. With no scope set the GUC is empty, so the policy matches no rows and an unscoped transaction sees and writes nothing (fail-closed); a row whose `user_scope_id` is NULL is not blanket-visible. Because the data connection runs as the non-superuser `vaf_app` role, the database enforces this independently of the application filter.
 
 ### Policy logic
 
-| `app.current_user_scope_id` | Row `user_scope_id` | Visible? |
+| `app.current_user_scope_id` | Row `user_scope_id` | Visible / writable? |
 |------------------------------|---------------------|----------|
-| Not set / empty              | Any                 | Yes (admin/system access) |
-| Set to UUID                  | NULL                | Yes (shared/global memories) |
+| Not set / empty              | Any                 | **No** (unscoped session is denied all rows) |
+| Set to UUID                  | NULL                | **No** (a NULL-scope row is not blanket-visible) |
 | Set to UUID                  | Same UUID           | Yes |
 | Set to UUID                  | Different UUID      | **No** |
 
-**Important**: The RLS policy uses `set_config(..., true)` (transaction-scoped), which is scoped to the current transaction. This prevents scope leakage between concurrent requests sharing a connection pool.
+**Important**: The GUC is set with `set_config(..., true)` (transaction-scoped) on every memory data path — `get_db(user_scope_id=...)` threads the scope through all callers — so it is scoped to the current transaction and never leaks between concurrent requests sharing the connection pool. Because the data connection runs as the non-superuser `vaf_app` role, an unscoped transaction is denied at the database, not merely filtered in the application.
 
-**Note**: this RLS policy is a backstop only and deliberately fails **open** — it allows all rows when `app.current_user_scope_id` is empty/unset (an unscoped transaction) or when a row's `user_scope_id` IS NULL. RLS therefore does not protect an unscoped transaction; the application-layer scope filter (now fail-closed, see Section 2) remains the primary guard.
+**Note**: this RLS policy is fail-closed and is genuinely enforced, not just a best-effort backstop. A row is visible or writable only when its `user_scope_id` exactly equals the per-transaction GUC; an unset or empty GUC matches nothing (an unscoped transaction sees and writes zero rows), and a row with `user_scope_id IS NULL` is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application's data connection uses a non-superuser role (`NOSUPERUSER`, `NOBYPASSRLS`), so the database enforces isolation independently of the application-layer scope filter. The owner role (`vaf`, superuser) bypasses RLS and is used only for DDL, migrations, and global maintenance via the owner engine. The application filter (also fail-closed, see Section 2) is the first line of defense; RLS is a real second one.
 
 ## 5. Filesystem Isolation
 
@@ -389,7 +387,7 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Memory graph | Scope filter on auto-connect and manual operations | Application |
 | Gateway | Server-side scope extraction, client scope stripped | Transport |
 | Redis cache | Scope-prefixed cache keys | Caching |
-| PostgreSQL | Row-Level Security policy | Database |
+| PostgreSQL | Fail-closed Row-Level Security (ENABLED + FORCED), enforced via non-superuser `vaf_app` role | Database |
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |
 | Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |
@@ -460,19 +458,21 @@ cache_key = f"my_feature:{item_id}"
 When creating new tables that hold user data:
 
 1. Add a `user_scope_id` column (UUID, nullable for system/shared data).
-2. Add an RLS policy mirroring the `memories` table pattern.
-3. In `get_db()`, ensure `set_config('app.current_user_scope_id', ..., true)` (transaction-scoped) is called (already handled globally).
+2. Add a fail-closed RLS policy mirroring the current `memories` table pattern, and `FORCE` RLS so the owner does not bypass it.
+3. Grant the non-superuser application role (`vaf_app`) `SELECT, INSERT, UPDATE, DELETE` on the new table — the application data connection runs as `vaf_app`, not the table owner.
+4. In `get_db(user_scope_id=...)`, the per-transaction GUC `app.current_user_scope_id` is already set globally, so the new table's policy is enforced automatically.
 
 ```sql
--- Example for a new table
+-- Example for a new table (fail-closed, mirrors the memories pattern)
 ALTER TABLE my_new_table ENABLE ROW LEVEL SECURITY;
+ALTER TABLE my_new_table FORCE  ROW LEVEL SECURITY;
 
 CREATE POLICY user_isolation_my_new_table ON my_new_table
-    USING (
-        COALESCE(current_setting('app.current_user_scope_id', true), '') = ''
-        OR user_scope_id IS NULL
-        OR user_scope_id = current_setting('app.current_user_scope_id', true)::uuid
-    );
+    USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+    WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid);
+
+-- Grant DML on the new table to the app role so vaf_app can use it:
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON my_new_table TO vaf_app;
 ```
 
 ### Rule 6: Scope filesystem access

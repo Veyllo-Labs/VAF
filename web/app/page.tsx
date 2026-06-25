@@ -1345,7 +1345,7 @@ function VAFDashboardContent() {
     }>>([]);
 
     const workspaceSubpathRef = useRef('');
-    const refreshWorkspace = useCallback(async (sid?: string | null, subpath?: string) => {
+    const refreshWorkspace = useCallback(async (sid?: string | null, subpath?: string, _retry: number = 0) => {
         const id = sid ?? currentSessionId;
         if (!id) { setWorkspaceInfo(null); return; }
         const sub = subpath ?? workspaceSubpathRef.current;
@@ -1356,13 +1356,22 @@ function VAFDashboardContent() {
             );
             if (!res.ok) {
                 // Folder may have been deleted - fall back to the root
-                if (sub) { workspaceSubpathRef.current = ''; refreshWorkspace(id, ''); }
+                if (sub) { workspaceSubpathRef.current = ''; refreshWorkspace(id, ''); return; }
+                // Transient server error (e.g. while the renderer was stalled): retry a few times so the
+                // workspace button recovers instead of staying hidden for good. A 4xx (e.g. 403) is
+                // definitive and not retried.
+                if (res.status >= 500 && _retry < 3) setTimeout(() => refreshWorkspace(id, '', _retry + 1), 1500);
                 return;
             }
             const data = await res.json();
             workspaceSubpathRef.current = data?.subpath ?? '';
             setWorkspaceInfo(data?.path ? data : null);
-        } catch { /* backend unreachable - keep current state */ }
+        } catch {
+            // Backend unreachable / the renderer stalled mid-request. The session-change effect already
+            // cleared workspaceInfo, so without a retry the button would vanish permanently after a UI
+            // freeze. Retry a few times before giving up.
+            if (_retry < 3) setTimeout(() => refreshWorkspace(id, sub, _retry + 1), 1500);
+        }
     }, [currentSessionId]);
 
     // Load workspace info whenever the active chat changes

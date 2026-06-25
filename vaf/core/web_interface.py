@@ -707,10 +707,14 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
             pass
 
 
-def notify_document_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
+def notify_document_created(session_id: Optional[str], file_path, title: Optional[str] = None, open_mode: str = "editor") -> None:
     """
     Notify the Web UI that a document was created so the Document Editor opens with it.
     Call this from any code path that creates a document (workflow, document_agent, etc.).
+
+    open_mode: "editor" (default) auto-opens the editable Document Editor. "viewer" instead opens the
+    file read-only in the Document Viewer (sidebar) and RAG-indexes it — used for research_agent reports,
+    which are meant to be read/referenced rather than edited.
     Works from main process (WebSocket) and from subprocess (HTTP POST to /api/workflow/update).
 
     Safe when there is no Web session (e.g. Telegram or automation): if session_id is missing,
@@ -724,6 +728,7 @@ def notify_document_created(session_id: Optional[str], file_path, title: Optiona
         "sessionId": session_id,
         "filePath": resolved,
         "title": title or Path(file_path).name,
+        "openMode": open_mode,
     }
     wi = get_web_interface()
     if getattr(wi, "_server_loop", None):

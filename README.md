@@ -12,6 +12,10 @@ O))         O))       O))))))))
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface — on Windows, macOS, and Linux.
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)
+
+**Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft — `legal@veyllo.io`.
+
 **Requires:** Python 3.10+, Node.js 18+, Docker (optional, for memory and sandboxing)
 
 ---
@@ -319,7 +323,7 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## License
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)
 
 VAF is **dual-licensed**:
 

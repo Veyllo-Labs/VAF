@@ -204,6 +204,12 @@ Providers that support multimodal (image) input:
 
 **Non-vision model degradation:** `_prepare_messages()` checks `provider + model_name` against a known-vision list before building multimodal content blocks. If the active model does not support vision (e.g. any DeepSeek model), images are silently stripped and replaced with `[Image attached: filename]` text so the agent still runs without hanging. A `⚠️ Vision not supported` warning is emitted to the WebUI. The check lives in `vaf/core/agent.py` → `_model_supports_vision()`.
 
+**Image downscaling:** Before an image is sent, oversized images are downscaled — the longest edge is capped (default 2000 px; OpenAI internally caps high-detail at ~2048 px) and the image is re-encoded (JPEG by default; PNGs with transparency stay PNG). This runs in `vaf/core/image_utils.py` → `downscale_image_b64()`, applied inside `_prepare_messages()` for both the primary and the vision-fallback path, so every provider benefits. It prevents OpenAI returning **HTTP 500** on full-resolution photos (multi-MB base64 payloads) and lowers token cost; images already within the cap are passed through byte-for-byte. The helper never raises — on any decode error it sends the original. Tunable via `vision_image_max_edge` and `vision_image_jpeg_quality`.
+
+### Request Timeouts & Retries (API providers)
+
+The OpenAI-compatible client (OpenAI, DeepSeek, OpenRouter, local) is created with explicit `httpx` timeouts: `connect`/`write` are bounded so a large upload cannot hang, while `read` stays generous (default 600 s) so long reasoning streams are not cut off. On a transient failure at request initiation — HTTP 5xx, timeout, or connection drop — VAF retries the call a few times with backoff. The retry wraps only the request initiation (before any token is streamed), so it can never duplicate output, and it sits on top of the OpenAI SDK's own retries to ride out longer transient outages. Tunable via `api_retry_attempts` and `api_timeout_*`.
+
 ### Multi-Tool Wrapper Compatibility
 
 Some models emit a wrapper call named `multi_tool_use.parallel` with a `tool_uses` array.

@@ -110,6 +110,17 @@ class Config:
         # Leave empty to keep current behavior (strip images + show error to user).
         "vision_provider": "",   # e.g. "google", "openai", "anthropic", "openrouter"
         "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-4o" — leave empty for provider default
+        # Image downscaling before send: full-res photos make providers 500 and waste tokens.
+        # Only images whose longest edge exceeds max_edge are shrunk (small images untouched).
+        "vision_image_max_edge": 2000,      # px; OpenAI internally caps high-detail at ~2048
+        "vision_image_jpeg_quality": 85,    # re-encode quality when downscaling
+
+        # OpenAI-compatible request resilience (openai/deepseek/openrouter/local).
+        "api_retry_attempts": 2,            # VAF-level retries on transient 5xx/timeout (atop the SDK's own)
+        "api_timeout_connect": 20.0,        # s — bound connect so a huge upload can't hang
+        "api_timeout_write": 120.0,         # s — bound the upload (request body) phase
+        "api_timeout_read": 600.0,          # s — KEEP generous: reasoning models stream for minutes
+        "api_timeout_pool": 20.0,           # s — connection-pool acquire
 
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name

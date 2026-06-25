@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (216 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (223 keys).
 
 ## How configuration is set
 
@@ -74,6 +74,13 @@ print(agent.run("In one sentence, what is Python?"))
 | `api_key_veyllo` | `""` | Reserved (Veyllo API server, future). |
 | `vision_provider` | `""` | Fallback provider for image input when the primary has no vision (e.g. `google`). Empty = strip images. |
 | `vision_model` | `""` | Model for the vision fallback; empty = provider default. |
+| `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |
+| `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
+| `api_retry_attempts` | `2` | VAF-level retries on a transient 5xx/timeout for OpenAI-compatible providers (atop the SDK's own retries; only before any token is streamed, so output is never duplicated). |
+| `api_timeout_connect` | `20.0` | OpenAI-compatible client connect timeout (s). |
+| `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) — bounds large image uploads. |
+| `api_timeout_read` | `600.0` | Read timeout (s); kept generous so long reasoning streams are not cut off. |
+| `api_timeout_pool` | `20.0` | Connection-pool acquire timeout (s). |
 | `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. |
 | `subagent_use_separate_provider` | `False` | Use `subagent_provider` instead of inheriting. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |

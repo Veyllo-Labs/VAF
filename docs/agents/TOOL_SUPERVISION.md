@@ -109,12 +109,21 @@ Requests are processed by worker threads pulling from a single shared `TaskQueue
   hands the same session to two workers at once — a session's turns run strictly in order.
 - **Fairness.** With `queue_policy: weighted_fair`, interactive / automation / background task
   classes are scheduled with weighted fairness; the default `legacy` policy is a single priority heap.
-- **Pool.** `vaf/core/headless_runner.py` runs `parallel_main_workers` worker threads (default 1).
-  With more than one worker and the weighted-fair policy, **different** sessions can be processed
-  concurrently while each session stays serialized.
+- **Pool.** `vaf/core/headless_runner.py` runs up to the **effective** worker count: the configured
+  `parallel_main_workers` clamped per provider — API providers to `max_parallel_api_workers` (default 5),
+  `provider=local` to `max_parallel_local_workers` (default 2, further clamped to the llama-server
+  `--parallel` slots) to avoid VRAM exhaustion. Default is 1 (serialized). With more than one worker,
+  **different** sessions are processed concurrently while each session stays serialized — the per-session
+  lock holds in **both** policies, so `weighted_fair` only adds lane fairness across task classes (recommended
+  alongside `parallel_main_workers > 1`).
 
 Stop requests are per-session (`request_stop` / `should_stop` / `clear_stop`), so stopping one
 session never affects another.
+
+Known limitations with more than one worker (only worker #1 owns the web-interface registration):
+editing a **custom tool** in Settings hot-reloads worker #1 only — workers 2..N keep the old tool
+definition until the next restart; and the "session active" hint on reconnect reflects worker #1's last
+task (cosmetic — live status comes from `manager.latest_state`, and Stop is per-session).
 
 ### Concurrency and session isolation
 

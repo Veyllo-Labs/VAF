@@ -9431,46 +9431,55 @@ class Agent:
         # a TC message that has no following tool response → 400.
         # Fix: only count a role:tool as a valid response if it appears at an
         # index AFTER the assistant+tool_calls message that issued the call.
-        _tc_response_idx: dict = {}  # tool_call_id → index of first role:tool
+        # Position-aware AND duplicate-id-safe pairing: each assistant tool_call
+        # claims the NEAREST following UNCLAIMED role:tool with the same id. A
+        # single global "first response per id" map mis-handles DUPLICATE ids
+        # (which occur if a turn ever gets replayed/duplicated into history): the
+        # 2nd assistant's call looks unanswered — its only recorded response is the
+        # early one — so its tool_calls get stripped, yet the 2nd tool result
+        # survives → an orphaned role:tool that APIs (e.g. DeepSeek) 400 on.
+        _tool_idxs_by_id: dict = {}
         for _i, _m in enumerate(messages):
             if _m.get("role") == "tool" and _m.get("tool_call_id"):
-                _tcid = _m["tool_call_id"]
-                if _tcid not in _tc_response_idx:
-                    _tc_response_idx[_tcid] = _i
+                _tool_idxs_by_id.setdefault(_m["tool_call_id"], []).append(_i)
+        _claimed: set = set()
 
         cleaned: List[Dict] = []
         for _i, msg in enumerate(messages):
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                live_calls = [
-                    tc for tc in msg["tool_calls"]
-                    if tc.get("id") in _tc_response_idx
-                    and _tc_response_idx[tc.get("id")] > _i  # response must follow the TC
-                ]
+                live_calls = []
+                for tc in msg["tool_calls"]:
+                    _resp = next(
+                        (j for j in _tool_idxs_by_id.get(tc.get("id"), [])
+                         if j > _i and j not in _claimed),
+                        None,
+                    )
+                    if _resp is not None:
+                        _claimed.add(_resp)
+                        live_calls.append(tc)
                 if len(live_calls) != len(msg["tool_calls"]):
-                    # Some calls have no response — rebuild the message. Also drop the
-                    # Anthropic raw-block replay cache: it holds the ORIGINAL tool_use
-                    # blocks, which would now reference dropped tool_results (-> 400). The
-                    # converter then re-synthesizes from the trimmed tool_calls instead.
+                    # Some calls have no following response — rebuild the message. Also
+                    # drop the Anthropic raw-block replay cache: it holds the ORIGINAL
+                    # tool_use blocks, which would now reference dropped tool_results
+                    # (-> 400). The converter re-synthesizes from the trimmed tool_calls.
                     msg = {k: v for k, v in msg.items() if k != "_anthropic_blocks"}
                     if live_calls:
                         msg["tool_calls"] = live_calls
                     else:
                         # All calls are dangling — drop tool_calls entirely
                         msg = {k: v for k, v in msg.items() if k != "tool_calls"}
+            # MUST stay unconditional (exactly one append per input msg, no
+            # continue/skip): _claimed holds indices into `messages`, and the
+            # filter below indexes into `cleaned` — they only align while cleaned
+            # mirrors messages 1:1.
             cleaned.append(msg)
 
-        # Also remove orphaned role:tool messages — whose assistant+tool_calls
-        # was stripped by the loop above or removed by compression. Leaving them
-        # can cause API errors about unexpected role:tool placement.
-        _live_tc_ids: set = set()
-        for _m in cleaned:
-            if _m.get("role") == "assistant" and _m.get("tool_calls"):
-                for _tc in _m["tool_calls"]:
-                    if _tc.get("id"):
-                        _live_tc_ids.add(_tc["id"])
+        # Drop role:tool results that no surviving assistant tool_call claimed
+        # (orphans — their assistant+tool_calls was stripped above or lost to
+        # compression). Leaving them causes API errors about role:tool placement.
         messages = [
-            _m for _m in cleaned
-            if not (_m.get("role") == "tool" and _m.get("tool_call_id") not in _live_tc_ids)
+            _m for _i, _m in enumerate(cleaned)
+            if not (_m.get("role") == "tool" and _i not in _claimed)
         ]
 
         # --- Thinking-mode reply context injection ----------------------------

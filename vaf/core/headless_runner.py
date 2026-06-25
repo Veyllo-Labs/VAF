@@ -1762,14 +1762,58 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # hit) across session reloads. Plain assistant text is saved
                                 # separately below as _clean_response, so it is skipped here.
                                 try:
+                                    # Idempotency guard against history duplication: a re-sent identical
+                                    # prompt (plus a concurrent session reload on the shared agent) can make
+                                    # turn_context_messages_since_last_user() re-select an EARLIER turn's
+                                    # assistant(tool_calls)/role:tool block and append it verbatim — writing
+                                    # DUPLICATE tool_call_ids that later 400 providers like DeepSeek
+                                    # ("messages with role 'tool' must follow a message with 'tool_calls'").
+                                    # Track CALL ids and RESULT ids in SEPARATE spaces: an assistant's
+                                    # tool_calls[].id and its paired role:tool's tool_call_id are the SAME id
+                                    # (that equality IS the link), so one shared set would skip every fresh
+                                    # result as a "duplicate" of its own call and orphan the tool_use. Skip a
+                                    # role:tool only if its id already exists as a RESULT; skip an assistant
+                                    # only if ALL its call ids already exist as CALLS. Also dedupe in-batch.
+                                    _call_ids = set()
+                                    _result_ids = set()
+                                    _existing_ctx = set()
+                                    for _em in session.messages:
+                                        _eid = getattr(_em, "tool_call_id", None)
+                                        if _eid:
+                                            _result_ids.add(_eid)
+                                        for _etc in (getattr(_em, "tool_calls", None) or []):
+                                            _etcid = (_etc or {}).get("id")
+                                            if _etcid:
+                                                _call_ids.add(_etcid)
+                                        _ec = str(getattr(_em, "content", "") or "")
+                                        if _ec.lstrip().startswith("[Context:"):
+                                            _existing_ctx.add(_ec.strip())
                                     for _tm in turn_context_messages_since_last_user(getattr(agent, "history", []) or [], _user_input):
+                                        _role = _tm.get("role")
+                                        _content = str(_tm.get("content") or "")
+                                        _tcid = _tm.get("tool_call_id")
+                                        _tcids = [(_c or {}).get("id") for _c in (_tm.get("tool_calls") or []) if (_c or {}).get("id")]
+                                        if _role == "tool" and _tcid and _tcid in _result_ids:
+                                            continue
+                                        if _role == "assistant" and _tcids and all(_id in _call_ids for _id in _tcids):
+                                            continue
+                                        if (_role == "system"
+                                                and _content.lstrip().startswith("[Context:")
+                                                and _content.strip() in _existing_ctx):
+                                            continue
                                         session.add_message(
-                                            role=_tm.get("role"),
-                                            content=str(_tm.get("content") or ""),
+                                            role=_role,
+                                            content=_content,
                                             tool_calls=_tm.get("tool_calls"),
                                             tool_call_id=_tm.get("tool_call_id"),
                                             name=_tm.get("name"),
                                         )
+                                        if _tcid:
+                                            _result_ids.add(_tcid)
+                                        for _id in _tcids:
+                                            _call_ids.add(_id)
+                                        if _content.lstrip().startswith("[Context:"):
+                                            _existing_ctx.add(_content.strip())
                                 except Exception:
                                     pass
                                 if _clean_response:

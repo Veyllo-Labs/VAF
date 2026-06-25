@@ -350,16 +350,19 @@ async def init_db(drop_existing: bool = False):
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vaf_app"))
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO vaf_app"))
 
-        # Enable Row-Level Security on memories table (defense-in-depth)
+        # Row-Level Security on memories: fail-CLOSED, matching scripts/rls_enforce.sql so init_db (a fresh
+        # install, or a POST /api/memory/init) produces the SAME enforced state as the cutover and can never
+        # silently revert it to fail-open. A row is visible/writable ONLY when its user_scope_id equals the
+        # per-transaction GUC; NULLIF maps an unset/empty GUC to NULL so an unscoped session matches nothing
+        # (deny) and NULL-scoped rows are not blanket-visible. Enforcement applies to the app role (vaf_app,
+        # NOSUPERUSER/NOBYPASSRLS); the superuser owner (vaf) still bypasses for cross-user stats/DDL.
         await conn.execute(text("ALTER TABLE memories ENABLE ROW LEVEL SECURITY"))
+        await conn.execute(text("ALTER TABLE memories FORCE ROW LEVEL SECURITY"))
         await conn.execute(text("DROP POLICY IF EXISTS user_isolation_memories ON memories"))
         await conn.execute(text("""
             CREATE POLICY user_isolation_memories ON memories
-                USING (
-                    COALESCE(current_setting('app.current_user_scope_id', true), '') = ''
-                    OR user_scope_id IS NULL
-                    OR user_scope_id = current_setting('app.current_user_scope_id', true)::uuid
-                )
+                USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+                WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
         """))
 
         logger.info("Memory database initialized successfully (RLS enabled)")

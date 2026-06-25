@@ -238,6 +238,54 @@ class TaskQueue:
         with self._cv:
             return bool(self._inflight_by_worker)
 
+    @staticmethod
+    def _task_scope(task: "AgentTask") -> Optional[str]:
+        """Best-effort user_scope_id for a task. Enqueue sites use two different metadata keys:
+        web interactive turns set 'enqueue_user_scope_id'; thinking/timer/automation/compaction set
+        'user_scope_id'. Read BOTH. Returns None for scope-less housekeeping tasks (e.g. LOAD_SESSION
+        system commands), which must NOT count as a user's turn for fairness gating."""
+        md = task.metadata or {}
+        scope = md.get("enqueue_user_scope_id") or md.get("user_scope_id")
+        if scope is None:
+            return None
+        scope = str(scope).strip()
+        return scope or None
+
+    def _iter_all_tasks(self):
+        """Yield every in-flight and queued AgentTask (caller must hold self._cv)."""
+        for task in self._inflight_by_worker.values():
+            if task is not None:
+                yield task
+        if self._legacy_mode:
+            for item in self._legacy_heap:
+                yield item[3]
+        else:
+            for heap in self._queues.values():
+                for item in heap:
+                    yield item[3]
+
+    def is_busy_for_scope(self, target_key: str, canonicalize: Callable[[Any], str]) -> bool:
+        """True if any in-flight OR queued task belongs to the same user as `target_key`.
+
+        `target_key` is the canonical key of the user we are gating (already run through the
+        caller's canonicalizer, e.g. thinking_mode._key). `canonicalize` maps each task's raw
+        metadata scope to its canonical key, so admin aliases (None/'default'/local-admin-UUID)
+        collapse and match correctly. Scope-less housekeeping tasks (LOAD_SESSION etc.) are
+        skipped — they are not a user's turn and must not block another user's thinking run."""
+        if not target_key:
+            return False
+        with self._cv:
+            for task in self._iter_all_tasks():
+                s = self._task_scope(task)
+                if s is None:
+                    continue
+                try:
+                    if canonicalize(s) == target_key:
+                        return True
+                except Exception:
+                    continue
+            return False
+
     def get_queue_stats(self) -> Dict[str, Any]:
         with self._cv:
             if self._legacy_mode:

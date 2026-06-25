@@ -255,6 +255,8 @@ The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`,
 
 Each user also has a username-based directory tree. This is the legacy layout, preserved for backward compatibility. New features should prefer scope-based paths above.
 
+Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) — **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed — a cross-user leak, even though the memory database itself stays correctly scope-isolated.
+
 ```
 ~/.vaf/users/<username>/
 ├── user_identity.json      # Personal preferences
@@ -315,6 +317,10 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
 ### Automations (`vaf/core/automation.py`)
 
 Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
+
+**Background-run live-emit isolation.** A scheduled automation runs silently and must not surface in another user's live session. With `VAF_IN_AUTOMATION=1`, `_emit_to_web_ui()` is `False` (no status/context/retry emits). Tool start/end updates are not gated by that env (a concurrent real user's tool updates must keep flowing), so they were a separate leak: the automation agent has no own web session, and the tool emit fell back to the process-wide "current session" — broadcasting its tool bubbles into whoever was the **active** web user (a real cross-user leak seen on a LAN client). The fix is a per-agent flag, `agent._background_run = True` (set in `run_task`), checked at both `emit_tool_update` sites so a background run broadcasts no tool bubbles. The flag is per-instance and therefore race-free; gating on the process-wide env would also suppress a concurrent real user's updates.
+
+**Handoff bundle isolation.** When a background automation must ask the user something it cannot decide, it stores its full working history as a *handoff bundle* under `Platform.vaf_dir() / "handoff_bundles" / <user_scope_id> /<id>.json`, keyed by the raw scope id (aligned with `thinking_requests`). The linked tracked request and the bundle are written under the same resolved scope (`user_scope_id or local_admin_scope_id`), so only the **same** user's main agent — finding the request under its own scope — can load the bundle and continue the task; a bundle written for user A is unreadable for user B. See [AUTOMATIONS.md](../platform/AUTOMATIONS.md#silent-background-execution--context-handoff).
 
 **Global slot limit:** A given time slot (same HH:MM + frequency, e.g. daily 08:15) may be used by at most **3 users**. If three users already have an automation at that slot, a fourth gets an error: *"Too many other users have already booked this time slot. Please choose another slot at least 15 minutes apart."* This avoids overloading the scheduler at popular times while keeping automations user-specific.
 

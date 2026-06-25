@@ -153,9 +153,11 @@ setup(
         ],
     },
     classifiers=[
+        # License is declared via the SPDX `license` expression above (PEP 639);
+        # the deprecated `License ::` classifier is intentionally omitted (setuptools
+        # warns on, and PyPI rejects, specifying both).
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

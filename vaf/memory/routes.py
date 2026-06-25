@@ -182,24 +182,19 @@ async def initialize_database(drop_existing: bool = False):
 
 # Stats
 @memory_router.get("/stats", response_model=StatsResponse)
-async def get_stats():
-    """Get memory system statistics."""
+async def get_stats(user_scope_id: Optional[UUID] = Depends(get_current_user_scope)):
+    """Get memory system statistics, scoped to the current user."""
     try:
-        cache = get_cache()
-        cached = await cache.get_stats()
-        if cached is not None:
-            return StatsResponse(**cached)
-
-        stats = await get_db_stats()
+        # Per-user counts; the global stats cache is intentionally bypassed (it is not scoped, and a
+        # 3-count query is cheap) so one user's totals are never served to another.
+        stats = await get_db_stats(user_scope_id)
         db_ok = await check_db_connection()
-        response = StatsResponse(
+        return StatsResponse(
             memories=stats["memories"],
             chunks=stats["chunks"],
             connections=stats["connections"],
             db_connected=db_ok
         )
-        await cache.set_stats(response.model_dump())
-        return response
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         return StatsResponse(

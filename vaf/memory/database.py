@@ -339,8 +339,13 @@ async def init_db(drop_existing: bool = False):
             END $$;
         """))
         await conn.execute(text("GRANT USAGE ON SCHEMA public TO vaf_app"))
-        await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON memories, chunks, connections TO vaf_app"))
+        # vaf_memory also holds the auth/system tables (local_users, user_sessions) accessed via the same
+        # get_db connection, so grant DML on ALL tables, not just the memory ones. Only 'memories' is
+        # RLS-protected below; the auth/system tables have no RLS (login needs a cross-user lookup).
+        await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO vaf_app"))
+        await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO vaf_app"))
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vaf_app"))
+        await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO vaf_app"))
 
         # Enable Row-Level Security on memories table (defense-in-depth)
         await conn.execute(text("ALTER TABLE memories ENABLE ROW LEVEL SECURITY"))
@@ -387,29 +392,32 @@ async def close_db():
     logger.info("Database connections closed")
 
 
-async def get_db_stats() -> dict:
+async def get_db_stats(user_scope_id: Optional[str] = None) -> dict:
     """
-    Get database statistics for monitoring.
-    
+    Memory statistics for the CURRENT USER.
+
+    Runs on the app engine with the scope GUC set, so the memories count is RLS-filtered and the chunk /
+    connection counts JOIN memories so they are scoped too (chunks/connections have no RLS of their own).
+    A missing scope yields zeros (fail-closed), never global totals.
+
     Returns:
         Dict with memory count, chunk count, connection count
     """
-    # Global counts across all users -> run on the OWNER engine (bypasses RLS by design), so the
-    # stats stay correct after the app data role is cut over to the non-superuser RLS role.
-    async with get_owner_db() as db:
-        from vaf.memory.models import Memory, Chunk, Connection
-        from sqlalchemy import func, select
-        
+    from vaf.memory.models import Memory, Chunk, Connection
+    from sqlalchemy import func, select
+
+    async with get_db(user_scope_id=str(user_scope_id) if user_scope_id else None) as db:
         memory_count = await db.scalar(
             select(func.count()).select_from(Memory).where(Memory.is_deleted == False)
         )
+        # JOIN chunks/connections to memories so RLS-on-memories scopes them (no RLS on the child tables).
         chunk_count = await db.scalar(
-            select(func.count()).select_from(Chunk)
+            select(func.count()).select_from(Chunk).join(Memory, Chunk.memory_id == Memory.id)
         )
         connection_count = await db.scalar(
-            select(func.count()).select_from(Connection)
+            select(func.count()).select_from(Connection).join(Memory, Connection.source_id == Memory.id)
         )
-        
+
         return {
             "memories": memory_count or 0,
             "chunks": chunk_count or 0,

@@ -85,8 +85,9 @@ EXTRAS = {
     "desktop": [
         "pystray>=0.19.5", "pillow>=10.0.0", "pywebview>=4.3.0",
         "pyobjc-framework-Cocoa>=9.0; sys_platform == 'darwin'",
-        "PyQt6>=6.4.0; sys_platform == 'linux'",
-        "PyQt6-WebEngine>=6.4.0; sys_platform == 'linux'",
+        # PySide6 (LGPLv3), NOT PyQt6 (GPLv3-or-commercial): GPL is incompatible with
+        # VAF's source-available MIT + Commons Clause license. PySide6 bundles Qt WebEngine.
+        "PySide6>=6.7.0; sys_platform == 'linux'",
         "qtpy>=2.0.0; sys_platform == 'linux'",
     ],
     "memory": [

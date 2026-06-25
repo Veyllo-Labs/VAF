@@ -50,9 +50,8 @@ pystray>=0.19.5                                          # Cross-platform tray (
 pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"   # Required by pystray on macOS
 pillow>=10.0.0      # Image handling for icons
 pywebview>=4.3.0    # Native desktop window (Edge on Win, WKWebView on Mac, WebKitGTK on Linux)
-PyQt6>=6.4.0; sys_platform == "linux"          # Chromium-based WebView for Linux (via Qt WebEngine)
-PyQt6-WebEngine>=6.4.0; sys_platform == "linux"
-qtpy>=2.0.0; sys_platform == "linux"
+PySide6>=6.7.0; sys_platform == "linux"        # Chromium-based WebView for Linux (Qt WebEngine). LGPLv3, NOT PyQt6/GPL — see LICENSE
+qtpy>=2.0.0; sys_platform == "linux"           # Qt binding abstraction; QT_API=pyside6 pins PySide6 (set in desktop_window.py)
 # rumps>=0.4.0; sys_platform == "darwin"  # Removed: conflicts with pywebview main-thread ownership
 
 # Code Quality & Linting

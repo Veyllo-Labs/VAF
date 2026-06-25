@@ -17,6 +17,16 @@ import os
 import pathlib
 import threading
 
+# ── Qt binding: prefer PySide6 (LGPLv3) over PyQt6 (GPLv3) ───────────────────
+# qtpy — used both here and inside pywebview's Qt backend — selects the Qt binding
+# from the QT_API env var. We pin PySide6 because PyQt6 is GPLv3-or-commercial:
+# bundling it would drag VAF's whole Linux build under the GPL, which is
+# incompatible with VAF's source-available MIT + Commons Clause license. PySide6
+# is LGPLv3 (dynamically linked, user-replaceable) → fine to distribute.
+# setdefault so a developer holding a commercial Qt/PyQt license can still override.
+# Must run before any qtpy import; this module owns all Qt access + the window.
+os.environ.setdefault("QT_API", "pyside6")
+
 _log = logging.getLogger(__name__)
 
 _window = None   # pywebview Window instance
@@ -246,10 +256,10 @@ def _ensure_pdf_renderer():
     if _pdf_renderer is not None:
         return _pdf_renderer
     try:
-        from PyQt6.QtCore import QObject, pyqtSlot, QUrl, QTimer
-        from PyQt6.QtWebEngineCore import QWebEnginePage
-        from PyQt6.QtWidgets import QFileDialog
-        from PyQt6.QtGui import QDesktopServices
+        from qtpy.QtCore import QObject, Slot, QUrl, QTimer
+        from qtpy.QtWebEngineCore import QWebEnginePage
+        from qtpy.QtWidgets import QFileDialog
+        from qtpy.QtGui import QDesktopServices
     except Exception as e:
         _log.debug("[DesktopWindow] PDF renderer unavailable: %s", e)
         return None
@@ -259,7 +269,7 @@ def _ensure_pdf_renderer():
             super().__init__()
             self._pages = []  # keep refs until each render finishes
 
-        @pyqtSlot(str, str, str)
+        @Slot(str, str, str)
         def render(self, html, mode, name):
             import os as _os, re as _re, tempfile
             clean = _re.sub(r"[^\w\s.-]", "", name or "document").strip().replace(" ", "_") or "document"
@@ -314,7 +324,7 @@ def _ensure_pdf_renderer():
     # QueuedConnection to it would never run. Push it onto the Qt main thread
     # (the QApplication's thread) so the marshaled render slot actually executes.
     try:
-        from PyQt6.QtWidgets import QApplication
+        from qtpy.QtWidgets import QApplication
         _app = QApplication.instance()
         if _app is not None and _pdf_renderer.thread() is not _app.thread():
             _pdf_renderer.moveToThread(_app.thread())
@@ -337,7 +347,7 @@ def render_pdf(html: str, name: str = "document", mode: str = "pdf") -> dict:
         renderer = _pdf_renderer
         if renderer is None:
             return {"ok": False, "error": "renderer not ready"}
-        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+        from qtpy.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(
             renderer, "render", Qt.ConnectionType.QueuedConnection,
             Q_ARG(str, html or ""),
@@ -425,7 +435,7 @@ def _install_crash_recovery() -> None:
     are ignored)."""
     try:
         from webview.platforms.qt import BrowserView
-        from PyQt6.QtWebEngineCore import QWebEnginePage
+        from qtpy.QtWebEngineCore import QWebEnginePage
     except Exception as e:                       # pragma: no cover - backend/version differences
         _log.debug("[DesktopWindow] crash recovery unavailable: %s", e)
         return
@@ -472,7 +482,7 @@ def _install_download_print_handlers() -> None:
     Without this, Download / Print / Save-as-PDF clicks in the WebUI do exactly
     nothing in the desktop window: pywebview only connects its download slot when
     ALLOW_DOWNLOADS is set — and that slot calls the Qt5-only download.setPath(),
-    which does not exist on PyQt6 — and nobody listens to printRequested at all.
+    which does not exist on Qt6 — and nobody listens to printRequested at all.
     We connect our own Qt6-correct handlers instead:
       - profile.downloadRequested        -> native save dialog + accept()
       - page.printRequested              -> save-as-PDF dialog + page.printToPdf()
@@ -485,7 +495,7 @@ def _install_download_print_handlers() -> None:
     """
     try:
         from webview.platforms.qt import BrowserView
-        from PyQt6.QtWidgets import QFileDialog
+        from qtpy.QtWidgets import QFileDialog
     except Exception as e:                       # pragma: no cover - backend/version differences
         _log.debug("[DesktopWindow] download/print dialogs unavailable: %s", e)
         return
@@ -576,13 +586,13 @@ def _install_clipboard_permissions() -> None:
        navigator.clipboard.writeText() in the WebUI silently did nothing — the copy buttons (e.g. the LAN
        access URL) appeared dead. We enable it (+ JavascriptCanPaste) so copy works.
     2) pywebview's onFeaturePermissionRequested calls setFeaturePermission(url, feature, <int 1/2>), but
-       PyQt6 6.x requires the QWebEnginePage.PermissionPolicy ENUM, not an int — so every non-media
+       Qt6 (PySide6) requires the QWebEnginePage.PermissionPolicy ENUM, not an int — so every non-media
        permission request raised `TypeError: argument 3 has unexpected type 'int'` in the terminal. We
        replace that slot with an enum-correct one (grant media like pywebview intended, deny the rest).
     Idempotent per page."""
     try:
         from webview.platforms.qt import BrowserView
-        from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+        from qtpy.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     except Exception as e:                          # pragma: no cover - backend/version differences
         _log.debug("[DesktopWindow] clipboard/permission hook unavailable: %s", e)
         return
@@ -766,8 +776,8 @@ def start(icon_path: str = None) -> None:
         import time, os
         time.sleep(0.3)
         try:
-            from PyQt6.QtGui import QIcon
-            from PyQt6.QtWidgets import QApplication
+            from qtpy.QtGui import QIcon
+            from qtpy.QtWidgets import QApplication
             _app = QApplication.instance()
             if _app and os.path.exists(icon_path):
                 _icon = QIcon(icon_path)

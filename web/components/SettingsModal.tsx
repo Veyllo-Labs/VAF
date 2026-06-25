@@ -364,6 +364,160 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
 ];
 
 
+type AccessPreset = 'standard' | 'full' | 'readonly' | 'custom';
+
+// Pattern-based so presets also cover the admin's CUSTOM tools (matched on the tool name, not a fixed list).
+const WW_DESTRUCTIVE_RE = /(^|_)(delete|remove|drop|clear|reset|uninstall|kill|destroy|wipe|purge|revoke)(_|$)/i;
+const WW_READABLE_RE = /(^|_)(list|read|get|search|view|show|fetch|find|query|describe|status|info|count)(_|$)/i;
+
+/** Resolve a preset to concrete tool names + workflow ids from the live lists. Returns null for 'custom'
+ *  (the caller keeps the manual selection). 'full' selects literally everything. */
+function resolveAccessPreset(
+    preset: AccessPreset,
+    tools: { name: string }[],
+    workflows: { id: string }[],
+): { tools: string[]; workflows: string[] } | null {
+    if (preset === 'full') return { tools: tools.map(t => t.name), workflows: workflows.map(w => w.id) };
+    if (preset === 'readonly') return { tools: tools.filter(t => WW_READABLE_RE.test(t.name) && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: [] };
+    if (preset === 'standard') return { tools: tools.filter(t => !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: workflows.map(w => w.id) };
+    return null;
+}
+
+/** Apple-simple access picker: preset chips (Standard / Full / Read-only / Custom); the granular tool +
+ *  workflow grids appear only for 'Custom'. Used by both Add User and Edit User. Pure presentation —
+ *  the preset->selection recompute lives in the parent. */
+function AccessPresetSection({
+    tools, workflows, preset, selectedTools, selectedWorkflows, onPresetChange, onToolsChange, onWorkflowsChange,
+}: {
+    tools: { name: string; description?: string }[];
+    workflows: { id: string; name: string; steps: number }[];
+    preset: AccessPreset;
+    selectedTools: string[];
+    selectedWorkflows: string[];
+    onPresetChange: (p: AccessPreset) => void;
+    onToolsChange: (t: string[]) => void;
+    onWorkflowsChange: (w: string[]) => void;
+}) {
+    const tModals = useTranslations('modals');
+    const tCommon = useTranslations('common');
+    return (
+        <>
+            <div className="space-y-3">
+                <div>
+                    <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.access')}</h4>
+                    <p className="text-xs text-gray-400">{tModals('addUser.accessDesc')}</p>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(['standard', 'full', 'readonly', 'custom'] as const).map(p => (
+                        <button
+                            key={p}
+                            type="button"
+                            onClick={() => onPresetChange(p)}
+                            className={cn(
+                                "px-3 py-2 rounded-xl border text-sm font-medium text-center transition-colors",
+                                preset === p ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-200 hover:border-gray-300"
+                            )}
+                        >
+                            {p === 'full' ? tModals('addUser.preset_full')
+                                : p === 'readonly' ? tModals('addUser.preset_readonly')
+                                    : p === 'custom' ? tModals('addUser.preset_custom')
+                                        : tModals('addUser.preset_standard')}
+                        </button>
+                    ))}
+                </div>
+                <p className="text-xs text-gray-400">
+                    {preset === 'full' ? tModals('addUser.preset_full_desc')
+                        : preset === 'readonly' ? tModals('addUser.preset_readonly_desc')
+                            : preset === 'custom' ? tModals('addUser.preset_custom_desc')
+                                : tModals('addUser.preset_standard_desc')}
+                </p>
+                {preset !== 'custom' && (
+                    <div className="text-xs text-gray-500 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl">
+                        {tModals('addUser.accessSummary', { tools: selectedTools.length, workflows: selectedWorkflows.length })}
+                    </div>
+                )}
+            </div>
+
+            {preset === 'custom' && (
+                <div className="grid lg:grid-cols-2 gap-4 items-start">
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableTools')}</h4>
+                                <p className="text-xs text-gray-400">{tModals('addUser.availableToolsDesc')}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const all = tools.map(t => t.name);
+                                    onToolsChange(all.every(n => selectedTools.includes(n)) ? [] : all);
+                                }}
+                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                            >
+                                {tools.length > 0 && tools.every(t => selectedTools.includes(t.name)) ? tCommon('deselectAll') : tCommon('selectAll')}
+                            </button>
+                        </div>
+                        <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-2 gap-2">
+                            {tools.length > 0 ? tools.map(tool => (
+                                <label key={tool.name} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedTools.includes(tool.name)}
+                                        onChange={(e) => onToolsChange(e.target.checked ? [...selectedTools, tool.name] : selectedTools.filter(t => t !== tool.name))}
+                                        className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
+                                    />
+                                    <span className="text-sm text-gray-700 truncate" title={tool.description}>{tool.name}</span>
+                                </label>
+                            )) : (
+                                <div className="col-span-2 text-center py-4 text-sm text-gray-400">{tModals('addUser.noToolsAvailable')}</div>
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-400">{tModals('addUser.toolsSelected', { selected: selectedTools.length, total: tools.length })}</p>
+                    </div>
+
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableWorkflows')}</h4>
+                                <p className="text-xs text-gray-400">{tModals('addUser.availableWorkflowsDesc')}</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const all = workflows.map(w => w.id);
+                                    onWorkflowsChange(all.every(id => selectedWorkflows.includes(id)) ? [] : all);
+                                }}
+                                className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                            >
+                                {workflows.length > 0 && workflows.every(w => selectedWorkflows.includes(w.id)) ? tCommon('deselectAll') : tCommon('selectAll')}
+                            </button>
+                        </div>
+                        <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-1 gap-2">
+                            {workflows.length > 0 ? workflows.map(workflow => (
+                                <label key={workflow.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedWorkflows.includes(workflow.id)}
+                                        onChange={(e) => onWorkflowsChange(e.target.checked ? [...selectedWorkflows, workflow.id] : selectedWorkflows.filter(w => w !== workflow.id))}
+                                        className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                        <span className="text-sm text-gray-700 truncate block">{workflow.name}</span>
+                                        <span className="text-xs text-gray-400">{workflow.steps} steps</span>
+                                    </div>
+                                </label>
+                            )) : (
+                                <div className="col-span-1 text-center py-4 text-sm text-gray-400">{tModals('addUser.noWorkflowsAvailable')}</div>
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-400">{tModals('addUser.workflowsSelected', { selected: selectedWorkflows.length, total: workflows.length })}</p>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+}
+
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
@@ -605,22 +759,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     // Network Topology: server node only; devices from API when available
     const [networkNodes, setNetworkNodes, onNetworkNodesChange] = useNodesState([
-        { 
-            id: 'server', 
-            type: 'input', 
-            data: { 
+        {
+            id: 'server',
+            type: 'input',
+            draggable: false,
+            connectable: false,
+            sourcePosition: Position.Bottom,
+            data: {
                 label: (
-                    <div className="flex flex-col items-center">
-                        <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-200">
+                    <div className="flex flex-col items-center px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-md shadow-gray-200/60 min-w-[150px]">
+                        <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300">
                             <Server size={24} className="text-white" />
                         </div>
-                        <div className="font-bold text-gray-900">VAF Host</div>
-                        <div className="text-[10px] text-gray-500 font-mono">—</div>
+                        <div className="font-bold text-gray-900 text-sm">VAF Host</div>
+                        <div className="text-[10px] text-gray-500 font-mono mt-0.5">—</div>
                     </div>
-                ) 
-            }, 
-            position: { x: 300, y: 150 },
-            style: { border: 'none', background: 'transparent' }
+                )
+            },
+            position: { x: 420, y: 40 },
+            style: { border: 'none', background: 'transparent', width: 'auto' }
         },
     ]);
     
@@ -633,10 +790,17 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
     /** From API /api/network/access-url: host, ports (access/backend), url (full URL for copy). */
     const [accessUrlData, setAccessUrlData] = useState<{ host: string | null; port: number; backend_port: number; url: string | null } | null>(null);
+    /** Real runtime status from /api/network/status: did the integrated HTTPS proxy ACTUALLY bind, on
+     *  which effective port, the resulting LAN URL, or the bind error — so the tab shows the truth. */
+    const [networkStatus, setNetworkStatus] = useState<{ proxy_bound: boolean; effective_https_port: number | null; error: string | null; url: string | null; host: string | null } | null>(null);
     const [userSearch, setUserSearch] = useState('');
     const [showAddUserModal, setShowAddUserModal] = useState(false);
     const [editingUser, setEditingUser] = useState<any>(null);
     const [newUser, setNewUser] = useState({ username: '', email: '', role: 'User', password: '', tools: [] as string[], workflows: [] as string[], createDb: true });
+    // Access preset for the Add-User form: pick a level instead of wading through ~95 checkboxes. The
+    // presets are computed from the LIVE tool/workflow lists (which include the admin's custom entries),
+    // so custom tools are covered automatically. 'custom' reveals the granular grids.
+    const [accessPreset, setAccessPreset] = useState<'standard' | 'full' | 'readonly' | 'custom'>('standard');
     const [showNewUserPassword, setShowNewUserPassword] = useState(false);
 
     // Security Warning & Restart Animation
@@ -836,30 +1000,84 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setDisplayPort(window.location.port || '3000');
     }, [isOpen]);
 
-    // Update network map server node label with real host:port
+    // Network map: poll the active connections and render every NON-localhost device as a node around the
+    // VAF host — with its real IP + the logged-in user's name + a device-type icon. localhost IS the host,
+    // so it isn't shown as a separate device. Polls fast while the map modal is open, slowly otherwise.
     useEffect(() => {
-        if (!displayHost) return;
-        setNetworkNodes((nds) =>
-            nds.map((n) =>
-                n.id === 'server'
-                    ? {
-                          ...n,
-                          data: {
-                              label: (
-                                  <div className="flex flex-col items-center">
-                                      <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-200">
-                                          <Server size={24} className="text-white" />
-                                      </div>
-                                      <div className="font-bold text-gray-900">VAF Host</div>
-                                      <div className="text-[10px] text-gray-500 font-mono">{displayHost}{displayPort && displayPort !== '80' && displayPort !== '443' ? `:${displayPort}` : ''}</div>
-                                  </div>
-                              ),
-                          },
-                      }
-                    : n
-            )
+        if (!isOpen || (activeTab !== 'local_network' && !showNetworkModal)) return;
+        const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
+        let cancelled = false;
+        const hostLabel = (
+            <div className="flex flex-col items-center px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-md shadow-gray-200/60 min-w-[150px]">
+                <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300">
+                    <Server size={24} className="text-white" />
+                </div>
+                <div className="font-bold text-gray-900 text-sm">VAF Host</div>
+                <div className="text-[10px] text-gray-500 font-mono mt-0.5">{displayHost || 'localhost'}{displayPort && displayPort !== '80' && displayPort !== '443' ? `:${displayPort}` : ''}</div>
+            </div>
         );
-    }, [displayHost, displayPort]);
+        const poll = () => {
+            fetch(`${apiBase}/api/network/connections`, { credentials: 'include' })
+                .then((r) => (r.ok ? r.json() : []))
+                .then((conns: any[]) => {
+                    if (cancelled || !Array.isArray(conns)) return;
+                    const isLocal = (ip: string) => !ip || ['127.0.0.1', '::1', 'localhost', 'unknown'].includes(ip);
+                    const byIp = new Map<string, any>();
+                    conns.forEach((c) => {
+                        if (isLocal(c.ip)) return;
+                        const prev = byIp.get(c.ip);
+                        if (!prev || (c.last_active || 0) > (prev.last_active || 0)) byIp.set(c.ip, c);
+                    });
+                    const devices = Array.from(byIp.values());
+                    // Tidy top-down topology: the VAF Host sits on top and its connected devices fan out in a
+                    // row beneath it. Edges run host-bottom -> device-top (smoothstep) so a link never cuts
+                    // through a node box. (The old radial layout placed a device directly above the host and
+                    // the straight edge sliced vertically through both cards.) Both nodes use a transparent
+                    // wrapper so only the styled card shows, and connection handles are hidden via CSS.
+                    const cx = 420, hostY = 40, deviceY = 320, spacing = 210;
+                    const n = devices.length;
+                    const hostNode = {
+                        id: 'server', type: 'input', draggable: false, connectable: false,
+                        position: { x: cx, y: hostY }, sourcePosition: Position.Bottom,
+                        style: { border: 'none', background: 'transparent', width: 'auto' },
+                        data: { label: hostLabel },
+                    };
+                    const deviceNodes = devices.map((d, i) => {
+                        const dt = String(d.device_type || 'unknown');
+                        const Icon = dt === 'mobile' ? Smartphone : dt === 'tablet' ? Laptop : Monitor;
+                        const cls = dt === 'mobile' ? 'bg-pink-100 text-pink-600 border-pink-200'
+                            : dt === 'tablet' ? 'bg-purple-100 text-purple-600 border-purple-200'
+                                : 'bg-green-100 text-green-600 border-green-200';
+                        return {
+                            id: `dev-${d.ip}`,
+                            draggable: false, connectable: false,
+                            position: { x: cx + (i - (n - 1) / 2) * spacing, y: deviceY },
+                            targetPosition: Position.Top,
+                            style: { border: 'none', background: 'transparent', width: 'auto' },
+                            data: { label: (
+                                <div className="relative flex flex-col items-center px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-md shadow-gray-200/60 min-w-[140px]">
+                                    <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-green-500 ring-2 ring-green-100 animate-pulse" title="online" />
+                                    <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center mb-2 border', cls)}><Icon size={20} /></div>
+                                    <div className="text-xs font-semibold text-gray-800 max-w-[130px] truncate">{d.username || '—'}</div>
+                                    <div className="text-[10px] text-gray-500 font-mono mt-0.5">{d.ip}</div>
+                                </div>
+                            ) },
+                        };
+                    });
+                    setNetworkNodes([hostNode, ...deviceNodes]);
+                    setNetworkEdges(devices.map((d) => ({
+                        id: `e-${d.ip}`, source: 'server', target: `dev-${d.ip}`,
+                        type: 'smoothstep', animated: false,
+                        style: { stroke: '#60a5fa', strokeWidth: 2.5 },
+                    })));
+                })
+                .catch(() => {});
+        };
+        poll();
+        const interval = setInterval(poll, showNetworkModal ? 4000 : 15000);
+        return () => { cancelled = true; clearInterval(interval); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, activeTab, showNetworkModal, displayHost, displayPort]);
 
     // Fetch local network users when tab is active
     useEffect(() => {
@@ -867,10 +1085,44 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setUsersLoading(true);
         fetch('/api/users')
             .then((res) => (res.ok ? res.json() : []))
-            .then((data) => (Array.isArray(data) ? setUsers(data) : setUsers([])))
+            .then((data) => {
+                if (!Array.isArray(data)) { setUsers([]); return; }
+                // Map the API shape (online / last_login / is_active) onto the table's fields. "Status"
+                // means actually-online (a live WebSocket), not the is_active account flag; "Last active"
+                // is "now" when online, else the last login time (or — when there is none).
+                setUsers(data.map((u: any) => ({
+                    ...u,
+                    status: u.online ? 'active' : 'inactive',
+                    lastActive: u.online
+                        ? tCommon('now')
+                        : (u.last_login ? new Date(u.last_login).toLocaleString() : '—'),
+                })));
+            })
             .catch(() => setUsers([]))
             .finally(() => setUsersLoading(false));
-    }, [isOpen, activeTab]);
+    }, [isOpen, activeTab, tCommon]);
+
+    // Apply the chosen access preset to the new user's tool/workflow lists (covers custom tools too).
+    useEffect(() => {
+        const resolved = resolveAccessPreset(accessPreset, tools, workflows);
+        if (!resolved) return; // 'custom' keeps the manual grid selection
+        setNewUser(prev => ({ ...prev, tools: resolved.tools, workflows: resolved.workflows }));
+    }, [accessPreset, tools, workflows]);
+
+    // Edit User: same preset mechanic, applied to the user being edited. Reset to 'custom' on open (below)
+    // so the admin first sees the user's CURRENT tools/workflows, then can re-pick a preset or fine-tune.
+    const [editAccessPreset, setEditAccessPreset] = useState<AccessPreset>('custom');
+    // Edit User reset feedback (must be declared BEFORE the `if (!isOpen) return null` early return —
+    // hooks have to run on every render or React throws "rendered more hooks than previous render").
+    const [pwResetTemp, setPwResetTemp] = useState<string | null>(null);
+    const [twoFaResetDone, setTwoFaResetDone] = useState(false);
+    useEffect(() => {
+        if (!editingUser || editAccessPreset === 'custom') return;
+        const resolved = resolveAccessPreset(editAccessPreset, tools, workflows);
+        if (!resolved) return;
+        setEditingUser((prev: any) => prev ? { ...prev, tools: resolved.tools, workflows: resolved.workflows } : prev);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editAccessPreset, editingUser?.id, tools, workflows]);
 
     // VAF version for the About tab — single source of truth is the backend
     // /api/version endpoint, which returns vaf/version.py. Never hardcode here.
@@ -881,6 +1133,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .then((data) => { if (data?.version) setAppVersion(data.version); })
             .catch(() => {});
     }, [isOpen, activeTab]);
+
+    // Poll the REAL runtime status of LAN hosting (did the integrated proxy actually bind, on which port,
+    // or fail) so the tab shows the truth instead of a config-derived assumption. Polls while the tab is
+    // open + hosting enabled, so it updates after enable once the proxy binds (or surfaces a bind error).
+    useEffect(() => {
+        if (!isOpen || activeTab !== 'local_network') return;
+        if (!localConfig.local_network_enabled) { setNetworkStatus(null); return; }
+        const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
+        let cancelled = false;
+        const poll = () => {
+            fetch(`${apiBase}/api/network/status`, { credentials: 'include' })
+                .then((res) => (res.ok ? res.json() : null))
+                .then((data) => { if (!cancelled && data) setNetworkStatus(data); })
+                .catch(() => {});
+        };
+        poll();
+        const id = setInterval(poll, 3000);
+        return () => { cancelled = true; clearInterval(id); };
+    }, [isOpen, activeTab, localConfig.local_network_enabled]);
 
     // Fetch LAN access URL from backend (IP for other devices); use same-origin so it works behind proxy (8443)
     useEffect(() => {
@@ -1403,6 +1674,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 
                 // Reset form
                 setNewUser({ username: '', email: '', role: 'User', password: '', tools: [], workflows: [], createDb: true });
+                setAccessPreset('standard');
                 setShowNewUserPassword(false);
             } else {
                 const err = await res.json();
@@ -1425,6 +1697,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     email: editingUser.email,
                     role: editingUser.role,
                     is_active: editingUser.status === 'active',
+                    tools: editingUser.tools || [],
+                    workflows: editingUser.workflows || [],
                 })
             });
 
@@ -1444,6 +1718,39 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         } catch (error) {
             console.error('Error updating user:', error);
             alert('Error updating user');
+        }
+    };
+
+    // Admin-only: reset a user's password to a fresh temporary one (shown once) or clear their 2FA.
+    const handleResetPassword = async () => {
+        if (!editingUser) return;
+        if (!confirm(tModals('editUser.confirmResetPassword'))) return;
+        try {
+            const res = await fetch(`/api/users/${editingUser.id}/reset-password`, { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                setPwResetTemp(data.temporary_password || null);
+            } else {
+                const err = await res.json();
+                alert(`${tModals('editUser.resetPasswordFailed')}: ${err.detail || ''}`);
+            }
+        } catch {
+            alert(tModals('editUser.resetPasswordFailed'));
+        }
+    };
+    const handleReset2fa = async () => {
+        if (!editingUser) return;
+        if (!confirm(tModals('editUser.confirmResetTwoFa'))) return;
+        try {
+            const res = await fetch(`/api/users/${editingUser.id}/reset-2fa`, { method: 'POST' });
+            if (res.ok) {
+                setTwoFaResetDone(true);
+            } else {
+                const err = await res.json();
+                alert(`${tModals('editUser.resetTwoFaFailed')}: ${err.detail || ''}`);
+            }
+        } catch {
+            alert(tModals('editUser.resetTwoFaFailed'));
         }
     };
 
@@ -2456,8 +2763,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('otherDevicesLanUrl')}</div>
                                                                 {lanUrl ? (
                                                                     <>
-                                                                        <div className="font-mono text-sm text-green-800 break-all">{apiHost || new URL(lanUrl).hostname}</div>
-                                                                        {portsText && <div className="text-xs text-green-700 mt-0.5">{tLocalNet('portsUsed')}: {portsText}</div>}
+                                                                        {/* The full URL incl. https:// + the effective proxy port — this is exactly what to
+                                                                            type/open on the other device. The backend (8001) is NOT shown here: it binds
+                                                                            127.0.0.1 and is unreachable from the LAN; only this proxy URL is. */}
+                                                                        <div className="font-mono text-sm text-green-800 break-all">{lanUrl}</div>
                                                                         <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
                                                                     </>
                                                                 ) : (
@@ -2516,11 +2825,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <table className="w-full text-sm text-left">
                                                     <thead className="bg-gray-50 text-gray-500 font-medium border-b border-gray-200">
                                                         <tr>
-                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('username')}</th>
-                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('role')}</th>
-                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('lastActive')}</th>
-                                                            <th className="px-4 py-3 font-semibold">{tLocalNet('status')}</th>
-                                                            <th className="px-4 py-3 font-semibold text-right">{tLocalNet('actions')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-center">{tLocalNet('username')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-center">{tLocalNet('role')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-center">{tLocalNet('lastActive')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-center">{tLocalNet('status')}</th>
+                                                            <th className="px-4 py-3 font-semibold text-center">{tLocalNet('actions')}</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
@@ -2535,17 +2844,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             (u.role && u.role.toLowerCase().includes(userSearch.toLowerCase()))
                                                         ).map((user, i) => (
                                                             <tr key={i} className="hover:bg-gray-50 transition-colors group">
-                                                                <td onClick={() => setSelectedUser(user)} className="px-4 py-3 font-medium text-gray-900 flex items-center gap-2 cursor-pointer">
-                                                                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-600 font-bold border border-gray-200">
-                                                                        {user.username[0].toUpperCase()}
+                                                                <td onClick={() => setSelectedUser(user)} className="px-4 py-3 font-medium text-gray-900 cursor-pointer">
+                                                                    <div className="flex items-center justify-center gap-2">
+                                                                        <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-600 font-bold border border-gray-200">
+                                                                            {user.username[0].toUpperCase()}
+                                                                        </div>
+                                                                        {user.username}
                                                                     </div>
-                                                                    {user.username}
                                                                 </td>
-                                                                <td className="px-4 py-3 text-gray-600">{user.role}</td>
-                                                                <td className="px-4 py-3 text-gray-500">{user.lastActive}</td>
-                                                                <td className="px-4 py-3">
+                                                                <td className="px-4 py-3 text-gray-600 text-center">{user.role}</td>
+                                                                <td className="px-4 py-3 text-gray-500 text-center">{user.lastActive}</td>
+                                                                <td className="px-4 py-3 text-center">
                                                                     <span className={cn(
-                                                                        "px-2 py-1 rounded-full text-xs font-medium border flex items-center w-fit gap-1.5",
+                                                                        "px-2 py-1 rounded-full text-xs font-medium border inline-flex items-center gap-1.5",
                                                                         user.status === 'active' 
                                                                             ? "bg-green-50 text-green-700 border-green-200" 
                                                                             : "bg-gray-50 text-gray-600 border-gray-200"
@@ -2554,10 +2865,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                         {user.status === 'active' ? tCommon('active') : tCommon('inactive')}
                                                                     </span>
                                                                 </td>
-                                                                <td className="px-4 py-3 text-right">
-                                                                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                         <button 
-                                                                            onClick={() => setEditingUser(user)}
+                                                                            onClick={() => { setEditingUser(user); setEditAccessPreset('custom'); setPwResetTemp(null); setTwoFaResetDone(false); }}
                                                                             className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
                                                                             title="Edit User"
                                                                         >
@@ -2607,23 +2918,36 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         </div>
                                         
-                                        {/* Security Status Info */}
-                                        <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg flex flex-col gap-2">
-                                            <div className="flex items-center gap-2 text-blue-800 font-medium text-sm">
-                                                <Shield size={16} />
+                                        {/* Security status — a calm status-LED list (neutral box, the dots are the only
+                                            accent). The first line reflects the REAL /api/network/status. */}
+                                        <div className="mt-4 p-3.5 bg-gray-50 border border-gray-200 rounded-xl flex flex-col gap-3">
+                                            <div className="flex items-center gap-2 text-gray-700 font-medium text-sm">
+                                                <Shield size={15} className="text-gray-400" />
                                                 {tLocalNet('securityStatus')}
                                             </div>
-                                            <div className="grid grid-cols-1 gap-2 pl-6">
-                                                <div className="flex items-center gap-2 text-xs text-blue-700">
-                                                    <CheckCircle size={12} className="text-blue-600" />
-                                                    <span>{tLocalNet('firewallActive')}</span>
+                                            <div className="flex flex-col gap-2">
+                                                {/* LAN hosting — amber when active, red when it failed to bind, amber pulse while starting. */}
+                                                <div className="flex items-center gap-2.5 text-xs text-gray-600">
+                                                    <span className={cn(
+                                                        "inline-block w-1.5 h-1.5 rounded-full shrink-0",
+                                                        networkStatus?.error ? "bg-red-500"
+                                                            : networkStatus?.proxy_bound ? "bg-green-500"
+                                                                : "bg-amber-400 animate-pulse"
+                                                    )} />
+                                                    <span>
+                                                        {networkStatus?.error
+                                                            ? `${tLocalNet('statusError')}: ${networkStatus.error}`
+                                                            : networkStatus?.proxy_bound
+                                                                ? tLocalNet('statusRunning')
+                                                                : tLocalNet('statusStarting')}
+                                                    </span>
                                                 </div>
-                                                <div className="flex items-center gap-2 text-xs text-blue-700">
-                                                    <CheckCircle size={12} className="text-blue-600" />
+                                                <div className="flex items-center gap-2.5 text-xs text-gray-600">
+                                                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
                                                     <span>{tLocalNet('authRequired')}</span>
                                                 </div>
-                                                <div className="flex items-center gap-2 text-xs text-blue-700">
-                                                    <CheckCircle size={12} className="text-blue-600" />
+                                                <div className="flex items-center gap-2.5 text-xs text-gray-600">
+                                                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
                                                     <span>{tLocalNet('noPublicAccess')}</span>
                                                 </div>
                                             </div>
@@ -2646,7 +2970,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                                 <div className="text-center z-10">
                                                     <div className="font-bold text-gray-900 text-lg">{tLocalNet('viewNetworkMap')}</div>
-                                                    <div className="text-sm text-gray-500 mt-1">{tLocalNet('activeDevices', { count: networkNodes.length })}</div>
+                                                    <div className="text-sm text-gray-500 mt-1">{tLocalNet('activeDevices', { count: Math.max(0, networkNodes.length - 1) })}</div>
                                                 </div>
                                                 
                                                 <div className="absolute bottom-4 right-4 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-1 rounded-md border border-blue-100">
@@ -2980,11 +3304,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'about' && (
                             <div className="space-y-6 pb-8">
                                 <div className="text-center py-6">
-                                    <div className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-xl overflow-hidden flex shrink-0">
-                                        <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
-                                    </div>
+                                    <img src="/logo.png" alt="VAF" className="w-24 h-24 mx-auto mb-4 object-contain shrink-0" />
                                     <h2 className="text-2xl font-bold text-gray-900">VAF</h2>
-                                    <p className="text-gray-500">Veyllo Agent Framework</p>
+                                    <p className="text-gray-500">Veyllo Agentic Framework</p>
                                     <p className="text-xs text-gray-400 mt-1">{appVersion ? `v${appVersion}` : '…'}</p>
                                 </div>
 
@@ -4886,7 +5208,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowAddUserModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-hidden"
+                        className="relative bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-hidden"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -4954,94 +5276,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </div>
                             </div>
 
-                            {/* Tools Section */}
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableTools')}</h4>
-                                        <p className="text-xs text-gray-400">{tModals('addUser.availableToolsDesc')}</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const allToolNames = tools.map(t => t.name);
-                                            const allSelected = allToolNames.every(name => newUser.tools.includes(name));
-                                            setNewUser({...newUser, tools: allSelected ? [] : allToolNames});
-                                        }}
-                                        className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
-                                    >
-                                        {tools.length > 0 && tools.every(t => newUser.tools.includes(t.name)) ? tCommon('deselectAll') : tCommon('selectAll')}
-                                    </button>
-                                </div>
-                                <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-3 gap-2">
-                                    {tools.length > 0 ? tools.map(tool => (
-                                        <label key={tool.name} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
-                                            <input
-                                                type="checkbox"
-                                                checked={newUser.tools.includes(tool.name)}
-                                                onChange={(e) => {
-                                                    if (e.target.checked) {
-                                                        setNewUser({...newUser, tools: [...newUser.tools, tool.name]});
-                                                    } else {
-                                                        setNewUser({...newUser, tools: newUser.tools.filter(t => t !== tool.name)});
-                                                    }
-                                                }}
-                                                className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
-                                            />
-                                            <span className="text-sm text-gray-700 truncate" title={tool.description}>{tool.name}</span>
-                                        </label>
-                                    )) : (
-                                        <div className="col-span-3 text-center py-4 text-sm text-gray-400">{tModals('addUser.noToolsAvailable')}</div>
-                                    )}
-                                </div>
-                                <p className="text-xs text-gray-400">{tModals('addUser.toolsSelected', { selected: newUser.tools.length, total: tools.length })}</p>
-                            </div>
-
-                            {/* Workflows Section */}
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <h4 className="text-sm font-medium text-gray-700">{tModals('addUser.availableWorkflows')}</h4>
-                                        <p className="text-xs text-gray-400">{tModals('addUser.availableWorkflowsDesc')}</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const allWorkflowIds = workflows.map(w => w.id);
-                                            const allSelected = allWorkflowIds.every(id => newUser.workflows.includes(id));
-                                            setNewUser({...newUser, workflows: allSelected ? [] : allWorkflowIds});
-                                        }}
-                                        className="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
-                                    >
-                                        {workflows.length > 0 && workflows.every(w => newUser.workflows.includes(w.id)) ? tCommon('deselectAll') : tCommon('selectAll')}
-                                    </button>
-                                </div>
-                                <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3 bg-gray-50 grid grid-cols-2 gap-2">
-                                    {workflows.length > 0 ? workflows.map(workflow => (
-                                        <label key={workflow.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer transition-colors border border-transparent hover:border-gray-200">
-                                            <input
-                                                type="checkbox"
-                                                checked={newUser.workflows.includes(workflow.id)}
-                                                onChange={(e) => {
-                                                    if (e.target.checked) {
-                                                        setNewUser({...newUser, workflows: [...newUser.workflows, workflow.id]});
-                                                    } else {
-                                                        setNewUser({...newUser, workflows: newUser.workflows.filter(w => w !== workflow.id)});
-                                                    }
-                                                }}
-                                                className="rounded border-gray-300 text-gray-900 focus:ring-gray-400 accent-gray-900"
-                                            />
-                                            <div className="flex-1 min-w-0">
-                                                <span className="text-sm text-gray-700 truncate block">{workflow.name}</span>
-                                                <span className="text-xs text-gray-400">{workflow.steps} steps</span>
-                                            </div>
-                                        </label>
-                                    )) : (
-                                        <div className="col-span-2 text-center py-4 text-sm text-gray-400">{tModals('addUser.noWorkflowsAvailable')}</div>
-                                    )}
-                                </div>
-                                <p className="text-xs text-gray-400">{tModals('addUser.workflowsSelected', { selected: newUser.workflows.length, total: workflows.length })}</p>
-                            </div>
+                            <AccessPresetSection
+                                tools={tools}
+                                workflows={workflows}
+                                preset={accessPreset}
+                                selectedTools={newUser.tools}
+                                selectedWorkflows={newUser.workflows}
+                                onPresetChange={setAccessPreset}
+                                onToolsChange={(t) => setNewUser(prev => ({ ...prev, tools: t }))}
+                                onWorkflowsChange={(w) => setNewUser(prev => ({ ...prev, workflows: w }))}
+                            />
 
                             {/* Memory Database Toggle */}
                             <div className="flex items-center gap-4 p-4 bg-white border border-gray-200 rounded-xl shadow-sm">
@@ -5094,10 +5338,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setEditingUser(null)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white w-full max-w-3xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
+                        <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl shrink-0">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold border border-blue-200">
                                     {editingUser.username[0].toUpperCase()}
@@ -5112,7 +5356,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </button>
                         </div>
                         
-                        <div className="p-6 space-y-6">
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6">
                             <div className="space-y-4">
                                 <div className="grid grid-cols-2 gap-4">
                                     <Input
@@ -5138,6 +5382,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 />
                             </div>
 
+                            <Section title={tModals('addUser.access')}>
+                                <div className="space-y-4">
+                                    <AccessPresetSection
+                                        tools={tools}
+                                        workflows={workflows}
+                                        preset={editAccessPreset}
+                                        selectedTools={editingUser.tools || []}
+                                        selectedWorkflows={editingUser.workflows || []}
+                                        onPresetChange={setEditAccessPreset}
+                                        onToolsChange={(t) => setEditingUser({ ...editingUser, tools: t })}
+                                        onWorkflowsChange={(w) => setEditingUser({ ...editingUser, workflows: w })}
+                                    />
+                                </div>
+                            </Section>
+
                             <Section title={tModals('editUser.securityAccess')}>
                                 <div className="space-y-3">
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
@@ -5147,9 +5406,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                             <span className="text-sm font-medium text-gray-700">{tModals('editUser.password')}</span>
                                         </div>
-                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tCommon('reset')}</button>
+                                        {pwResetTemp ? (
+                                            <span className="text-xs font-mono text-gray-800 bg-gray-100 px-2 py-1 rounded select-all" title={tModals('editUser.tempPasswordHint')}>{pwResetTemp}</span>
+                                        ) : (
+                                            <button onClick={handleResetPassword} className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tCommon('reset')}</button>
+                                        )}
                                     </div>
-                                    
+
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
                                         <div className="flex items-center gap-3">
                                             <div className="p-2 bg-purple-50 text-purple-600 rounded-lg">
@@ -5157,7 +5420,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                             <span className="text-sm font-medium text-gray-700">{tModals('editUser.twoFaStatus')}</span>
                                         </div>
-                                        <button className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tModals('editUser.resetTwoFa')}</button>
+                                        {twoFaResetDone ? (
+                                            <span className="text-xs text-green-600">{tModals('editUser.twoFaResetDone')}</span>
+                                        ) : (
+                                            <button onClick={handleReset2fa} className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tModals('editUser.resetTwoFa')}</button>
+                                        )}
                                     </div>
 
                                     <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
@@ -5177,7 +5444,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </Section>
                         </div>
 
-                        <div className="flex items-center justify-between p-6 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl">
+                        <div className="flex items-center justify-between p-6 border-t border-gray-100 bg-gray-50/50 rounded-b-2xl shrink-0">
                             <button onClick={handleDeleteUser} className="px-4 py-2 text-red-600 hover:bg-red-50 font-medium rounded-lg transition-colors flex items-center gap-2">
                                 <Trash2 size={16} /> {tModals('editUser.deleteUser')}
                             </button>
@@ -5344,20 +5611,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <div className="flex-1 overflow-hidden bg-gray-50 relative">
                             <Suspense fallback={<ReactFlowFallback />}>
                                 <ReactFlow
+                                    className="vaf-netmap"
                                     nodes={networkNodes}
                                     edges={networkEdges}
                                     onNodesChange={onNetworkNodesChange}
                                     onEdgesChange={onNetworkEdgesChange}
                                     fitView
-                                    fitViewOptions={{ padding: 0.2 }}
+                                    fitViewOptions={{ padding: 0.3 }}
+                                    minZoom={0.2}
+                                    nodesDraggable={false}
+                                    nodesConnectable={false}
+                                    elementsSelectable={false}
                                     proOptions={{ hideAttribution: true }}
                                 >
                                     <Background color="#e5e7eb" gap={20} />
-                                    <Controls className="bg-white border-gray-200 shadow-sm text-gray-500" />
-                                    <MiniMap
-                                        nodeColor={() => '#3b82f6'}
-                                        maskColor="rgba(243, 244, 246, 0.7)"
-                                        className="bg-white border-gray-200 shadow-sm"
+                                    <Controls
+                                        position="bottom-right"
+                                        showInteractive={false}
+                                        className="bg-white border border-gray-200 shadow-sm text-gray-500 rounded-lg overflow-hidden"
                                     />
                                 </ReactFlow>
                             </Suspense>

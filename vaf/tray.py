@@ -52,6 +52,17 @@ try:
 except Exception:
     pass
 
+# Capture HARD crashes that leave no Python traceback — a native segfault/abort (e.g. the Qt WebEngine
+# renderer dying) terminates the process before any `except` runs, so a silent death looks like "the log
+# just stops". faulthandler dumps every thread's Python stack to a file on SIGSEGV/SIGABRT/SIGFPE/SIGBUS,
+# so the NEXT occurrence is diagnosable (which thread was where) instead of a guess.
+try:
+    import faulthandler as _faulthandler
+    _fh_log = open(Path(os.environ.get("VAF_LOG_DIR", str(repo_log_dir))) / "faulthandler.log", "a", buffering=1)
+    _faulthandler.enable(file=_fh_log, all_threads=True)
+except Exception:
+    pass
+
 
 def _tray_startup_log(msg: str, error: str = ""):
     """Always write to tray_startup_YYYY-MM-DD.txt for diagnostics (even when Debug Logs is off)."""
@@ -108,6 +119,7 @@ tray_context = TrayContext()
 server_thread = None
 uvicorn_server = None  # Global reference for restart capability
 uvicorn_loop = None    # Event loop for the uvicorn server
+internal_api_server = None  # 8005 internal HTTP channel server (TLS mode) — stoppable on restart/disable
 
 
 def _atexit_stop_server():
@@ -439,20 +451,19 @@ def start_uvicorn():
 
         # --- START INTEGRATED HTTPS PROXY (single entry point for HTTPS, no Nginx required) ---
         # When TLS is on, proxy listens on 0.0.0.0:local_network_https_port and forwards to 127.0.0.1:3000/8001.
-        # On Windows, port 443 often requires admin → use 8443 so it works without elevation.
+        # run_https_proxy tries that port and transparently falls back to 8443 when it is privileged
+        # (<1024, e.g. 443) and cannot be bound without admin/root — on EVERY platform, not just Windows.
+        # The effective port + bind result land in vaf.network.runtime_status so the UI shows the real URL.
         if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
             try:
                 from vaf.network.https_proxy import run_https_proxy
                 https_port = Config.get("local_network_https_port", 443)
-                if platform.system() == "Windows" and https_port == 443:
-                    https_port = 8443
-                    log("Tray", "Using HTTPS port 8443 on Windows (443 would require admin).")
                 def _run_https_proxy():
                     def _log(msg: str, _style: str = "info"):
                         log("HTTPS-Proxy", msg)
                     run_https_proxy("0.0.0.0", https_port, ssl_cert, ssl_key, log_callback=_log)
                 threading.Thread(target=_run_https_proxy, daemon=True).start()
-                log("Tray", f"Integrated HTTPS proxy started on 0.0.0.0:{https_port}")
+                log("Tray", f"Starting integrated HTTPS proxy (configured port {https_port}, auto-fallback to 8443 if privileged)")
             except Exception as px:
                 log("Tray", f"HTTPS proxy failed to start: {px}")
 
@@ -460,16 +471,20 @@ def start_uvicorn():
         # Next.js proxies to 8005 to avoid SSL trust issues. When TLS is off, Next.js proxies to 8001 directly.
         if tls_enabled:
             def _start_internal_api():
+                global internal_api_server
                 try:
                     import asyncio
                     log("Tray", "Starting internal API channel on port 8005...")
                     internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False)
                     internal_srv = uvicorn.Server(internal_cfg)
                     internal_srv.install_signal_handlers = lambda: None
+                    internal_api_server = internal_srv  # track so restart/disable can stop it
                     internal_loop = asyncio.new_event_loop()
                     internal_loop.run_until_complete(internal_srv.serve())
                 except Exception as ie:
                     log("Tray", f"Internal API channel failed: {ie}")
+                finally:
+                    internal_api_server = None
             threading.Thread(target=_start_internal_api, daemon=True).start()
 
         # Manually disable signal handlers to prevent main thread interference
@@ -501,7 +516,27 @@ def restart_backend_server():
     global uvicorn_server, uvicorn_loop, server_thread
     log("Tray", "Backend server restart requested")
 
+    global internal_api_server
     try:
+        # Stop the integrated HTTPS proxy + internal 8005 channel FIRST. They run in their own daemon
+        # threads with no other handle, so without this they keep listening on the LAN port (8443) and
+        # 8005 even after hosting is disabled — i.e. "turn network off" would NOT actually close LAN
+        # access. start_uvicorn re-creates them only when TLS is on, so stopping them here is correct for
+        # both restart and disable.
+        try:
+            from vaf.network.https_proxy import stop_https_proxy
+            stop_https_proxy()
+            log("Tray", "Stopped integrated HTTPS proxy (8443)")
+        except Exception as _pe:
+            log("Tray", f"Stopping HTTPS proxy failed: {_pe}")
+        if internal_api_server is not None:
+            try:
+                internal_api_server.should_exit = True
+                log("Tray", "Stopped internal API channel (8005)")
+            except Exception:
+                pass
+            internal_api_server = None
+
         # Stop the current server
         if uvicorn_server:
             log("Tray", "Stopping current uvicorn server...")
@@ -524,6 +559,123 @@ def restart_backend_server():
         log("Tray", f"Backend server restart failed: {e}")
         logger.error(f"Backend server restart failed: {e}")
         return False
+
+
+# --- Serialized + coalesced network restart -------------------------------------------------------
+# Enabling LAN mode writes SEVERAL config keys in one save (local_network_enabled + local_network_tls_
+# enabled + …). The config observer fires once per changed key, and the file-poll loop can fire too — so
+# without coordination we spawned MULTIPLE restart threads that raced on the SAME FrontendManager
+# singleton (os.getpgid() on a self.process the other thread just set to None) and the global uvicorn
+# server. Two threads tearing down + restarting the same processes at the same millisecond is the
+# untraceable hard crash seen on "Apply Change". This lock makes at most ONE restart run at a time;
+# a burst of key changes collapses into a single restart that reads the latest config.
+_network_restart_lock = threading.Lock()
+_network_restart_pending = threading.Event()
+_network_restart_reason = {"key": None, "value": None}
+
+
+def _do_network_restart(key, value):
+    """Perform ONE network restart: protect the desktop webview, restart frontend + backend, then bring
+    the webview back. Only ever called by the single serialized worker in _schedule_network_restart."""
+    target_host = "127.0.0.1"  # network on => bind localhost, LAN access goes via the integrated proxy
+
+    msg = f"Config change detected: {key}={value}. Restarting servers with host={target_host}..."
+    log("Tray", msg)
+    try: logger.info(f"[Tray] {msg}")
+    except Exception: pass
+
+    # Audit log
+    try:
+        from vaf.core.user_notifications import append_notification
+        from vaf.core.config import get_local_admin_scope_id
+        append_notification(
+            user_scope_id=str(get_local_admin_scope_id()),
+            kind="system",
+            title="Network restart triggered",
+            status="success",
+            summary=f"Changed {key} to {value}.\nRestarting Backend & Frontend for network binding: {target_host}",
+        )
+    except Exception:
+        pass
+
+    # NOTE: do NOT navigate the webview during the teardown. Navigating it (to a splash) WHILE
+    # stop_frontend simultaneously kills the page server (:3000) raced inside QtWebEngine and took the
+    # whole app down (SIGKILL, no Python traceback). The webview safely stays on its current page for the
+    # brief restart; we reload it AFTER the frontend is listening again (below) — the same ordering the
+    # boot path uses (navigate only once :3000 is ready), which is reliable.
+
+    # Restart Frontend (Next.js). start_frontend() blocks until the port is listening again.
+    try:
+        from vaf.core.frontend_manager import FrontendManager
+        fm = FrontendManager()
+
+        def fe_logger(m, style):
+            log("Tray", f"[FE] {m}")
+            try: logger.info(f"[Tray] [FE] {m}")
+            except Exception: pass
+
+        log("Tray", "Stopping frontend...")
+        try: logger.info("[Tray] Stopping frontend...")
+        except Exception: pass
+        fm.stop_frontend(wait_for_exit=True)
+
+        log("Tray", f"Starting frontend (host={target_host})...")
+        try: logger.info(f"[Tray] Starting frontend (host={target_host})...")
+        except Exception: pass
+        fm.start_frontend(force_restart=True, host=target_host, log_callback=fe_logger)
+
+        log("Tray", "Frontend restarted.")
+        try: logger.info("[Tray] Frontend restarted.")
+        except Exception: pass
+    except Exception as e:
+        log("Tray", f"Frontend restart failed: {e}")
+        try: logger.error(f"[Tray] Frontend restart failed: {e}")
+        except Exception: pass
+
+    # Restart Backend (Uvicorn)
+    try: logger.info("[Tray] Restarting backend...")
+    except Exception: pass
+    restart_backend_server()
+
+    # Frontend is listening again → bring the webview back to the live app. The frontend's own reconnect
+    # overlay covers any brief window before the freshly-restarted backend finishes coming up.
+    try:
+        from vaf.core import desktop_window
+        desktop_window.navigate("http://127.0.0.1:3000")
+    except Exception:
+        pass
+
+
+def _schedule_network_restart(key, value):
+    """Coalesce + serialize network restarts. Safe to call from the config observer AND the file-poll
+    loop; concurrent/duplicate calls collapse into a single restart instead of racing."""
+    _network_restart_reason["key"] = key
+    _network_restart_reason["value"] = value
+    _network_restart_pending.set()
+    if not _network_restart_lock.acquire(blocking=False):
+        # A restart worker is already running; it will pick up the pending flag (and latest config).
+        log("Tray", f"Network restart already in progress; coalescing change {key}={value}")
+        return
+
+    def _worker():
+        try:
+            while _network_restart_pending.is_set():
+                # Debounce FIRST so the whole burst of key changes from one 'enable LAN' save settles,
+                # then clear — so everything that arrived up to now is consumed by this single restart.
+                # (Clearing before the sleep would let mid-sleep keys trigger a redundant second pass.)
+                time.sleep(1.0)
+                _network_restart_pending.clear()
+                try:
+                    _do_network_restart(_network_restart_reason["key"], _network_restart_reason["value"])
+                except Exception as e:
+                    log("Tray", f"Network restart failed: {e}")
+                    try: logger.exception("[Tray] Network restart failed")
+                    except Exception: pass
+        finally:
+            _network_restart_lock.release()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
 
 def get_icon_path(status):
     """Generate and return path to an icon for the given status using the VAF logo."""
@@ -776,11 +928,15 @@ def check_activity_loop(update_icon_callback):
 
 
 def _effective_https_port() -> int:
-    """Port for integrated HTTPS proxy. On Windows, 443 often needs admin → use 8443."""
-    p = Config.get("local_network_https_port", 443)
-    if platform.system() == "Windows" and p == 443:
-        return 8443
-    return p
+    """The port the integrated HTTPS proxy ACTUALLY bound (runtime truth), or the configured port as a
+    fallback before it has bound. The proxy auto-falls-back from a privileged port (443) to 8443 on any
+    platform, so this no longer guesses per-OS — it reads the real result."""
+    configured = Config.get("local_network_https_port", 443)
+    try:
+        from vaf.network import runtime_status
+        return runtime_status.effective_https_port(default=configured)
+    except Exception:
+        return configured
 
 
 def open_webui(icon_or_item=None, item=None):
@@ -932,76 +1088,11 @@ def on_config_changed(key, value, old_value=None):
                 log("Tray", f"llama-server restart error: {e}")
         threading.Thread(target=_restart_llama, daemon=True).start()
 
-    # Network binding changes → restart uvicorn + frontend
+    # Network binding changes → restart uvicorn + frontend.
+    # Enabling LAN flips several of these keys in one save; _schedule_network_restart coalesces the burst
+    # into a SINGLE serialized restart (no concurrent teardown of the frontend singleton / uvicorn).
     elif key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
-        def _restart_job():
-            # Delay slightly to allow the config save to complete and response to be sent
-            time.sleep(1)
-            
-            # Re-read config (network on => 127.0.0.1, access via integrated proxy)
-            from vaf.core.config import Config
-            target_host = "127.0.0.1"
-            
-            msg = f"Config change detected: {key}={value}. Restarting servers with host={target_host}..."
-            log("Tray", msg)
-            
-            # Audit log
-            try:
-                from vaf.core.user_notifications import append_notification
-                from vaf.core.config import get_local_admin_scope_id
-                append_notification(
-                    user_scope_id=str(get_local_admin_scope_id()),
-                    kind="system",
-                    title="Network restart triggered",
-                    status="success",
-                    summary=f"Changed {key} to {value}.\nRestarting Backend & Frontend for network binding: {target_host}"
-                )
-            except: pass
-
-            try: logger.info(f"[Tray] {msg}")
-            except: pass
-            
-            # Restart Frontend (Next.js)
-            try:
-                from vaf.core.frontend_manager import FrontendManager
-                fm = FrontendManager()
-                
-                # Define callback to capture logs
-                def fe_logger(msg, style):
-                    log("Tray", f"[FE] {msg}")
-                    try: logger.info(f"[Tray] [FE] {msg}")
-                    except: pass
-
-                # Stop waiting for exit to ensure we don't hang if it's stubborn
-                log("Tray", "Stopping frontend...")
-                try: logger.info("[Tray] Stopping frontend...")
-                except: pass
-                
-                fm.stop_frontend(wait_for_exit=True)
-                
-                # Restart
-                log("Tray", f"Starting frontend (host={target_host})...")
-                try: logger.info(f"[Tray] Starting frontend (host={target_host})...")
-                except: pass
-                
-                fm.start_frontend(force_restart=True, host=target_host, log_callback=fe_logger)
-                
-                log("Tray", "Frontend restarted.")
-                try: logger.info("[Tray] Frontend restarted.")
-                except: pass
-            except Exception as e:
-                log("Tray", f"Frontend restart failed: {e}")
-                try: logger.error(f"[Tray] Frontend restart failed: {e}")
-                except: pass
-            
-            # Restart Backend (Uvicorn)
-            # This is defined in tray.py, so we can call it directly
-            try: logger.info("[Tray] Restarting backend...")
-            except: pass
-            restart_backend_server()
-        
-        # Run in separate thread to avoid deadlock (uvicorn thread waiting for itself)
-        threading.Thread(target=_restart_job, daemon=True).start()
+        _schedule_network_restart(key, value)
 
 # Last known network config (read from file by poll thread) so CLI changes in another process are picked up
 _last_network_config = {}
@@ -1204,14 +1295,13 @@ def run_app():
             print(f"[Tray] Frontend started on port {port}")
             log("Tray", f"Frontend started on port {port}")
             if auto_open:
-                # Build actual URL (may differ from startup placeholder if port changed or TLS enabled)
-                local_network_enabled = Config.get("local_network_enabled", False)
-                tls_enabled = Config.get("local_network_tls_enabled", False)
-                if local_network_enabled and tls_enabled:
-                    https_port = _effective_https_port()
-                    actual_url = f"https://127.0.0.1:{https_port}" if https_port != 443 else "https://127.0.0.1"
-                else:
-                    actual_url = f"http://127.0.0.1:{port}"
+                # The desktop window is localhost — it must ALWAYS load the local frontend directly,
+                # regardless of TLS/LAN. Routing it through the public HTTPS proxy URL is wrong: that
+                # port is for REMOTE devices, it hits a self-signed cert, and before the proxy has bound
+                # _effective_https_port() falls back to 443 → "https://127.0.0.1" → connection refused
+                # (the blank GUI). The integrated proxy stays up for LAN clients; this only changes what
+                # the desktop window itself displays. Matches the restart path (desktop_window.navigate).
+                actual_url = f"http://127.0.0.1:{port}"
                 try:
                     from vaf.core import desktop_window as _dw
                     _dw.navigate(actual_url)

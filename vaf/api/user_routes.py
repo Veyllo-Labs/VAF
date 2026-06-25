@@ -99,6 +99,31 @@ class UserResponse(BaseModel):
 async def list_users(_: Dict[str, Any] = Depends(require_admin)):
     """List all users (admin only). Returns empty list if DB not available."""
     try:
+        # REAL online status: a user is "online" if one of their scopes currently has a live WebSocket
+        # connection (the connection manager tracks the user_scope_id per socket). This is the actual
+        # activity — NOT the is_active account flag, and NOT last_login (which is null for a localhost-
+        # trust session that never went through password login).
+        online_scopes = set()
+        try:
+            from vaf.core.web_server import manager as _wsmgr
+            for _conn in list(getattr(_wsmgr, "active_connections", []) or []):
+                try:
+                    _sc = _wsmgr.get_connection_user(_conn)
+                    if _sc:
+                        online_scopes.add(str(_sc))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        admin_scope = str(get_local_admin_scope_id())
+
+        def _is_online(u) -> bool:
+            uscope = str(u.user_scope_id) if u.user_scope_id else ""
+            # The local admin connects under the configured admin scope, which may differ from this row's
+            # user_scope_id — so treat any admin as online when the admin scope is connected.
+            is_admin = (u.role == UserRole.ADMIN) or (bool(uscope) and uscope == admin_scope)
+            return (bool(uscope) and uscope in online_scopes) or (is_admin and admin_scope in online_scopes)
+
         async with get_auth_db() as db:
             result = await db.execute(select(LocalUser).order_by(LocalUser.created_at.desc()))
             users = result.scalars().all()
@@ -110,6 +135,7 @@ async def list_users(_: Dict[str, Any] = Depends(require_admin)):
                     "email": user.permissions.get("email") if user.permissions else None,
                     "role": user.role,
                     "is_active": user.is_active,
+                    "online": _is_online(user),
                     "requires_2fa_setup": user.requires_2fa_setup,
                     "tools": user.permissions.get("tools", []) if user.permissions else [],
                     "workflows": user.permissions.get("workflows", []) if user.permissions else [],
@@ -265,6 +291,57 @@ async def update_user(user_id: str, data: UserUpdate, _: Dict[str, Any] = Depend
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update user: {str(e)}"
+        )
+
+
+@router.post("/{user_id}/reset-password")
+async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """Reset a user's password to a freshly generated temporary one (admin only). Returns the temporary
+    password ONCE so the admin can hand it over; it is hashed (Argon2) before storage."""
+    try:
+        async with get_auth_db() as db:
+            result = await db.execute(select(LocalUser).where(LocalUser.id == uuid_module.UUID(user_id)))
+            user = result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            new_password = secrets.token_urlsafe(12)
+            user.password_hash = hash_password(new_password)
+            user.updated_at = _utc_now_naive()
+            await db.commit()
+            return {"temporary_password": new_password}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reset password: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset password: {str(e)}"
+        )
+
+
+@router.post("/{user_id}/reset-2fa")
+async def reset_2fa(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """Clear a user's 2FA (admin only): removes the stored TOTP secret and forces a fresh 2FA setup on
+    the user's next login."""
+    try:
+        async with get_auth_db() as db:
+            result = await db.execute(select(LocalUser).where(LocalUser.id == uuid_module.UUID(user_id)))
+            user = result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            user.totp_secret = None
+            user.totp_nonce = None
+            user.requires_2fa_setup = True
+            user.updated_at = _utc_now_naive()
+            await db.commit()
+            return {"message": "2FA reset; the user will set it up again on next login"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reset 2FA: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset 2FA: {str(e)}"
         )
 
 

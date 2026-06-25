@@ -87,6 +87,28 @@ def is_allowed_ip(ip: str) -> bool:
         return False
 
 
+def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optional[int]:
+    """Return the first port from [preferred, fallback] that `host` can ACTUALLY bind, or None if
+    neither is bindable. A privileged port (<1024, e.g. 443) raises PermissionError for a non-root
+    desktop user, so VAF transparently falls back to a non-privileged high port instead of failing
+    silently (the previous code only did this on Windows). The probe socket is closed immediately;
+    the caller (uvicorn) then binds the chosen port — SO_REUSEADDR makes the brief gap harmless."""
+    for port in dict.fromkeys(p for p in (preferred, fallback) if p):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, int(port)))
+            return int(port)
+        except OSError as e:
+            logger.info("Port %s not bindable on %s (%s); trying next", port, host, e)
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    return None
+
+
 def get_all_local_ips() -> List[Tuple[str, str]]:
     """
     Get all local network IP addresses.

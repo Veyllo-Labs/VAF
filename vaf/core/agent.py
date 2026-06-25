@@ -8496,8 +8496,12 @@ class Agent:
                                     "[System: You still have pending tasks — do NOT stop yet. Work the next "
                                     "step NOW by calling the needed tools.\n"
                                     f">> CURRENT STEP {_done + 1}/{_total}: \"{_text}\" — finish it, then call "
-                                    f"update_working_memory(mark_task_done={_idx}). Only stop when every task "
-                                    "is done or you have a genuine question that requires the user.]"
+                                    f"update_working_memory(mark_task_done={_idx}). If you ALREADY completed this "
+                                    "step, mark that exact index now instead of redoing it — do NOT repeat an "
+                                    "action that may already be complete (for example a purchase/payment) just "
+                                    "because a step still looks open; mark the correct index or ask the user if "
+                                    "unsure. Only stop when every task is done or you have a genuine question "
+                                    "that requires the user.]"
                                 )
                             self.history.append({"role": "system", "content": _ac_content})
                             UI.event(

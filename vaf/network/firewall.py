@@ -7,6 +7,8 @@ Supports Windows (netsh), macOS (pf), and Linux (iptables/ufw).
 SECURITY: This is Layer 2 of the three-layer defense against internet exposure.
 """
 
+import os
+import shlex
 import subprocess
 import logging
 import tempfile
@@ -225,7 +227,7 @@ block in quick proto tcp to any port {{{port}, {port_frontend}}}
         
         # Copy to /etc/pf.anchors (requires sudo)
         result = subprocess.run(
-            ['sudo', 'cp', temp_path, str(anchor_path)],
+            ['sudo', '-n','cp', temp_path, str(anchor_path)],
             capture_output=True,
             text=True
         )
@@ -237,10 +239,10 @@ block in quick proto tcp to any port {{{port}, {port_frontend}}}
             return False
         
         # Load the anchor
-        subprocess.run(['sudo', 'pfctl', '-a', 'vaf', '-f', str(anchor_path)], capture_output=True)
+        subprocess.run(['sudo', '-n','pfctl', '-a', 'vaf', '-f', str(anchor_path)], capture_output=True)
         
         # Enable pf if not already enabled
-        subprocess.run(['sudo', 'pfctl', '-e'], capture_output=True)
+        subprocess.run(['sudo', '-n','pfctl', '-e'], capture_output=True)
         
         logger.info("macOS pf rules created successfully")
         return True
@@ -256,12 +258,12 @@ def _cleanup_firewall_macos() -> bool:
     
     try:
         # Flush the vaf anchor
-        subprocess.run(['sudo', 'pfctl', '-a', 'vaf', '-F', 'all'], capture_output=True)
+        subprocess.run(['sudo', '-n','pfctl', '-a', 'vaf', '-F', 'all'], capture_output=True)
         
         # Remove anchor file
         anchor_path = Path("/etc/pf.anchors/vaf")
         if anchor_path.exists():
-            subprocess.run(['sudo', 'rm', str(anchor_path)], capture_output=True)
+            subprocess.run(['sudo', '-n','rm', str(anchor_path)], capture_output=True)
         
         return True
     except Exception as e:
@@ -281,18 +283,141 @@ def _setup_firewall_linux(port: int, port_frontend: int) -> bool:
     Note: Requires root privileges.
     """
     logger.info("Setting up Linux firewall rules for local network access")
-    
+
+    # Prefer firewalld when it's the active firewall (most modern Linux desktops). It supports a clean,
+    # LAN-subnet-scoped rich rule and — crucially — pkexec elevation, which pops a NATIVE password dialog
+    # in desktop mode instead of a dead `sudo` TTY prompt. iptables/ufw stay as the fallback.
+    if _firewalld_running():
+        return _setup_firewall_linux_firewalld(port, port_frontend)
+
     # Check if ufw is available and active
     ufw_available = subprocess.run(
         ['which', 'ufw'],
         capture_output=True
     ).returncode == 0
-    
+
     if ufw_available:
         return _setup_firewall_linux_ufw(port, port_frontend)
-    
+
     # Use iptables directly
     return _setup_firewall_linux_iptables(port, port_frontend)
+
+
+# ── firewalld backend (modern Linux): LAN-subnet rich rule + pkexec GUI elevation ────────────────────
+
+def _firewalld_running() -> bool:
+    """True only if firewalld is installed AND running (so we don't try rich rules on an iptables-only box)."""
+    try:
+        if subprocess.run(['which', 'firewall-cmd'], capture_output=True).returncode != 0:
+            return False
+        r = subprocess.run(['firewall-cmd', '--state'], capture_output=True, text=True, timeout=5)
+        return 'running' in ((r.stdout or '') + (r.stderr or '')).lower()
+    except Exception:
+        return False
+
+
+def _lan_subnet_cidr() -> Optional[str]:
+    """CIDR of the network the LAN IP sits on (e.g. 192.168.2.0/24), so the opening is scoped to the LAN
+    only (RFC1918) — never the whole interface or the internet. Uses the interface's real netmask."""
+    try:
+        import ipaddress
+        import socket as _socket
+        import psutil
+        from vaf.network.binding import get_local_network_ip
+        lan_ip = get_local_network_ip()
+        if not lan_ip:
+            return None
+        for _iface, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if getattr(a, 'family', None) == _socket.AF_INET and a.address == lan_ip and a.netmask:
+                    return str(ipaddress.ip_network(f"{lan_ip}/{a.netmask}", strict=False))
+    except Exception as e:
+        logger.debug("firewalld: LAN subnet detection failed: %s", e)
+    return None
+
+
+def _firewalld_zone() -> str:
+    """Zone of the interface that carries the LAN IP (a rule only affects traffic on interfaces in that
+    zone). Falls back to the default zone, then 'public'."""
+    try:
+        import socket as _socket
+        import psutil
+        from vaf.network.binding import get_local_network_ip
+        lan_ip = get_local_network_ip()
+        if lan_ip:
+            for iface, addrs in psutil.net_if_addrs().items():
+                if any(getattr(a, 'family', None) == _socket.AF_INET and a.address == lan_ip for a in addrs):
+                    r = subprocess.run(['firewall-cmd', '--get-zone-of-interface', iface],
+                                       capture_output=True, text=True, timeout=5)
+                    if r.returncode == 0 and r.stdout.strip():
+                        return r.stdout.strip()
+                    break
+        r = subprocess.run(['firewall-cmd', '--get-default-zone'], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return 'public'
+
+
+def _firewalld_rich_rule(subnet: str, port: int) -> str:
+    return (f'rule family="ipv4" source address="{subnet}" '
+            f'port port="{port}" protocol="tcp" accept')
+
+
+def _firewalld_rule_present(zone: str, rule: str) -> bool:
+    try:
+        r = subprocess.run(['firewall-cmd', '--zone', zone, '--query-rich-rule', rule],
+                           capture_output=True, text=True, timeout=5)
+        return r.returncode == 0 and 'yes' in (r.stdout or '').lower()
+    except Exception:
+        return False
+
+
+def _elevation_argv() -> list:
+    """How to gain root for the firewall change: pkexec in desktop mode (NATIVE polkit password dialog),
+    otherwise non-interactive sudo (`sudo -n`) so a headless/server run fails fast instead of hanging on
+    a TTY password prompt."""
+    if (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) and \
+       subprocess.run(['which', 'pkexec'], capture_output=True).returncode == 0:
+        return ['pkexec']
+    return ['sudo', '-n']
+
+
+def _setup_firewall_linux_firewalld(port: int, port_frontend: int) -> bool:
+    """Open ONLY the LAN access port (the integrated HTTPS proxy port, e.g. 8443) for the LAN subnet, via
+    a firewalld rich rule in the interface's zone. The backend (8001) and frontend (3000) bind 127.0.0.1
+    and are unreachable from the LAN, so they are deliberately NOT opened. Idempotent: if the rule already
+    exists, nothing runs and no password dialog appears."""
+    subnet = _lan_subnet_cidr()
+    if not subnet:
+        logger.warning("firewalld: could not determine the LAN subnet; not opening any port")
+        return False
+    zone = _firewalld_zone()
+    rule = _firewalld_rich_rule(subnet, port)
+    if _firewalld_rule_present(zone, rule):
+        logger.info("firewalld: LAN access already open (zone=%s, source=%s, port=%s)", zone, subnet, port)
+        return True
+    # Add to BOTH runtime (effective immediately) and permanent (survives reboot) in a SINGLE elevation
+    # so the user sees at most one password dialog.
+    q = shlex.quote(rule)
+    inner = (f"firewall-cmd --zone={shlex.quote(zone)} --add-rich-rule={q} && "
+             f"firewall-cmd --permanent --zone={shlex.quote(zone)} --add-rich-rule={q}")
+    argv = _elevation_argv() + ['sh', '-c', inner]
+    try:
+        logger.info("firewalld: opening port %s for %s in zone %s via %s", port, subnet, zone, argv[0])
+        subprocess.run(argv, check=True, timeout=120)
+        logger.info("firewalld: LAN access opened (zone=%s, source=%s, port=%s)", zone, subnet, port)
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("firewalld: elevation timed out (password dialog dismissed?)")
+        return False
+    except subprocess.CalledProcessError as e:
+        logger.error("firewalld: could not add rich rule (dialog cancelled / no privileges?): %s", e)
+        return False
+    except Exception as e:
+        logger.error("firewalld: setup error: %s", e)
+        return False
 
 
 def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
@@ -307,7 +432,7 @@ def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
         for p in ports:
             # Allow localhost
             subprocess.run([
-                'sudo', 'iptables', '-A', 'INPUT',
+                'sudo', '-n','iptables', '-A', 'INPUT',
                 '-i', 'lo',
                 '-p', 'tcp', '--dport', str(p),
                 '-j', 'ACCEPT',
@@ -317,7 +442,7 @@ def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
             # Allow private ranges
             for cidr in PRIVATE_CIDRS:
                 subprocess.run([
-                    'sudo', 'iptables', '-A', 'INPUT',
+                    'sudo', '-n','iptables', '-A', 'INPUT',
                     '-p', 'tcp', '--dport', str(p),
                     '-s', cidr,
                     '-j', 'ACCEPT',
@@ -326,7 +451,7 @@ def _setup_firewall_linux_iptables(port: int, port_frontend: int) -> bool:
             
             # Block all other incoming on this port
             subprocess.run([
-                'sudo', 'iptables', '-A', 'INPUT',
+                'sudo', '-n','iptables', '-A', 'INPUT',
                 '-p', 'tcp', '--dport', str(p),
                 '-j', 'DROP',
                 '-m', 'comment', '--comment', f'VAF-block-{p}'
@@ -350,7 +475,7 @@ def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
             # Allow from private networks
             for cidr in PRIVATE_CIDRS:
                 subprocess.run([
-                    'sudo', 'ufw', 'allow',
+                    'sudo', '-n','ufw', 'allow',
                     'from', cidr,
                     'to', 'any',
                     'port', str(p),
@@ -361,7 +486,7 @@ def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
             # Deny from anywhere else (ufw default deny handles this)
         
         # Reload ufw
-        subprocess.run(['sudo', 'ufw', 'reload'], capture_output=True)
+        subprocess.run(['sudo', '-n','ufw', 'reload'], capture_output=True)
         
         logger.info(f"Linux ufw rules created for ports {ports}")
         return True
@@ -379,7 +504,7 @@ def _cleanup_firewall_linux() -> bool:
         # Try to find and delete VAF rules from iptables
         # List rules with line numbers
         result = subprocess.run(
-            ['sudo', 'iptables', '-L', 'INPUT', '-n', '--line-numbers'],
+            ['sudo', '-n','iptables', '-L', 'INPUT', '-n', '--line-numbers'],
             capture_output=True,
             text=True
         )
@@ -397,17 +522,17 @@ def _cleanup_firewall_linux() -> bool:
             # Delete in reverse order to preserve line numbers
             for rule_num in sorted(vaf_rules, reverse=True):
                 subprocess.run(
-                    ['sudo', 'iptables', '-D', 'INPUT', str(rule_num)],
+                    ['sudo', '-n','iptables', '-D', 'INPUT', str(rule_num)],
                     capture_output=True
                 )
         
         # Also try ufw cleanup
         subprocess.run(
-            ['sudo', 'ufw', 'delete', 'allow', 'proto', 'tcp', 'to', 'any', 'port', '8001'],
+            ['sudo', '-n','ufw', 'delete', 'allow', 'proto', 'tcp', 'to', 'any', 'port', '8001'],
             capture_output=True
         )
         subprocess.run(
-            ['sudo', 'ufw', 'delete', 'allow', 'proto', 'tcp', 'to', 'any', 'port', '3000'],
+            ['sudo', '-n','ufw', 'delete', 'allow', 'proto', 'tcp', 'to', 'any', 'port', '3000'],
             capture_output=True
         )
         

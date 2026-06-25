@@ -105,7 +105,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         "Update working memory (notes, plan, tasks) that persists across turns and appears in <working_memory>. "
         "plan = your high-level approach (short); tasks = the concrete steps that carry it out (tracked and kept on course). "
         "Set notes/plan to replace the list, add_notes/add_plan to append. "
-        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark ONE done, or mark_all_done=true to mark EVERY pending task done at once (use this when the user says they are finished / 'mark everything done'). For multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
+        "Tasks: add_task to add a step (pending), mark_task_done(index) to mark ONE done (pass the index of the step you actually finished — the open step shown in your context; marking an already-done or out-of-range index does nothing and you are told the correct index), or mark_all_done=true to mark EVERY pending task done at once (use this when the user says they are finished / 'mark everything done'). For multi-step work put the steps in tasks, not plan. Done tasks auto-removed after 12h."
     )
     
     parameters = {
@@ -150,7 +150,7 @@ class UpdateWorkingMemoryTool(BaseTool):
             },
             "mark_task_done": {
                 "type": "integer",
-                "description": "0-based index of the task to mark as done."
+                "description": "0-based index of the task you just finished — pass the OPEN step's index (shown in the current-step reminder). Marking an already-done or non-existent index changes nothing and returns a warning pointing to the real open step."
             },
             "mark_all_done": {
                 "type": "boolean",
@@ -273,6 +273,48 @@ class UpdateWorkingMemoryTool(BaseTool):
                 info = f" Marked {max(done_now, 0)} pending task(s) done; all {len(post_tasks)} task(s) complete."
             elif add_task is not None and str(add_task).strip() and len(post_tasks) == len(pre_tasks):
                 info = " (That task was already in the list — not re-added.)"
+
+            # Robust mark_task_done feedback (warn + redirect; NEVER auto-change status here). Marking an
+            # index that is ALREADY done — or out of range — is a silent no-op; returning "✅ updated" gave
+            # the agent no signal that it marked the WRONG step. That is exactly how it got stuck repeating
+            # a real-money purchase: it called mark_task_done(0) (already done) while step [1] (the buy)
+            # stayed pending, so the rendered "CURRENT STEP" header kept pushing the re-buy. Point it at the
+            # real open step instead — same rule (_current_step) that renders the header, so the index matches.
+            if mark_task_done is not None:
+                try:
+                    mt = int(mark_task_done)
+                except Exception:
+                    mt = -1
+                n = len(pre_tasks)
+
+                def _is_done(t):
+                    return str((t.get("status") if isinstance(t, dict) else None) or "pending").lower() == "done"
+
+                already_done = (0 <= mt < n) and _is_done(pre_tasks[mt])
+                out_of_range = not (0 <= mt < n)
+                if already_done or out_of_range:
+                    cur = MainPersistenceManager._current_step(post_tasks)  # (idx, text, done, total) or None
+                    what = (
+                        f"Task [{mt}] was ALREADY done — that mark_task_done changed nothing"
+                        if already_done else
+                        f"There is no task [{mt}] (tasks are [0..{max(n - 1, 0)}]) — that mark_task_done was ignored"
+                    )
+                    if cur is not None:
+                        ci, ctext = cur[0], cur[1]
+                        return (
+                            f"⚠️ {what}. The current OPEN step is [{ci}] (\"{str(ctext)[:60]}\"). "
+                            f"If you just finished THAT, call update_working_memory(mark_task_done={ci}). "
+                            f"Do NOT repeat an action that may already be complete (e.g. a purchase/payment) "
+                            f"just because a step still looks open — mark the correct index, or ask the user "
+                            f"if you are unsure." + info
+                        )
+                    if already_done:
+                        return (
+                            f"✅ Task [{mt}] was already done — all tasks are complete now. "
+                            f"Nothing more to do here." + info
+                        )
+                    return f"⚠️ {what}; nothing is currently open either." + info
+
             return "✅ Working Memory updated." + info + nudge
         except Exception as e:
             return f"❌ Error updating working memory: {e}"

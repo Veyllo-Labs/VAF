@@ -75,12 +75,13 @@ ip route get 1.1.1.1 | grep -oP 'src \K\S+'
 
 | Port | Purpose |
 |------|---------|
-| 8443 | HTTPS proxy (LAN access, TLS) |
+| 8443 | HTTPS proxy (LAN access, TLS) — effective port; 8443 only when 443 falls back |
 | 3000 | Next.js frontend (internal, localhost only) |
 | 8001 | FastAPI backend (internal, localhost only) |
+| 8005 | Internal plain-HTTP backend channel (internal, localhost only) |
 | 8080 | llama-server LLM backend (internal, localhost only) |
 
-Only port 8443 is exposed on the network interface. All other ports are bound to `127.0.0.1`.
+Only the HTTPS proxy access port (8443 after a 443 fallback) is exposed on the network interface. All other ports are bound to `127.0.0.1`.
 
 ## Locked Settings
 
@@ -133,10 +134,16 @@ journalctl --user -u vaf -n 50
 Common causes: Python venv path changed after a `git pull` to a different directory, or Docker containers not running (memory system unavailable).
 
 **Port 8443 not reachable from other devices:**
-- Check firewall: `sudo firewall-cmd --list-ports` (firewalld) or `sudo ufw status`
-- VAF uses its own firewall rules via `vaf/network/firewall.py` but these require the OS firewall to allow the port through.
-- OpenSUSE/Fedora: `sudo firewall-cmd --add-port=8443/tcp --permanent && sudo firewall-cmd --reload`
-- Ubuntu: `sudo ufw allow 8443/tcp`
+- Check firewall: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`
+- VAF configures the OS firewall itself via `vaf/network/firewall.py`. On Linux it prefers firewalld when it is running and opens **only** port 8443 for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
+- Elevation differs by environment:
+  - **Desktop session:** when hosting is enabled VAF prompts automatically through a native polkit/pkexec password dialog and adds the rule for you.
+  - **Headless/server:** VAF uses non-interactive `sudo -n` (it fails fast rather than hanging on a TTY), so the rule is typically not added automatically — run the manual command below.
+- Manual firewalld command (preferred subnet-scoped rich rule form; replace `<LAN-subnet>` with your network, e.g. `192.168.2.0`):
+  ```bash
+  sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload
+  ```
+- Ubuntu (ufw fallback): `sudo ufw allow 8443/tcp`
 
 **Certificate regeneration:**
 If the TLS certificate has expired or the LAN IP changed:

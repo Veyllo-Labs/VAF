@@ -12,6 +12,7 @@ Best practice: single entry point for HTTPS, TLS termination here.
 import asyncio
 import logging
 import ssl
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -75,6 +76,28 @@ BACKEND_ORIGIN = "http://127.0.0.1:8005"
 # instead of opening a new connection for every single resource (JS chunks, CSS, images, etc.)
 _frontend_client: "httpx.AsyncClient | None" = None  # noqa: F821
 _backend_client: "httpx.AsyncClient | None" = None  # noqa: F821
+
+# The live proxy server, so LAN-disable / restart can stop it. The proxy runs in a daemon thread with no
+# other handle; without this it keeps listening on the LAN port after hosting is turned off.
+_running_server = None
+
+
+def stop_https_proxy() -> None:
+    """Signal the running HTTPS proxy to exit (LAN/TLS disabled, or a restart) and clear the runtime
+    status so the UI stops advertising a port nothing serves."""
+    global _running_server
+    srv = _running_server
+    _running_server = None
+    if srv is not None:
+        try:
+            srv.should_exit = True
+        except Exception:
+            pass
+    try:
+        from vaf.network import runtime_status
+        runtime_status.reset()
+    except Exception:
+        pass
 
 
 async def _get_client(target_origin: str) -> "httpx.AsyncClient":  # noqa: F821
@@ -177,6 +200,10 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     cookie = _get_cookie_header(websocket.scope)
     if cookie:
         extra_headers.append(("Cookie", cookie))
+    # Forward the REAL client IP so the backend's connection tracker (the network map) records the actual
+    # LAN device instead of 127.0.0.1 (this proxy). The backend reads X-Forwarded-For for the WS too.
+    if websocket.client and websocket.client.host:
+        extra_headers.append(("X-Forwarded-For", websocket.client.host))
     try:
         async with websockets.connect(backend_uri, additional_headers=extra_headers or None) as backend_ws:
             async def from_backend():
@@ -239,6 +266,16 @@ async def _shutdown_clients() -> None:
         _backend_client = None
 
 
+@asynccontextmanager
+async def _lifespan(app):
+    """Starlette 1.0 removed the on_startup/on_shutdown __init__ args in favor of a lifespan context
+    manager. Without this the proxy app raised `TypeError: ... unexpected keyword argument 'on_shutdown'`
+    at create time, so the proxy never bound the LAN port. Close the shared httpx clients on shutdown so
+    pooled connections don't leak across restarts."""
+    yield
+    await _shutdown_clients()
+
+
 def create_proxy_app() -> Starlette:
     """Create the ASGI proxy application. WebSocket /ws must use WebSocketRoute so upgrades work."""
     routes = [
@@ -248,7 +285,7 @@ def create_proxy_app() -> Starlette:
         Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]
-    app = Starlette(routes=routes, on_shutdown=[_shutdown_clients])
+    app = Starlette(routes=routes, lifespan=_lifespan)
     return AccessLogMiddleware(app)
 
 
@@ -264,15 +301,30 @@ def run_https_proxy(
         logger.info("[HTTPS Proxy] %s", msg)
         if log_callback:
             log_callback(msg, style)
+    from vaf.network import runtime_status
     try:
         import uvicorn
+        from vaf.network.binding import pick_bindable_port
+        # Pick a bindable port: try the configured one, fall back to 8443 when it is privileged/taken.
+        # 443 needs root on Linux/macOS — the old code only fell back on Windows, so on Linux the proxy
+        # silently died and nothing listened on the LAN. The effective port is recorded so the UI shows
+        # the REAL URL instead of a value merely computed from config.
+        effective = pick_bindable_port(host, port, 8443)
+        if effective is None:
+            msg = (f"could not bind HTTPS port {port} or fallback 8443 — a privileged port (<1024) needs "
+                   f"admin/root; pick a high port or open it during setup")
+            _log(msg, "error")
+            runtime_status.set_proxy_failed(port, msg)
+            return
+        if effective != port:
+            _log(f"HTTPS port {port} not bindable (privileged?); using {effective} instead", "warning")
         app = create_proxy_app()
         # Compatibility: ensure TLS 1.2 clients can connect.
         # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.
         config = uvicorn.Config(
             app,
             host=host,
-            port=port,
+            port=effective,
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
             ssl_version=ssl.PROTOCOL_TLS_SERVER,
@@ -282,11 +334,19 @@ def run_https_proxy(
         )
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None
-        _log(f"HTTPS proxy listening on https://0.0.0.0:{port} (-> 3000, 8005)")
-        _write_access(f"PROXY STARTED  host={host} port={port} cert={ssl_certfile}")
+        global _running_server
+        _running_server = server  # so stop_https_proxy() (LAN-disable / restart) can shut it down
+        _log(f"HTTPS proxy listening on https://{host}:{effective} (-> 3000, 8005)")
+        _write_access(f"PROXY STARTED  host={host} port={effective} cert={ssl_certfile}")
+        runtime_status.set_proxy_bound(effective, port)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(server.serve())
+        _running_server = None
     except Exception as e:
         _log(f"HTTPS proxy failed: {e}", "error")
         logger.exception("HTTPS proxy error")
+        try:
+            runtime_status.set_proxy_failed(port, str(e))
+        except Exception:
+            pass

@@ -2,7 +2,7 @@
 
 VAF (Veyllo Agent Framework) includes robust networking capabilities designed to allow secure, local collaboration. This document details the architecture, security measures, and usage of these features.
 
-**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443; on Windows often 8443 if 443 requires admin). The proxy is the single TLS entry point and routes requests as follows:
+**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443). On **any platform** (Linux/macOS/Windows), if 443 is privileged and cannot be bound by a non-root user, VAF automatically falls back to 8443. The effective bound port is surfaced via `/api/network/status` (`effective_https_port`), so the UI always shows the real port. The proxy is the single TLS entry point and routes requests as follows:
 
 | Path | Target | Description |
 |------|--------|-------------|
@@ -11,7 +11,7 @@ VAF (Veyllo Agent Framework) includes robust networking capabilities designed to
 | `/sounds/*` | `http://127.0.0.1:8005` | Notification sound files (GET/HEAD) |
 | Everything else | `http://127.0.0.1:3000` | Next.js frontend |
 
-The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. Access via `https://127.0.0.1` (or `https://127.0.0.1:8443` when using 8443) and `https://<LAN-IP>` works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
+The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for LAN/remote devices and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/nginx-vaf-https.conf.example`.
 
 ## Security Model
 
@@ -19,10 +19,20 @@ Security is the primary design constraint for VAF's network features. The system
 
 ### Layer 1: OS Firewall Automation
 
-When "Local Network Hosting" is enabled, VAF automatically configures the OS firewall (Windows Firewall, macOS pf, or Linux iptables) to:
+When "Local Network Hosting" is enabled, VAF automatically configures the OS firewall (Windows Firewall, macOS pf, or Linux).
+
+On **Linux**, VAF **prefers firewalld** when it is running. It opens **only the effective proxy port** (e.g. 8443) for the **LAN subnet** via a rich rule (e.g. `source address="192.168.2.0/24" port="8443" protocol="tcp" accept`) in the interface's actual zone — not a blanket world-open. The backend (8001) and frontend (3000) bind `127.0.0.1` and are deliberately **not** opened (they are unreachable from the LAN). Elevation uses **pkexec** in a desktop session (a native polkit password dialog appears when hosting is enabled) and `sudo -n` headless/server (non-interactive, fails fast, never hangs on a TTY). Firewall setup runs off the startup critical path (daemon thread) so it never blocks startup, and is idempotent (no dialog if the rule already exists). `iptables`/`ufw` remain as the fallback when firewalld is not running.
+
+On other platforms, the firewall is configured to:
 - **Allow**: Traffic from RFC 1918 Private IP ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`).
 - **Allow**: Localhost traffic (`127.0.0.0/8`, `::1`).
-- **Block**: All other incoming traffic to VAF ports (default 3000/8001).
+- **Block**: All other incoming traffic to VAF ports.
+
+Manual firewalld command if needed:
+```bash
+sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload
+```
+(the subnet-scoped rich rule is preferred over a blanket `--add-port`).
 
 Implementation: `vaf/network/firewall.py`
 
@@ -272,19 +282,21 @@ When TLS is active, the following changes take effect across the stack:
 
 | Component | Without TLS | With TLS |
 |-----------|-------------|----------|
-| Backend API | `http://host:8001` | `https://host:8001` |
-| WebSocket | `ws://host:8001/ws` | `wss://host:8001/ws` |
+| Backend API | `http://host:8001` | LAN: via proxy `https://<LAN-IP>:8443`; desktop: internal plain `http://127.0.0.1:8005` |
+| WebSocket | `ws://host:8001/ws` | LAN: same-origin `wss://<LAN-IP>:8443/ws` (via proxy); desktop: plain `ws://127.0.0.1:8005/ws` |
 | Auth Cookies | `httponly`, `samesite=lax` | `httponly`, `samesite=lax`, **`secure`** |
 | CORS Origins | `http://` variants only | `http://` + `https://` variants |
 | Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
-| Frontend Proxy | `http://127.0.0.1:8001` | `https://127.0.0.1:8001` |
+| Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
+
+The WebSocket transport differs by client: `/api/network/ws-config` returns `wss://` + the effective proxy port for LAN clients (identified by the `X-Forwarded-Proto: https` header the proxy stamps), and plain `ws://` + the internal `8005` channel for the desktop window. The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without the self-signed cert.
 
 ### TLS Configuration Reference
 
 | Config Key | Type | Default | Description |
 |------------|------|---------|-------------|
 | `local_network_tls_enabled` | `bool` | `false` | TLS flag. Enforced to `true` whenever `local_network_enabled=true` |
-| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (8443 on Windows if 443 needs admin) |
+| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |
 | `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
 | `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |
 
@@ -345,15 +357,15 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts before blocking |
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |
 | `local_network_tls_enabled` | `bool` | `false` | Enable HTTPS/WSS encryption |
-| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (e.g. 8443 on Windows if 443 needs admin) |
+| `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |
 | `local_network_ssl_cert` | `string` | `""` | PEM certificate path (auto-populated) |
 | `local_network_ssl_key` | `string` | `""` | PEM private key path (auto-populated) |
 
 ### Live Updates
 
-Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`).
+Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless — nothing is listening on the port).
 
-When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` on Windows when `443` would require elevation) so LAN clients can reach the proxy entry point.
+When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless).
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
 The integrated HTTPS proxy is configured for broad client compatibility (`TLS 1.2+`) so older LAN devices do not fail with empty-response errors during TLS negotiation.
 Auto-generated TLS certificates are re-generated when the current LAN IP changes, so the certificate SAN list stays aligned with the active access IP.
@@ -389,13 +401,13 @@ vaf/
 
 ### Request Flow (Network Mode with TLS)
 
-When TLS is enabled, the **integrated HTTPS proxy** is the single entry point. The backend serves TLS on port 8001 and an internal HTTP-only channel on port 8005; the proxy talks to the frontend (3000) and to the internal channel (8005) so TLS is terminated only at the proxy.
+When TLS is enabled, the **integrated HTTPS proxy** is the single entry point **for LAN/remote clients**. The backend serves TLS on port 8001 and an internal HTTP-only channel on port 8005; the proxy talks to the frontend (3000) and to the internal channel (8005) so TLS is terminated only at the proxy. The local desktop window bypasses the proxy entirely: it loads `http://127.0.0.1:3000` directly, routes `/api` through the Next.js proxy to the plain `8005` channel, and connects its WebSocket to `ws://127.0.0.1:8005/ws`.
 
 ```
-Browser (https://127.0.0.1 or https://<LAN-IP>, port 443 or 8443)
+LAN/remote browser (https://<LAN-IP>, port 8443 or 443)
     |
     v
-Integrated HTTPS proxy (0.0.0.0:443 or 8443)  [connection-pooled httpx clients]
+Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [connection-pooled httpx clients]
     |
     +-- /api, /api/*, /ws     -->  http://127.0.0.1:8005 (internal channel, same FastAPI app)
     +-- /sounds/*             -->  http://127.0.0.1:8005 (notification sounds from backend)
@@ -415,18 +427,22 @@ Route Handler (reads request.state.user for identity & scoping)
 ### 1. Get Access URL
 **GET** `/api/network/access-url`
 
-Returns the URL other devices on the LAN should use. When TLS is enabled, the port matches the integrated HTTPS proxy (443 or 8443 on Windows). The Web UI uses this for the "For other devices on LAN" row in Network settings.
+Returns the URL other devices on the LAN should use. When TLS is enabled, the port matches the **effective** integrated HTTPS proxy port (443, or 8443 after the cross-platform fallback). The Web UI uses this for the "For other devices on LAN" row in Network settings.
 
-**Response (TLS on, Windows):**
+**Response (TLS on, 443 unbindable → 8443 fallback):**
 ```json
 {
   "host": "192.168.1.50",
   "port": 8443,
+  "backend_port": 8001,
+  "ports": { "access": 8443, "backend": 8001 },
   "url": "https://192.168.1.50:8443"
 }
 ```
 
-**Response (no LAN IP detected):** `{ "host": null, "port": 443, "url": null }`
+`backend_port` (and `ports.backend`) is informational — the FastAPI backend binds `127.0.0.1` and is not reachable from the LAN.
+
+**Response (no LAN IP detected):** `{ "host": null, "port": 443, "backend_port": 8001, "ports": { "access": 443, "backend": 8001 }, "url": null }`
 
 ### 2. Get Active Connections
 **GET** `/api/network/connections`
@@ -447,7 +463,33 @@ Returns a list of currently connected devices for the Network Topology map.
 ]
 ```
 
-### 3. Authentication Endpoints
+### 3. Get Network Status
+**GET** `/api/network/status`
+
+Real runtime state of LAN hosting: whether the integrated HTTPS proxy actually bound and on which port (after any 443->8443 fallback), the resulting LAN URL, and the last bind error if it failed. The Local Network status dot in the Web UI reads this.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "tls": true,
+  "host": "192.168.1.50",
+  "configured_https_port": 443,
+  "effective_https_port": 8443,
+  "proxy_bound": true,
+  "error": null,
+  "url": "https://192.168.1.50:8443"
+}
+```
+
+`effective_https_port` is the port the proxy actually bound; `proxy_bound`/`error` report whether binding succeeded.
+
+### 4. Get WebSocket Config
+**GET** `/api/network/ws-config`
+
+Tells the caller which WebSocket transport to use; the answer differs per client so one frontend build works on the desktop and over the LAN. TLS off -> `{ "useWss": false, "port": 8001 }`; TLS on with `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`; TLS on without that header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` (the internal plain channel, since QtWebEngine rejects the proxy's self-signed cert).
+
+### 5. Authentication Endpoints
 
 | Method | Endpoint | Auth Required | Description |
 |--------|----------|---------------|-------------|

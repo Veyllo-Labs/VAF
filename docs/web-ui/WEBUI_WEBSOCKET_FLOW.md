@@ -33,7 +33,7 @@ flowchart TB
 
 ## Connection Sequence (Happy Path)
 
-1. WebUI opens WebSocket: `ws://localhost:8001/ws` (or `wss://<host>:8443/ws` when Local Network TLS proxy is enabled).
+1. WebUI opens its WebSocket using the transport from `/api/network/ws-config`: `ws://localhost:8001/ws` when TLS is off; `wss://<host>:<effective proxy port>/ws` for a LAN client behind the HTTPS proxy; and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert).
 2. Backend sends `session_list` and then `history_update` (auto-load latest session).
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
 4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).

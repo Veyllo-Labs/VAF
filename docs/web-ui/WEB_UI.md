@@ -73,7 +73,7 @@ Singleton pattern manager that:
 - **Load Sessions**: Switch between existing conversations
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
-- **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Loading a session checks ownership; other users' sessions are not accessible.
+- **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Every session command (load, chat, delete, rename, hide, artifact edit) verifies ownership before acting; other users' sessions are not accessible. Legacy sessions with no recorded scope are admin-only when acting on them.
 - **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (user-scoped default, e.g. `web-default-<scope>`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](../agents/Thinking-Mode.md).
 
 ### 3. Status Indicators

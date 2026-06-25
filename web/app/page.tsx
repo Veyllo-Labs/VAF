@@ -1834,6 +1834,7 @@ function VAFDashboardContent() {
     const [suggestionType, setSuggestionType] = useState<'tool' | 'workflow' | null>(null);
     const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const ghostRef = useRef<HTMLDivElement>(null);   // inline-autocomplete mirror; kept scroll-synced with the textarea
     const suggestionListRef = useRef<HTMLDivElement>(null);
 
     // Re-focus input whenever the agent finishes generating
@@ -6233,7 +6234,11 @@ function VAFDashboardContent() {
                                                 </div>
                                             )}
                                             <div className="relative flex items-end flex-1 min-h-0">
-                                                <div className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre overflow-hidden">
+                                                {/* inline-autocomplete ghost: mirrors the input as transparent text so the
+                                                    grey suggestion sits exactly at the cursor. Must wrap + scroll EXACTLY
+                                                    like the textarea (pre-wrap/break-words + synced scrollTop), or on
+                                                    multi-line input the suggestion drifts onto the wrong line. */}
+                                                <div ref={ghostRef} className="absolute inset-0 py-4 px-1 pointer-events-none text-sm text-gray-400 whitespace-pre-wrap break-words overflow-hidden">
                                                     <span className="text-transparent">{input}</span>
                                                     {suggestion}
                                                 </div>
@@ -6242,6 +6247,7 @@ function VAFDashboardContent() {
                                                     rows={1}
                                                     value={input}
                                                     onChange={handleInputChange}
+                                                    onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
                                                     placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : input ? "" : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"

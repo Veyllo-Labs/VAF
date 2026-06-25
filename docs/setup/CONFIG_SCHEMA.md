@@ -147,7 +147,8 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `memory_enabled` | `True` | Enable the self-learning RAG memory. |
-| `memory_db_url` | `postgresql://vaf:...@localhost:5432/vaf_memory` | Memory DB DSN. |
+| `memory_db_url` | `postgresql://vaf:...@localhost:5432/vaf_memory` | Memory DB DSN for per-user data. Default uses the owner role; set it to a non-superuser role (e.g. `vaf_app`) to enforce Row-Level Security on `memories` (see USER_ISOLATION.md). |
+| `memory_db_owner_url` | `""` | Owner/superuser DSN for DDL, migrations and global stats. Empty falls back to `memory_db_url`; set it to the owner role (e.g. `vaf`) when `memory_db_url` is the non-superuser app role. |
 | `memory_db_echo` | `False` | SQLAlchemy echo (debug). |
 | `memory_embedding_model` | `all-MiniLM-L6-v2` | Sentence-transformer embedding model. |
 | `memory_encryption_key` | `""` | Managed; memory-at-rest encryption key. |

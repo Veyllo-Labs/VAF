@@ -56,6 +56,11 @@ jobs:
       # Fail the build if any relative Markdown link points at a missing file.
       run: python scripts/check_doc_links.py
 
+    - name: Check license headers
+      # Fail the build if any first-party source file is missing the AGPL SPDX header
+      # (VAF is dual-licensed; see LICENSING.md). Vendored code and templates are excluded.
+      run: python scripts/check_license_headers.py
+
     - name: Verify CLI Entry Point (Smoke Test)
       run: |
         # This checks if all imports work and requirements are met

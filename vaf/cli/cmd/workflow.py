@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 CLI command for running workflows in separate terminal windows.
 This allows entire workflows to run independently with their own context.

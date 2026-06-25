@@ -2,6 +2,7 @@
   "name": "vaf-web-ui",
   "version": "2.6 Alpha",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "next dev",
     "dev:insecure": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 next dev",

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Gap B regression: in network-enabled mode the /ws auth must FAIL CLOSED for non-localhost clients.
 
 Before the fix, an auth-phase exception (e.g. get_jwt_secret() raising, an import error, or a non-PyJWT

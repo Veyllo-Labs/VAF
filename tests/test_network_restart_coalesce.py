@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The LAN-enable crash regression.
 
 Enabling LAN/server mode writes SEVERAL config keys in ONE save (local_network_enabled +

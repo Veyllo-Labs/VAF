@@ -10,6 +10,17 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+### Changed
+- **License: relicensed from "MIT + Commons Clause v1.0" to a dual license — GNU
+  AGPL-3.0-or-later (open source) plus a separate Commercial License.** `LICENSE` now
+  carries the verbatim AGPL-3.0 text; see the new `LICENSING.md` (dual-license explanation,
+  EN/DE) and `COMMERCIAL.md` (commercial/Enterprise terms). Building Plugins, Tools, and
+  Workflows on top of VAF stays permission-free via an AGPL Section 7 additional permission.
+  Contributor terms in `CONTRIBUTING.md` updated: contributions are accepted under the AGPL
+  inbound plus a separate commercial-relicensing grant to Veyllo GmbH (so the dual-license
+  model is enforceable), with a DCO `git commit -s` sign-off certifying origin. Source files
+  now carry `SPDX-License-Identifier: AGPL-3.0-or-later` headers pointing to `LICENSING.md`.
+
 ### Added
 - Embeddable library surface: `from vaf import Agent` (`docs/EMBEDDING.md`,
   `docs/ARCHITECTURE.md`); slim base install plus optional extras in `setup.py`.

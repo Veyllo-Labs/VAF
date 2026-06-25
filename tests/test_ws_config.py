@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """ws-config must steer each caller to a WS transport it can actually open.
 
 The desktop window loads the frontend on plain http://127.0.0.1:3000 and cannot use wss:// to the

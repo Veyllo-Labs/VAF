@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """thinking_done(message=...) fallback delivery. agent.chat_step special-cases thinking_done and returns
 BEFORE running the tool, so the delivery must happen via the shared helper deliver_thinking_done_fallback
 (called from both ThinkingDoneTool.run and the agent dispatch). Web UI emit is stubbed."""

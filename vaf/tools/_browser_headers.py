@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Realistic, internally-consistent browser HTTP headers for the scrape/fetch paths.
 
 A request that only sends `User-Agent` + `Accept` is itself a bot tell — real browsers

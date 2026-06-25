@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Research agent now saves reports as .docx (like document_agent): the HTML sections are
 converted to clean Markdown, built into a DocumentModel and rendered to docx. Pins the
 HTML->Markdown conversion and the end-to-end markdown->docx path.

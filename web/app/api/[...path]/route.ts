@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 /**
  * Proxy all /api/* requests to the VAF backend with proper cookie forwarding.
  * Fixes 401 (Unauthorized) when Next.js rewrites did not forward cookies reliably.

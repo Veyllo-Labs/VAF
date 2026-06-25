@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Regression: vision images must be downscaled before send (fixes OpenAI HTTP 500
 on full-resolution photos) — and the helper must NEVER raise on the hot path.
 

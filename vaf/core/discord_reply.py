@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Discord reply hook: headless_runner calls send_discord_reply(channel_id, text)
 when a task has source=discord. The bridge registers a callback that enqueues

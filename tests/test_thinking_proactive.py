@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Proactive intelligence layer (Stufe 2): the evidence-gate keeps the weak model from fabricating — a
 PROACTIVE suggestion (no source note/todo) is silently dropped unless its `details` quote real retrieved
 memory/history this run. Plus the anti-spam rate-limit. Storage isolated per test."""

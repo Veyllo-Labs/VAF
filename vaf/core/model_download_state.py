@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Process-wide signal for an in-progress local model (GGUF) download.
 
 The tray (activity thread) and the uvicorn web worker (`headless_runner`) run in the SAME process on

@@ -1,4 +1,7 @@
 'use client';
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { X, Plus, Trash2, AlertCircle, Loader2, GitBranch, Upload, Download } from 'lucide-react';

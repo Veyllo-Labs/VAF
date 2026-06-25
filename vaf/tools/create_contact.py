@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Create a contact in the central contact list (Settings → Connections → Contacts).
 Use update_contact(contact_id, ...) to change later; use contact_id from list_contacts or get_contact.

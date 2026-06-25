@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 export type Alignment = 'left' | 'center' | 'right' | 'justify';
 export type ListKind = 'none' | 'bullet' | 'numbered';
 export type NativeDocxBlockType = 'paragraph' | 'table' | 'image' | 'page_break' | 'unsupported';

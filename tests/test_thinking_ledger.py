@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Stufe-0 completion ledger: the deterministic housekeeping floor of a thinking run. The gate uses it to
 refuse termination while a captured note/todo is still unhandled. Storage isolated per test to tmp."""
 import vaf.core.thinking_ledger as tl

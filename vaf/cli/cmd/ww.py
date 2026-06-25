@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """`vaf ww` -- Whare Wananga tool self-learning from the terminal.
 
 Thin Typer wrapper around vaf.whare_wananga.cli (which holds the actual logic and is also runnable

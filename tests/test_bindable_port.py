@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """pick_bindable_port: try the configured HTTPS port, transparently fall back to a non-privileged
 port when the preferred one cannot be bound (e.g. 443 needs root on Linux/macOS). This is what makes
 LAN/server mode actually start on a non-root desktop instead of failing silently."""

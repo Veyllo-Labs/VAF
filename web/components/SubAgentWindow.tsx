@@ -1,4 +1,7 @@
 'use client';
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';

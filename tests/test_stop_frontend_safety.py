@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """stop_frontend must never take the tray down with the frontend.
 
 The "Killed" right after "Stopping frontend..." crash was os.killpg signalling the TRAY's own process

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Stage-3 brake of the pending-task auto-continue gate.
 
 Before the agent auto-continues through its task list, it must NOT do so if its final reply is a

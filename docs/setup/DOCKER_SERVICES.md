@@ -190,7 +190,7 @@ When Gotenberg is running, uploaded Office documents in the Document Viewer are 
 
 Important: Gotenberg is a **preview/rendering** service, not the mutable editing engine for the native DOCX editor. The native DOCX editor uses VAF's own DOCX-first document model and dedicated load/save endpoints; Gotenberg remains responsible for high-fidelity Office-to-PDF rendering.
 
-**License:** Gotenberg is MIT; LibreOffice is MPL 2.0 – both compatible with MIT+Conclus projects.
+**License:** Gotenberg is MIT; LibreOffice is MPL 2.0 – both are permissive/weak-copyleft and compatible with an AGPL-3.0 project like VAF.
 
 ---
 

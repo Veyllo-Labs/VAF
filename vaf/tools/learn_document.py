@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 learn_document: Learn a document into long-term memory (RAG).
 Extracts clean Markdown, splits it into sections, and for each section makes one LLM call that

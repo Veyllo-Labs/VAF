@@ -175,12 +175,47 @@ Built a tool or workflow you're proud of? Share it with the community - record a
 - **Naming:** `snake_case` for functions/variables, `PascalCase` for classes.
 - **Imports:** Group standard libs, third-party libs, and local imports.
 
-## ⚖️ License
+## ⚖️ License & Contributor Terms
 
-By contributing, you agree that your contributions will be licensed under the project's **MIT License with Commons Clause v1.0**.
-This ensures the project remains open for use but protects the core business model.
+VAF is **dual-licensed**: open source under the **GNU AGPL-3.0-or-later** and, separately,
+under a **commercial license** sold by Veyllo GmbH (see [LICENSING.md](LICENSING.md) and
+[COMMERCIAL.md](COMMERCIAL.md)). For this dual model to work, every contribution must be
+usable under **both** licenses — which is what the terms below establish.
 
-**Intellectual Property Grant:** By submitting a pull request, you grant **Veyllo GmbH** an irrevocable, perpetual, worldwide, non-exclusive, royalty-free license to use, modify, distribute, and sublicense your contribution within the VAF project and any derivative works or commercial products (including proprietary Enterprise versions) without restriction.
+**Opening a pull request (or otherwise submitting a patch or material) constitutes your
+agreement to all three Contributor Terms below.** These terms are accepted by the act of
+submitting — the commit sign-off in (3) is a *separate* record of origin and is **not**, by
+itself, the instrument that conveys the grant in (2).
+
+1. **Inbound license.** Your contribution is provided under the **AGPL-3.0-or-later**, the
+   same license as the project.
+
+2. **Commercial relicensing grant.** By submitting a contribution you **also** grant
+   **Veyllo GmbH** an irrevocable, perpetual, worldwide, non-exclusive, royalty-free,
+   sublicensable, and transferable license to use, reproduce, modify, distribute, and
+   **relicense** your contribution under **any terms, including proprietary/commercial
+   terms** — so that your contribution can be included in both the AGPL Community Edition and
+   Veyllo GmbH's commercial/Enterprise offerings. This grant is what makes the dual-license
+   model possible; without it, your code could not be shipped under the commercial license.
+   This grant binds independently of, and in addition to, the sign-off in (3).
+
+3. **Certificate of origin.** You certify that you wrote the contribution or otherwise have
+   the right to submit it under the terms above, in line with the
+   [Developer Certificate of Origin](https://developercertificate.org/). Sign off your
+   commits to record this certification of origin:
+
+   ```bash
+   git commit -s -m "feat: ..."
+   ```
+
+   The `-s` flag adds a `Signed-off-by: Your Name <you@example.com>` line. (The DCO attests
+   to origin only; your acceptance of terms 1 and 2 comes from submitting the contribution,
+   not from the sign-off line.)
+
+If you cannot make the commercial relicensing grant in (2) — for example, your contribution
+includes third-party code under an incompatible license — say so explicitly in the PR so we
+can handle it appropriately (e.g. keep it clearly attributed and AGPL-only, outside the
+commercial offering).
 
 ---
 **Thank you for building VAF with us!** 🚀

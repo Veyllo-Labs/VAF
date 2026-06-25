@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Regression: the integrated HTTPS proxy must construct without crashing.
 
 Starlette 1.0 REMOVED the on_startup/on_shutdown __init__ arguments in favor of a `lifespan` context

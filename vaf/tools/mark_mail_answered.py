@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Mark an email as answered (agent has processed it). Sets answered_at so the UI shows
 "Benatwortet am DD.MM.YYYY um HH:MM" and avoids double handling.

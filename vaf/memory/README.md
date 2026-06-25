@@ -189,4 +189,5 @@ pytest tests/test_memory.py -v
 
 ## License
 
-MIT License - See LICENSE file in the project root.
+Dual-licensed: GNU AGPL-3.0-or-later or a Commercial License. See [LICENSE](../../LICENSE),
+[LICENSING.md](../../LICENSING.md), and [COMMERCIAL.md](../../COMMERCIAL.md) in the project root.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """WorkflowSelector._extract_value tests.
 
 Pins the time-extraction gate: a time value (HH:MM) is extracted ONLY for an actual time variable

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 WhatsApp send utilities: text chunking for Baileys.
 WhatsApp message limit: ~65536 bytes per message; we chunk at 4000 chars (like OpenClaw) for readability.

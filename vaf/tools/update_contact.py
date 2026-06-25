@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Update a contact by contact_id (from list_contacts or get_contact).
 When multiple contacts share the same name, always use contact_id and confirm with the user which contact they mean.

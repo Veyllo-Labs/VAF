@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Pending contact replies: store replies that require user approval before sending.
 Used when front_office_contact_reply_require_approval is True (from_contact replies).

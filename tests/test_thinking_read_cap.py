@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Thinking-mode read-tool cap: a background run must not spin on memory_search / list_* (the redundant
 block only catches EXACT-arg duplicates). The cap blocks the Nth call by NAME within one step. It is
 gated by VAF_THINKING_MODE so the main chat loop is never affected. Tested directly on the method via a

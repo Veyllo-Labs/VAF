@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 Search the user's synced mailbox by subject or sender (like Ctrl+F).
 Use when the user asks "what does the X mail say?" or "details about the [sender/subject] email".

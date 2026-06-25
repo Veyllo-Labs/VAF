@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 VAF Desktop Window — pywebview wrapper.
 
@@ -19,10 +22,10 @@ import threading
 
 # ── Qt binding: prefer PySide6 (LGPLv3) over PyQt6 (GPLv3) ───────────────────
 # qtpy — used both here and inside pywebview's Qt backend — selects the Qt binding
-# from the QT_API env var. We pin PySide6 because PyQt6 is GPLv3-or-commercial:
-# bundling it would drag VAF's whole Linux build under the GPL, which is
-# incompatible with VAF's source-available MIT + Commons Clause license. PySide6
-# is LGPLv3 (dynamically linked, user-replaceable) → fine to distribute.
+# from the QT_API env var. We pin PySide6 (LGPLv3) because it is the official Qt for
+# Python binding and dynamically linked / user-replaceable. VAF is AGPL-3.0, so PyQt6
+# (GPLv3) would now be license-compatible, but PySide6's weak copyleft avoids forcing
+# GPL/AGPL onto downstream apps that merely embed VAF as a library.
 # setdefault so a developer holding a commercial Qt/PyQt license can still override.
 # Must run before any qtpy import; this module owns all Qt access + the window.
 os.environ.setdefault("QT_API", "pyside6")

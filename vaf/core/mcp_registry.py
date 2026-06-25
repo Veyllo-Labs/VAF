@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 MCP server registry — discover the tools of configured MCP servers and expose each one as a native
 VAF tool (a dynamically-built BaseTool named ``mcp_<server>_<tool>``).

@@ -90,6 +90,7 @@ registry:
       "created_at": "...",
       "updated_at": "...",
       "shared_with": ["*"],
+      "owner_scope_id": null,
       "scan": { "score": 0, "level": "clean", "count": 0 }
     }
   }
@@ -103,10 +104,27 @@ Visibility uses the same rules as custom tools (see
 - `shared_with: []` — admin only.
 - `shared_with: ["<scope_id>", ...]` — those users plus admin.
 
-Create / edit / delete / upload and permission changes are **admin-only**
-(enforced in the WebSocket handlers). The registry is `vaf/core/skills_registry.py`;
-discovery and the routing-facing list are `vaf/skills/templates.py`
-(`list_skills`, `reload_skills`).
+**Visibility** (read/list/use) is governed by `shared_with` (above). **Edit/delete
+authority** is governed separately by ownership: the optional `owner_scope_id` field
+records which user owns a skill. `can_user_edit_skill(skill_id, user_scope_id)` returns
+True for an admin (scope `None` or the local-admin scope), or for the owner
+(`owner_scope_id == user_scope_id`); skills with no `owner_scope_id` (legacy / admin
+WebUI skills) are admin-only to edit.
+
+There are two mutation paths:
+
+- **Admin WebUI / WebSocket** — create / edit / delete / upload and permission changes
+  are **admin-only** (enforced in the handlers); these can set any `shared_with` and may
+  override a high-risk scan. They do not set `owner_scope_id` (the field stays absent).
+- **Agent self-service tools** — a regular user manages their **own** skills through the
+  agent (`create_skill` / `update_skill` / `delete_skill`); see
+  [Self-service skill tools](#self-service-skill-tools-per-user). These stamp
+  `owner_scope_id`, keep the skill **private** (`shared_with=[owner]`), and cannot make a
+  skill public or override the scanner.
+
+The registry is `vaf/core/skills_registry.py` (`register_skill` carries the optional
+`owner_scope_id`; `can_user_edit_skill` is the authority check); discovery and the
+routing-facing list are `vaf/skills/templates.py` (`list_skills`, `reload_skills`).
 
 ---
 
@@ -191,6 +209,47 @@ skill's bundled files, for example:
   error listing the available skills.
 - `~/.vaf/skills` is readable by the existing `read_file` safety check
   (`is_safe_path`), so no special file-access path is introduced.
+
+---
+
+## Self-service skill tools (per-user)
+
+Beyond `use_skill`, the agent can manage a user's own skills directly, so a user can grow
+their skill library by talking to the agent instead of only the admin WebUI. Five
+read/write `BaseTool`s under `vaf/tools/`, all **user-isolated** (the calling user's
+`user_scope_id` is injected at dispatch, `None` = admin):
+
+| Tool | Does | Authority |
+|------|------|-----------|
+| `list_skills` | List the skills visible to the caller; flags `[yours]` the ones they own. | visibility (`shared_with`) |
+| `read_skill` | Return a visible skill's raw `SKILL.md` source (inspect before editing). | visibility |
+| `create_skill` | Create a new **private** skill owned by the caller. | any user |
+| `update_skill` | Edit a skill the caller **owns** (full content replace). | ownership |
+| `delete_skill` | Delete a skill the caller **owns** (`dangerous` → confirmation). | ownership |
+
+Isolation and safety rules:
+
+- **Private by default.** `create_skill` sets `shared_with=[owner_scope]` and
+  `owner_scope_id=owner_scope` — visible to the owner and admins only. The agent can
+  never set `["*"]` (making a skill public stays an admin/WebUI action).
+- **Own skills only.** `update_skill`/`delete_skill` require
+  `can_user_edit_skill`; another user's private skill returns a uniform *"not found or not
+  yours"* (no existence leak). Admin (scope `None`) may edit/delete any skill and does not
+  take ownership of it. `update_skill` preserves `owner_scope_id`, `shared_with`, and
+  `created_at`, and never widens visibility.
+- **Same validation + scan as the WebUI.** Create/edit build `SKILL.md` (from `name` +
+  `description` + `body`, or a raw `skill_md`), validate with `parse_skill_md_text` before
+  writing, and run the static scanner — a **`high`** result blocks the write. Unlike the
+  admin WebUI there is **no override** exposed to the agent. SKILL.md only: bundled
+  scripts still come via the admin zip upload.
+- Every mutation calls `reload_skills()` so the router list and `list_skills` cache stay
+  current.
+
+**Surfacing.** The unified tool router force-activates these tools, **verb-scoped**, when
+the message is about skills (EN/DE keywords incl. "skill"/"fähigkeit"): list/show →
+`list_skills`+`read_skill`; create/learn → `create_skill`+`read_skill`; edit →
+`update_skill`+`read_skill`+`list_skills`; delete → `delete_skill`+`list_skills`
+(`use_skill` is added too). The verb scoping keeps each turn under the per-turn tool cap.
 
 ---
 
@@ -286,7 +345,8 @@ Components: `web/components/settings/SkillsEditor.tsx`,
 | `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`. |
 | `vaf/core/skills_registry.py` | Manifest, scoping, `save_skill_md`, `import_skill_zip`, scan gate. |
 | `vaf/tools/use_skill.py` | On-demand delivery tool. |
-| `vaf/core/agent.py` | Unified router, `[SKILL SUGGESTION]` injection, `use_skill` pinning, scope injection. |
+| `vaf/tools/{list,read,create,update,delete}_skill.py` | Per-user self-service skill-management tools (owner-isolated). |
+| `vaf/core/agent.py` | Unified router, `[SKILL SUGGESTION]` injection, `use_skill` pinning, scope injection, self-service skill-tool gating. |
 | `vaf/core/web_server.py` | WebSocket handlers and `_broadcast_skills_update`. |
 | `web/components/settings/SkillsEditor.tsx` | Create/edit/upload editor. |
 
@@ -322,4 +382,4 @@ available). Storage lives under `~/.vaf/skills/`.
 
 ---
 
-*Last updated: 2026-06-23*
+*Last updated: 2026-06-26*

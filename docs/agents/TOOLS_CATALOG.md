@@ -83,6 +83,11 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `execute_workflow` | write | Run a specific workflow by ID. |
 | `list_workflows` | read | List available workflows. |
 | `use_skill` | read | Load the full instructions for a named Skill. |
+| `list_skills` | read | List the Skills visible to the user; flags the ones they own. |
+| `read_skill` | read | Show a visible Skill's raw SKILL.md source (inspect before editing). |
+| `create_skill` | write | Create a new private Skill owned by the user (safety-scanned). |
+| `update_skill` | write | Edit a Skill the user owns. |
+| `delete_skill` | dangerous | Delete a Skill the user owns. |
 | `list_tools` | read | List all tools available to the model. |
 | `search_tools` | read | Search the tool catalogue by keyword. |
 

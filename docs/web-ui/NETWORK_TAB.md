@@ -101,12 +101,12 @@ When a user logs in via the Local Network, the Settings Interface adapts dynamic
 | Settings Category | Admin (Host) | Standard User (Client) | Scope / Logic |
 | :--- | :---: | :---: | :--- |
 | **General** | ✅ Visible | ❌ **Hidden** | API Keys & System-wide secrets. |
-| **AI & Model** | ✅ Visible | ❌ **Hidden** | Global LLM selection (Llama/OpenAI) is set by Admin. |
+| **AI & Model** | ✅ Visible | ❌ **Hidden** | Global LLM selection (Llama/OpenAI), plus sub-agent and thinker provider/model, set by Admin. |
 | **Local Network** | ✅ Visible | ❌ **Hidden** | Only Admin can manage users and network ports. |
 | **Interface** | ✅ Visible | ❌ **Hidden** | Global UI defaults (e.g., auto-open folders). |
 | **Connections** | ✅ Visible | ✅ **Visible** | **User-Scoped:** Integrations (WhatsApp, Discord) linked here apply *only* to this user. |
 | **Automations** | ✅ Visible | ✅ **Visible** | **User-Scoped:** Users can schedule their own personal workflows. |
-| **Advanced** | ✅ Visible | ⚠️ **Restricted** | Users see only personal memory settings; System sub-agent configs are hidden. |
+| **Advanced** | ✅ Visible | ⚠️ **Restricted** | Users see only personal settings; system management panels (Tools, MCP, Workflows) are hidden. |
 
 ### 3.2 The "User Box" (Data Scoping)
 

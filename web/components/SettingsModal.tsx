@@ -569,10 +569,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const addSecs = (tab: string, titles: string[]) => { if (accessible(tab)) titles.forEach(label => out.push({ tab, label, sectionSlug: slugifySection(label) })); };
         addSecs('general', [tGeneral('apiKeys'), tGeneral('webSearch'), tGeneral('centralCredentials')]);
         addSecs('persona', [tPersona('identity'), tPersona('soul'), tPersona('longTermMemory')]);
-        addSecs('ai', [tAi('provider'), tAi('localModelSettings'), tAi('visionModel')]);
+        addSecs('ai', [tAi('provider'), tAi('localModelSettings'), tAi('visionModel'), tAdvanced('subAgents'), tAdvanced('thinker')]);
         addSecs('voice', [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
-        addSecs('advanced', [tAdvanced('subAgents'), tAdvanced('attachments'), tAdvanced('thinker'), tAdvanced('system')]);
+        addSecs('advanced', [tAdvanced('attachments'), tAdvanced('system')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
@@ -2463,6 +2463,130 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     );
                                 })()}
 
+                                <Section title={tAdvanced('subAgents')}>
+                                    <Switch
+                                        label={tInterface('separateTerminals')}
+                                        description={tInterface('separateTerminalsDesc')}
+                                        checked={localConfig.sub_agents_in_separate_terminals ?? true}
+                                        onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
+                                    />
+                                    <div className="mt-4">
+                                        <Select
+                                            label={tAdvanced('subAgentProvider')}
+                                            value={localConfig.subagent_provider || 'inherit'}
+                                            onChange={(v: string) => handleChange('subagent_provider', v)}
+                                            options={[
+                                                { value: 'inherit', label: tAdvanced('sameAsMain') },
+                                                { value: 'openai', label: 'OpenAI' },
+                                                { value: 'anthropic', label: 'Anthropic' },
+                                                { value: 'deepseek', label: 'DeepSeek' },
+                                                { value: 'google', label: 'Google' },
+                                                { value: 'openrouter', label: 'OpenRouter' },
+                                                { value: 'local', label: 'Local' },
+                                            ]}
+                                        />
+                                    </div>
+                                    {(() => {
+                                        // Effective provider for tool/workflow calls: the sub-agent provider when set,
+                                        // otherwise the main provider. Mirrors the Thinker model picker below.
+                                        const sp = (localConfig.subagent_provider && localConfig.subagent_provider !== 'inherit')
+                                            ? localConfig.subagent_provider
+                                            : (localConfig.provider || 'local');
+                                        const isLocal = sp === 'local';
+                                        const p = PROVIDERS.find(pr => pr.id === sp);
+                                        const def = !isLocal && p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : '';
+                                        const list = !isLocal && p ? (apiModels?.[p.id] ?? []) : [];
+                                        const modelOpts = isLocal
+                                            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
+                                            : [
+                                                ...(def ? [{ value: def, label: list.includes(def) ? def : `${def} (Default)` }] : []),
+                                                ...list.filter(m => m !== def).map(m => ({ value: m, label: m })),
+                                              ];
+                                        return (
+                                            <div className="mt-3">
+                                                <Select
+                                                    label={tAdvanced('toolWorkflowModel')}
+                                                    value={localConfig.subagent_model || ''}
+                                                    onChange={(v: string) => handleChange('subagent_model', v || undefined)}
+                                                    options={[
+                                                        { value: '', label: tAdvanced('sameAsMainChat') },
+                                                        ...modelOpts,
+                                                    ]}
+                                                />
+                                            </div>
+                                        );
+                                    })()}
+                                    <div className="h-4" />
+                                    <Switch
+                                        label={tAdvanced('subAgentTimeout')}
+                                        description={tAdvanced('subAgentTimeoutDesc')}
+                                        checked={localConfig.subagent_timeout_enabled ?? true}
+                                        onChange={(v: boolean) => handleChange('subagent_timeout_enabled', v)}
+                                    />
+                                    {localConfig.subagent_timeout_enabled && (
+                                        <div className="mt-2 pl-4 border-l-2 border-gray-100">
+                                            <Input
+                                                label={tAdvanced('timeoutMinutes')}
+                                                value={localConfig.subagent_timeout_minutes || 120}
+                                                onChange={(v: string) => handleChange('subagent_timeout_minutes', parseInt(v))}
+                                                type="number"
+                                            />
+                                        </div>
+                                    )}
+                                </Section>
+
+                                <Section title={tAdvanced('thinker')}>
+                                    <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
+                                    <Select
+                                        label={tAdvanced('thinkerProvider')}
+                                        value={localConfig.thinking_provider || 'inherit'}
+                                        onChange={(v: string) => {
+                                            handleChange('thinking_provider', v);
+                                            handleChange('thinking_model', undefined);
+                                        }}
+                                        options={[
+                                            { value: 'inherit', label: tAdvanced('sameAsMain') },
+                                            { value: 'openai', label: 'OpenAI' },
+                                            { value: 'anthropic', label: 'Anthropic' },
+                                            { value: 'deepseek', label: 'DeepSeek' },
+                                            { value: 'google', label: 'Google' },
+                                            { value: 'openrouter', label: 'OpenRouter' },
+                                            { value: 'local', label: 'Local' },
+                                        ]}
+                                    />
+                                    {(localConfig.thinking_provider && localConfig.thinking_provider !== 'inherit') && (() => {
+                                        const tp = localConfig.thinking_provider;
+                                        const isLocal = tp === 'local';
+                                        const defaultModel = isLocal
+                                            ? (availableModels?.[0] ?? '')
+                                            : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
+                                        const options = isLocal
+                                            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
+                                            : (() => {
+                                                const p = PROVIDERS.find(pr => pr.id === tp);
+                                                if (!p) return [];
+                                                const list = apiModels?.[p.id] ?? [];
+                                                const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
+                                                const rest = list.filter(m => m !== def);
+                                                return [
+                                                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
+                                                    ...rest.map(m => ({ value: m, label: m }))
+                                                ];
+                                            })();
+                                        return (
+                                            <div className="mt-3" key={tp}>
+                                                <Select
+                                                    label={tAdvanced('thinkerModel')}
+                                                    value={localConfig.thinking_model ?? defaultModel}
+                                                    onChange={(v: string) => handleChange('thinking_model', v || undefined)}
+                                                    options={options}
+                                                />
+                                                <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>
+                                            </div>
+                                        );
+                                    })()}
+                                </Section>
+
                                 <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
                                     <div className="flex items-center justify-between mb-3">
                                         <label className="text-sm font-medium text-gray-700">{tAi('temperature')}</label>
@@ -2989,56 +3113,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'advanced' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
-                                <Section title={tAdvanced('subAgents')}>
-                                    <Switch
-                                        label={tInterface('separateTerminals')}
-                                        description={tInterface('separateTerminalsDesc')}
-                                        checked={localConfig.sub_agents_in_separate_terminals ?? true}
-                                        onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
-                                    />
-                                    <div className="mt-4">
-                                        <Select
-                                            label={tAdvanced('subAgentProvider')}
-                                            value={localConfig.subagent_provider || 'inherit'}
-                                            onChange={(v: string) => handleChange('subagent_provider', v)}
-                                            options={[
-                                                { value: 'inherit', label: tAdvanced('sameAsMain') },
-                                                { value: 'openai', label: 'OpenAI' },
-                                                { value: 'anthropic', label: 'Anthropic' },
-                                                { value: 'deepseek', label: 'DeepSeek' },
-                                                { value: 'google', label: 'Google' },
-                                                { value: 'openrouter', label: 'OpenRouter' },
-                                                { value: 'local', label: 'Local' },
-                                            ]}
-                                        />
-                                    </div>
-                                    <div className="mt-3">
-                                        <Input
-                                            label="Tool / Workflow Model"
-                                            value={localConfig.subagent_model || ''}
-                                            onChange={(v: string) => handleChange('subagent_model', v)}
-                                            placeholder="Same as main chat (hybrid: use deepseek-v4-0324)"
-                                        />
-                                    </div>
-                                    <div className="h-4" />
-                                    <Switch
-                                        label={tAdvanced('subAgentTimeout')}
-                                        description={tAdvanced('subAgentTimeoutDesc')}
-                                        checked={localConfig.subagent_timeout_enabled ?? true}
-                                        onChange={(v: boolean) => handleChange('subagent_timeout_enabled', v)}
-                                    />
-                                    {localConfig.subagent_timeout_enabled && (
-                                        <div className="mt-2 pl-4 border-l-2 border-gray-100">
-                                            <Input
-                                                label={tAdvanced('timeoutMinutes')}
-                                                value={localConfig.subagent_timeout_minutes || 120}
-                                                onChange={(v: string) => handleChange('subagent_timeout_minutes', parseInt(v))}
-                                                type="number"
-                                            />
-                                        </div>
-                                    )}
-                                </Section>
-
                                 <Section title={tAdvanced('attachments')}>
                                     <Switch
                                         label={tAdvanced('hierarchicalIndexing')}
@@ -3046,58 +3120,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.attachment_rag_hierarchical_enabled ?? false}
                                         onChange={(v: boolean) => handleChange('attachment_rag_hierarchical_enabled', v)}
                                     />
-                                </Section>
-
-                                <Section title={tAdvanced('thinker')}>
-                                    <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
-                                    <Select
-                                        label={tAdvanced('thinkerProvider')}
-                                        value={localConfig.thinking_provider || 'inherit'}
-                                        onChange={(v: string) => {
-                                            handleChange('thinking_provider', v);
-                                            handleChange('thinking_model', undefined);
-                                        }}
-                                        options={[
-                                            { value: 'inherit', label: tAdvanced('sameAsMain') },
-                                            { value: 'openai', label: 'OpenAI' },
-                                            { value: 'anthropic', label: 'Anthropic' },
-                                            { value: 'deepseek', label: 'DeepSeek' },
-                                            { value: 'google', label: 'Google' },
-                                            { value: 'openrouter', label: 'OpenRouter' },
-                                            { value: 'local', label: 'Local' },
-                                        ]}
-                                    />
-                                    {(localConfig.thinking_provider && localConfig.thinking_provider !== 'inherit') && (() => {
-                                        const tp = localConfig.thinking_provider;
-                                        const isLocal = tp === 'local';
-                                        const defaultModel = isLocal
-                                            ? (availableModels?.[0] ?? '')
-                                            : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
-                                        const options = isLocal
-                                            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
-                                            : (() => {
-                                                const p = PROVIDERS.find(pr => pr.id === tp);
-                                                if (!p) return [];
-                                                const list = apiModels?.[p.id] ?? [];
-                                                const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
-                                                const rest = list.filter(m => m !== def);
-                                                return [
-                                                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
-                                                    ...rest.map(m => ({ value: m, label: m }))
-                                                ];
-                                            })();
-                                        return (
-                                            <div className="mt-3" key={tp}>
-                                                <Select
-                                                    label={tAdvanced('thinkerModel')}
-                                                    value={localConfig.thinking_model ?? defaultModel}
-                                                    onChange={(v: string) => handleChange('thinking_model', v || undefined)}
-                                                    options={options}
-                                                />
-                                                <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>
-                                            </div>
-                                        );
-                                    })()}
                                 </Section>
 
                                 <Section title={tAdvanced('system')}>

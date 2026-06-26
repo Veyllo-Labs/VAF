@@ -310,6 +310,7 @@ const PROVIDER_META: { id: string; label: string }[] = [
     { id: 'google', label: 'Google' },
     { id: 'openai', label: 'OpenAI' },
     { id: 'openrouter', label: 'OpenRouter' },
+    { id: 'veyllo', label: 'Veyllo' },
 ];
 
 type ProviderModelInfo = { default: string; fallback: string[] };
@@ -320,6 +321,7 @@ const FALLBACK_PROVIDER_MODELS: Record<string, ProviderModelInfo> = {
     deepseek:   { default: 'deepseek-v4-flash', fallback: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-auto'] },
     google:     { default: 'gemini-2.5-flash', fallback: ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'] },
     openrouter: { default: 'anthropic/claude-sonnet-4.6', fallback: ['anthropic/claude-sonnet-4.6', 'openai/gpt-4o', 'google/gemini-2.5-flash'] },
+    veyllo:     { default: 'veyllo-chat', fallback: ['veyllo-chat'] },
 };
 
 // Vision-capable providers (no static model lists — models are fetched dynamically via refresh button).
@@ -329,9 +331,10 @@ const VISION_PROVIDERS: { id: string; label: string }[] = [
     { id: 'google',     label: 'Google' },
     { id: 'openai',     label: 'OpenAI' },
     { id: 'openrouter', label: 'OpenRouter' },
+    { id: 'veyllo',     label: 'Veyllo' },
 ];
 
-const VISION_CAPABLE_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter']);
+const VISION_CAPABLE_PROVIDERS = new Set(['veyllo', 'openai', 'anthropic', 'google', 'openrouter']);
 
 // Common IANA timezones for Date & Time (Interface). Used in system prompt and user context.
 const DATE_TIME_TIMEZONES: { value: string; label: string }[] = [
@@ -1405,7 +1408,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             // Auto-fetch model list when an API key looks complete (length > 20)
             if (key.startsWith('api_key_') && typeof value === 'string' && value.length > 20) {
                 const provider = key.replace('api_key_', '');
-                const dynamicProviders = ['openai', 'anthropic', 'google', 'openrouter', 'deepseek'];
+                const dynamicProviders = ['veyllo', 'openai', 'anthropic', 'google', 'openrouter', 'deepseek'];
                 const prevKey = prev[key] || '';
                 // Only trigger when key changes from empty/short to long (not on every keystroke)
                 if (dynamicProviders.includes(provider) && prevKey.length <= 20) {
@@ -2214,9 +2217,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('provider', v)}
                                         options={[
                                             { value: 'local', label: tAi('localLlama') },
-                                            // First-party Veyllo API server — placeholder (disabled) until it ships
-                                            { value: 'veyllo', label: 'Veyllo', disabled: true },
-                                            ...PROVIDERS.map(p => ({ value: p.id, label: p.label }))
+                                            { value: 'veyllo', label: 'Veyllo' },
+                                            ...PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
                                         ]}
                                     />
                                 </Section>
@@ -2477,6 +2479,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             onChange={(v: string) => handleChange('subagent_provider', v)}
                                             options={[
                                                 { value: 'inherit', label: tAdvanced('sameAsMain') },
+                                                { value: 'veyllo', label: 'Veyllo' },
                                                 { value: 'openai', label: 'OpenAI' },
                                                 { value: 'anthropic', label: 'Anthropic' },
                                                 { value: 'deepseek', label: 'DeepSeek' },
@@ -2546,6 +2549,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         }}
                                         options={[
                                             { value: 'inherit', label: tAdvanced('sameAsMain') },
+                                            { value: 'veyllo', label: 'Veyllo' },
                                             { value: 'openai', label: 'OpenAI' },
                                             { value: 'anthropic', label: 'Anthropic' },
                                             { value: 'deepseek', label: 'DeepSeek' },

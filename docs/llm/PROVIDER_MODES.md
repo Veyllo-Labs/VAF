@@ -13,7 +13,7 @@ The gates:
 
 | Gate | Meaning | Set in |
 |------|---------|--------|
-| `self.provider` | `local` vs an API provider (`openai`/`anthropic`/`google`/`deepseek`/`openrouter`) | config `provider`; `agent.py.__init__` |
+| `self.provider` | `local` vs an API provider (`veyllo`/`openai`/`anthropic`/`google`/`deepseek`/`openrouter`) | config `provider`; `agent.py.__init__` |
 | `self.api_backend` / `self.use_server` / `self.llm` | the active backend (API / llama-server 8080 / in-process library) | `load_model()` (`agent.py`) |
 | `APIProvider.provider_name` | which API provider inside `api_backend.py` | `APIBackendManager` |
 | `self.is_gemma_local` / `self.model_mode` | local Gemma (any version) / `"gemma4"` \| `"gemma3n"` \| `None` | `agent.py.__init__` |
@@ -24,7 +24,7 @@ Backend selection itself is documented in [LLM_BACKEND_FACTS.md](LLM_BACKEND_FAC
 
 ## API providers
 
-All API providers go through `vaf/core/api_backend.py`. `openai`, `deepseek` and `openrouter` share the
+All API providers go through `vaf/core/api_backend.py`. `veyllo`, `openai`, `deepseek` and `openrouter` share the
 OpenAI-compatible `OpenAIProvider` (differing only by `base_url`); `anthropic` and `google` use their
 own SDK provider classes.
 
@@ -39,6 +39,7 @@ own SDK provider classes.
 | **Anthropic** | native Messages API (`anthropic` SDK). OpenAI tool history (`assistant.tool_calls` + `role:"tool"`) is converted to `tool_use`/`tool_result` content blocks; leading system messages merge into the top-level `system` and mid-run nudges become user turns; `temperature` is omitted when thinking is on or the model removed sampling (Opus 4.7+/Fable); adaptive thinking is surfaced as `<think>` (`anthropic_thinking`); the system prompt is prompt-cached (`anthropic_prompt_cache`); `stop_reason` refusal/pause_turn is handled; raw assistant blocks are replayed via the `_anthropic_blocks` history key so a thinking tool loop preserves signed thinking blocks | `AnthropicProvider` (`api_backend.py`), `_prepare_messages`/`chat_step` (`agent.py`) | [API_INTEGRATION.md](API_INTEGRATION.md) |
 | **Google (Gemini)** | native `google-genai` SDK (the deprecated `google-generativeai` package is no longer used). OpenAI tool history is converted to `function_call` / `function_response` parts; system consolidation as for Anthropic; `tool_choice` maps to `FunctionCallingConfig`; thinking is surfaced as `<think>` on Gemini 2.5/3.x (`google_thinking`); images use `Part.from_bytes` | `GoogleProvider` (`api_backend.py`) | [API_INTEGRATION.md](API_INTEGRATION.md) |
 | **OpenRouter** | OpenAI-compatible via `base_url`; uses dotted model ids (`anthropic/claude-sonnet-4.6`); **excluded** from the OpenAI reasoning-param gating because OpenRouter normalizes around `max_tokens` for every model; context window and model list are fetched live from `openrouter.ai/api/v1/models` | `OpenAIProvider` (base_url), `get_model_context_window` (`api_backend.py`) | [API_INTEGRATION.md](API_INTEGRATION.md) |
+| **Veyllo** | OpenAI-compatible via `base_url` = `https://api.veyllo.app/v1` (configurable via `veyllo_base_url`); `veyllo-chat` is multimodal, so one model serves both chat and image input — no separate vision provider is required when Veyllo is primary | `OpenAIProvider` (base_url), `api_backend.py` factory | [API_INTEGRATION.md](API_INTEGRATION.md) |
 | **All API** | per-provider default and fallback model lists come from one source — `Config.PROVIDER_MODELS` (`config.py`) — read by every call site and served to the web UI via `GET /api/provider-models`; a stale local GGUF `model` value falls back to `api_model_<provider>`; context window is resolved per model family (Claude/Gemini 1M, Haiku 4.5 200K), live-fetched for OpenRouter, else 128K | `config.py` `PROVIDER_MODELS`/`get_default_model`, `api_backend.py`, `config_routes.py` | [API_INTEGRATION.md](API_INTEGRATION.md) |
 | **All API / local (concurrency)** | concurrent multi-user execution is capped per provider — API providers up to `max_parallel_api_workers` (default 5) effective workers, `provider=local` to `max_parallel_local_workers` (default 2, clamped to the llama-server `--parallel` slots) to avoid VRAM exhaustion; default is 1 (serialized). 429/rate-limit retries (honoring `Retry-After`) apply to every provider | `headless_runner.py` (worker spawn), `api_backend.py` (`_with_retry`/`_is_retryable_error`) | [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md), [API_INTEGRATION.md](API_INTEGRATION.md) |
 

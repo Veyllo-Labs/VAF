@@ -84,6 +84,7 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
             "error": parsed.get("error"),
             "shared_with": entry.get("shared_with", ["*"]),
             "created_by": entry.get("created_by"),
+            "owner_scope_id": entry.get("owner_scope_id"),
             "scan": entry.get("scan"),
         })
     return out

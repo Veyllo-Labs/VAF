@@ -5285,6 +5285,28 @@ class Agent:
             if hasattr(self, 'prompt_manager'):
                 self.prompt_manager.activate_module("orchestrator")
 
+        # Skill management: when the message is about skills, force the self-service skill tools — but
+        # VERB-SCOPED so a turn only adds the relevant subset (stays well under router_max_tools). use_skill
+        # is added too so a just-created/edited skill can be loaded right after. The user-isolation (own
+        # skills only) is enforced inside each tool, not here.
+        if "skill" in u_lower or "fähigkeit" in u_lower:
+            def _force_skill_tools(*names):
+                for _n in names:
+                    if _n in self.tools:
+                        forced_tools.add(_n)
+            if any(kw in u_lower for kw in (
+                "create", "new skill", "erstelle", "neue fähigkeit",
+                "lerne", "learn", "as a skill", "als skill", "save as skill", "speichere als skill",
+            )):
+                _force_skill_tools("create_skill", "read_skill")
+            elif any(kw in u_lower for kw in ("edit", "update", "change", "modify", "ändere", "bearbeite")):
+                _force_skill_tools("update_skill", "read_skill", "list_skills")
+            elif any(kw in u_lower for kw in ("delete", "remove", "lösche", "entferne")):
+                _force_skill_tools("delete_skill", "list_skills")
+            else:
+                _force_skill_tools("list_skills", "read_skill")
+            _force_skill_tools("use_skill")
+
         # 1. Create a simplified list of tools
         tool_info = []
         for name, tool_instance in self.tools.items():
@@ -8999,6 +9021,11 @@ class Agent:
                 if name == "use_skill":
                     # Scope skill visibility to the calling user (None = admin).
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("list_skills", "read_skill", "create_skill", "update_skill", "delete_skill"):
+                    # Self-service skill management is user-isolated: list/read/create/edit/delete operate
+                    # on the caller's own (or visible) skills only. None scope = admin (sees/edits all).
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):

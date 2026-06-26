@@ -162,6 +162,26 @@ def is_skill_visible_to_user(skill_id: str, user_scope_id: Optional[str]) -> boo
     return skill_id in get_visible_skill_ids_for_user(user_scope_id)
 
 
+def can_user_edit_skill(skill_id: str, user_scope_id: Optional[str]) -> bool:
+    """Whether this user may edit/delete the skill (NOT the same as visibility).
+
+    - admin (user_scope_id is None, or equals the local-admin scope) -> may edit any skill.
+    - a real user -> only their OWN skill (entry.owner_scope_id == user_scope_id).
+    - legacy / admin-WebUI skills without an owner -> admin-only.
+    Returns False for an unknown skill id.
+    """
+    entry = get_skill_manifest_entry(skill_id)
+    if entry is None:
+        return False
+    from vaf.core.config import get_local_admin_scope_id
+    if user_scope_id is None or str(user_scope_id) == str(get_local_admin_scope_id()):
+        return True
+    owner = entry.get("owner_scope_id")
+    if owner is None:
+        return False
+    return str(owner) == str(user_scope_id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CRUD  (all admin-only — callers must enforce)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,11 +191,18 @@ def register_skill(
     created_by: str,
     shared_with: Optional[List[str]] = None,
     scan: Optional[Dict[str, Any]] = None,
+    owner_scope_id: Optional[str] = None,
 ) -> None:
     """Add or overwrite a skill entry in the manifest. Call after writing the folder.
 
     `scan` (optional) is the security-scanner result; a compact {score, level,
     count} is persisted so the UI can badge risky skills.
+
+    `owner_scope_id` (optional) records WHICH user (scope id) owns this skill, so the
+    agent's self-service skill tools can let a user edit/delete only their own skills
+    (see `can_user_edit_skill`). Default None preserves an existing owner on re-register
+    and leaves admin/WebUI-created skills without an owner (admin-only edit) — the
+    existing admin path passes no owner and is unchanged.
     """
     if shared_with is None:
         shared_with = ["*"]
@@ -189,6 +216,9 @@ def register_skill(
             "created_at": existing.get("created_at", now),
             "updated_at": now,
             "shared_with": shared_with,
+            # Preserve an existing owner when the caller passes None (e.g. an admin
+            # WebUI update of a user-owned skill must not strip ownership).
+            "owner_scope_id": owner_scope_id if owner_scope_id is not None else existing.get("owner_scope_id"),
         }
         if scan is not None:
             entry["scan"] = {

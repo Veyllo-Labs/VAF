@@ -103,7 +103,7 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
 
 ## Configuration
 
-Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker**):
+Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinker (background)**):
 
 | Key | Default | Purpose |
 |-----|---------|---------|
@@ -135,7 +135,7 @@ Key options (in `config.json` or via Web UI **Settings → Advanced → Thinker*
 | `thinking_proactive_min_runs` | `6` | **Deprecated** — rate-limiting no longer silences runs; repeats are prevented by the recent/declined dedup prompts. Unused. |
 | `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
 
-**Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → Advanced → Thinker (background)**.
+**Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → AI & Model → Thinker (background)**.
 
 **DeepSeek auto routing:** When the thinking provider resolves to DeepSeek with the `deepseek-auto` model, the run is treated as a background task and routes to `deepseek-v4-pro` (the best model), matching the "background task = pro" design. `_run_thinking_for_user` sets `VAF_BACKGROUND_PRO=1` (a pro-context trigger for the `deepseek-auto` resolver in `api_backend.py`) for the duration of the run and clears it in its `finally`. A dedicated flag is used rather than `VAF_IN_WORKFLOW_TERMINAL` (which would make the thinking loop **skip** the run) or `VAF_IN_AUTOMATION` (which carries other automation semantics).
 

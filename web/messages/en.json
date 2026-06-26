@@ -565,6 +565,30 @@
     "userIdentity": "User Identity"
   },
   "modals": {
+    "announcement": {
+      "intro": {
+        "title": "VAF is in open alpha",
+        "lead": "Glad you’re here. VAF isn’t finished yet — we’re testing in the open. Please keep in mind:",
+        "point1": "Much is <b>still in development</b> and can be <b>buggy</b>.",
+        "point2": "Some features <b>may be removed</b>, others <b>will be added</b>.",
+        "point3": "<b>Nothing is final</b> — behavior and the UI can change at any time.",
+        "outro": "Go easy on the rough edges — your feedback makes VAF better.",
+        "button": "Got it – let’s go",
+        "note": "We’ll only show this once."
+      },
+      "changelog": {
+        "title": "What’s new in {version}",
+        "lead": "A few things have changed since your last visit.",
+        "button": "Got it",
+        "note": "You only see this when there’s something new."
+      },
+      "sections": {
+        "new": "New",
+        "improved": "Improved",
+        "fixed": "Fixed",
+        "removed": "Removed"
+      }
+    },
     "tools": {
       "title": "Available Tools",
       "modulesInstalled": "{count} modules installed",

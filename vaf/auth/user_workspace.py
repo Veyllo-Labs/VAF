@@ -76,6 +76,7 @@ class UserWorkspace:
                 "timezone": None,
                 "date_format": None,
                 "time_format": None,
+                "last_seen_announcement_version": None,
                 "change_log": [],
             }
             self.save_user_identity(default_user)
@@ -138,6 +139,7 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
             "timezone": None,
             "date_format": None,
             "time_format": None,
+            "last_seen_announcement_version": None,
             "change_log": [],
         }
         try:
@@ -170,6 +172,9 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
                 else:
                     val = data[key]
                     data[key] = (val if isinstance(val, str) and val.strip() else None) or defaults[key]
+            # Backfill so older identity files heal on read (the announcement modal reads/writes this).
+            if "last_seen_announcement_version" not in data:
+                data["last_seen_announcement_version"] = defaults["last_seen_announcement_version"]
 
             # One-time migration: local admin used to use username "Local Admin"; data may still be there
             local_admin_username = Config.get("local_admin_username", "admin")

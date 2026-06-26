@@ -836,9 +836,11 @@ def check_activity_loop(update_icon_callback):
         except Exception:
             thinking_defer = False
 
-        # Check provider type - cloud providers don't need local model loading
+        # Check provider type - any non-local provider is an API/cloud provider and needs no local model.
+        # Kept provider-agnostic on purpose: a hardcoded allowlist used to omit newer providers (e.g.
+        # `veyllo`), which made the tray load a phantom local model while in API mode.
         provider = Config.get("provider", "local")
-        is_cloud_provider = provider in ("openai", "anthropic", "google", "openrouter", "mistral", "groq", "deepseek")
+        is_cloud_provider = provider != "local"
 
         # Provider switched at runtime -> manage the local model directly. The steady-state unload branch
         # below is gated on `not is_cloud_provider`, so a model loaded BEFORE a switch to a cloud/API

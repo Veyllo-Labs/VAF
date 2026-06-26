@@ -120,7 +120,7 @@ class Config:
         # Vision Model Fallback — used when the primary provider does not support image input.
         # Example: primary = deepseek (no vision) → vision_provider = google / openai / anthropic.
         # Leave empty to keep current behavior (strip images + show error to user).
-        "vision_provider": "",   # e.g. "google", "openai", "anthropic", "openrouter"
+        "vision_provider": "",   # e.g. "veyllo", "google", "openai", "anthropic", "openrouter"
         "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-4o" — leave empty for provider default
         # Image downscaling before send: full-res photos make providers 500 and waste tokens.
         # Only images whose longest edge exceeds max_edge are shrunk (small images untouched).

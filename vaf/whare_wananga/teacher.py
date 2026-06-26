@@ -31,7 +31,7 @@ _OVERRIDE_SETTING = "whare_wananga_teacher_model"   # optional explicit "provide
 _COOLDOWN = 24 * 3600.0
 _MAX_ROUNDS = 3
 _MAX_TOKENS = 8000
-_PROVIDERS = ("anthropic", "openai", "google", "openrouter", "deepseek")
+_PROVIDERS = ("veyllo", "anthropic", "openai", "google", "openrouter", "deepseek")
 
 # Coarse capability tiers over model FAMILIES (higher = stronger). Pragmatic substring match on the
 # configured model id; small/fast variants are demoted regardless of family. Needs upkeep as models

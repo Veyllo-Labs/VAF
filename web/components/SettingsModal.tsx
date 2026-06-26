@@ -1928,8 +1928,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         value={localConfig.api_key_veyllo || ''}
                                         onChange={(v: string) => handleChange('api_key_veyllo', v)}
                                         type="password"
-                                        placeholder="Veyllo API key (server coming soon)"
-                                        link="https://veyllo.io"
+                                        placeholder="vaf_live_…"
+                                        link="https://veyllo.app"
                                     />
                                     <Input
                                         label={tGeneral('openaiKey')}
@@ -2424,7 +2424,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 }}
                                                 options={[
                                                     { value: '', label: tAi('visionNone') },
-                                                    ...VISION_PROVIDERS.map(p => ({ value: p.id, label: p.label }))
+                                                    { value: 'veyllo', label: 'Veyllo' },
+                                                    ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
                                                 ]}
                                             />
                                             {selectedVisionProvider && (

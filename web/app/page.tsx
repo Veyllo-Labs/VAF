@@ -22,6 +22,9 @@ import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActio
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
+import AnnouncementModal from '@/components/AnnouncementModal';
+import { formatVersion } from '@/lib/version';
+import { decideAnnouncement, acknowledgedVersion, latestEntry, type AnnouncementKind } from '@/lib/changelog';
 import SubAgentWindow from '@/components/SubAgentWindow';
 import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
@@ -1083,11 +1086,21 @@ function VAFDashboardContent() {
                 setUserTimeFormat(tf === '12h' ? '12h' : '24h');
                 const name = data?.user_identity?.name || data?.identity?.name || null;
                 setUserName(name || null);
+                setLastSeenVersion(data?.user_identity?.last_seen_announcement_version ?? null);
+                setPersonaLoaded(true);
             })
             .catch(() => setUserTimeFormat('24h'));
     }, []);
 
     useEffect(() => { fetchUserTimeFormat(); }, [fetchUserTimeFormat]);
+
+    // App version — single source of truth: backend /api/version -> vaf/version.py. Drives the badge.
+    useEffect(() => {
+        fetch(getApiBase() + '/api/version', { credentials: 'include' })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => { if (data?.version) setRawVersion(String(data.version)); })
+            .catch(() => {});
+    }, []);
 
     const handleSettingsClose = useCallback(() => {
         setSettingsInitialTab(null);
@@ -1287,6 +1300,11 @@ function VAFDashboardContent() {
     const [automationTodos, setAutomationTodos] = useState<AutomationTodo[]>([]);
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+    // Announcement modal: first-run Open-Alpha notice, reused as a per-version "what's new".
+    const [announcement, setAnnouncement] = useState<AnnouncementKind>(null);
+    const [rawVersion, setRawVersion] = useState<string | null>(null);
+    const [lastSeenVersion, setLastSeenVersion] = useState<string | null>(null);
+    const [personaLoaded, setPersonaLoaded] = useState(false);
     const [gateRequest, setGateRequest] = useState<{ tool: string; cwd: string; reason: string; args_preview: string } | null>(null);
     // The main agent avatar briefly FLASHES a tool's outcome (success / error); a pending risky-tool
     // confirmation (gateRequest) shows `permission`. The flash auto-clears after ~one cycle so we
@@ -4055,6 +4073,27 @@ function VAFDashboardContent() {
             }
         }
     }, [isAuthenticated, authChecking, searchParams, ws]);
+
+    const handleAnnouncementClose = useCallback(() => {
+        const acked = acknowledgedVersion(rawVersion);
+        setLastSeenVersion(acked || null);  // local update so the decision effect won't re-fire
+        setAnnouncement(null);
+        if (acked) {
+            fetch(getApiBase() + '/api/user/user-identity', {
+                method: 'PUT', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ last_seen_announcement_version: acked }),
+            }).catch(() => {});
+        }
+    }, [rawVersion]);
+
+    // First-run Open-Alpha notice (or a per-version "what's new"). Gated on persona AND version both
+    // loaded so it never flashes; the per-user last_seen_announcement_version drives show-once.
+    useEffect(() => {
+        if (!isAuthenticated || authChecking || !personaLoaded || !rawVersion || announcement) return;
+        const kind = decideAnnouncement(lastSeenVersion, rawVersion);
+        if (kind) setAnnouncement(kind);
+    }, [isAuthenticated, authChecking, personaLoaded, rawVersion, lastSeenVersion, announcement]);
 
     useEffect(() => {
         if (ws && status === 'connected' && input.length >= 2) {
@@ -7283,6 +7322,14 @@ function VAFDashboardContent() {
                 notifications={notifications}
                 onFetchComplete={setNotifications}
                 userTimeFormat={userTimeFormat}
+            />
+            <AnnouncementModal
+                isOpen={announcement !== null}
+                onClose={handleAnnouncementClose}
+                variant={announcement === 'changelog' ? 'changelog' : 'intro'}
+                versionDisplay={formatVersion(rawVersion).display}
+                channel={formatVersion(rawVersion).channel}
+                entry={announcement === 'changelog' ? latestEntry() : null}
             />
             {editingAutomationFromCalendar && (
                 <CreateAutomationPopup

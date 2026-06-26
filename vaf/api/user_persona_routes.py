@@ -50,6 +50,7 @@ class UserIdentityUpdate(BaseModel):
     timezone: Optional[str] = None  # IANA e.g. Europe/Berlin
     date_format: Optional[str] = None  # e.g. dd.mm.yyyy
     time_format: Optional[str] = None  # "24h" | "12h"
+    last_seen_announcement_version: Optional[str] = None  # major.minor the user last acknowledged (announcement modal)
 
 class UserIdentityEntryUpdate(BaseModel):
     """Update or delete a specific entry in a list field."""
@@ -129,8 +130,13 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
             if current.get(dt_key) != val:
                 changes.append(dt_key)
                 current[dt_key] = val
+    # System field: the announcement version the user acknowledged. Persist it SILENTLY — it is
+    # bookkeeping, not a user-facing profile edit, so it must never land in change_log.
+    if "last_seen_announcement_version" in full_dict and full_dict["last_seen_announcement_version"] is not None:
+        current["last_seen_announcement_version"] = str(full_dict["last_seen_announcement_version"]).strip() or None
     for key, value in update_dict.items():
-        if key in ("main_messenger", "city", "country", "timezone", "date_format", "time_format"):
+        if key in ("main_messenger", "city", "country", "timezone", "date_format", "time_format",
+                   "last_seen_announcement_version"):
             continue
         if current.get(key) != value:
             changes.append(key)

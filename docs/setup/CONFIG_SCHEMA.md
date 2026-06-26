@@ -33,7 +33,7 @@ Keys marked ★ are the ones most embedders need; everything else has a sensible
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `provider` ★ | `"local"` | LLM provider: `local`, `openai`, `anthropic`, `deepseek`, `google`, `openrouter`. |
+| `provider` ★ | `"local"` | LLM provider: `local`, `veyllo`, `openai`, `anthropic`, `deepseek`, `google`, `openrouter`. |
 | `model` ★ | `"auto"` | Local GGUF model. `"auto"` = VRAM-adaptive default, or set `"repo/file.gguf"`. Ignored for API providers. |
 | `api_key_<provider>` ★ | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; Base64 on disk. |
 | `api_model_<provider>` ★ | per provider (see below) | Model name for the API provider (e.g. `api_model_openai`). |
@@ -47,6 +47,7 @@ Default API models (from `Config.PROVIDER_MODELS`):
 
 | Provider | `api_model_*` default |
 |----------|-----------------------|
+| veyllo | `veyllo-chat` |
 | openai | `gpt-4o` |
 | anthropic | `claude-sonnet-4-6` |
 | deepseek | `deepseek-v4-flash` |
@@ -71,7 +72,8 @@ print(agent.run("In one sentence, what is Python?"))
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `api_key_veyllo` | `""` | Reserved (Veyllo API server, future). |
+| `api_key_veyllo` | `""` | API key for the first-party Veyllo API. |
+| `veyllo_base_url` | `"https://api.veyllo.app/v1"` | Veyllo API base URL (OpenAI-compatible wire protocol); override for staging or self-host. |
 | `vision_provider` | `""` | Fallback provider for image input when the primary has no vision (e.g. `google`). Empty = strip images. |
 | `vision_model` | `""` | Model for the vision fallback; empty = provider default. |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |

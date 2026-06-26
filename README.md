@@ -241,7 +241,7 @@ Key config options (`config.json`):
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `provider` | `local` | `local`, `openai`, `anthropic`, `google`, `deepseek`, `openrouter` |
+| `provider` | `local` | `local`, `veyllo`, `openai`, `anthropic`, `google`, `deepseek`, `openrouter` |
 | `n_ctx` | `32768` | Context window (minimum 32 768 for tool use) |
 | `gpu_layers` | `99` | Layers to offload to GPU (`0` = CPU only) |
 | `web_ui_enabled` | `true` | Start web UI alongside the agent |

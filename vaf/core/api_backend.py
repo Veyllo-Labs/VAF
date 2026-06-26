@@ -889,6 +889,9 @@ class APIBackendManager:
             return OpenAIProvider("deepseek", self.api_key, base_url="https://api.deepseek.com/v1")
         elif self.provider_name == "openrouter":
             return OpenAIProvider("openrouter", self.api_key, base_url="https://openrouter.ai/api/v1")
+        elif self.provider_name == "veyllo":
+            # First-party Veyllo API (OpenAI-compatible). Base URL is configurable for staging/self-host.
+            return OpenAIProvider("veyllo", self.api_key, base_url=self.config.get("veyllo_base_url") or "https://api.veyllo.app/v1")
         else:
             raise ValueError(f"Unsupported provider: {self.provider_name}")
 
@@ -1130,6 +1133,12 @@ class APIBackendManager:
                                  headers={"Authorization": f"Bearer {key}"}, timeout=10)
                 if r.status_code == 200:
                     return [m["id"] for m in r.json().get("data", []) if m.get("id")][:50]
+            elif provider == "veyllo":
+                base = (Config.load().get("veyllo_base_url") or "https://api.veyllo.app/v1").rstrip("/")
+                r = requests.get(f"{base}/models",
+                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                if r.status_code == 200:
+                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
         except Exception:
             return []
         return []

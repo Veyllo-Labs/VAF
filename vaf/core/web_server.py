@@ -3356,6 +3356,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 if resp.status_code == 200:
                                     data = resp.json()
                                     models = [m["id"] for m in data.get("data", [])][:50]  # Limit
+                        elif provider == "veyllo" and api_key:
+                            # First-party Veyllo API (OpenAI-compatible /v1/models). Base URL is configurable.
+                            veyllo_base = (Config.load().get("veyllo_base_url") or "https://api.veyllo.app/v1").rstrip("/")
+                            import httpx
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.get(
+                                    f"{veyllo_base}/models",
+                                    headers={"Authorization": f"Bearer {api_key}"},
+                                    timeout=10.0
+                                )
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    models = [m["id"] for m in data.get("data", []) if m.get("id")]
                     except Exception as e:
                         log("WebServer", f"Failed to fetch models for {provider}: {e}")
                     

@@ -41,6 +41,12 @@ PROVIDER_MODELS: dict[str, dict] = {
         "default": "anthropic/claude-sonnet-4.6",
         "fallback": ["anthropic/claude-sonnet-4.6", "openai/gpt-4o", "google/gemini-2.5-flash"],
     },
+    # First-party Veyllo API (OpenAI-compatible). `veyllo-chat` is multimodal — it handles both
+    # text chat and image input, so the same provider/model serves chat and vision.
+    "veyllo": {
+        "default": "veyllo-chat",
+        "fallback": ["veyllo-chat"],
+    },
 }
 
 
@@ -84,9 +90,11 @@ class Config:
 
 
         # AI Provider Settings
-        # Options: "local", "openai", "anthropic", "deepseek", "google", "openrouter"
+        # Options: "local", "veyllo", "openai", "anthropic", "deepseek", "google", "openrouter"
         "provider": "local",
-        
+        # Base URL for the Veyllo API (OpenAI-compatible). Overridable for staging/self-host.
+        "veyllo_base_url": "https://api.veyllo.app/v1",
+
         # API Keys (Base64 encoded for basic obfuscation - NOT encryption!)
         # For production, consider using system keyring for API keys and tokens.
         "api_key_veyllo": "",  # Veyllo API server coming later
@@ -102,6 +110,7 @@ class Config:
         
         # API Model Selection per Provider
         # Defaults derive from PROVIDER_MODELS (single source of truth — see top of file).
+        "api_model_veyllo": PROVIDER_MODELS["veyllo"]["default"],
         "api_model_openai": PROVIDER_MODELS["openai"]["default"],
         "api_model_anthropic": PROVIDER_MODELS["anthropic"]["default"],
         "api_model_deepseek": PROVIDER_MODELS["deepseek"]["default"],  # deepseek-chat deprecated 2026-07-24

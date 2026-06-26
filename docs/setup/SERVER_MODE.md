@@ -139,7 +139,7 @@ The requested count is **clamped per provider**, so it is safe to set high:
 
 | Provider | Effective workers | Cap key |
 |----------|-------------------|---------|
-| API (openai/anthropic/deepseek/google/openrouter) | `min(requested, max_parallel_api_workers)` — default 5 | `max_parallel_api_workers` |
+| API (veyllo/openai/anthropic/deepseek/google/openrouter) | `min(requested, max_parallel_api_workers)` — default 5 | `max_parallel_api_workers` |
 | `local` (one shared llama-server) | `min(requested, max_parallel_local_workers, n_parallel slots)` — default 2 | `max_parallel_local_workers` |
 
 `local` is a single llama-server process, so its concurrency is bounded by its `--parallel` decode slots and

@@ -16,6 +16,7 @@ When you configure an API provider, VAF automatically:
 
 | Provider | Models Fetched | API Endpoint |
 |----------|---------------|--------------|
+| **Veyllo** | ✅ Dynamic | `GET /v1/models` |
 | **OpenAI** | ✅ Dynamic | `GET /v1/models` |
 | **Anthropic** | ✅ Dynamic (Web UI path) | `GET /v1/models` |
 | **Google** | ✅ Dynamic | `GET /v1beta/models` |
@@ -251,13 +252,13 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 
 | Setting | Description |
 |---------|-------------|
-| `vision_provider` | Provider to use for vision tasks (`openai`, `anthropic`, `google`, `openrouter`). Leave empty to show an error when images are attached. |
+| `vision_provider` | Provider to use for vision tasks (`veyllo`, `openai`, `anthropic`, `google`, `openrouter`). Leave empty to show an error when images are attached. |
 | `vision_model` | Specific model for vision. Leave empty to use the provider's default. |
 
 ### How it works
 
 1. User sends a message with an image attached.
-2. If the primary provider supports vision (Anthropic, Google, OpenAI with `gpt-4o`, etc.) → image is processed normally.
+2. If the primary provider supports vision (Veyllo with `veyllo-chat`, Anthropic, Google, OpenAI with `gpt-4o`, etc.) → image is processed normally.
 3. If the primary provider **does not** support vision (e.g. DeepSeek) and a `vision_provider` is configured:
    - VAF makes a short auxiliary call to the vision provider to analyse the image.
    - The description is injected into the message as `[Vision (provider/model): ...]`.

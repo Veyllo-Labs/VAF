@@ -52,6 +52,20 @@ jobs:
         # Exit-zero treats all other errors as warnings
         ruff check . --exit-zero --exclude vaf/tools/coder_templates
 
+    - name: Lint install scripts (bash)
+      if: runner.os != 'Windows'
+      run: bash -n install.sh packaging/install/bootstrap.sh run_vaf.sh start_vaf.sh
+
+    - name: Parse install scripts (PowerShell)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        foreach ($f in 'install.ps1','packaging/install/bootstrap.ps1') {
+          $e = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$e)
+          if ($e) { $e; exit 1 }
+        }
+
     - name: Check doc links
       # Fail the build if any relative Markdown link points at a missing file.
       run: python scripts/check_doc_links.py

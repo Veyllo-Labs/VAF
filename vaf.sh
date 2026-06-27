@@ -18,6 +18,11 @@ PYTHON="$DIR/venv/bin/python3"
 DOCKER="/usr/bin/docker"
 COMPOSE_FILE="$DIR/docker-compose.memory.yml"
 NODE_DIR="$DIR/web"
+# Backend health probe. The main API port serves plain HTTP normally, but HTTPS
+# when local_network_tls_enabled is set, so backend_is_up() tries both schemes.
+# Override the port via VAF_BACKEND_PORT if it was customised in config.json.
+BACKEND_PORT="${VAF_BACKEND_PORT:-8001}"
+BACKEND_HEALTH_PATH="/api/auth/needs-setup"
 
 # Colors
 GREEN='\033[0;32m'
@@ -31,6 +36,25 @@ warn() { echo -e "  ${YELLOW}[!!]${NC}  $1"; }
 err()  { echo -e "  ${RED}[ERR]${NC} $1"; }
 info() { echo -e "  ${CYAN}[..]${NC}  $1"; }
 
+# Is the VAF backend answering?  Probes the live backend (the same health
+# endpoint cmd_start waits on) rather than the .vaf.pid file, which is only
+# written by 'vaf.sh start' — NOT by the tray / native-wrapper launch path.
+# This makes status + the start guard path-agnostic.
+backend_is_up() {
+    if command -v curl >/dev/null 2>&1; then
+        # Normal mode serves plain HTTP; TLS mode (local_network_tls_enabled)
+        # serves HTTPS with a self-signed local cert (-k). A 2xx from the
+        # unauthenticated needs-setup endpoint on either scheme = backend alive.
+        curl -sf  --max-time 2 "http://127.0.0.1:${BACKEND_PORT}${BACKEND_HEALTH_PATH}"  >/dev/null 2>&1 && return 0
+        curl -skf --max-time 2 "https://127.0.0.1:${BACKEND_PORT}${BACKEND_HEALTH_PATH}" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    # Fallback when curl is missing: is anything listening on the API port?
+    # Scheme-agnostic (so it also covers TLS mode), but only proves a listener
+    # exists, not that the backend is actually healthy.
+    ss -tlnp 2>/dev/null | grep -q ":${BACKEND_PORT} "
+}
+
 # ============================================================
 # STATUS
 # ============================================================
@@ -39,17 +63,24 @@ cmd_status() {
     echo "=== VAF Status ==="
     echo ""
 
-    # VAF Python process
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if kill -0 "$PID" 2>/dev/null; then
-            ok "VAF is running (PID $PID)"
+    # VAF backend — probe the live backend on :8001 so we report correctly no
+    # matter how VAF was started.  The .vaf.pid file is only written by
+    # 'vaf.sh start', so it is treated as secondary info, not the source of truth.
+    if backend_is_up; then
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            ok "VAF is running (PID $(cat "$PID_FILE"))"
         else
-            warn "PID file found but process is gone (PID $PID) — cleaning up..."
-            rm -f "$PID_FILE"
+            [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
+            ok "VAF is running (backend on :${BACKEND_PORT} — started outside vaf.sh, no PID file)"
         fi
     else
-        warn "VAF is not running"
+        # Backend not answering — clean up any stale PID file and report down.
+        if [ -f "$PID_FILE" ]; then
+            warn "VAF is not running (stale PID file removed)"
+            rm -f "$PID_FILE"
+        else
+            warn "VAF is not running"
+        fi
     fi
 
     # llama-server
@@ -90,16 +121,20 @@ cmd_start() {
     echo "=== Starting VAF ==="
     echo ""
 
-    # Check if already running
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if kill -0 "$PID" 2>/dev/null; then
-            warn "VAF is already running (PID $PID)"
-            exit 0
+    # Check if already running — probe the live backend first so we also catch
+    # an instance started via the tray / native wrapper (which writes no
+    # .vaf.pid).  Order: health (:8001) → PID file → only then spawn.  This
+    # prevents a second instance fighting over port 8001/3000.
+    if backend_is_up; then
+        if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+            warn "VAF is already running (PID $(cat "$PID_FILE"))"
         else
-            rm -f "$PID_FILE"
+            warn "VAF is already running (backend on :${BACKEND_PORT} — started outside vaf.sh)"
         fi
+        exit 0
     fi
+    # Backend not answering — drop any stale PID file before starting.
+    [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
 
     # Check venv
     if [ ! -f "$PYTHON" ]; then
@@ -144,7 +179,7 @@ cmd_start() {
     PID=$!
     echo "$PID" > "$PID_FILE"
 
-    # Wait up to 15 seconds for backend to come up on :8001
+    # Wait up to 15 seconds for backend to come up on the API port
     info "Waiting for backend to start..."
     for i in $(seq 1 15); do
         sleep 1
@@ -154,8 +189,8 @@ cmd_start() {
             rm -f "$PID_FILE"
             exit 1
         fi
-        if curl -sf http://127.0.0.1:8001/api/auth/needs-setup >/dev/null 2>&1; then
-            ok "VAF started (PID $PID) — backend on :8001"
+        if backend_is_up; then
+            ok "VAF started (PID $PID) — backend on :${BACKEND_PORT}"
             break
         fi
         if [ "$i" -eq 15 ]; then

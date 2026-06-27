@@ -92,7 +92,8 @@ Use `vaf.sh` in the project root:
 
 **start:**
 - Checks if Docker containers are running, starts them if not
-- Starts VAF in the background (PID stored in `.vaf.pid`)
+- If VAF is already running — including an instance started via the tray, which writes no `.vaf.pid` — reports it and exits without starting a second instance
+- Otherwise starts VAF in the background (PID stored in `.vaf.pid`)
 - Log: `logs/vaf_run.log`
 
 **stop:**
@@ -103,9 +104,12 @@ Use `vaf.sh` in the project root:
 - Fallback: SIGKILL if process does not respond
 
 **status:**
-- Shows whether VAF and llama-server are running
-- Shows status of all Docker containers
-- Warns with `[!!]` if any container is `unhealthy`
+- Reports whether VAF is running by probing the backend health endpoint, so it is correct no matter how VAF was started — directly, via the tray, or via `vaf.sh start` — even when no `.vaf.pid` file exists
+- Works in both plain-HTTP and TLS mode (`local_network_tls_enabled`); the `.vaf.pid` file is only used as secondary detail
+- Shows whether llama-server is running
+- Shows status of all Docker containers, warning with `[!!]` if any container is `unhealthy`
+
+> If VAF was started outside `vaf.sh` (the tray writes no `.vaf.pid`), `status` still detects it via the backend and notes `started outside vaf.sh`. Override the probed port with `VAF_BACKEND_PORT` if you changed `local_network_port` in `config.json`.
 
 ### Docker containers (standalone)
 

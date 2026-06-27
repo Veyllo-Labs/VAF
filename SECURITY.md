@@ -2,11 +2,13 @@
 
 VAF is a powerful AI automation framework designed for **local and private network use**. Because it gives an LLM (Large Language Model) the ability to interact with your filesystem, execute code, and access your connected accounts, it carries significant security risks if misconfigured.
 
+> **Status: early alpha.** VAF is under active development — expect breaking changes, rough edges, and incomplete hardening. Use it for **private / internal** purposes only. Do **not** expose the login, Web UI, or API to the public internet, and do not rely on it for production or with data you cannot afford to lose. The "no public web hosting" rule below is not optional.
+
 ---
 
 ## 🛑 CRITICAL WARNING: NO PUBLIC WEB HOSTING
 
-**NEVER host the VAF Web UI or API directly on the public internet.**
+**NEVER host the VAF Web UI directly on the public internet.**
 
 VAF is not designed to be a public-facing web application. Even with network mode and authentication enabled, exposing this software to the open web puts your entire machine and all connected accounts at extreme risk.
 
@@ -83,13 +85,13 @@ Dependencies are handled at one of three tiers based on risk:
 **`schedule` decision:** `schedule` is pinned in `requirements.lock` with a SHA-256 hash and is never updated automatically. The stdlib replacement would provide identical security at the cost of ~200 lines of datetime arithmetic — not worth the maintenance burden. Current pinned version: `1.2.2`.
 
 ### Pinned lockfile
-`requirements.lock` pins every dependency (direct and transitive) to an exact version with SHA-256 hashes. A compromised new version on PyPI cannot be installed silently:
+`requirements.lock` pins every dependency (direct and transitive) to an exact version with SHA-256 hashes, so a compromised new version on PyPI cannot be installed silently. For a hardened install, use it explicitly:
 
 ```bash
 pip install --require-hashes -r requirements.lock
 ```
 
-The lockfile is regenerated intentionally with `pip-compile --generate-hashes` — never via an automated process.
+**Honest caveat:** the default installer (`install.sh` / `install.ps1`) and `vaf update` install from `requirements.txt` (version ranges, no hashes) for portability across platforms and Python versions — so the hash-pinned protection above is **opt-in**, not the default path. On a trust-sensitive host, install from the lockfile yourself. The lockfile is regenerated intentionally with `pip-compile --generate-hashes` — never via an automated process.
 
 ### Updating dependencies
 When a dependency needs to be updated:
@@ -97,6 +99,9 @@ When a dependency needs to be updated:
 2. Run `pip-compile --generate-hashes --allow-unsafe --output-file requirements.lock requirements.txt`
 3. Review the diff in `requirements.lock` before installing
 4. For vendored packages: copy the new source, verify the SHA-256, update the hash comment in the consuming file
+
+### Installer downloads
+The one-click installer/bootstrap provisions toolchain prerequisites by downloading them from their official vendors over HTTPS **when missing**: `uv` (astral.sh), a portable Node.js (nodejs.org), and on Windows a portable Git/MinGit (git-for-windows). These are fetched at install time, not bundled, and are **not checksum-pinned by VAF** — a deliberate trade-off (the same model comparable agent installers use). On a trust-sensitive host, install these prerequisites yourself first so the installer uses what is already present.
 
 ---
 

@@ -53,8 +53,8 @@ If Docker is **not installed** or **cannot be started**:
 - This is intentional — we do not compromise on security
 
 To execute code, you must:
-1. Install Docker Desktop from https://docker.com
-2. Start Docker Desktop
+1. Install a Docker runtime — Docker Desktop (<https://docker.com>), or Docker Engine / Colima / Podman
+2. Start the runtime so the daemon is reachable (e.g. `colima start`, or open Docker Desktop)
 3. Re-run your code request
 
 ---
@@ -187,12 +187,13 @@ The sandbox container connects back to the host via `host.docker.internal` on al
 ## Troubleshooting
 
 **Error: "Docker is not installed"**
-- Install Docker Desktop from https://docker.com
-- Re-run the VAF installer: `.\install.bat` (Windows) or `./install.sh` (Linux/macOS)
+- Install a Docker runtime: Docker Desktop (<https://docker.com>), or Docker Engine / Colima / Podman
+  (the VAF installer detects an existing runtime but does not install one)
+- Then re-run the request (no reinstall needed)
 
 **Error: "Docker Daemon is not running"**
-- Open Docker Desktop manually
-- Ensure you have accepted the Docker Desktop Terms of Service (common first-run issue)
+- Start the runtime (open Docker Desktop, or `colima start`)
+- Docker Desktop first-run: accept the Terms of Service
 - Linux: `sudo systemctl start docker`
 
 **Error: "Image not found"**

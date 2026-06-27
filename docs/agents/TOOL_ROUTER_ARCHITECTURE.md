@@ -224,7 +224,7 @@ ToolBridgeServer (random port, daemon)  ←── vaf_tools.call("web_search", �
 
 | OS | Bridge address |
 |---|---|
-| All | `host.docker.internal` (Docker Desktop on Mac/Win; `extra_hosts: host-gateway` injection on Linux via `docker-compose.memory.yml`) |
+| All | `host.docker.internal` (built in on Docker Desktop / Colima on Mac/Win; `extra_hosts: host-gateway` injection on Linux via `docker-compose.memory.yml`) |
 
 ---
 

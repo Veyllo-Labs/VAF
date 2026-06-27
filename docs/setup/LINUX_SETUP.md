@@ -6,6 +6,12 @@ Supported distributions: **OpenSUSE**, **Fedora**, **Ubuntu/Debian**, **Arch Lin
 
 ## Installation
 
+The automated installer ([install.sh](../../install.sh)) is the recommended path. It installs the
+build/audio/desktop system packages (step 1), provisions Python via [uv](https://docs.astral.sh/uv/)
+(no system Python required), downloads a portable Node into `~/.vaf/node` if Node is missing, and
+**detects** an existing Docker runtime — it does not install Docker. Step 1's package lists are for
+the manual path (step 4), or if you prefer to install them ahead of time.
+
 ### 1. System Packages
 
 **OpenSUSE (zypper):**
@@ -38,7 +44,10 @@ sudo pacman -S python-gobject webkit2gtk
 
 > **Note:** The WebKitGTK packages are only needed for the native desktop window. If they are missing, VAF falls back to opening the Web UI in your default browser instead.
 
-### 2. Enable Docker
+### 2. Enable Docker *(optional — memory/RAG + code sandbox only)*
+
+VAF runs without Docker (long-term memory is then off). To enable it, set up a runtime — the
+installer detects an existing one and does not install Docker for you:
 
 ```bash
 sudo systemctl enable --now docker

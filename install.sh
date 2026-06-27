@@ -196,6 +196,7 @@ print_step "Checking Python Installation..."
 
 PYTHON_CMD=""
 PYTHON_VERSION=""
+USE_UV=false
 
 # Try python3 first, then python
 for cmd in python3 python; do
@@ -209,19 +210,26 @@ for cmd in python3 python; do
     fi
 done
 
-if [[ -n "$PYTHON_CMD" ]]; then
+# Prefer uv: it provisions Python without sudo, so a bare machine needs nothing
+# pre-installed. Install uv when neither a suitable Python nor uv is present.
+if [[ -z "$PYTHON_CMD" ]] && ! command -v uv &> /dev/null; then
+    print_warning "No suitable Python found - installing uv (provisions Python, no sudo)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null || print_warning "uv install failed"
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+if command -v uv &> /dev/null; then
+    USE_UV=true
+    print_success "Using uv to manage Python ($(command -v uv))"
+elif [[ -n "$PYTHON_CMD" ]]; then
     print_success "Python $PYTHON_VERSION found ($PYTHON_CMD)"
 else
-    print_error "Python $MIN_PYTHON_VERSION or higher not found!"
+    print_error "Python $MIN_PYTHON_VERSION or higher not found and uv could not be installed!"
     echo ""
     if [[ "$OS_TYPE" == "macos" ]]; then
-        echo -e "  Install with: ${CYAN}brew install python@3.12${NC}"
-    elif [[ "$PKG_MANAGER" == "apt" ]]; then
-        echo -e "  Install with: ${CYAN}sudo apt-get install python3 python3-pip python3-venv${NC}"
-    elif [[ "$PKG_MANAGER" == "dnf" || "$PKG_MANAGER" == "yum" ]]; then
-        echo -e "  Install with: ${CYAN}sudo dnf install python3 python3-pip${NC}"
-    elif [[ "$PKG_MANAGER" == "pacman" ]]; then
-        echo -e "  Install with: ${CYAN}sudo pacman -S python python-pip${NC}"
+        echo -e "  Install with: ${CYAN}brew install python@3.12${NC}  or  ${CYAN}curl -LsSf https://astral.sh/uv/install.sh | sh${NC}"
+    else
+        echo -e "  Install Python via your package manager, or: ${CYAN}curl -LsSf https://astral.sh/uv/install.sh | sh${NC}"
     fi
     exit 1
 fi
@@ -266,14 +274,9 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
             ;;
     esac
 
-    # PyGObject must be compiled inside the venv (system gi is not accessible from venv)
-    # This is needed for pywebview's GTK backend (desktop window feature)
-    if [[ -f "venv/bin/activate" ]]; then
-        print_info "Installing PyGObject into venv (needed for desktop window)..."
-        source venv/bin/activate
-        pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed — desktop window may not work"
-        deactivate
-    fi
+    # (PyGObject is installed into the venv AFTER it is created — see the venv step.
+    #  It used to run here, but the venv does not exist yet on a first install, so the
+    #  guard silently skipped it and the GTK desktop window never worked.)
 fi
 
 print_success "System dependencies installed"
@@ -350,132 +353,18 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
             print_success "Docker Compose available"
         fi
     else
-        print_warning "Docker not found"
-        echo ""
-        echo -e "  Docker is required for the Memory System (pgvector database)."
-        echo ""
-        
-        # Attempt automatic Docker installation
-        DOCKER_INSTALL_SUCCESS=false
-        
+        print_warning "Docker not found - the Memory System (pgvector) needs a container runtime."
+        print_info "VAF runs fine without Docker; long-term memory just stays off (enable it later)."
         if [[ "$OS_TYPE" == "macos" ]]; then
-            if [[ "$PKG_MANAGER" == "brew" ]]; then
-                print_info "Attempting to install Docker Desktop via Homebrew..."
-                echo -e "  (This may take several minutes)"
-                echo ""
-                
-                if brew install --cask docker 2>&1; then
-                    DOCKER_INSTALL_SUCCESS=true
-                    print_success "Docker Desktop installed!"
-                    echo ""
-                    echo -e "  ${YELLOW}============================================================${NC}"
-                    echo -e "  ${YELLOW}IMPORTANT: Please start Docker Desktop from Applications${NC}"
-                    echo -e "  ${WHITE}After Docker starts, run the installer again:${NC}"
-                    echo -e "  ${CYAN}./install.sh${NC}"
-                    echo -e "  ${YELLOW}============================================================${NC}"
-                    echo ""
-                else
-                    print_warning "Automatic installation failed"
-                    echo -e "  Install manually: ${CYAN}brew install --cask docker${NC}"
-                fi
-            else
-                echo -e "  Install Homebrew first, then: ${CYAN}brew install --cask docker${NC}"
-                echo -e "  Or download from: https://www.docker.com/products/docker-desktop/"
-            fi
-            
-        elif [[ "$PKG_MANAGER" == "apt" ]]; then
-            print_info "Attempting to install Docker via official script..."
-            echo -e "  (This requires sudo and may take a few minutes)"
-            echo ""
-            
-            if curl -fsSL https://get.docker.com | sh 2>&1; then
-                DOCKER_INSTALL_SUCCESS=true
-                print_success "Docker installed!"
-                
-                # Add user to docker group
-                if sudo usermod -aG docker "$USER" 2>/dev/null; then
-                    print_success "User added to docker group"
-                fi
-                
-                # Start Docker service
-                if sudo systemctl start docker 2>/dev/null && sudo systemctl enable docker 2>/dev/null; then
-                    print_success "Docker service started"
-                    DOCKER_INSTALLED=true
-                    DOCKER_RUNNING=true
-                    DOCKER_COMPOSE=true
-                fi
-                
-                echo ""
-                echo -e "  ${YELLOW}============================================================${NC}"
-                echo -e "  ${YELLOW}IMPORTANT: You may need to log out and back in${NC}"
-                echo -e "  ${WHITE}for docker group permissions to take effect.${NC}"
-                echo -e "  ${WHITE}Then run the installer again:${NC}"
-                echo -e "  ${CYAN}./install.sh${NC}"
-                echo -e "  ${YELLOW}============================================================${NC}"
-                echo ""
-            else
-                print_warning "Automatic installation failed"
-                echo -e "  Install manually: ${CYAN}curl -fsSL https://get.docker.com | sh${NC}"
-            fi
-            
-        elif [[ "$PKG_MANAGER" == "dnf" ]]; then
-            print_info "Attempting to install Docker via dnf..."
-            
-            if sudo dnf install -y docker docker-compose 2>&1; then
-                DOCKER_INSTALL_SUCCESS=true
-                sudo systemctl start docker 2>/dev/null
-                sudo systemctl enable docker 2>/dev/null
-                sudo usermod -aG docker "$USER" 2>/dev/null
-                print_success "Docker installed!"
-                DOCKER_INSTALLED=true
-                DOCKER_RUNNING=true
-                DOCKER_COMPOSE=true
-            else
-                print_warning "Automatic installation failed"
-                echo -e "  Install manually: ${CYAN}sudo dnf install docker docker-compose${NC}"
-            fi
-            
-        elif [[ "$PKG_MANAGER" == "pacman" ]]; then
-            print_info "Attempting to install Docker via pacman..."
-
-            if sudo pacman -S --noconfirm docker docker-compose 2>&1; then
-                DOCKER_INSTALL_SUCCESS=true
-                sudo systemctl start docker 2>/dev/null
-                sudo systemctl enable docker 2>/dev/null
-                sudo usermod -aG docker "$USER" 2>/dev/null
-                print_success "Docker installed!"
-                DOCKER_INSTALLED=true
-                DOCKER_RUNNING=true
-                DOCKER_COMPOSE=true
-            else
-                print_warning "Automatic installation failed"
-                echo -e "  Install manually: ${CYAN}sudo pacman -S docker docker-compose${NC}"
-            fi
-
-        elif [[ "$PKG_MANAGER" == "zypper" ]]; then
-            print_info "Attempting to install Docker via zypper..."
-
-            if sudo zypper install -y docker docker-compose 2>&1; then
-                DOCKER_INSTALL_SUCCESS=true
-                sudo systemctl enable --now docker 2>/dev/null
-                sudo usermod -aG docker "$USER" 2>/dev/null
-                print_success "Docker installed!"
-                print_warning "Log out and back in (or run 'newgrp docker') for group permissions to take effect"
-                DOCKER_INSTALLED=true
-                DOCKER_RUNNING=true
-                DOCKER_COMPOSE=true
-            else
-                print_warning "Automatic installation failed"
-                echo -e "  Install manually: ${CYAN}sudo zypper install docker docker-compose${NC}"
-            fi
+            print_info "To enable memory WITHOUT Docker Desktop (no license): ${CYAN}brew install colima docker && colima start${NC}"
+        else
+            print_info "To enable memory: install Docker Engine (free), e.g. your distro's ${CYAN}docker${NC} package, then ${CYAN}sudo systemctl enable --now docker${NC}"
         fi
-        
-        if [[ "$DOCKER_INSTALL_SUCCESS" != "true" ]]; then
-            echo ""
-            print_warning "Continuing installation - Memory System will be unavailable until Docker is installed"
-            echo -e "  After installing Docker, run the installer again: ${CYAN}./install.sh${NC}"
-            echo ""
-        fi
+        print_info "Then run: ${CYAN}docker compose -f docker-compose.memory.yml up -d${NC}"
+        echo ""
+        # No automatic Docker install on purpose: Docker Desktop is licensed for larger orgs
+        # and heavy; Engine/Colima are the free path and a deliberate opt-in. If the user
+        # already has ANY Docker the detection above uses it. Default install works without it.
     fi
 else
     print_info "Docker check skipped (--skip-docker flag)"
@@ -501,18 +390,37 @@ else
 fi
 
 if [[ "$NODE_INSTALLED" == "false" ]]; then
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        echo -e "  Install with: ${CYAN}brew install node${NC}"
-    elif [[ "$PKG_MANAGER" == "apt" ]]; then
-        echo -e "  Install with: ${CYAN}curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs${NC}"
-    elif [[ "$PKG_MANAGER" == "dnf" || "$PKG_MANAGER" == "yum" ]]; then
-        echo -e "  Install with: ${CYAN}sudo dnf install nodejs npm${NC}"
-    elif [[ "$PKG_MANAGER" == "zypper" ]]; then
-        echo -e "  Install with: ${CYAN}sudo zypper install nodejs-default npm-default${NC}"
-    elif [[ "$PKG_MANAGER" == "pacman" ]]; then
-        echo -e "  Install with: ${CYAN}sudo pacman -S nodejs npm${NC}"
+    print_info "Node.js not found - downloading a portable Node (user-scoped, no sudo)..."
+    # Fetched from the official nodejs.org dist (NOT bundled in the repo). Node core is MIT.
+    NARCH=$(uname -m)
+    case "$NARCH" in x86_64|amd64) NARCH=x64;; aarch64|arm64) NARCH=arm64;; esac
+    if [[ "$OS_TYPE" == "macos" ]]; then NPLAT=darwin; NEXT=tar.gz; else NPLAT=linux; NEXT=tar.xz; fi
+    NODE_BASE="https://nodejs.org/dist/latest-v22.x"
+    NFILE=$(curl -fsSL "$NODE_BASE/SHASUMS256.txt" 2>/dev/null | grep -oE "node-v[0-9.]+-$NPLAT-$NARCH\.$NEXT" | head -1)
+    if [[ -n "$NFILE" ]] && curl -fsSL "$NODE_BASE/$NFILE" -o "/tmp/$NFILE" 2>/dev/null; then
+        NODE_DIR="$HOME/.vaf/node"
+        rm -rf "$NODE_DIR" && mkdir -p "$NODE_DIR"
+        tar -xf "/tmp/$NFILE" -C "$NODE_DIR" --strip-components=1 2>/dev/null
+        export PATH="$NODE_DIR/bin:$PATH"
+        if command -v node &> /dev/null; then
+            NODE_INSTALLED=true
+            print_success "Portable Node.js $(node --version) installed ($NODE_DIR)"
+            # Persist for future launches (run_vaf.sh starts a fresh shell).
+            for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+                if [[ -f "$rc" ]] && ! grep -q '.vaf/node/bin' "$rc"; then
+                    echo 'export PATH="$HOME/.vaf/node/bin:$PATH"' >> "$rc"
+                fi
+            done
+        fi
     fi
-    print_warning "Web UI will not be available without Node.js"
+    if [[ "$NODE_INSTALLED" == "false" ]]; then
+        print_warning "Portable Node download failed — the Web UI needs Node $MIN_NODE_VERSION+."
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            echo -e "  Install with: ${CYAN}brew install node${NC}"
+        else
+            echo -e "  Install Node $MIN_NODE_VERSION+ via your package manager."
+        fi
+    fi
 fi
 
 # ============================================================================
@@ -522,22 +430,19 @@ print_step "Setting up Python Virtual Environment..."
 
 cd "$PROJECT_ROOT"
 
-if [[ -d "venv" ]]; then
-    # Detect Windows venv (has Scripts/ instead of bin/)
-    if [[ ! -f "venv/bin/activate" && -f "venv/Scripts/activate" ]]; then
-        print_warning "Windows virtual environment detected – recreating for Linux..."
-        rm -rf venv
-        $PYTHON_CMD -m venv venv
-        print_success "Virtual environment recreated (Linux-compatible)"
-    else
-        print_success "Virtual environment already exists"
-        read -p "  Recreate virtual environment? (y/N) " response
-        if [[ "$response" == "y" || "$response" == "Y" ]]; then
-            rm -rf venv
-            $PYTHON_CMD -m venv venv
-            print_success "Virtual environment recreated"
-        fi
-    fi
+# Drop a Windows-style venv (Scripts/ instead of bin/) so it gets recreated for this OS.
+if [[ -d "venv" && ! -f "venv/bin/activate" && -f "venv/Scripts/activate" ]]; then
+    print_warning "Windows virtual environment detected – recreating for this OS..."
+    rm -rf venv
+fi
+
+if [[ -d "venv/bin" ]]; then
+    print_success "Virtual environment already exists"
+elif [[ "$USE_UV" == "true" ]]; then
+    # uv creates the venv (and downloads Python 3.12 if needed). --seed adds pip so the
+    # `python3 -m pip install` steps below keep working inside a uv venv.
+    uv venv venv --python 3.12 --seed
+    print_success "Virtual environment created (uv, Python 3.12)"
 else
     $PYTHON_CMD -m venv venv
     print_success "Virtual environment created"
@@ -546,6 +451,14 @@ fi
 # Activate venv
 source venv/bin/activate
 print_info "Python: $(python3 --version)"
+
+# PyGObject into the venv (Linux desktop window / pywebview GTK backend). Needs the
+# gobject-introspection + cairo dev headers from the system-deps step. Done AFTER the venv
+# exists — fixes the old ordering bug where it ran before venv creation and was silently skipped.
+if [[ "$OS_TYPE" == "linux" ]]; then
+    print_info "Installing PyGObject into venv (desktop window)..."
+    pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed — desktop window may not work"
+fi
 
 # ============================================================================
 # 7. PYTHON DEPENDENCIES
@@ -557,6 +470,10 @@ if [[ "$OS_TYPE" == "macos" ]]; then
     export LDFLAGS="-L$(brew --prefix portaudio)/lib"
     export CFLAGS="-I$(brew --prefix portaudio)/include"
 fi
+
+# Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_mac.sh),
+# which would redo brew/venv/alias/.app work install.sh already did (macOS double-path).
+export VAF_SKIP_POSTINSTALL=1
 
 # Upgrade pip
 print_info "Upgrading pip..."
@@ -910,5 +827,5 @@ fi
 
 echo -e "  ${CYAN}GPU Acceleration:${NC} $GPU_TYPE ($GPU_NAME)"
 echo ""
-echo -e "  ${NC}Documentation: https://github.com/Veyllo/VAF${NC}"
+echo -e "  ${NC}Documentation: https://github.com/Veyllo-Labs/VAF${NC}"
 echo ""

@@ -129,6 +129,7 @@ Write-Step "Checking Python Installation..."
 
 $pythonCmd = $null
 $pythonVersion = $null
+$useUv = $false
 
 # Try python3 first, then python
 foreach ($cmd in @("python3", "python")) {
@@ -145,15 +146,29 @@ foreach ($cmd in @("python3", "python")) {
     } catch { }
 }
 
-if ($pythonCmd) {
+# Prefer uv: it provisions Python without admin rights, so a bare machine needs
+# nothing pre-installed. Auto-install uv when neither a suitable Python nor uv exists.
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $pythonCmd -and -not $uvCmd) {
+    Write-Warn "No suitable Python found - installing uv (provisions Python, no admin)..."
+    try {
+        Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+        $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+        $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+    } catch { Write-Warn "uv install failed: $_" }
+}
+
+if ($uvCmd) {
+    $useUv = $true
+    Write-Success "Using uv to manage Python ($($uvCmd.Source))"
+} elseif ($pythonCmd) {
     Write-Success "Python $pythonVersion found ($pythonCmd)"
 } else {
-    Write-Err "Python $MIN_PYTHON_VERSION or higher not found!"
+    Write-Err "Python $MIN_PYTHON_VERSION or higher not found and uv could not be installed!"
     Write-Host ""
-    Write-Host "  Please install Python from: https://www.python.org/downloads/" -ForegroundColor Yellow
-    Write-Host "  Or use winget: winget install Python.Python.3.12" -ForegroundColor Yellow
+    Write-Host "  Install Python from: https://www.python.org/downloads/ (check 'Add Python to PATH')" -ForegroundColor Yellow
+    Write-Host "  Or install uv:       irm https://astral.sh/uv/install.ps1 | iex" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  Make sure to check 'Add Python to PATH' during installation!" -ForegroundColor Yellow
     exit 1
 }
 
@@ -261,83 +276,15 @@ if (-not $SkipDocker) {
 
     if (-not $dockerInfo.Installed) {
         Write-Host ""
-        Write-Warn "Docker is NOT installed!"
-        Write-Host "  The Memory System requires Docker (pgvector database)." -ForegroundColor Yellow
+        Write-Warn "Docker not found - the Memory System (pgvector) needs a container runtime."
+        Write-Info "VAF runs fine without Docker; long-term memory just stays off (enable it later)."
+        Write-Info "To enable memory WITHOUT Docker Desktop (no license, no heavy GUI, no reboot):"
+        Write-Info "  - Docker Engine inside WSL2, or Podman, or Rancher Desktop"
+        Write-Info "Then run:  docker compose -f docker-compose.memory.yml up -d"
         Write-Host ""
-        
-        # Try to install Docker automatically using winget
-        $wingetAvailable = Get-Command winget -ErrorAction SilentlyContinue
-        if ($wingetAvailable) {
-            Write-Info "Attempting to install Docker Desktop via winget..."
-            Write-Host "  (This may take several minutes and require a restart)" -ForegroundColor DarkGray
-            Write-Host ""
-            
-            try {
-                # Install Docker Desktop
-                Write-Host -NoNewline "  [" -ForegroundColor Gray
-                $dockerInstallStart = Get-Date
-                
-                $installJob = Start-Job -ScriptBlock {
-                    winget install Docker.DockerDesktop --accept-source-agreements --accept-package-agreements 2>&1
-                }
-                
-                $spinChars = @('|', '/', '-', '\')
-                $spinIndex = 0
-                $lastUpdate = Get-Date
-                while ($installJob.State -eq 'Running') {
-                    Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
-                    $spinIndex = ($spinIndex + 1) % 4
-                    
-                    $elapsed = [math]::Round(((Get-Date) - $dockerInstallStart).TotalSeconds, 0)
-                    if ($elapsed -gt 0 -and $elapsed % 30 -eq 0 -and ((Get-Date) - $lastUpdate).TotalSeconds -ge 29) {
-                        Write-Host -NoNewline "`b] ${elapsed}s... [" -ForegroundColor DarkGray
-                        $lastUpdate = Get-Date
-                    }
-                    Start-Sleep -Milliseconds 200
-                }
-                
-                $installResult = Receive-Job -Job $installJob
-                $installExitCode = $installJob.ChildJobs[0].JobStateInfo.Reason
-                Remove-Job -Job $installJob -Force
-                $dockerInstallTime = [math]::Round(((Get-Date) - $dockerInstallStart).TotalSeconds, 1)
-                
-                # Check if installation succeeded
-                if ($installResult -match "Successfully installed" -or (Get-Command docker -ErrorAction SilentlyContinue)) {
-                    Write-Host "`b] Docker Desktop installed (${dockerInstallTime}s)" -ForegroundColor Green
-                    Write-Host ""
-                    Write-Success "Docker Desktop was installed successfully!"
-                    Write-Host ""
-                    Write-Host "  ============================================================" -ForegroundColor Yellow
-                    Write-Host "  IMPORTANT: You need to:" -ForegroundColor Yellow
-                    Write-Host "    1. RESTART your computer (required for WSL2/Hyper-V)" -ForegroundColor White
-                    Write-Host "    2. After restart, run the installer again:" -ForegroundColor White
-                    Write-Host "       .\install.bat" -ForegroundColor Cyan
-                    Write-Host "    (Docker will start automatically and set up the database)" -ForegroundColor DarkGray
-                    Write-Host "  ============================================================" -ForegroundColor Yellow
-                    Write-Host ""
-                    $dockerInfo.Installed = $true
-                } else {
-                    Write-Host "`b] Installation may have failed (${dockerInstallTime}s)" -ForegroundColor Yellow
-                    Write-Host ""
-                    Write-Warn "Docker installation might not have completed successfully"
-                    Write-Host "  You can try installing manually:" -ForegroundColor Gray
-                    Write-Host "  winget install Docker.DockerDesktop" -ForegroundColor Cyan
-                    Write-Host "  Or download from: https://www.docker.com/products/docker-desktop/" -ForegroundColor Cyan
-                }
-            } catch {
-                Write-Host "`b] Failed" -ForegroundColor Red
-                Write-Warn "Automatic Docker installation failed: $_"
-                Write-Host "  Please install Docker manually:" -ForegroundColor Gray
-                Write-Host "  winget install Docker.DockerDesktop" -ForegroundColor Cyan
-            }
-        } else {
-            Write-Host "  Install Docker Desktop from: https://www.docker.com/products/docker-desktop/" -ForegroundColor Cyan
-            Write-Host "  Or install winget first, then: winget install Docker.DockerDesktop" -ForegroundColor Cyan
-            Write-Host ""
-            Write-Warn "Continuing installation - Memory System will be unavailable until Docker is installed"
-            Write-Host "  After installing Docker, run the installer again: .\install.bat" -ForegroundColor Gray
-        }
-        Write-Host ""
+        # No automatic Docker Desktop install on purpose: it is licensed for larger orgs,
+        # heavyweight, and needs a reboot. If the user already has ANY Docker (Desktop,
+        # Engine, Podman, Colima) the detection above picks it up and we just use it.
     } elseif (-not $dockerInfo.Running) {
         Write-Warn "Docker is installed but NOT running!"
         Write-Host "  Starting Docker Desktop..." -ForegroundColor Yellow
@@ -424,9 +371,27 @@ try {
 }
 
 if (-not $nodeInstalled) {
-    Write-Info "Install Node.js 18+ from: https://nodejs.org/"
-    Write-Info "Or use winget: winget install OpenJS.NodeJS.LTS"
-    Write-Warn "Web UI will not be available without Node.js"
+    Write-Info "Node.js not found - downloading a portable Node (user-scoped, no admin)..."
+    try {
+        $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+        # Resolve the latest v22 LTS filename from the official dist index (not bundled — fetched).
+        $shasums = Invoke-RestMethod "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
+        $zipName = ([regex]::Matches($shasums, "node-v[\d.]+-win-$arch\.zip") | Select-Object -First 1).Value
+        if (-not $zipName) { throw "could not resolve Node win-$arch zip name" }
+        $nodeDir = Join-Path $env:LOCALAPPDATA "Veyllo\node"
+        $zip = Join-Path $env:TEMP $zipName
+        Invoke-WebRequest -Uri "https://nodejs.org/dist/latest-v22.x/$zipName" -OutFile $zip
+        if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir }
+        Expand-Archive -Path $zip -DestinationPath $nodeDir -Force
+        $nodeBin = (Get-ChildItem $nodeDir -Directory | Select-Object -First 1).FullName
+        $env:Path = "$nodeBin;$env:Path"
+        [Environment]::SetEnvironmentVariable("Path", "$nodeBin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+        $nodeVersion = & node --version 2>&1
+        if ($nodeVersion -match "v\d+") { $nodeInstalled = $true; Write-Success "Portable Node.js $nodeVersion installed (user-scoped)" }
+    } catch {
+        Write-Warn "Portable Node download failed: $_"
+        Write-Info "Install Node.js 18+ from https://nodejs.org/ (or: winget install OpenJS.NodeJS.LTS) for the Web UI"
+    }
 }
 
 # ============================================================================
@@ -436,7 +401,17 @@ Write-Step "Setting up Python Virtual Environment..."
 
 $venvPath = Join-Path $PROJECT_ROOT "venv"
 
-if ((Test-Path $venvPath) -and -not $Force) {
+if ($useUv) {
+    # uv creates the venv (and downloads Python 3.12 if needed). --seed adds pip so the
+    # existing `python -m pip install` steps below keep working inside a uv venv.
+    if ((Test-Path $venvPath) -and $Force) { Remove-Item -Recurse -Force $venvPath }
+    if (Test-Path $venvPath) {
+        Write-Success "Virtual environment already exists"
+    } else {
+        & uv venv $venvPath --python 3.12 --seed
+        Write-Success "Virtual environment created (uv, Python 3.12)"
+    }
+} elseif ((Test-Path $venvPath) -and -not $Force) {
     Write-Success "Virtual environment already exists"
     $response = Read-Host "  Recreate virtual environment? (y/N)"
     if ($response -eq "y" -or $response -eq "Y") {
@@ -459,6 +434,10 @@ $env:Path = "$venvPath\Scripts;$env:Path"
 # ============================================================================
 Write-Step "Installing Python Dependencies..."
 Write-Host "  (This may take 2-5 minutes depending on your internet connection)" -ForegroundColor DarkGray
+
+# Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_win.ps1).
+# Start-Job (below) inherits this env var. install.ps1 already handles setup.
+$env:VAF_SKIP_POSTINSTALL = "1"
 
 # Upgrade pip
 Write-Info "Upgrading pip..."
@@ -732,5 +711,5 @@ if ($dockerInfo.Running) {
 
 Write-Host "  GPU Acceleration: $($gpuInfo.Recommendation)" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Documentation: https://github.com/Veyllo/VAF" -ForegroundColor Gray
+Write-Host "  Documentation: https://github.com/Veyllo-Labs/VAF" -ForegroundColor Gray
 Write-Host ""

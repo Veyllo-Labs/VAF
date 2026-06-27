@@ -15,12 +15,20 @@ import os
 
 def run_setup_scripts():
     """Run platform-specific setup scripts after installation."""
+    # Skip when an outer installer (install.sh / install.ps1 / bootstrap) already drives the
+    # platform setup, or when we are in a nested setup run. Otherwise `pip install -e .` re-runs
+    # setup_mac.sh / setup_win.ps1 and redoes brew/venv/alias/.app work the installer just did
+    # (the macOS double-path issue).
+    if os.environ.get("VAF_SKIP_POSTINSTALL") == "1" or os.environ.get("VAF_SKIP_PIP_INSTALL") == "1":
+        print("Skipping post-install platform script (installer is handling setup).")
+        return
+
     system = platform.system()
     project_root = Path(__file__).parent
-    
+
     # Set environment variable to prevent loops
     os.environ["VAF_SKIP_PIP_INSTALL"] = "1"
-    
+
     try:
         if system == "Windows":
             print("\n🪟 Windows detected. Running setup_win.ps1...")

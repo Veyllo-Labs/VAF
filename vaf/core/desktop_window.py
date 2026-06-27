@@ -36,6 +36,7 @@ _window = None   # pywebview Window instance
 _webview = None  # pywebview module (lazy import so it can be optional)
 _state_path: pathlib.Path | None = None  # path to window_state.json
 _save_timer: threading.Timer | None = None  # debounce timer for state saves
+_last_state: dict = {}  # latest known {width,height,x,y}; merged so resize/move don't clobber each other
 # Renderer crash auto-recovery bookkeeping (see _install_crash_recovery).
 _recovery = {"reloads": 0, "last": 0.0, "hooked": set()}
 # Native dialog wiring bookkeeping (see _install_download_print_handlers).
@@ -44,33 +45,59 @@ _dialogs_hooked: set = set()
 _pdf_renderer = None
 
 
-def _load_state(default_w: int, default_h: int) -> tuple[int, int]:
-    """Return (width, height) from saved state, or defaults if not available."""
+def _ensure_state_path() -> None:
+    """Set _state_path if not already set. Must be available during init() (which runs BEFORE
+    start()), otherwise the saved size/position is never read back and the window always opens at
+    the default. Idempotent; safe to call from init() and start()."""
+    global _state_path
+    if _state_path is not None:
+        return
+    try:
+        _base = pathlib.Path(__file__).resolve().parents[2] / ".vaf_webview"
+        _base.mkdir(parents=True, exist_ok=True)
+        _state_path = _base / "window_state.json"
+    except Exception as exc:
+        _log.debug("[DesktopWindow] Could not resolve window-state path: %s", exc)
+
+
+def _load_state(default_w: int, default_h: int) -> tuple[int, int, int | None, int | None]:
+    """Return (width, height, x, y) from saved state; x/y are None when no valid position is saved.
+    Falls back to the given defaults for size when nothing usable is stored."""
+    _ensure_state_path()
+    w, h, x, y = default_w, default_h, None, None
     if _state_path and _state_path.exists():
         try:
             data = json.loads(_state_path.read_text(encoding="utf-8"))
-            w = int(data.get("width", default_w))
-            h = int(data.get("height", default_h))
-            if 400 <= w <= 7680 and 300 <= h <= 4320:
-                return w, h
+            cw, ch = int(data.get("width", default_w)), int(data.get("height", default_h))
+            if 400 <= cw <= 7680 and 300 <= ch <= 4320:
+                w, h = cw, ch
+            if "x" in data and "y" in data:
+                cx, cy = int(data["x"]), int(data["y"])
+                # Allow modest negatives so a window on a secondary/left monitor is restored.
+                if -7680 <= cx <= 15360 and -4320 <= cy <= 8640:
+                    x, y = cx, cy
+            _last_state.update({"width": w, "height": h})
+            if x is not None:
+                _last_state.update({"x": x, "y": y})
         except Exception:
             pass
-    return default_w, default_h
+    return w, h, x, y
 
 
-def _save_state(width: int, height: int) -> None:
-    """Persist window size (debounced — only writes after 1s of no further resize)."""
+def _save_state(**fields: int) -> None:
+    """Persist window size/position (debounced — writes after 1s of no further change).
+    Merges into _last_state so a resize event does not wipe the saved position and vice versa."""
     global _save_timer
+    _ensure_state_path()
     if not _state_path:
         return
+    _last_state.update({k: v for k, v in fields.items() if v is not None})
     if _save_timer:
         _save_timer.cancel()
+    snapshot = dict(_last_state)
     def _write():
         try:
-            _state_path.write_text(
-                json.dumps({"width": width, "height": height}),
-                encoding="utf-8",
-            )
+            _state_path.write_text(json.dumps(snapshot), encoding="utf-8")
         except Exception as exc:
             _log.debug("[DesktopWindow] Could not save window state: %s", exc)
     _save_timer = threading.Timer(1.0, _write)
@@ -78,10 +105,22 @@ def _save_state(width: int, height: int) -> None:
     _save_timer.start()
 
 
-def init(url: str, title: str = "VAF", width: int = 1280, height: int = 800) -> None:
-    """Create the desktop window. Must be called before start()."""
+def init(url: str, title: str = "VAF", width: int | None = None, height: int | None = None) -> None:
+    """Create the desktop window. Must be called before start().
+
+    Default size is 1920x1080 (overridable via the config keys `desktop_window_width` /
+    `desktop_window_height`). The last size AND position are remembered across restarts
+    (window_state.json); the saved values take precedence over the defaults."""
     global _window, _webview
     import os, sys
+    if width is None or height is None:
+        try:
+            from vaf.core.config import Config
+            width = width or int(Config.get("desktop_window_width", 1920) or 1920)
+            height = height or int(Config.get("desktop_window_height", 1080) or 1080)
+        except Exception:
+            width = width or 1920
+            height = height or 1080
     if sys.platform == "linux":
         # Force X11/XWayland for both GTK and Qt — native Wayland causes protocol errors.
         # GDK_BACKEND: affects GTK (pystray/AppIndicator)
@@ -160,21 +199,29 @@ def init(url: str, title: str = "VAF", width: int = 1280, height: int = 800) -> 
     import webview as _wv  # ImportError propagates if pywebview not installed
     _webview = _wv
 
-    # Load saved window size (falls back to defaults if no saved state yet)
-    saved_w, saved_h = _load_state(width, height)
+    # Load saved window size + position (falls back to defaults if no saved state yet).
+    _ensure_state_path()
+    saved_w, saved_h, saved_x, saved_y = _load_state(width, height)
 
-    _window = _wv.create_window(
-        title,
-        url,
+    _create_kwargs = dict(
         width=saved_w,
         height=saved_h,
         resizable=True,
         confirm_close=False,
         text_select=True,   # allow the user to select/copy text in the webview
     )
+    if saved_x is not None and saved_y is not None:
+        _create_kwargs["x"] = saved_x
+        _create_kwargs["y"] = saved_y
+
+    _window = _wv.create_window(title, url, **_create_kwargs)
     _window.events.closing += _on_closing
     _window.events.loaded += _on_loaded
     _window.events.resized += _on_resized
+    try:
+        _window.events.moved += _on_moved   # pywebview >= 4; persist position too
+    except Exception as e:
+        _log.debug("[DesktopWindow] window 'moved' event unavailable: %s", e)
     # Expose a native Save-As bridge to the WebUI. The workspace download relies on
     # this in the desktop window because QtWebEngine's own download path is brittle
     # (a parentless save dialog can open behind the window; downloads started after
@@ -425,7 +472,12 @@ _INTERCEPT_JS = """
 
 def _on_resized(width: int, height: int) -> None:
     """Persist window size whenever the user resizes it."""
-    _save_state(width, height)
+    _save_state(width=width, height=height)
+
+
+def _on_moved(x: int, y: int) -> None:
+    """Persist window position whenever the user moves it."""
+    _save_state(x=x, y=y)
 
 
 def _install_crash_recovery() -> None:
@@ -793,10 +845,11 @@ def start(icon_path: str = None) -> None:
 
     # Determine a stable storage path for cookies / localStorage so the user
     # stays logged in across restarts.  Stored inside the VAF data dir.
-    global _state_path
-    _base = pathlib.Path(__file__).resolve().parents[2] / ".vaf_webview"
+    # _ensure_state_path() already ran in init(); this keeps storage co-located with it.
+    _ensure_state_path()
+    _base = (_state_path.parent if _state_path
+             else pathlib.Path(__file__).resolve().parents[2] / ".vaf_webview")
     _base.mkdir(parents=True, exist_ok=True)
-    _state_path = _base / "window_state.json"
     _storage = str(_base)
 
     # Memory-leak diagnostic logger. Currently ENABLED to investigate the renderer/GPU RAM and the

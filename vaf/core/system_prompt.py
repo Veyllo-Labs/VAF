@@ -1104,13 +1104,25 @@ Then use the results to answer. Do NOT guess from your training data!
         
         if not tool_names:
             return ""
-        
+
+        # Vision framing (only when the analyze_image tool is loaded): the main model is
+        # text-only — attached images arrive as a text description, and analyze_image is how
+        # it looks closer. Prevents the "I can't see the image / I only guessed" failure.
+        _vision_note = ""
+        if "analyze_image" in tool_names:
+            _vision_note = (
+                "\n\n**Images:** You cannot see attached images directly. Each attached image is "
+                "described to you as text in a `[VISUAL CONTEXT …]` block — treat that as ground truth, "
+                "never say you only guessed it. For anything the description doesn't cover (exact "
+                "colours, positions, small text, locating an object), call `analyze_image(prompt=…)`."
+            )
+
         # Short summary for prompt (full docs are in tool definitions)
         return f"""
 ## Available Tools
 You have access to {len(tool_names)} tools: {', '.join(sorted(tool_names))}
 
-Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate.
+Use tools proactively to accomplish tasks. Don't ask for permission - just use them when appropriate.{_vision_note}
 
 ### ⚡ Multiple Tool Calls in ONE Response
 **You CAN and SHOULD call multiple tools in a SINGLE response when the user asks for multiple simple things!**

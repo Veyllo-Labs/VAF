@@ -570,6 +570,11 @@ async def _replace_session_vector_once_async(
 
             for i, doc in enumerate(documents):
                 name = str((doc or {}).get("name") or f"Attachment {i + 1}").strip()
+                # Images are viewed (and described by the vision model), never text-indexed —
+                # skip so an opened image is not RAG-ingested as if it were a text document.
+                _mt = str((doc or {}).get("mimeType") or (doc or {}).get("mime_type") or "").lower()
+                if _mt.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico")):
+                    continue
                 content = str((doc or {}).get("content") or "").strip()
                 if not content:
                     continue
@@ -861,6 +866,10 @@ async def _replace_session_async(
             safe_docs: List[Dict[str, Any]] = []
             for i, doc in enumerate(documents):
                 name = str((doc or {}).get("name") or f"Attachment {i + 1}").strip()
+                # Images are viewed (and described by the vision model), never text-indexed.
+                _mt = str((doc or {}).get("mimeType") or (doc or {}).get("mime_type") or "").lower()
+                if _mt.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico")):
+                    continue
                 content = str((doc or {}).get("content") or "").strip()
                 if not content:
                     continue

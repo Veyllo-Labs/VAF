@@ -251,6 +251,7 @@ Rules:
 - Only set for paths inside `~/Documents/VAF_Projects/` — temporary files and one-off outputs are excluded.
 - New projects are created per chat: `VAF_Projects/<uid[:8]>/<session_id>/<ProjectName>` (the session level applies whenever a session id is available).
 - `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event — except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; poisoned legacy sessions self-heal).
+- **Image attachments** uploaded in a chat are stored as files under `VAF_Projects/<uid[:8]>/<session_id>/attachments/` (`get_session_attachments_dir()`); `Message.metadata["images"]` holds only `{name, mime_type, path, base_description}`, not inline base64. The agent reads them by path (`analyze_image` / `read_file`); the Web UI serves them via `GET /api/file`. See the vision section in `docs/llm/API_INTEGRATION.md`.
 
 At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:
 

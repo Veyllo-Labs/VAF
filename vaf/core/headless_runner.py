@@ -1266,6 +1266,49 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
+                    # Image viewer: while the Image Viewer is open, inject the open image's vision
+                    # description into THIS turn only (so the agent can reason about the image the user
+                    # is looking at). Stored in runtime_state by web_server.py and cleared here after use
+                    # — same lifecycle as the code viewer, so the description stays in context exactly as
+                    # long as the viewer is open.
+                    try:
+                        session_for_iv = session_mgr.load(task.session_id)
+                        iv_ctx = (getattr(session_for_iv, "runtime_state", None) or {}).get("image_viewer_context") or {}
+                        iv_desc = (iv_ctx.get("description") or "").strip()
+                        if iv_desc:
+                            iv_name = iv_ctx.get("name") or "image"
+                            iv_block = (
+                                f"--- CURRENTLY OPEN IN IMAGE VIEWER: {iv_name} (vision description) ---\n"
+                                f"{iv_desc}\n"
+                                f"(The user is looking at this image. For finer detail call analyze_image.)\n"
+                                f"---\n\n"
+                            )
+                            effective_input = iv_block + effective_input
+                            session_for_iv.runtime_state.pop("image_viewer_context", None)
+                            session_mgr.save(session_for_iv, sync_state=False)
+                    except Exception:
+                        pass
+
+                    # Marked region: inject the vision answer about the user's yellow-marked region
+                    # for THIS turn only (computed in web_server when the question was sent), then clear.
+                    try:
+                        session_for_mr = session_mgr.load(task.session_id)
+                        mr = (getattr(session_for_mr, "runtime_state", None) or {}).get("marked_region_answer") or {}
+                        mr_text = (mr.get("text") or "").strip()
+                        if mr_text:
+                            mr_name = mr.get("name") or "image"
+                            mr_block = (
+                                f"--- MARKED REGION on {mr_name} (the yellow box the user drew) — "
+                                f"vision answer to their question ---\n"
+                                f"{mr_text}\n"
+                                f"---\n\n"
+                            )
+                            effective_input = mr_block + effective_input
+                            session_for_mr.runtime_state.pop("marked_region_answer", None)
+                            session_mgr.save(session_for_mr, sync_state=False)
+                    except Exception:
+                        pass
+
                     # Session workspace + active project: inject so agent knows where to edit files.
                     # [SESSION WORKSPACE] = stable workspace root set on first file creation (session.project_path).
                     # [ACTIVE PROJECT]    = most recently created/edited project (runtime_state["last_project_path"]).
@@ -1771,8 +1814,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             if last_user_msg != _user_input.strip():
                                 _img_meta = None
                                 if _task_images:
+                                    # base_description: filled in place by chat_step's one-time
+                                    # vision pass — persist it so follow-up turns / reloads stay
+                                    # grounded without re-running (costly) vision per turn.
                                     _img_meta = {"images": [
-                                        {"name": _im.get("name", "image"), "mime_type": _im.get("mime_type", "image/jpeg"), "data": _im.get("data", "")}
+                                        {
+                                            "name": _im.get("name", "image"),
+                                            "mime_type": _im.get("mime_type", "image/jpeg"),
+                                            # Prefer the on-disk path (keeps session.json lean); fall
+                                            # back to inline base64 only when no file was written.
+                                            **({"path": _im["path"]} if _im.get("path") else {"data": _im.get("data", "")}),
+                                            **({"base_description": _im["base_description"]} if _im.get("base_description") else {}),
+                                        }
                                         for _im in _task_images
                                     ]}
                                 session.add_message(role="user", content=_user_input.strip(), metadata=_img_meta)

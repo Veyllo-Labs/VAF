@@ -41,6 +41,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `document_writer` | write | Create simple structured documents (letters, templates). |
 | `document_editor` | read | Open a document in the editor panel for the user. |
 | `document_viewer` | read | Open a document in the viewer panel. |
+| `analyze_image` | read | Take a closer, targeted look at an image the user attached (exact colours, positions, small text, finding an object). Re-runs the vision backend on demand — see the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
 | `replace_editor_selection` | write | Replace the marked selection in the open editor. |
 | `replace_editor_text` | write | Replace an exact snippet in the open editor. |
 | `report_filename` | read | Generate a report filename in the Documents folder. |

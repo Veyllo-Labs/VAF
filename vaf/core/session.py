@@ -119,6 +119,12 @@ class Session:
                 entry["tool_call_id"] = m.tool_call_id
             if getattr(m, "name", None):
                 entry["name"] = m.name
+            # Carry attached images (+ their persisted base_description) for user turns so
+            # restored history keeps multi-turn vision grounding; stored in metadata["images"].
+            if m.role == "user":
+                _imgs = (getattr(m, "metadata", None) or {}).get("images")
+                if _imgs:
+                    entry["images"] = _imgs
             out.append(entry)
         return out
     
@@ -906,6 +912,37 @@ def get_user_projects_root(user_scope_id: Optional[str]) -> Optional[Path]:
         return None
     from vaf.core.platform import Platform
     return Platform.documents_dir() / "VAF_Projects" / uid[:8]
+
+
+def get_session_attachments_dir(
+    session_id: Optional[str],
+    user_scope_id: Optional[str] = None,
+    create: bool = True,
+) -> Optional[Path]:
+    """Per-chat folder for uploaded image attachments: VAF_Projects/<uid8>/<session_id>/attachments/.
+
+    Images are stored here as FILES (not base64 inline in session.json) so the chat stays lean,
+    the agent can reference them by path (list_files / read_file / analyze_image), and the WebUI
+    can serve them via /api/file. Takes user_scope_id EXPLICITLY (unlike get_session_workspace_dir,
+    which reads it from saved session metadata) so it is correct on the very FIRST turn — before
+    the session has been persisted with its scope. Falls back to the un-scoped
+    VAF_Projects/<session_id>/ for the local-admin / no-scope case, matching get_session_workspace_dir.
+    Returns None without a usable session_id; with create=True the folder is created."""
+    import re as _re
+    folder = _re.sub(r'[^a-zA-Z0-9_-]', '', (session_id or "").strip())[:32]
+    if not folder:
+        return None
+    base = get_user_projects_root(user_scope_id)
+    if base is None:
+        from vaf.core.platform import Platform
+        base = Platform.documents_dir() / "VAF_Projects"
+    target = base / folder / "attachments"
+    if create:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+    return target
 
 
 def read_workspace_label(folder: Path) -> Optional[str]:

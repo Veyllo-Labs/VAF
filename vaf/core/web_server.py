@@ -1694,6 +1694,120 @@ async def get_file(request: Request, path: str = Query(..., description="Absolut
     )
 
 
+@app.post("/api/image/describe")
+async def describe_image(request: Request):
+    """One-time vision description of a chat image (for the Image Viewer + agent context).
+
+    Cached per (session, path) in runtime_state so it is generated once; reuses a
+    chat-uploaded image's existing base_description when present. Same per-user isolation
+    as /api/file: only the owner (or local admin) of VAF_Projects/<uid8> may describe it.
+    """
+    from pathlib import Path as _Path
+    from vaf.core.platform import Platform
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    session_id = str((body or {}).get("sessionId") or "").strip()
+    path = str((body or {}).get("path") or "").strip()
+    if not session_id or not path:
+        raise HTTPException(status_code=400, detail="sessionId and path required")
+    try:
+        target = Platform.normalize_path(path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Scope to the user's own VAF_Projects/<uid8> subtree (fail-closed), mirroring /api/file.
+    import re as _re_id
+    _projects_root = (Platform.documents_dir() / "VAF_Projects").resolve()
+    _resolved = target.resolve()
+    if not _resolved.is_relative_to(_projects_root):
+        raise HTTPException(status_code=403, detail="Access denied")
+    _rel_parts = _resolved.relative_to(_projects_root).parts
+    _first = _rel_parts[0] if _rel_parts else ""
+    if _re_id.fullmatch(r"[0-9a-f]{8}", _first):
+        try:
+            from vaf.api.config_routes import get_current_user_or_local_admin
+            from vaf.core.config import get_local_admin_scope_id
+            _user = get_current_user_or_local_admin(request) or {}
+            _scope = str(_user.get("user_scope_id") or "")
+            _is_admin = _scope == str(get_local_admin_scope_id())
+            _allowed = _is_admin or _scope.replace("-", "").lower().startswith(_first)
+        except HTTPException:
+            raise
+        except Exception:
+            _allowed = False
+        if not _allowed:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    from vaf.core.session import SessionManager
+    sm = SessionManager()
+    try:
+        sess = sm.load(session_id)
+    except Exception:
+        sess = None
+    # User isolation: never read or write another user's session (same ownership rule as
+    # _resolve_session_workspace / the WS load_session gate). A session with no scope is
+    # legacy/local; the local admin may access any. Fail closed if it can't be verified.
+    if sess is not None:
+        try:
+            from vaf.api.config_routes import get_current_user_or_local_admin
+            from vaf.core.config import get_local_admin_scope_id
+            _uscope = (get_current_user_or_local_admin(request) or {}).get("user_scope_id")
+            _sscope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
+            _owner = (not _sscope) or str(_sscope) == str(_uscope)
+            _admin = str(_uscope) == str(get_local_admin_scope_id())
+            if not (_owner or _admin):
+                raise HTTPException(status_code=403, detail="Session does not belong to this user")
+        except HTTPException:
+            raise
+        except Exception:
+            sess = None  # fail closed: don't touch a session we couldn't verify
+    _key = str(target.resolve())
+    desc = ""
+    # 1. Already cached for this session.
+    if sess is not None:
+        desc = ((getattr(sess, "runtime_state", None) or {}).get("image_descriptions") or {}).get(_key) or ""
+    # 2. Reuse a chat-uploaded image's persisted base_description (match by path).
+    if not desc and sess is not None:
+        for _m in getattr(sess, "messages", None) or []:
+            for _img in ((getattr(_m, "metadata", None) or {}).get("images") or []):
+                if isinstance(_img, dict) and _img.get("path") and _img.get("base_description"):
+                    try:
+                        if _Path(_img["path"]).resolve() == target.resolve():
+                            desc = _img["base_description"]
+                            break
+                    except Exception:
+                        pass
+            if desc:
+                break
+    # 3. Generate once via the vision backend, then cache.
+    if not desc:
+        try:
+            import asyncio as _asyncio
+            import mimetypes as _mt
+            from vaf.core.vision_infer import describe_image_cached
+            _mime = _mt.guess_type(str(target))[0] or "image/png"
+            # Offload the blocking vision call so the async event loop stays responsive.
+            # describe_image_cached shares a process-wide cache with the chat-upload base
+            # description, so the same image is never described/billed twice (incl. the race
+            # where the viewer is opened mid-turn).
+            desc = (await _asyncio.to_thread(
+                describe_image_cached,
+                {"path": str(target), "mime_type": _mime, "name": target.name},
+            )) or ""
+            if desc and sess is not None:
+                if not getattr(sess, "runtime_state", None):
+                    sess.runtime_state = {}
+                sess.runtime_state.setdefault("image_descriptions", {})[_key] = desc
+                sm.save(sess, sync_state=False)
+        except Exception as _de:
+            log("WebServer", f"describe_image failed: {_de}")
+    return {"name": target.name, "description": desc}
+
+
 def _allowed_file_path(path_str: str):
     """Resolve path and check it is under allowed roots. Returns Path or raises HTTPException."""
     from vaf.core.platform import Platform
@@ -2638,14 +2752,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if _kind:
                     entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
                 if role == "user" and meta and meta.get("images"):
-                    entry["images"] = [
-                        {
-                            "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img.get('data', '')}",
-                            "name": img.get("name", "image"),
-                        }
-                        for img in meta["images"]
-                        if img.get("data")
-                    ]
+                    from urllib.parse import quote as _urlquote
+                    _img_entries = []
+                    for img in meta["images"]:
+                        if img.get("path"):
+                            # File on disk → serve via /api/file (per-user isolation enforced there).
+                            _img_entries.append({
+                                "url": f"/api/file?path={_urlquote(str(img['path']))}",
+                                "name": img.get("name", "image"),
+                            })
+                        elif img.get("data"):
+                            # Legacy inline base64 → data: URL.
+                            _img_entries.append({
+                                "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img['data']}",
+                                "name": img.get("name", "image"),
+                            })
+                    entry["images"] = _img_entries
                 if role == "tool":
                     # Try metadata dict first, then fall back to top-level keys
                     # (backend stores tool info as top-level: name, tool_call_id)
@@ -3629,6 +3751,90 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception:
                                 pass
 
+                        # Image viewer context: while the Image Viewer is open, the frontend sends the
+                        # open image's vision description each turn. Store it in runtime_state so
+                        # headless_runner injects it per-turn (kept in context only while the viewer is
+                        # open), exactly like code_viewer_file.
+                        image_viewer_ctx = cmd.get("imageViewerContext")
+                        if image_viewer_ctx and isinstance(image_viewer_ctx, dict) and image_viewer_ctx.get("description"):
+                            try:
+                                loaded = session_mgr.load(session_id)
+                            except FileNotFoundError:
+                                loaded = Session(id=session_id, name=f"Session {session_id}", runtime_state={})
+                                session_mgr.save(loaded, sync_state=False)
+                            if not getattr(loaded, "runtime_state", None):
+                                loaded.runtime_state = {}
+                            loaded.runtime_state["image_viewer_context"] = image_viewer_ctx
+                            session_mgr.save(loaded, sync_state=False)
+                        else:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                                if getattr(loaded, "runtime_state", None) and "image_viewer_context" in loaded.runtime_state:
+                                    del loaded.runtime_state["image_viewer_context"]
+                                    session_mgr.save(loaded, sync_state=False)
+                            except Exception:
+                                pass
+
+                        # Marked region: the user drew a yellow box on an image and is asking about it.
+                        # Run vision ONCE on the annotated full image + zoomed crop with the user's
+                        # question, and stash the answer text so headless injects it this turn (one-shot,
+                        # like image_viewer_context). Vision is offloaded so the event loop stays free.
+                        marked_region = cmd.get("markedRegion")
+                        if marked_region and isinstance(marked_region, dict) and (marked_region.get("annotated") or marked_region.get("crop")):
+                            try:
+                                import asyncio as _asyncio
+                                from vaf.core.vision_infer import vision_infer as _vinfer
+                                _rname = marked_region.get("name") or "image"
+                                _mr_imgs = []
+                                for _k in ("annotated", "crop"):
+                                    _d = marked_region.get(_k) or ""
+                                    if not _d:
+                                        continue
+                                    _mime = "image/png"
+                                    if _d.startswith("data:"):
+                                        if ";" in _d:
+                                            _mime = _d[5:].split(";", 1)[0] or "image/png"
+                                        _d = _d.split(",", 1)[1] if "," in _d else _d
+                                    _mr_imgs.append({"data": _d, "mime_type": _mime, "name": _rname})
+                                _q = (content or "").strip() or "What is in the marked region?"
+                                _prompt = (
+                                    f"The user marked a region of the image '{_rname}' with a YELLOW rectangle. "
+                                    f"The first image is the full image with the box; the second is a zoomed crop of it. "
+                                    f"Answer specifically about what is INSIDE the marked region:\n{_q}"
+                                )
+                                _ans = await _asyncio.to_thread(_vinfer, _mr_imgs, _prompt)
+                                try:
+                                    loaded = session_mgr.load(session_id)
+                                except FileNotFoundError:
+                                    # First message into a fresh session — create it so the
+                                    # (already-paid) vision answer isn't silently dropped.
+                                    loaded = Session(id=session_id, name=f"Session {session_id}", runtime_state={})
+                                if not getattr(loaded, "runtime_state", None):
+                                    loaded.runtime_state = {}
+                                if _ans:
+                                    loaded.runtime_state["marked_region_answer"] = {"name": _rname, "text": _ans}
+                                else:
+                                    loaded.runtime_state.pop("marked_region_answer", None)
+                                session_mgr.save(loaded, sync_state=False)
+                            except Exception as _mre:
+                                log("WebServer", f"markedRegion vision failed: {_mre}")
+                                # Don't leave a stale answer from a previous turn if this one failed.
+                                try:
+                                    _l = session_mgr.load(session_id)
+                                    if getattr(_l, "runtime_state", None) and "marked_region_answer" in _l.runtime_state:
+                                        del _l.runtime_state["marked_region_answer"]
+                                        session_mgr.save(_l, sync_state=False)
+                                except Exception:
+                                    pass
+                        else:
+                            try:
+                                loaded = session_mgr.load(session_id)
+                                if getattr(loaded, "runtime_state", None) and "marked_region_answer" in loaded.runtime_state:
+                                    del loaded.runtime_state["marked_region_answer"]
+                                    session_mgr.save(loaded, sync_state=False)
+                            except Exception:
+                                pass
+
                         # Editor selections: store for replace_editor_selection tool (start/end per index)
                         editor_selections = cmd.get("editorSelections")
                         if isinstance(editor_selections, list) and editor_selections:
@@ -3733,7 +3939,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # (see Agent.chat_step). Clearing it here first destroyed that handoff — the agent
                         # found nothing and answered without the question's context (observed 2026-06-22).
                         if attached_images:
+                            # Persist images as files in the user-siloed chat folder; entries
+                            # then reference them by path (lean session.json, real file location).
+                            attached_images = _persist_attached_images_to_files(
+                                attached_images, session_id, user_scope_id
+                            )
                             metadata["images"] = attached_images
+                            # Surface the stored file(s) to the Web UI so the chat's workspace box
+                            # appears (same notify the agent's file-creating tools use). Uploading an
+                            # image now creates a real file in the chat folder, so it should show up
+                            # there just like agent-created files.
+                            try:
+                                from vaf.core.web_interface import notify_file_created
+                                for _ai in attached_images:
+                                    if _ai.get("path"):
+                                        notify_file_created(session_id, _ai["path"], title=_ai.get("name"))
+                            except Exception as _nfe:
+                                log("WebServer", f"notify_file_created (image upload) failed: {_nfe}")
                         tq.add(session_id=session_id, input_text=content, source="web", metadata=metadata)
                         try:
                             if is_debug_logging_enabled():
@@ -5666,6 +5888,54 @@ def _is_temp_like_filename(name: str) -> bool:
         return False
     import re
     return bool(re.match(r"^vaf_[a-zA-Z0-9_]+\.[a-zA-Z0-9]+$", name))
+
+
+def _persist_attached_images_to_files(attached_images: list, session_id, user_scope_id) -> list:
+    """Write uploaded chat images to the user-siloed chat attachments folder and return entries
+    that reference them by PATH instead of inline base64. Keeps session.json lean and gives the
+    agent a real file location (analyze_image / read_file). Per image, on ANY failure the original
+    base64 entry is kept so vision never breaks. Only image/* is written; oversized payloads are
+    skipped (kept inline)."""
+    import base64 as _b64
+    import mimetypes as _mt
+    import os as _os
+    import re as _re
+    import time as _time
+    import uuid as _uuid
+    from vaf.core.session import get_session_attachments_dir
+    try:
+        attach_dir = get_session_attachments_dir(session_id, user_scope_id, create=True)
+    except Exception:
+        attach_dir = None
+    if not attach_dir:
+        return attached_images
+    _MAX_BYTES = 25 * 1024 * 1024
+    out = []
+    for idx, img in enumerate(attached_images):
+        data_b64 = img.get("data") or ""
+        mime = img.get("mime_type", "image/jpeg") or "image/jpeg"
+        name = img.get("name", "image") or "image"
+        if not data_b64 or not str(mime).startswith("image/"):
+            out.append(img)
+            continue
+        try:
+            raw_bytes = _b64.b64decode(data_b64)
+            if not raw_bytes or len(raw_bytes) > _MAX_BYTES:
+                out.append(img)
+                continue
+            # On-disk basename: derive the extension from the VALIDATED image mime (never trust
+            # the uploaded name's extension), so /api/file always serves an image Content-Type.
+            # The display name keeps the original. A uuid token guarantees uniqueness (no overwrite
+            # when two same-named images arrive in the same second).
+            stem = _re.sub(r'[^A-Za-z0-9._-]', '_', _os.path.splitext(name)[0])[:60] or "image"
+            ext = _mt.guess_extension(str(mime).split(";")[0].strip()) or ".img"
+            fpath = attach_dir / f"{int(_time.time())}_{_uuid.uuid4().hex[:8]}_{stem}{ext}"
+            fpath.write_bytes(raw_bytes)
+            out.append({"name": name, "mime_type": mime, "path": str(fpath)})
+        except Exception as e:
+            log("WebServer", f"attach image to file failed ({name}): {e}")
+            out.append(img)  # fall back to inline base64
+    return out
 
 
 async def _notify_attachment_index(manager, session_id: str, kind: str, **extra) -> None:

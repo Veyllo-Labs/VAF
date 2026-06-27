@@ -141,7 +141,19 @@ class SendMailTool(BaseTool):
             },
             "to": {
                 "type": "string",
-                "description": "Recipient email address.",
+                "description": "Recipient email address(es). Multiple allowed, comma-separated.",
+            },
+            "cc": {
+                "type": "string",
+                "description": "Optional. Cc recipient address(es), comma-separated.",
+            },
+            "bcc": {
+                "type": "string",
+                "description": "Optional. Bcc recipient address(es), comma-separated.",
+            },
+            "in_reply_to": {
+                "type": "string",
+                "description": "Optional. When replying, pass the original email's message_id (from mail_inbox/read_mail) so the reply threads correctly in the recipient's client.",
             },
             "subject": {
                 "type": "string",
@@ -169,6 +181,9 @@ class SendMailTool(BaseTool):
         user_scope_id = cred_scope_from_kwargs(kwargs)
         account_id = (kwargs.get("account_id") or "").strip()
         to = (kwargs.get("to") or "").strip()
+        cc = (kwargs.get("cc") or "").strip() or None
+        bcc = (kwargs.get("bcc") or "").strip() or None
+        in_reply_to = (kwargs.get("in_reply_to") or "").strip() or None
         subject = (kwargs.get("subject") or "").strip()
         body = (kwargs.get("body") or "").strip()
         confirm_high_risk = bool(kwargs.get("confirm_high_risk", False))
@@ -229,6 +244,9 @@ class SendMailTool(BaseTool):
                 subject=subject,
                 body=body or "",
                 attachments=attachments if attachments else None,
+                cc=cc,
+                bcc=bcc,
+                in_reply_to=in_reply_to,
                 username=cred_username,
                 user_scope_id=user_scope_id,
             )
@@ -236,7 +254,8 @@ class SendMailTool(BaseTool):
             return f"Failed to send email: {e}"
         if ok:
             suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
-            return f"Email{suffix} sent to {to} from {account_id}."
+            cc_suffix = f", cc {cc}" if cc else ""
+            return f"Email{suffix} sent to {to}{cc_suffix} from {account_id}."
         
         # Determine provider for better error hint
         prov_hint = ""

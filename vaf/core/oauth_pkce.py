@@ -78,9 +78,28 @@ def _load_states() -> Dict[str, Dict[str, Any]]:
 
 
 def _save_states(states: Dict[str, Dict[str, Any]]) -> None:
+    # The state file holds the PKCE code_verifier (a short-lived secret). Write it atomically
+    # and restrict it to owner-only (0600) so another local user cannot read it during the
+    # 10-minute window and complete the flow with an intercepted auth code.
+    from vaf.core.secure_store import _atomic_write_bytes, harden_dir, harden_path
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"states": states}, indent=2), encoding="utf-8")
+    harden_dir(path.parent)
+    _atomic_write_bytes(path, json.dumps({"states": states}, indent=2).encode("utf-8"))
+    harden_path(path)
+
+
+def _safe_oauth_error(resp) -> str:
+    """Extract a non-sensitive error string from a token-endpoint response. Never returns the
+    raw body (which can contain tokens / refresh tokens), only the standard error fields."""
+    try:
+        body = resp.json()
+        msg = body.get("error_description") or body.get("error")
+        if msg:
+            return str(msg)[:200]
+    except Exception:
+        pass
+    return f"HTTP {resp.status_code}"
 
 
 def _pkce_verifier_and_challenge() -> Tuple[str, str]:
@@ -322,11 +341,7 @@ def exchange_code_for_tokens(
     headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
     resp = requests.post(token_url, data=payload, headers=headers, timeout=30)
     if resp.status_code != 200:
-        try:
-            err_body = resp.json()
-            err_msg = err_body.get("error_description") or err_body.get("error") or resp.text[:200]
-        except Exception:
-            err_msg = resp.text[:200]
+        err_msg = _safe_oauth_error(resp)
         logger.warning("Token exchange failed: %s %s", resp.status_code, err_msg)
         raise ValueError(f"Token exchange failed: {err_msg}")
     data = resp.json()
@@ -392,8 +407,9 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     try:
         resp = requests.post(token_url, data=payload, headers=headers, timeout=30)
         if resp.status_code != 200:
-            logger.warning("Token refresh failed for %s: %s %s", provider, resp.status_code, resp.text[:200])
-            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} status={resp.status_code} response={resp.text}")
+            err_msg = _safe_oauth_error(resp)
+            logger.warning("Token refresh failed for %s: %s %s", provider, resp.status_code, err_msg)
+            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} status={resp.status_code} error={err_msg}")
             return access
         data = resp.json()
         new_access = data.get("access_token")

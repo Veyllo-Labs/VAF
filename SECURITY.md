@@ -48,6 +48,14 @@ The `browser_agent` tool controls a real headless Chromium browser. This introdu
 ### 4. Sub-Agent Isolation
 Sub-agents (Coder, Librarian, Research) run in separate processes. While they are instructed to stay within certain directories, they are **not fully sandboxed** unless you are running in Docker mode. Even in Docker mode, excessive resource consumption (RAM/CPU) can lead to Denial of Service (DoS) on the host machine.
 
+### 5. Email Accounts (IMAP/SMTP)
+
+VAF connects to user-supplied mail servers, so it treats the IMAP/SMTP host you enter as an untrusted outbound target:
+
+- **SSRF / private-host guard:** Before connecting (and on the "test connection" check), VAF resolves the host and refuses any address that is not globally routable — loopback, RFC-1918 private ranges, and link-local addresses (including the `169.254.169.254` cloud-metadata endpoint). This blocks a malicious or mistyped mail-host config from probing your internal network. Multicast/reserved/link-local are refused unconditionally. If you genuinely run a mail server on your LAN or the same host, set `email_allow_private_hosts=true` in `config.json` to allow loopback / private addresses (the metadata endpoint stays blocked even then). Default is `false`.
+- **TLS verification:** IMAP and SMTP connections verify the server's TLS certificate against the system trust store; connection attempts time out rather than hanging.
+- **Credential redaction over the API:** `GET /api/config` returns secrets (API keys, OAuth client secrets, the JWT/encryption keys, IMAP/SMTP passwords, and database URLs) only to admin users. Non-admin network users receive a redacted config and only their own scoped account list.
+
 ---
 
 ## Multi-Tenant Security (Network Mode)

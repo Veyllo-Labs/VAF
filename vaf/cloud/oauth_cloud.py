@@ -89,9 +89,14 @@ def _load_states() -> Dict[str, Dict[str, Any]]:
 
 
 def _save_states(states: Dict[str, Dict[str, Any]]) -> None:
+    # Holds the PKCE code_verifier (short-lived secret): write atomically and restrict to
+    # owner-only (0600) so another local user can't read it during the auth window.
+    from vaf.core.secure_store import _atomic_write_bytes, harden_dir, harden_path
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"states": states}, indent=2), encoding="utf-8")
+    harden_dir(path.parent)
+    _atomic_write_bytes(path, json.dumps({"states": states}, indent=2).encode("utf-8"))
+    harden_path(path)
 
 
 # ── Client credential resolution ────────────────────────────────────────

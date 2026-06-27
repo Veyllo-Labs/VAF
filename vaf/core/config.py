@@ -595,6 +595,40 @@ class Config:
             return True
         return any(key.startswith(prefix) for prefix in cls.GLOBAL_CONFIG_KEY_PREFIXES)
 
+    # Secret config values that must NEVER be returned to a non-admin client.
+    # This is a READ-redaction list and is intentionally NARROWER than the
+    # global write-denylist above: keys like api_model_* or non-secret
+    # local_network_* are admin-only to *write* but safe for any user to *read*
+    # (the UI needs them), whereas the entries below are credentials/keys
+    # (API keys, OAuth client secrets, the JWT secret, encryption keys, DB URLs
+    # that may embed passwords).
+    SECRET_CONFIG_KEY_SUFFIXES = (
+        "_client_secret",
+        "_secret",
+        "_credentials_key",
+        "_encryption_key",
+        "_kek",
+        "_password",
+        "_passwd",
+    )
+    SECRET_CONFIG_KEY_PREFIXES = ("api_key_",)
+    SECRET_CONFIG_KEYS = frozenset({
+        "secure_store_kek",
+        "memory_db_url",
+        "redis_url",
+    })
+
+    @classmethod
+    def is_secret_config_key(cls, key: str) -> bool:
+        """True if this config value is a credential/secret that must never be sent
+        to a non-admin client. Narrower than is_global_config_key (which also covers
+        non-secret admin-only settings the UI legitimately reads)."""
+        if key in cls.SECRET_CONFIG_KEYS:
+            return True
+        if any(key.startswith(p) for p in cls.SECRET_CONFIG_KEY_PREFIXES):
+            return True
+        return any(key.endswith(s) for s in cls.SECRET_CONFIG_KEY_SUFFIXES)
+
     # Connection config keys that only admin may write (enabled/whitelist etc.). Non-admins write to connection_enabled_by_scope instead.
     CONNECTION_CONFIG_KEYS = frozenset({"telegram_config", "whatsapp_config", "discord_config"})
 
@@ -643,6 +677,13 @@ class Config:
             return dict(config)
         out = dict(config)
         scope_str = str(user_scope_id).strip() if user_scope_id else None
+
+        # Strip credentials/secrets: non-admins must never receive API keys, OAuth
+        # client secrets, the JWT secret, encryption keys or DB URLs. (The wizard's
+        # OAuth-config read is admin-only; non-admins read connection *state* from
+        # dedicated status endpoints, not raw secrets.)
+        for k in [k for k in out if cls.is_secret_config_key(k)]:
+            out.pop(k, None)
 
         # Email: only this user's accounts (email_config_by_scope[user_scope_id])
         by_scope = config.get("email_config_by_scope") or {}

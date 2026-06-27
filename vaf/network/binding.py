@@ -90,6 +90,48 @@ def is_allowed_ip(ip: str) -> bool:
         return False
 
 
+def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
+    """SSRF guard for user-supplied OUTBOUND targets (e.g. an IMAP/SMTP server a user types
+    into the email wizard). Resolves the host and raises ValueError if ANY resolved address is
+    not globally routable.
+
+    - Multicast / reserved / unspecified / link-local (incl. the 169.254.169.254 cloud-metadata
+      endpoint) are NEVER allowed, even with the override.
+    - Loopback / RFC-1918 private addresses are allowed only when allow_private=True (so a user
+      who genuinely runs a LAN / self-hosted mail server can opt in via email_allow_private_hosts).
+
+    Note: there is an inherent resolve-vs-connect TOCTOU (DNS rebinding); for a mostly-static
+    mail-server config the residual risk is low and accepted.
+    """
+    h = (host or "").strip()
+    if not h:
+        raise ValueError("No host given")
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except socket.gaierror as e:
+        raise ValueError(f"Cannot resolve host: {h}") from e
+    addrs = {info[4][0] for info in infos}
+    if not addrs:
+        raise ValueError(f"Cannot resolve host: {h}")
+    for ip in addrs:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError as e:
+            raise ValueError(f"Invalid resolved address for host: {h}") from e
+        if addr.is_global:
+            continue
+        if addr.is_multicast or addr.is_reserved or addr.is_unspecified or addr.is_link_local:
+            raise ValueError(f"Refusing to connect to non-routable address ({ip}) for host {h}")
+        if addr.is_loopback or addr.is_private:
+            if allow_private:
+                continue
+            raise ValueError(
+                f"Refusing to connect to private address ({ip}) for host {h}. "
+                "Set email_allow_private_hosts=true to allow a LAN / self-hosted server."
+            )
+        raise ValueError(f"Refusing to connect to non-public address ({ip}) for host {h}")
+
+
 def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optional[int]:
     """Return the first port from [preferred, fallback] that `host` can ACTUALLY bind, or None if
     neither is bindable. A privileged port (<1024, e.g. 443) raises PermissionError for a non-root

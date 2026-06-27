@@ -8,14 +8,16 @@ Credentials are stored in credential_store (keyring or encrypted file);
 config holds only account metadata.
 """
 import asyncio
+import html
 import logging
 import re
+import ssl
 import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from datetime import datetime, timezone
 
@@ -50,8 +52,15 @@ from vaf.api.oauth_session_binding import (
     enforce_callback_actor_binding,
     require_oauth_actor_in_network_mode,
 )
+from vaf.network.binding import assert_safe_remote_host
 
 logger = logging.getLogger("vaf.api.email")
+
+
+def _guard_mail_host(host: str) -> None:
+    """SSRF guard for a user-supplied IMAP/SMTP host. Refuses non-public addresses unless an
+    admin opted in via email_allow_private_hosts (LAN / self-hosted server)."""
+    assert_safe_remote_host(host, allow_private=bool(Config.get("email_allow_private_hosts", False)))
 
 router = APIRouter(prefix="/api/email", tags=["email"])
 
@@ -103,9 +112,9 @@ class AddImapAccountRequest(BaseModel):
     email: str
     password: str
     imap_host: Optional[str] = None
-    imap_port: Optional[int] = None
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
     smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
 class TestImapRequest(BaseModel):
@@ -113,7 +122,7 @@ class TestImapRequest(BaseModel):
     email: str
     password: str
     imap_host: Optional[str] = None
-    imap_port: Optional[int] = None
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
 def _get_email_config(
@@ -196,7 +205,11 @@ def _test_imap_login(
     elif domain in ("outlook.com", "hotmail.com", "live.com", "live.de", "msn.com", "outlook.de", "office365.com"):
         hint = "Outlook.com no longer supports IMAP with app passwords (Microsoft retired Basic auth in 2024). Use 'Sign in with Microsoft' in the wizard instead—an admin must configure the OAuth client first (expand 'For admins' in the email wizard)."
     try:
-        conn = imaplib.IMAP4_SSL(host, port=port)
+        _guard_mail_host(host)
+    except ValueError as e:
+        return False, str(e), hint
+    try:
+        conn = imaplib.IMAP4_SSL(host, port=port, ssl_context=ssl.create_default_context(), timeout=30)
         conn.login(email, password)
         conn.noop()
         conn.logout()
@@ -325,10 +338,12 @@ async def oauth_callback(
         _username = data.get("username")
         _user_scope_id = data.get("user_scope_id")
         _add_account(account_id, provider, account_id if "@" in account_id else account_id, enabled=True, username=_username, user_scope_id=_user_scope_id)
-        logger.info("email oauth callback: account added account_id=%s provider=%s scope=%s", account_id, provider, _user_scope_id)
+        # account_id is the user's email (PII) → mask it in logs.
+        masked_account = (account_id[:3] + "***") if account_id else "unknown"
+        logger.info("email oauth callback: account added account_id=%s provider=%s", masked_account, provider)
         try:
             from vaf.core.log_helper import append_domain_log
-            append_domain_log("backend", f"[EMAIL_OAUTH] account added account_id={account_id} provider={provider}")
+            append_domain_log("backend", f"[EMAIL_OAUTH] account added account_id={masked_account} provider={provider}")
         except Exception:
             pass
         return _redirect_success(account_id, provider)
@@ -345,14 +360,17 @@ def _redirect_success(account_id: str, provider: str) -> RedirectResponse:
 
 
 def _redirect_error(message: str) -> HTMLResponse:
+    # message can include provider-controlled text (the OAuth `error` query param) → escape it
+    # so a crafted error value cannot inject HTML/script into this page.
+    safe_message = html.escape(message or "Email connection failed")
     url = f"{_frontend_base_url()}/settings?connections=1&email_oauth=error"
     html_content = f"""
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Email connection failed</title></head>
     <body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
     <h2>Email connection failed</h2>
-    <p>{message}</p>
-    <p><a href="{url}">Back to Settings</a></p>
+    <p>{safe_message}</p>
+    <p><a href="{html.escape(url)}">Back to Settings</a></p>
     </body></html>
     """
     return HTMLResponse(content=html_content, status_code=200)
@@ -381,7 +399,7 @@ async def list_accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
 
 
 @router.post("/accounts/test")
-async def test_imap_connection(body: TestImapRequest):
+async def test_imap_connection(request: Request, body: TestImapRequest, _user: Dict[str, Any] = Depends(_get_current_user)):
     """
     Test IMAP login with the given credentials. Nothing is saved.
     Use before adding an account to verify email/password (and 2FA app password for Gmail).
@@ -401,6 +419,14 @@ async def test_imap_connection(body: TestImapRequest):
     )
     if ok:
         return {"ok": True}
+    # Feed the shared rate limiter so repeated failed credential tests get blocked per IP
+    # (the test route returns 200 even on failure, so the middleware's 401 path won't catch it).
+    try:
+        from vaf.auth.rate_limit import record_login_failure
+        client_ip = request.client.host if request.client else "unknown"
+        record_login_failure(client_ip)
+    except Exception:
+        pass
     return {"ok": False, "error": err, "hint": hint}
 
 
@@ -867,17 +893,19 @@ async def remove_account(request: Request, account_id: str, _user: Dict[str, Any
 EMAIL_AUTO_SYNC_INTERVAL_SEC = 30 * 60  # 30 minutes
 
 
-def _collect_auto_sync_accounts() -> List[tuple[str, Dict[str, Any], Dict[str, Any]]]:
-    """Return list of (config_username, account_dict, full_ec) for every account with auto_sync_enabled."""
+def _collect_auto_sync_accounts() -> List[tuple[Optional[str], Dict[str, Any], Dict[str, Any], Optional[str]]]:
+    """Return (config_username, account_dict, full_ec, user_scope_id) for every account with
+    auto_sync_enabled, across legacy/local-admin, per-username and per-scope (UUID-scoped
+    network user) configs. For per-scope entries config_username is None and user_scope_id is set."""
     local_admin = get_local_admin_username().lower()
-    result: List[tuple[str, Dict[str, Any], Dict[str, Any]]] = []
+    result: List[tuple[Optional[str], Dict[str, Any], Dict[str, Any], Optional[str]]] = []
     # Legacy / local admin
     ec = _get_email_config(None)
     if isinstance(ec, dict):
         for a in ec.get("accounts") or []:
             if a.get("auto_sync_enabled"):
-                result.append((local_admin, a, ec))
-    # Per-user config
+                result.append((local_admin, a, ec, None))
+    # Per-username config (legacy network users)
     by_user = Config.get("email_config_by_user") or {}
     if isinstance(by_user, dict):
         for uname, user_ec in by_user.items():
@@ -885,7 +913,21 @@ def _collect_auto_sync_accounts() -> List[tuple[str, Dict[str, Any], Dict[str, A
                 continue
             for a in user_ec.get("accounts") or []:
                 if a.get("auto_sync_enabled"):
-                    result.append((uname.strip(), a, user_ec))
+                    result.append((uname.strip(), a, user_ec, None))
+    # Per-scope config (UUID-scoped network users) — previously skipped, so their mailboxes
+    # never auto-synced. Carry the scope so creds/store/save all resolve to the right user.
+    by_scope = Config.get("email_config_by_scope") or {}
+    if isinstance(by_scope, dict):
+        local_admin_scope = str(get_local_admin_scope_id()).strip()
+        for scope_id, scope_ec in by_scope.items():
+            if not isinstance(scope_ec, dict):
+                continue
+            scope_str = str(scope_id).strip()
+            if not scope_str or scope_str == local_admin_scope:
+                continue  # local admin is already covered by the legacy email_config above
+            for a in scope_ec.get("accounts") or []:
+                if a.get("auto_sync_enabled"):
+                    result.append((None, a, scope_ec, scope_str))
     return result
 
 
@@ -903,12 +945,19 @@ async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
     synced = 0
     failed = 0
     errors: List[str] = []
-    for config_username, acc, ec in items:
+    for config_username, acc, ec, user_scope_id in items:
         account_id = acc.get("account_id") or acc.get("email") or ""
         if not account_id:
             continue
-        cred_username = None if config_username.strip().lower() == get_local_admin_username().lower() else config_username
-        store_username = "" if cred_username is None else cred_username
+        if user_scope_id:
+            # UUID-scoped network user: creds/store/save all key off the scope.
+            cred_username = None
+            store_username = ""
+            save_username = None
+        else:
+            cred_username = None if (config_username or "").strip().lower() == get_local_admin_username().lower() else config_username
+            store_username = "" if cred_username is None else cred_username
+            save_username = config_username if store_username else None
         limit = min(max(1, max_messages), 200)
         try:
             messages = await asyncio.to_thread(
@@ -917,16 +966,17 @@ async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
                 folder="INBOX",
                 max_messages=limit,
                 username=cred_username,
+                user_scope_id=user_scope_id,
             )
         except Exception as e:
             logger.warning("Auto-sync fetch failed for %s: %s", account_id[:8] + "***", e)
             failed += 1
             errors.append(f"{account_id[:12]}...: {e}")
             continue
-        count = upsert_messages(account_id, "INBOX", messages, username=store_username)
-        delete_messages_older_than(username=store_username, days=90)
+        count = upsert_messages(account_id, "INBOX", messages, username=store_username, user_scope_id=user_scope_id)
+        delete_messages_older_than(username=store_username, user_scope_id=user_scope_id, days=90)
         acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
-        _save_email_config(ec, config_username if store_username else None)
+        _save_email_config(ec, save_username, user_scope_id=user_scope_id)
         synced += 1
         if count > 0:
             logger.info("Auto-sync completed for %s: %d messages", account_id[:8] + "***", count)

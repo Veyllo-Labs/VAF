@@ -14,6 +14,8 @@ venv) and all user state (~/.vaf) live OUTSIDE the git tree, so `git checkout`
 only swaps tracked source and rollback is another checkout.
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -173,10 +175,39 @@ def _start_service() -> None:
 
 def _install_python_deps(root: Path) -> None:
     UI.info("Installing Python dependencies...")
+    # Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_mac.sh /
+    # setup_win.ps1) during an update — that would redo brew/venv/alias/.app work.
+    env = {**os.environ, "VAF_SKIP_POSTINSTALL": "1"}
     for args in (["-e", "."], ["-r", "requirements.txt"]):
-        r = subprocess.run([sys.executable, "-m", "pip", "install", *args], cwd=str(root))
+        r = subprocess.run([sys.executable, "-m", "pip", "install", *args], cwd=str(root), env=env)
         if r.returncode != 0:
             raise _UpdateError(f"pip install {' '.join(args)} failed")
+
+
+def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> None:
+    """Update frontend npm deps after a checkout. Without this, the lazy `npm run build` on the
+    next start would build against stale node_modules and the Web UI could break. Runs
+    `npm install` only when web/package.json|package-lock.json changed (or node_modules is
+    missing, or force on rollback). Non-fatal: a failure warns but does not roll back."""
+    web = root / "web"
+    if not (web / "package.json").exists():
+        return
+    npm = shutil.which("npm")
+    if not npm:
+        if force or prev_sha:
+            UI.warning("npm not found - skipping Web UI dependency update (install Node to update the dashboard).")
+        return
+    need = force or not (web / "node_modules").is_dir()
+    if not need and prev_sha:
+        _, changed, _ = _git(root, "diff", "--name-only", prev_sha, "HEAD",
+                             "--", "web/package.json", "web/package-lock.json")
+        need = bool(changed.strip())
+    if not need:
+        return
+    UI.info("Updating frontend dependencies (npm install)...")
+    r = subprocess.run([npm, "install"], cwd=str(web))
+    if r.returncode != 0:
+        UI.warning("npm install failed; the Web UI may not rebuild. Run `cd web && npm install` manually.")
 
 
 def _invalidate_web_build(root: Path) -> None:
@@ -214,6 +245,7 @@ def _rollback(root: Path, anchor: str) -> None:
         _install_python_deps(root)
     except Exception:
         UI.error("Rollback dependency reinstall failed; you may need `pip install -e .` manually.")
+    _install_web_deps(root, force=True)
     _invalidate_web_build(root)
     try:
         _start_service()
@@ -265,6 +297,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None) -> None:
             "git fetch origin --tags",
             f"git checkout {target}",
             "pip install -e .  +  pip install -r requirements.txt",
+            "npm install in web/ (only if frontend deps changed)",
             "invalidate web/.next (lazy rebuild on next start)",
             "run config/state migrations",
             "restart the VAF service",
@@ -310,6 +343,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None) -> None:
             raise _UpdateError(f"git checkout {target} failed: {err}")
 
         _install_python_deps(root)
+        _install_web_deps(root, cur_sha)
         _invalidate_web_build(root)
         _run_migrations()
 

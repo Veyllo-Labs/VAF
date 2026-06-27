@@ -4,20 +4,25 @@ On Windows, VAF runs as a background service and provides a command-line interfa
 
 ## Installation
 
-The recommended method for setting up VAF on Windows is via the automated PowerShell script. This ensures all dependencies, including system-specific drivers for GPU acceleration and speech synthesis, are correctly configured.
+The recommended method is the automated installer. From the project root in PowerShell, run:
 
-1. Open PowerShell in the project root directory.
-2. Execute the setup script:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\setup_win.ps1
-   ```
+```powershell
+.\install.bat
+```
 
-### Installation Actions:
-- **Virtual Environment**: Creates an isolated Python environment (`venv`) to manage dependencies.
-- **System Integration**: Installs and patches `pywin32` for reliable background operation and COM interaction.
-- **Dependency Management**: Installs all required packages in editable mode.
-- **Shortcuts**: Generates "VAF Agent" shortcuts on the **Desktop** and in the **Start Menu**.
-- **Visuals**: Auto-generates high-resolution application icons.
+(or `powershell -ExecutionPolicy Bypass -File .\install.ps1`). It provisions a bare machine
+without admin rights.
+
+### Installation actions:
+- **Python**: not required up front — if no suitable Python is found, the installer installs
+  [uv](https://docs.astral.sh/uv/) and provisions Python itself.
+- **Node.js**: not required up front — if missing, a portable Node is downloaded into
+  `%LOCALAPPDATA%\Veyllo\node` for the web UI.
+- **Virtual environment**: creates an isolated `venv` and installs the Python dependencies (editable mode).
+- **System integration**: installs and patches `pywin32` for reliable background operation and COM interaction.
+- **Docker** *(optional)*: **detected, not installed** — used for the memory/RAG system and the code
+  sandbox if a runtime is present (Docker Desktop, or Docker Engine in WSL2). The app runs without it.
+- **Shortcuts & icons**: "VAF Agent" shortcuts on the **Desktop** and in the **Start Menu**, with generated app icons.
 
 ---
 

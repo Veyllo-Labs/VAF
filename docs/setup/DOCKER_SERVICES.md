@@ -254,7 +254,10 @@ docker compose -f docker-compose.memory.yml restart tts
 
 ### During Installation (`install.sh` / `install.ps1`)
 
-The installer automatically manages the Docker stack:
+The installer **detects** an existing Docker runtime (Docker Desktop, Engine, Colima, Podman) and
+uses it — it does **not** install Docker. Docker is optional: without it, long-term memory/RAG and
+the code sandbox are off and the rest of VAF still runs. When a runtime is present, the installer
+manages the stack:
 
 1. **Change Detection**: After a `git pull`, the installer checks whether `docker-compose.memory.yml` has changed (via `git diff HEAD~1 HEAD`).
 2. **Auto-Start Docker Daemon**: If Docker is installed but not running, the installer attempts to start it automatically:

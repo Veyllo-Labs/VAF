@@ -16,7 +16,7 @@ An autonomous agent framework built on top of local and cloud LLMs. VAF runs as 
 
 **Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft — `legal@veyllo.io`.
 
-**Requires:** Python 3.10+, Node.js 18+, Docker (optional, for memory and sandboxing)
+**Requires:** Git to clone. The installer provisions Python and Node for you (via uv / a portable Node); Docker is optional — only for memory and the code sandbox.
 
 ---
 
@@ -47,7 +47,7 @@ git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
 chmod +x install.sh && ./install.sh
 ```
 
-The installer sets up a Python venv, installs all dependencies, builds the web UI, and adds the `vaf` command to your shell.
+The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), detects an existing Docker runtime (it doesn't install one), and adds the `vaf` command to your shell.
 
 **Installation mode** — the installer asks once:
 ```
@@ -77,18 +77,19 @@ VAF runs in three modes depending on your use case.
 
 ### Desktop (recommended for personal use)
 
-Starts a persistent background service with the web UI accessible at `http://localhost:3000`.
+The desktop app — system-tray icon + agent window, web UI at `http://localhost:3000`. Easiest start: double-click the **VAF Agent** shortcut the installer created, or run:
+
+```bash
+vaf tray       # Start the desktop app (tray + web UI)
+```
+
+Or manage it as a background service:
 
 ```bash
 vaf start      # Start in background
 vaf stop       # Stop cleanly
 vaf restart    # Restart
 vaf status     # Show status
-```
-
-Or run in the foreground (e.g., to see logs directly):
-```bash
-vaf tray
 ```
 
 **LAN access** (other devices on your network):

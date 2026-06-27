@@ -17,8 +17,10 @@ import logging
 import quopri
 import re
 import smtplib
+import ssl
 from email import message_from_bytes, message_from_string
 from email.encoders import encode_base64
+from email.header import decode_header, make_header
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -31,8 +33,43 @@ from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
 from vaf.core.log_helper import append_domain_log_always
+from vaf.network.binding import assert_safe_remote_host
 
 logger = logging.getLogger("vaf.core.email_transport")
+
+# Socket timeouts so a hung/blackholed mail server can't wedge the worker indefinitely.
+IMAP_TIMEOUT_SEC = 30
+SMTP_TIMEOUT_SEC = 30
+
+
+class MailConnectError(Exception):
+    """Raised when connecting/authenticating to a mail server fails, so callers can
+    distinguish 'authentication / connection failed' from 'no messages'."""
+
+
+def _mail_tls_context() -> ssl.SSLContext:
+    """Default TLS context: verifies the server certificate against the system trust store
+    and checks the hostname. Used for IMAPS / SMTP-over-TLS / STARTTLS."""
+    return ssl.create_default_context()
+
+
+def _guard_mail_host(host: str) -> None:
+    """SSRF guard: refuse to connect to a non-public mail host unless an admin opted in via
+    email_allow_private_hosts (for a legitimate LAN / self-hosted mail server)."""
+    allow_private = bool(Config.get("email_allow_private_hosts", False))
+    assert_safe_remote_host(host, allow_private=allow_private)
+
+
+def _decode_mail_header(value: Optional[str]) -> str:
+    """Decode an RFC 2047 encoded-word header (e.g. =?UTF-8?B?...?=) into a plain Unicode string.
+    Applied to From/To/Subject/display-name so non-ASCII senders and subjects are human-readable
+    (and so sender/phishing rules match the real text, not the raw encoding)."""
+    if not value:
+        return value or ""
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return value
 
 
 def _decode_quoted_printable(raw: bytes) -> str:
@@ -151,7 +188,11 @@ def _extract_plain_from_raw_mime(body: str) -> Optional[str]:
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            text = payload.decode("utf-8", errors="replace")
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text = payload.decode(charset, errors="replace")
+            except (LookupError, TypeError):
+                text = payload.decode("utf-8", errors="replace")
             if "text/plain" in ctype:
                 plain = (plain or "") + text
             elif "text/html" in ctype:
@@ -350,12 +391,27 @@ def _imap_connect(
         logger.warning("No IMAP credentials for account %s", account_id[:8] + "***")
         return None
     try:
-        conn = imaplib.IMAP4_SSL(host, port=port)
+        _guard_mail_host(host)
+        conn = imaplib.IMAP4_SSL(
+            host, port=port, ssl_context=_mail_tls_context(), timeout=IMAP_TIMEOUT_SEC
+        )
         conn.login(acc.get("email") or account_id, creds["password"])
         return conn
-    except Exception as e:
+    except imaplib.IMAP4.error as e:
         logger.warning("IMAP login failed for %s: %s", account_id[:8] + "***", e)
-        return None
+        raise MailConnectError(
+            "Email authentication failed. Check the account's password / app password "
+            "in Settings → Connections → Email."
+        ) from e
+    except ValueError as e:
+        # SSRF guard (assert_safe_remote_host) or bad config.
+        logger.warning("IMAP host rejected for %s: %s", account_id[:8] + "***", e)
+        raise MailConnectError(str(e)) from e
+    except Exception as e:
+        logger.warning("IMAP connect failed for %s: %s", account_id[:8] + "***", e)
+        raise MailConnectError(
+            "Could not connect to the mail server. Check the server settings and your network."
+        ) from e
 
 
 def _smtp_connect(
@@ -376,13 +432,30 @@ def _smtp_connect(
     if not creds or "password" not in creds:
         return None
     try:
-        conn = smtplib.SMTP(host, port=port)
-        conn.starttls()
+        _guard_mail_host(host)
+        ctx = _mail_tls_context()
+        if port == 465:
+            # Implicit TLS (SMTPS).
+            conn = smtplib.SMTP_SSL(host, port=port, context=ctx, timeout=SMTP_TIMEOUT_SEC)
+        else:
+            conn = smtplib.SMTP(host, port=port, timeout=SMTP_TIMEOUT_SEC)
+            conn.starttls(context=ctx)
         conn.login(acc.get("email") or account_id, creds["password"])
         return conn
+    except smtplib.SMTPAuthenticationError as e:
+        logger.warning("SMTP auth failed for %s: %s", account_id[:8] + "***", e)
+        raise MailConnectError(
+            "Email authentication failed (SMTP). Check the account's password / app password in Settings."
+        ) from e
+    except ValueError as e:
+        # SSRF guard (assert_safe_remote_host) or bad config.
+        logger.warning("SMTP host rejected for %s: %s", account_id[:8] + "***", e)
+        raise MailConnectError(str(e)) from e
     except Exception as e:
-        logger.warning("SMTP login failed for %s: %s", account_id[:8] + "***", e)
-        return None
+        logger.warning("SMTP connect failed for %s: %s", account_id[:8] + "***", e)
+        raise MailConnectError(
+            "Could not connect to the SMTP server. Check the server settings and your network."
+        ) from e
 
 
 def verify_imap_connection(
@@ -391,7 +464,10 @@ def verify_imap_connection(
     user_scope_id: Optional[str] = None,
 ) -> bool:
     """Verify IMAP login for an account. Returns True if NOOP succeeds. Optional username/user_scope_id for multi-user scope."""
-    conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
+    try:
+        conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
+    except MailConnectError:
+        return False
     if not conn:
         return False
     try:
@@ -485,10 +561,10 @@ def _fetch_mail_gmail(
             payload = msg.get("payload") or {}
             headers_list = payload.get("headers") or []
             headers = {h["name"].lower(): h["value"] for h in headers_list if h.get("name")}
-            from_str = headers.get("from", "")
+            from_str = _decode_mail_header(headers.get("from", ""))
             category = apply_sender_rules_to_category(from_str, category, username, user_scope_id=user_scope_id)
             result.append({
-                "subject": headers.get("subject", ""),
+                "subject": _decode_mail_header(headers.get("subject", "")),
                 "from": from_str,
                 "date": headers.get("date", ""),
                 "message_id": headers.get("message-id", ""),
@@ -557,6 +633,22 @@ def _get_body_gmail(
         return None
 
 
+def normalize_recipients(value: Any) -> List[str]:
+    """Parse a recipient string ("a@x.com, b@y.com") or list into validated address strings.
+    Invalid/empty entries are dropped; order is preserved and duplicates removed."""
+    if not value:
+        return []
+    items = value if isinstance(value, list) else [value]
+    raw = ", ".join(str(x) for x in items if x)
+    out: List[str] = []
+    from email.utils import getaddresses
+    for _name, addr in getaddresses([raw]):
+        addr = (addr or "").strip()
+        if "@" in addr and "." in addr.rsplit("@", 1)[-1] and addr not in out:
+            out.append(addr)
+    return out
+
+
 def _build_mime_message(
     from_addr: str,
     to: str,
@@ -564,13 +656,32 @@ def _build_mime_message(
     body: str,
     subtype: str = "plain",
     attachments: Optional[List[Dict[str, str]]] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
+    include_bcc_header: bool = False,
 ) -> Any:
-    """Build MIME message, with optional attachments. Returns MIMEMultipart or MIMEText."""
+    """Build MIME message, with optional attachments, Cc and reply-threading headers.
+    Bcc is added as a header only when include_bcc_header=True (Gmail raw send, which strips
+    it before delivery); for SMTP the Bcc goes in the envelope, never the headers."""
+    def _apply_headers(m: Any) -> None:
+        m["Subject"] = subject
+        m["From"] = from_addr
+        m["To"] = to
+        if cc:
+            m["Cc"] = cc
+        if include_bcc_header and bcc:
+            m["Bcc"] = bcc
+        if in_reply_to:
+            m["In-Reply-To"] = in_reply_to
+            m["References"] = references or in_reply_to
+        elif references:
+            m["References"] = references
+
     if attachments:
         msg = MIMEMultipart()
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = to
+        _apply_headers(msg)
         msg.attach(MIMEText(body, subtype, "utf-8"))
         for att in attachments:
             path_str = att.get("path") or ""
@@ -586,9 +697,7 @@ def _build_mime_message(
             msg.attach(part)
         return msg
     msg = MIMEText(body, subtype, "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = to
+    _apply_headers(msg)
     return msg
 
 
@@ -601,6 +710,10 @@ def _send_mail_gmail(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
 ) -> bool:
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
@@ -614,7 +727,11 @@ def _send_mail_gmail(
         append_domain_log_always("backend", f"GMAIL_SEND_ERROR token_missing account={account_id}")
         return False
     from_addr = acc.get("email") or account_id
-    msg = _build_mime_message(from_addr, to, subject, body, subtype, attachments)
+    # Gmail strips the Bcc header before delivery, so it is safe to include here for blind copies.
+    msg = _build_mime_message(
+        from_addr, to, subject, body, subtype, attachments,
+        cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references, include_bcc_header=True,
+    )
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
     try:
         r = requests.post(
@@ -682,11 +799,11 @@ def _fetch_mail_microsoft(
         for m in value:
             from_obj = m.get("from") or {}
             from_email = (from_obj.get("emailAddress") or {}).get("address") or ""
-            from_name = (from_obj.get("emailAddress") or {}).get("name") or ""
+            from_name = _decode_mail_header((from_obj.get("emailAddress") or {}).get("name") or "")
             from_str = from_name + (" <" + from_email + ">") if from_email else from_name or from_email
             category = apply_sender_rules_to_category(from_str, "primary", username, user_scope_id=user_scope_id)
             result.append({
-                "subject": m.get("subject") or "",
+                "subject": _decode_mail_header(m.get("subject") or ""),
                 "from": from_str,
                 "date": m.get("receivedDateTime") or "",
                 "message_id": m.get("internetMessageId") or "",
@@ -743,6 +860,10 @@ def _send_mail_microsoft(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
 ) -> bool:
     """Send mail via Microsoft Graph (POST /me/sendMail)."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
@@ -755,8 +876,22 @@ def _send_mail_microsoft(
     message_obj: Dict[str, Any] = {
         "subject": subject,
         "body": {"contentType": "html" if subtype == "html" else "text", "content": body},
-        "toRecipients": [{"emailAddress": {"address": to}}],
+        "toRecipients": [{"emailAddress": {"address": a}} for a in normalize_recipients(to)],
     }
+    cc_addrs = normalize_recipients(cc)
+    if cc_addrs:
+        message_obj["ccRecipients"] = [{"emailAddress": {"address": a}} for a in cc_addrs]
+    bcc_addrs = normalize_recipients(bcc)
+    if bcc_addrs:
+        message_obj["bccRecipients"] = [{"emailAddress": {"address": a}} for a in bcc_addrs]
+    headers_list: List[Dict[str, str]] = []
+    if in_reply_to:
+        headers_list.append({"name": "In-Reply-To", "value": in_reply_to})
+        headers_list.append({"name": "References", "value": references or in_reply_to})
+    elif references:
+        headers_list.append({"name": "References", "value": references})
+    if headers_list:
+        message_obj["internetMessageHeaders"] = headers_list
     if attachments:
         att_list: List[Dict[str, Any]] = []
         for att in attachments:
@@ -800,7 +935,11 @@ def _get_body_imap(
     user_scope_id: Optional[str] = None,
 ) -> Optional[str]:
     """Fetch full message body via IMAP. Search by Message-ID then fetch body as plain text."""
-    conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
+    try:
+        conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
+    except MailConnectError as e:
+        logger.warning("IMAP body fetch connect failed for %s: %s", account_id[:8] + "***", e)
+        return None
     if not conn or not message_id:
         return None
     try:
@@ -832,7 +971,11 @@ def _get_body_imap(
                     payload = part.get_payload(decode=True)
                     if payload is None:
                         continue
-                    text = payload.decode("utf-8", errors="replace")
+                    charset = part.get_content_charset() or "utf-8"
+                    try:
+                        text = payload.decode(charset, errors="replace")
+                    except (LookupError, TypeError):
+                        text = payload.decode("utf-8", errors="replace")
                     if "text/plain" in ctype:
                         plain = (plain or "") + text
                     elif "text/html" in ctype:
@@ -962,10 +1105,10 @@ def fetch_mail(
                 else:
                     continue
                 msg = message_from_bytes(payload)
-                from_str = msg.get("From", "")
+                from_str = _decode_mail_header(msg.get("From", ""))
                 category = apply_sender_rules_to_category(from_str, "primary", username, user_scope_id=user_scope_id)
                 result.append({
-                    "subject": msg.get("Subject", ""),
+                    "subject": _decode_mail_header(msg.get("Subject", "")),
                     "from": from_str,
                     "date": msg.get("Date", ""),
                     "message_id": msg.get("Message-ID", ""),
@@ -995,9 +1138,15 @@ def send_mail(
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
     attachments: Optional[List[Dict[str, str]]] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    references: Optional[str] = None,
 ) -> bool:
     """Send one email. Returns True on success. Dispatches to Gmail API, Graph, or SMTP by provider.
     attachments: optional list of [{"path": "/full/path/to/file", "filename": "optional_name.pdf"}].
+    cc/bcc: optional recipient strings. in_reply_to/references: original Message-ID(s) for reply threading.
+    Raises MailConnectError on SMTP connect/auth failure so callers can surface the reason.
     Optional username/user_scope_id for multi-user scope."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
@@ -1006,9 +1155,15 @@ def send_mail(
         return False
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
-        return _send_mail_gmail(account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id, attachments=attachments)
+        return _send_mail_gmail(
+            account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id,
+            attachments=attachments, cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references,
+        )
     if provider == "microsoft":
-        return _send_mail_microsoft(account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id, attachments=attachments)
+        return _send_mail_microsoft(
+            account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id,
+            attachments=attachments, cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references,
+        )
     conn = _smtp_connect(account_id, username, user_scope_id=user_scope_id)
     if not conn:
         logger.warning("send_mail: _smtp_connect failed for %s", account_id)
@@ -1016,8 +1171,16 @@ def send_mail(
         return False
     try:
         from_addr = acc.get("email") or account_id
-        msg = _build_mime_message(from_addr, to, subject, body, subtype, attachments)
-        conn.sendmail(from_addr, [to], msg.as_string())
+        # Bcc stays out of the headers; it goes only into the SMTP envelope recipients.
+        msg = _build_mime_message(
+            from_addr, to, subject, body, subtype, attachments,
+            cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references, include_bcc_header=False,
+        )
+        envelope = normalize_recipients(to) + normalize_recipients(cc) + normalize_recipients(bcc)
+        if not envelope:
+            logger.warning("send_mail: no valid recipients for %s", account_id)
+            return False
+        conn.sendmail(from_addr, envelope, msg.as_string())
         return True
     except Exception as e:
         logger.warning("Send mail failed for %s: %s", account_id, e)

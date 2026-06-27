@@ -31,10 +31,29 @@ To update an installed VAF, run `vaf update`.
 - Web search result cache: identical `web_search` queries are served from a
   short-lived file cache (default 15 min; `web_search_cache_enabled` /
   `web_search_cache_ttl_seconds`), skipping the providers and synthesis.
+- Email subsystem hardening. **New config key `email_allow_private_hosts` (default
+  `false`)**: IMAP/SMTP hosts that resolve to loopback / RFC-1918 private / link-local
+  addresses (incl. the `169.254` metadata range) are refused as an SSRF guard unless this
+  is enabled. IMAP/SMTP connections now verify TLS certificates against the system trust
+  store (connect timeouts; port 465 uses implicit SMTP_SSL). `GET /api/config` redacts
+  secret keys (`api_key_*`, `*_secret`, `*_password`, `memory_db_url`, `redis_url`,
+  encryption keys, ...) for non-admin users; admins still receive everything.
+  `POST /api/email/accounts/test` now requires authentication and is rate-limited (shared
+  per-IP login limiter). OAuth PKCE state files (email + cloud) are written atomically with
+  `0600` permissions, and token-endpoint errors are no longer logged verbatim.
+- `send_mail` now supports `cc`, `bcc`, and reply threading via `in_reply_to` /
+  `references`, with recipient-address validation.
 
 ### Fixed
 - Filesystem alias resolution now matches only on a path boundary.
 - `send_mail` no longer silently drops a single string attachment path.
+- Mailbox authentication/connection failures now surface as an "authentication failed"
+  error from `mail_inbox` / `read_mail` instead of an empty "no messages" result.
+- Email headers (From/To/Subject) are now RFC 2047-decoded and message bodies are decoded
+  with the part's declared charset (previously hardcoded UTF-8).
+- Switching to an unowned/new session now resets the agent's current user scope/username,
+  preventing cross-user identity bleed; UUID-scoped network users' mailboxes are now
+  included in email auto-sync.
 
 <!--
 Template for a new release (see docs/setup/RELEASING.md):

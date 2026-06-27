@@ -114,7 +114,7 @@ When a user logs in via the Local Network, the Settings Interface adapts dynamic
 
 1.  **Global Scope (Admin/System):**
     *   *Example:* The Admin configures the `OpenAI API Key`.
-    *   *Result:* All users can *use* the AI to chat, but they cannot *see* or *change* the key.
+    *   *Result:* All users can *use* the AI to chat, but they cannot *see* or *change* the key. This is enforced server-side: `GET /api/config` (and the WebSocket config push) redact secret values for non-admins via `Config.config_for_user()` / `Config.is_secret_config_key()` (API keys, OAuth client secrets, encryption/KEK keys, the JWT secret, and the Memory DB / Redis URLs), so secrets never reach a non-admin client even if a settings panel is opened directly. Admins still receive the full config.
 
 2.  **User Scope (Personal Profile):**
     *   *Example:* User "John" connects his personal **WhatsApp** account in the "Connections" tab.

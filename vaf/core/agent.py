@@ -2810,12 +2810,15 @@ class Agent:
         sm = SessionManager(state_registry=self.state_registry)
         try:
             session = sm.load(session_id)
-            # Set current user from session metadata so build_prompt() can show User identity block (only override if session has them)
+            # Set current user from session metadata so build_prompt() shows the right User identity.
+            # Assign UNCONDITIONALLY (including None): switching to a session that has no owner must
+            # RESET the in-memory identity, otherwise the previous session's user_scope_id/username
+            # bleeds into the new session and that user's mail/memory/contacts could be exposed.
+            # None is safe downstream (tool dispatch falls back to local admin, admin checks treat
+            # None as non-admin). Headless re-applies the authoritative task identity after this load.
             meta = getattr(session, "metadata", None) or {}
-            if meta.get("user_scope_id") is not None:
-                self._current_user_scope_id = meta.get("user_scope_id")
-            if meta.get("username") is not None:
-                self._current_username = meta.get("username")
+            self._current_user_scope_id = meta.get("user_scope_id")
+            self._current_username = meta.get("username")
             # Suppress last_interaction preview for empty sessions: the "Prior topic: ..."
             # hint causes the agent to treat the previous session's message as the current
             # one, leading to context bleed into brand new chats.

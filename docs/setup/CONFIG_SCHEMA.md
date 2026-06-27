@@ -293,6 +293,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `whatsapp_config` | `None` | WhatsApp bridge config. |
 | `email_config*` | `None` | Email account config (by scope/user). |
 | `email_oauth_*_client_id` | `""` | Email OAuth client IDs (Google/Microsoft/Apple). |
+| `email_allow_private_hosts` | `False` | SSRF guard for IMAP/SMTP. When false (default), VAF refuses to connect to a mail host that resolves to loopback, RFC-1918 private, or link-local addresses (incl. the `169.254.169.254` cloud-metadata endpoint); set true only to use a legitimate LAN / self-hosted mail server. Multicast/reserved addresses are always refused. |
 | `cloud_config` / `cloud_config_by_user` | `None` / `{}` | Cloud storage config. |
 | `cloud_sync_enabled` | `False` | Enable cloud sync. |
 | `cloud_sync_interval_minutes` | `15` | Cloud sync interval. |
@@ -305,7 +306,11 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 ## Internal / managed (do not hand-edit)
 
 These are secrets or identity values managed by VAF; setting them by hand can break auth or
-decryption:
+decryption. In addition, these keys (and every other credential matched by
+`Config.is_secret_config_key`: `api_key_*`, `*_client_secret`, `*_secret`,
+`*_credentials_key`, `*_encryption_key`, `*_kek`, `*_password`, `memory_db_url`,
+`redis_url`) are redacted from `GET /api/config` for non-admin users; only admins receive
+their values.
 
 `secure_store_kek`, `memory_encryption_key`, `email_credentials_key`, `cloud_credentials_key`,
 `local_network_jwt_secret`, `local_admin_scope_id`, `local_admin_username`,

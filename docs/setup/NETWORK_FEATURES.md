@@ -109,7 +109,7 @@ The `RateLimitMiddleware` protects login endpoints against brute-force attacks:
 - Tracks failed login attempts per IP address
 - Blocks IPs after exceeding the threshold (default: 5 attempts)
 - Sliding time window (default: 15 minutes)
-- Applies to `/api/auth/login`, `/api/auth/bootstrap`, `/api/auth/verify-2fa`
+- Applies to `/api/auth/login`, `/api/auth/bootstrap`, `/api/auth/verify-2fa`, and `/api/email/accounts/test` (the email credential-test endpoint shares the same per-IP limiter, so failed mailbox-login tests count toward the block)
 - Returns HTTP 429 with `Retry-After` header when blocked
 - Automatically clears failure count on successful login
 

@@ -1406,6 +1406,41 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# RAG MEMORY-SAFETY CHARTER  —  read this before adding ANY new embedding/ingest lane
+#
+# (Why isn't the fancy semantic search over channel history here yet? Current official
+#  reason: skill issue. Real translation: get the leak story right first. — PS, Mert Elsner)
+#
+# WHY THIS EXISTS: this subsystem has a real memory-leak history. Rapid, repeated
+# embedding/ingest churn caused multi-GB RSS runaways. The defenses you see across
+# the memory stack are scar tissue from exactly that, NOT premature optimization:
+#   - the process-global singleton embedding model (never reloaded per item),
+#   - the attachment lane's `attachment_rag_safe_mode` lexical fallback (bypasses
+#     the vector/embedding lane entirely),
+#   - the RSS "killer", per-window index rate-limiting and burst coalescing,
+#   - the main-loop AUTO-CAPTURE QUEUE below.
+# These leaks are a DIFFERENT subsystem from the frontend QtWebEngine/GPU renderer
+# leak, and they came first. The frontend leak_diag / renderer auto-recovery cannot
+# see a backend embedding leak — there is currently no automatic backend RSS watchdog.
+#
+# RULE for any NEW RAG/embedding lane — e.g. a "semantic search over channel history"
+# indexer over Telegram/Discord/WhatsApp messages (intentionally deferred for now):
+#   1. Reuse the singleton model via get_embedding_service(); never construct an
+#      embedding model per item.
+#   2. Run ingest ONLY on the main event loop (enqueue here / drain in the main loop).
+#      NEVER daemon-thread + asyncio.run() — that combo + ONNX + asyncpg is the 20GB
+#      leak documented just below.
+#   3. Index incrementally: embed only NEW or content-changed items, keyed on a STABLE
+#      content hash (not a positional message id). Never embed inside a full
+#      delete + re-insert chat rewrite (it would re-embed the entire history).
+#   4. Gate behind a config flag, default OFF. Fail CLOSED — keep the lexical/SQLite
+#      path working — when the pgvector container (vaf-memory-db) is down.
+#   5. Pass auto_connect=False on ingest, and watch backend RSS during the first bulk
+#      backfill.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUTO-CAPTURE QUEUE SYSTEM (Memory-Leak-Safe)
 #
 # PROBLEM: Daemon threads + asyncio.run() + ONNX + asyncpg = 20GB+ memory leaks

@@ -11,6 +11,14 @@ To update an installed VAF, run `vaf update`.
 ## [Unreleased]
 
 ### Changed
+- **Thinking-mode proactive questions are now delivered to your configured main messenger**
+  (Telegram/WhatsApp/Discord) and tracked as a request there, instead of only the Web UI. If a
+  messenger question goes unanswered it is escalated once to the Web UI with a note that it was
+  already asked on that channel; with no messenger configured the behaviour is unchanged. The
+  background run now contacts you exclusively through `ask_user` (all raw `send_*` tools are removed
+  from thinking runs), and `ask_user` carries the running user's real scope so a non-admin's question
+  is never delivered to the admin's messenger. `send_whatsapp_reply` now reports real delivery, so a
+  down WhatsApp bridge falls back to the Web UI instead of silently dropping the message.
 - **License: relicensed from "MIT + Commons Clause v1.0" to a dual license — GNU
   AGPL-3.0-or-later (open source) plus a separate Commercial License.** `LICENSE` now
   carries the verbatim AGPL-3.0 text; see the new `LICENSING.md` (dual-license explanation,

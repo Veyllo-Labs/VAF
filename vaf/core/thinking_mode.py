@@ -411,11 +411,15 @@ def set_waiting_for_reply(
     question_text: str = "",
     request_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    channel: str = "web",
+    escalated_to_web: bool = False,
 ) -> None:
     """Record that we sent a question to the user; we will wait for reply, then nudge at 3 min, skip at 10 min.
     request_id links to the thinking_requests entry so the main agent can pick up the proposal and update its status.
-    session_id is the web session the question was delivered to (the anchor), so the nudge lands in the SAME chat
-    instead of re-picking the 'latest' session."""
+    session_id is the web session the question was delivered to (the anchor/web fallback), so the nudge/escalation
+    lands in the SAME chat instead of re-picking the 'latest' session.
+    channel is where the question was actually delivered ("telegram"/"whatsapp"/"discord"/"web"); when it is a
+    messenger and the user never answers, _process_waiting_reply escalates ONCE to the Web UI (escalated_to_web)."""
     key = _key(user_scope_id)
     data = _load_waiting()
     data[key] = {
@@ -426,6 +430,8 @@ def set_waiting_for_reply(
         "question_text": (question_text or "")[:500],
         "request_id": (request_id or "").strip() or None,
         "session_id": (session_id or "").strip() or None,
+        "channel": (channel or "web").strip().lower() or "web",
+        "escalated_to_web": bool(escalated_to_web),
     }
     _save_waiting(data)
 
@@ -597,21 +603,14 @@ def pop_user_reply_for_session(session_id: str) -> Optional[Dict[str, Any]]:
     return entry
 
 
-def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, session_id: Optional[str] = None) -> bool:
+def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, session_id: Optional[str] = None,
+                channel: Optional[str] = None) -> bool:
     """Send a short nudge via main_messenger (e.g. 'Hey Mert, bist du da?'). Returns True if sent. The web
     fallback delivers to `session_id` (the anchor session the question was asked in) when given and still
-    present, so the nudge lands in the SAME chat as the question — not whatever chat is currently 'latest'."""
+    present, so the nudge lands in the SAME chat as the question — not whatever chat is currently 'latest'.
+    `channel` is where the question was delivered: when it is "web" (incl. after a messenger escalation) the
+    messenger send is skipped so the nudge lands in the web chat the user is actually looking at."""
     try:
-        from vaf.core.messaging_connections import (
-            get_messaging_connections,
-            get_telegram_chat_id,
-            get_whatsapp_chat_jid,
-            get_discord_user_id,
-        )
-        from vaf.core.config import Config
-
-        conn = get_messaging_connections(username=(username or "admin").strip() or "admin", user_scope_id=user_scope_id)
-        main = (conn.get("main_messenger") or "").strip().lower()
         name = (display_name or username or "").strip() or "admin"
         # Varied, multilingual nudge from the VAF vocabulary book (rotates per user, in the user's
         # preferred_language). Falls back to a plain line if the vocab data is unavailable.
@@ -625,27 +624,13 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
             ) or f"Hey {name}, are you there?"
         except Exception:
             nudge = f"Hey {name}, are you there?"
-        if main == "telegram":
-            chat_id = get_telegram_chat_id(user_scope_id, username)
-            if chat_id:
-                from vaf.core.telegram_reply import send_telegram_reply
-                send_telegram_reply(chat_id, nudge)
+        # Primary: the user's configured main messenger (Telegram/WhatsApp/Discord) — unless the question
+        # is anchored to the web chat (channel="web", e.g. after an escalation), then go straight to web.
+        if (channel or "").strip().lower() != "web":
+            from vaf.core.messaging_connections import send_to_main_messenger
+            sent, _ch = send_to_main_messenger(user_scope_id, username, nudge)
+            if sent:
                 return True
-        elif main == "whatsapp":
-            jid = get_whatsapp_chat_jid(user_scope_id, username)
-            if jid:
-                from vaf.core.whatsapp_reply import send_whatsapp_reply
-                send_whatsapp_reply(username or "admin", jid, nudge, user_scope_id=user_scope_id)
-                return True
-        elif main == "discord":
-            user_id = get_discord_user_id(user_scope_id, username)
-            if user_id:
-                discord_config = Config.get("discord_config") or {}
-                bot_token = (discord_config.get("bot_token") or "").strip()
-                if bot_token:
-                    from vaf.core.discord_send import send_discord_dm
-                    if send_discord_dm(bot_token, user_id, nudge, chunk=True):
-                        return True
         # Fallback: no messenger configured — push to the ANCHOR Web UI session (the chat the question
         # was asked in), falling back to the latest web session only if the anchor is gone.
         try:
@@ -691,6 +676,35 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
         return False
 
 
+def _escalation_prefix(lang: str, channel_label: str) -> str:
+    """Note prepended to the one-time Web-UI re-ask of an unanswered messenger question."""
+    lg = (lang or "en")[:2].lower()
+    if lg == "de":
+        return f"_(Ich hatte dich dazu bereits auf {channel_label} gefragt, aber noch keine Antwort erhalten:)_"
+    return f"_(I already asked you this on {channel_label} but haven't heard back yet:)_"
+
+
+def _escalate_question_to_web(user_scope_id: Optional[str], w: Dict[str, Any], channel: str) -> Optional[str]:
+    """One-time Web-UI re-ask of a messenger question the user never answered, with a note that it was
+    already asked on that channel. Returns the web session id used, or None if no web chat was reachable."""
+    try:
+        question = (w.get("question_text") or "").strip()
+        if not question:
+            return None
+        try:
+            from vaf.core import vocab
+            lang = vocab.resolve_user_language(user_scope_id, w.get("username"))
+        except Exception:
+            lang = "en"
+        ch_label = {"telegram": "Telegram", "whatsapp": "WhatsApp", "discord": "Discord"}.get(channel, channel)
+        text = f"{_escalation_prefix(lang, ch_label)}\n\n{question}"
+        anchor = (w.get("session_id") or "").strip() or _latest_web_session_id(user_scope_id)
+        return emit_message_to_web_ui(user_scope_id, text, session_id=anchor)
+    except Exception as e:
+        logger.debug("escalate_question_to_web failed: %s", e)
+        return None
+
+
 def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
     """
     If user is in 'waiting for reply' state: send nudge at 3 min, clear at 10 min.
@@ -730,6 +744,25 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
         pass
 
     if elapsed_min >= skip_min:
+        # Unanswered. If the question went to a messenger and we haven't escalated yet, re-ask ONCE in
+        # the Web UI (with a note that we already asked on that channel), then give the web its own
+        # 3-/10-min window. Otherwise (web, or already escalated) give up and clear.
+        ch = (w.get("channel") or "web").strip().lower()
+        if ch in ("telegram", "whatsapp", "discord") and not w.get("escalated_to_web"):
+            esc_sid = _escalate_question_to_web(user_scope_id, w, ch)
+            if esc_sid:
+                data = _load_waiting()
+                key = _key(user_scope_id)
+                if key in data:
+                    data[key]["channel"] = "web"
+                    data[key]["escalated_to_web"] = True
+                    data[key]["session_id"] = esc_sid
+                    data[key]["question_sent_at_ts"] = now  # fresh web window
+                    data[key]["nudge_sent_at_ts"] = None
+                    _save_waiting(data)
+                logger.info("Thinking: %s question unanswered — escalated once to Web UI", ch)
+                return "skip"
+            # No reachable web chat to escalate to — fall through and give up.
         clear_waiting_for_reply(user_scope_id)
         return "allow_run"
     if nudge_ts is None:
@@ -738,6 +771,7 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
             w.get("username") or "admin",
             w.get("display_name") or w.get("username") or "admin",
             session_id=w.get("session_id"),
+            channel=w.get("channel"),
         ):
             data = _load_waiting()
             key = _key(user_scope_id)
@@ -1185,8 +1219,7 @@ user about it, pass its id to ask_user (below) so the system clears it on confir
 handled note disappears from your next run.
 
 **IF** you need the user's decision on something concrete and specific:
-  → Call `ask_user(message="<one clean, specific question or proposal>", proposed_action="<short note of what you'd do if they agree>", source_note_id="<id if the question is about a note>", source_todo_id="<id if about a todo>")`. Put ONLY the final user-facing text in `message` — no reasoning, no "I should…", no tool talk. This delivers the message, tracks it, and waits for the reply; the MAIN agent carries out `proposed_action` once the user confirms, and the linked note/todo is marked handled so it never comes back.
-  → If a main_messenger is configured (see User Identity) you may instead send via that messenger tool.
+  → Call `ask_user(message="<one clean, specific question or proposal>", proposed_action="<short note of what you'd do if they agree>", source_note_id="<id if the question is about a note>", source_todo_id="<id if about a todo>")`. Put ONLY the final user-facing text in `message` — no reasoning, no "I should…", no tool talk. This delivers the message to the user's main channel (Telegram/WhatsApp/Discord if configured, otherwise the Web UI), tracks it, and waits for the reply; the MAIN agent carries out `proposed_action` once the user confirms, and the linked note/todo is marked handled so it never comes back. You do NOT pick the channel — `ask_user` routes it.
   → If you reach the end and realise you never called ask_user, deliver the same message via
     `thinking_done(message="<the question>", proposed_action="...", source_note_id="<id>")` — it uses the
     exact same tracked path. Either way the message MUST go through a tool call.
@@ -1207,8 +1240,8 @@ Only send a message to the user if ALL of these are true:
 - You haven't asked this before (check declined questions + recent activity)
 - It genuinely helps the user (not just "filling" the thinking run)
 
-Channel rules: contact the user with the `ask_user` tool — its `message` is delivered to the Web UI
-and tracked as a request. If a main_messenger is configured you may use that messenger tool instead.
+Channel rules: contact the user ONLY with the `ask_user` tool — it delivers your `message` to the user's
+configured main channel (Telegram/WhatsApp/Discord, or the Web UI if none) and tracks it as a request.
 Never write the question as plain assistant text; e-mail is NEVER a channel for a background run.
 
 ## INTEL GATHERING (Pre-Computation)
@@ -1239,32 +1272,19 @@ Call thinking_done with a brief summary when finished."""
 
 _SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail"}
 
-# Outbound send tool -> the main_messenger value it belongs to. send_mail maps
-# to None: e-mail is never a valid main_messenger, and a thinking run once
-# tried to contact the user at a hallucinated address with it.
-_OUTBOUND_SEND_CHANNELS = {
-    "send_mail": None,
-    "send_telegram": "telegram",
-    "send_whatsapp": "whatsapp",
-    "send_discord": "discord",
-    "send_slack": "slack",
-}
-
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
-    """Remove outbound send tools the thinking agent must not use.
+    """Remove ALL outbound `send_*` tools from a thinking run.
 
-    Only the tool matching the user's configured main_messenger survives;
-    without a configured messenger ALL send tools are removed — plain-text
-    questions still reach the user through the Web UI fallback
-    (_maybe_emit_web_question). Returns the removed tool names.
+    `ask_user` now delivers to the user's configured main channel (Telegram/WhatsApp/Discord, else the
+    Web UI) AND tracks the request, so the agent never needs a raw send tool to reach the user — leaving
+    one around only invites an untracked or duplicate send by a weak model. `main_messenger` is kept for
+    signature stability (callers still pass it). Returns the removed tool names.
     """
-    mm = (main_messenger or "").strip().lower()
     removed = []
-    for tool_name, channel in _OUTBOUND_SEND_CHANNELS.items():
-        if channel is None or channel != mm:
-            if tools.pop(tool_name, None) is not None:
-                removed.append(tool_name)
+    for tool_name in _SENT_TOOLS:
+        if tools.pop(tool_name, None) is not None:
+            removed.append(tool_name)
     return removed
 
 
@@ -1349,9 +1369,11 @@ def deliver_tracked_message(
     `thinking_done(message=...)` fallback (used when a weak model composes the message but forgets to
     call ask_user). It (1) records a tracked request (status 'asked', stamped with the current run_seq +
     the source note/todo so a confirm can clear them), (2) sets waiting_for_reply so the main agent
-    picks up the user's reply, and (3) emits the exact text to the Web UI. The text is ALWAYS an explicit
-    caller argument — chain-of-thought is never scraped, so reasoning cannot leak. Returns the request
-    dict with an extra `delivered` flag, or None if `message` was empty."""
+    picks up the user's reply, and (3) delivers the exact text to the user's configured main messenger
+    (Telegram/WhatsApp/Discord via send_to_main_messenger), falling back to a Web UI emit only when no
+    messenger is configured or the send fails. The text is ALWAYS an explicit caller argument —
+    chain-of-thought is never scraped, so reasoning cannot leak. Returns the request dict with an extra
+    `delivered` flag, or None if `message` was empty."""
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
     from vaf.core import thinking_requests as treq
 
@@ -1422,9 +1444,37 @@ def deliver_tracked_message(
     # question resolves the latest web session NOW. The nudge + later follow-up reuse this anchor (via the
     # waiting state / the request) instead of independently re-picking 'latest', so they stay in the same chat.
     _anchor_sid = (req.get("session_id") if req else None) or _latest_web_session_id(user_scope_id)
+
+    # PRIMARY: deliver to the user's configured main messenger (Telegram/WhatsApp/Discord). The reply
+    # comes back on that channel and is reconstructed scope-keyed in chat_step, so the main agent answers
+    # there WITH context. The web session stays the anchor for the later escalation / web fallback.
+    from vaf.core.messaging_connections import send_to_main_messenger
+    sent_channel = None
+    try:
+        _ok, sent_channel = send_to_main_messenger(user_scope_id, uname, message)
+        if not _ok:
+            sent_channel = None
+    except Exception:
+        sent_channel = None
+
+    if sent_channel:
+        set_waiting_for_reply(
+            user_scope_id, username=uname, display_name=uname,
+            question_text=message, request_id=req["id"], session_id=_anchor_sid, channel=sent_channel,
+        )
+        # Pin the request to the web anchor so a later escalation / follow-up can reach the Web UI.
+        if _anchor_sid and req.get("session_id") != _anchor_sid:
+            treq.set_request_session(user_scope_id, req["id"], _anchor_sid)
+            req = treq.get_request(user_scope_id, req["id"]) or req
+        logger.info("Thinking: question delivered via %s (request %s)", sent_channel, req.get("id"))
+        req = dict(req)
+        req["delivered"] = True
+        return req
+
+    # FALLBACK: no main messenger configured (or the send failed) — deliver to the Web UI as before.
     set_waiting_for_reply(
         user_scope_id, username=uname, display_name=uname,
-        question_text=message, request_id=req["id"], session_id=_anchor_sid,
+        question_text=message, request_id=req["id"], session_id=_anchor_sid, channel="web",
     )
     # Deliver-gate: if the main agent is actively handling a user turn, do NOT push this live into the
     # middle of that turn. The request is already recorded + waiting_for_reply set (and the run loop
@@ -1444,7 +1494,7 @@ def deliver_tracked_message(
     if sid and sid != _anchor_sid:
         set_waiting_for_reply(
             user_scope_id, username=uname, display_name=uname,
-            question_text=message, request_id=req["id"], session_id=sid,
+            question_text=message, request_id=req["id"], session_id=sid, channel="web",
         )
     req = dict(req)
     req["delivered"] = bool(sid)

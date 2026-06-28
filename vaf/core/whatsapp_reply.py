@@ -24,8 +24,11 @@ def send_whatsapp_reply(
     text: str,
     voice_path: Optional[str] = None,
     user_scope_id: Optional[str] = None,
-) -> None:
-    """If a WhatsApp reply callback is registered, invoke it. Use voice_path for voice messages. user_scope_id helps resolve Front Office contacts (scoped storage)."""
+) -> bool:
+    """Hand a WhatsApp reply to the bridge callback. Use voice_path for voice messages. user_scope_id helps
+    resolve Front Office contacts (scoped storage). Returns True only if the message was actually enqueued for
+    the bridge; False when it was dropped (no callback registered / empty recipient / empty body / the bridge
+    refused or errored) so a caller can fall back to another channel instead of assuming success."""
     try:
         from vaf.core.log_helper import log_whatsapp_reply
         log_whatsapp_reply(
@@ -34,19 +37,26 @@ def send_whatsapp_reply(
     except Exception:
         pass
     if not username or not chat_jid:
-        return
+        return False
     if not _send_callback:
         try:
             from vaf.core.log_helper import log_whatsapp_reply
             log_whatsapp_reply("REPLY DROPPED callback not set (bridge not running?)")
         except Exception:
             pass
-        return
+        return False
     if not text and not voice_path:
-        return
+        return False
+    # The nested try keeps the bool contract intact even if the retry itself raises: any failure ->
+    # False, never a propagated exception.
     try:
-        _send_callback(username, chat_jid, text or "", voice_path, user_scope_id)
-    except TypeError:
-        _send_callback(username, chat_jid, text or "", voice_path)
+        try:
+            result = _send_callback(username, chat_jid, text or "", voice_path, user_scope_id)
+        except TypeError:
+            # Older callback signature without user_scope_id.
+            result = _send_callback(username, chat_jid, text or "", voice_path)
+        # A callback that returns a bool reports real enqueue success (e.g. the bridge dropped a
+        # non-whitelisted recipient); a legacy callback returning None is assumed to have accepted it.
+        return result if isinstance(result, bool) else True
     except Exception:
-        pass
+        return False

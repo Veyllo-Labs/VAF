@@ -29,6 +29,12 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 224.3 76.3% 48%;
     --radius: 0.75rem;
+    /* Safe-area insets (notch / home indicator) — usable as var(--safe-bottom) etc.
+       Resolve to 0 on devices/browsers without insets. Requires viewportFit:"cover". */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
   }
 }
  
@@ -67,6 +73,32 @@
   *::after {
     cursor: none !important;
   }
+}
+
+/* ── Mobile / touch foundation ───────────────────────────────────────────────
+   Everything here is gated on a touch viewport (pointer: coarse) or a dynamic-
+   viewport @supports, so the desktop app (pointer: fine, QtWebEngine) is untouched. */
+
+/* Dynamic viewport height: mobile browser chrome / on-screen keyboard shrink the
+   visible area. dvh tracks it; on desktop dvh == vh, so these are visually identical. */
+@supports (height: 100dvh) {
+  .h-screen { height: 100dvh; }
+  .min-h-screen { min-height: 100dvh; }
+}
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+@media (pointer: coarse) {
+  /* iOS auto-zooms when a focused control's font is < 16px — force 16px to stop it. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select { font-size: 16px; }
+  /* Kill the grey tap-flash on every touch. */
+  * { -webkit-tap-highlight-color: transparent; }
+  /* Opt-in 44px minimum hit area for small icon buttons (apply `.touch-target`). */
+  .touch-target { min-width: 44px; min-height: 44px; }
+  /* Stop rubber-band scroll from chaining into the page behind drawers/modals. */
+  body { overscroll-behavior-y: none; }
 }
 
 /* Scrollbar unsichtbar (z. B. Sidebar Chat-Liste), Scroll bleibt möglich */

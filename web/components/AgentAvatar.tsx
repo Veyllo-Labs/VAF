@@ -4,6 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React from 'react';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // ── Agent Avatar: the living dot, as a character ──
 // Keyframes (agentAvatar* + emo* + body* + wink + activity b*/e*/i*) live in globals.css.
@@ -199,6 +200,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // no cross-fade, no slideshow. `shown` lags `mode` by the settle duration.
     const [shown, setShown] = React.useState<AvatarMode>(mode);
     const [settling, setSettling] = React.useState(false);
+    const isMobile = useIsMobile();  // mobile: reserve the scene width as the avatar's footprint instead of the desktop leftward lean
     React.useEffect(() => {
         if (mode === shown) return;
         setSettling(true);                            // 1) drop animation -> ease to neutral
@@ -282,8 +284,11 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
 
     const active = shown !== 'idle';
     const act = isActivity(shown);
-    const toolScene = TOOL_SCENES[shown];   // non-null while a tool runs → render the scaled scene instead of the plain body
-    const awayScene = AWAY_SCENES[shown];   // non-null for a nudge away-scene → render the scaled away stage
+    // DESKTOP only: the wide tool/away scenes (web_search magnifier, browse globe, away stages …) extend far
+    // to the right. On the narrow mobile column they would push/clip the whole content row, so we suppress
+    // them there and fall back to the plain 36px avatar dot (see the !toolScene body branch below).
+    const toolScene = isMobile ? undefined : TOOL_SCENES[shown];
+    const awayScene = isMobile ? undefined : AWAY_SCENES[shown];
     // A tool scene (or delegate) extends a prop to the agent's RIGHT. Reserving that as layout WIDTH would
     // shove the whole content column (timeline / bubble) rightward every time a tool runs. Instead keep the
     // avatar's layout footprint at the normal 36px and let the scene lean LEFT into the empty gutter: a
@@ -291,7 +296,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // margin-box so nothing to the RIGHT moves. Margins transition (not per-frame) → leak-safe.
     // Only when the scene is actually drawn: a DIMMED bubble (non-latest) renders just the plain 36px figure,
     // so it must NOT lean — otherwise the dim dot gets shoved ~74-94px left, detached from its bubble.
-    const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (shown === 'delegate' ? 88 : 0));
+    const sceneWidth = dim ? 0 : (toolScene ? toolScene.w : awayScene ? awayScene.w : (!isMobile && shown === 'delegate' ? 88 : 0));
     const leanLeft = sceneWidth ? sceneWidth - 36 : 0;
     // Cross-dissolve transitions that involve a scene mode (e.g. thinking → web search): during the settle
     // window the whole content fades OUT, the DOM swaps while invisible, then the new scene/body fades IN —
@@ -472,7 +477,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                 {/* delegate — the avatar area is WIDER in this mode (root width above): the main agent stays
                     full size on the LEFT, a sub-agent (peer) spawns in on the RIGHT with a real gap, and a
                     token is handed across (arc) main -> sub. transform/opacity + static shadows = leak-safe. */}
-                {shown === 'delegate' && !dim && (
+                {shown === 'delegate' && !dim && !isMobile && (
                     <>
                         {/* token flows main -> sub in an arc (after the peer has spawned) */}
                         <span style={{

@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import {
-    Send, Menu, Plus, MessageSquare, Brain, Bot, User, Trash2, Edit2, Paperclip,
+    Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
     Folder, Download, Upload, RefreshCw, ArrowLeft
@@ -30,6 +30,7 @@ import DocumentEditor from '@/components/DocumentEditor';
 import DocumentViewer, { CHIP_BG_CLASSES, type InsertedSelectionRange } from '@/components/DocumentViewer';
 import CodeViewer, { isCodeFile, isTextFile } from '@/components/CodeViewer';
 import HtmlViewer, { isHtmlFile } from '@/components/HtmlViewer';
+import ImageViewer, { isImageFile, type ImageMark } from '@/components/ImageViewer';
 import { ToolMessage } from '@/components/ToolMessage';
 import VAFWorkflowRuntime from '@/components/workflows/VAFWorkflowRuntime';
 import CopyOnRightClick from '@/components/CopyOnRightClick';
@@ -1339,6 +1340,8 @@ function VAFDashboardContent() {
     const [realContext, setRealContext] = useState<any | null>(null); // REAL Payload (The Truth)
     const [ragResults, setRagResults] = useState<any | null>(null); // RAG Results
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
+    // Mobile RAG-snippets popover: hover doesn't exist on touch, so a tap toggles it (works on iOS too).
+    const [ragSnipOpen, setRagSnipOpen] = useState(false);
 
     // Session workspace window: file browser over the chat's own folder
     // (VAF_Projects/<uid>/<session_id>) with download/upload + drag and drop
@@ -1787,6 +1790,37 @@ function VAFDashboardContent() {
         isOpen: false, filePath: '',
     });
 
+    // Image Viewer state (dedicated viewer for image files — NOT the DocumentViewer,
+    // and never synced as a sidebar document, so images are not RAG-indexed as text).
+    // `description` holds the one-time vision description (shown in the viewer AND sent to
+    // the agent each turn while the viewer is open, via imageViewerContext).
+    const [imageViewerState, setImageViewerState] = useState<{ isOpen: boolean; filePath: string; title?: string; src?: string; description?: string; descLoading?: boolean }>({
+        isOpen: false, filePath: '',
+    });
+    // Yellow-marked region the user drew in the Image Viewer to ask about. While set (and the
+    // viewer is open) it rides every chat message as `markedRegion` so the backend runs vision
+    // on that region for this question. Cleared via the chip ✕ (bumps markClearToken to reset
+    // the viewer's drawing) or when the viewer closes.
+    const [imageMark, setImageMark] = useState<ImageMark | null>(null);
+    const [markClearToken, setMarkClearToken] = useState(0);
+    const clearImageMark = useCallback(() => { setImageMark(null); setMarkClearToken(t => t + 1); }, []);
+
+    // Open an image in the dedicated Image Viewer and (once) fetch its vision description so it
+    // shows in the viewer AND stays in the agent's context while the viewer is open.
+    const openImageInViewer = useCallback((path: string, name: string, src?: string) => {
+        setImageViewerState({ isOpen: true, filePath: path, title: name, src, description: '', descLoading: true });
+        setShowSubAgentPanel(true);
+        if (!currentSessionId) { setImageViewerState(prev => ({ ...prev, descLoading: false })); return; }
+        fetch(`${getApiBase()}/api/image/describe`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: currentSessionId, path }),
+        })
+            .then(r => r.ok ? r.json() : { description: '' })
+            .then(d => setImageViewerState(prev => prev.filePath === path ? { ...prev, description: d?.description || '', descLoading: false } : prev))
+            .catch(() => setImageViewerState(prev => prev.filePath === path ? { ...prev, descLoading: false } : prev));
+    }, [currentSessionId]);
+
     // ── Workspace file actions (download + open in viewer) ──────────────────
     const workspaceFileAbsPath = useCallback((name: string) => {
         if (!workspaceInfo?.path) return '';
@@ -1803,11 +1837,18 @@ function VAFDashboardContent() {
         const full = workspaceFileAbsPath(name);
         if (!full) return;
         const ext = (name.split('.').pop() || '').toLowerCase();
+        // Images open in the dedicated Image Viewer — never the DocumentViewer — and are
+        // NOT synced as sidebar documents, so opening one never RAG-indexes it as text.
+        if (isImageFile(name)) {
+            openImageInViewer(full, name, `${getApiBase()}/api/file?path=${encodeURIComponent(full)}`);
+            setIsWorkspaceModalOpen(false);
+            return;
+        }
         // Types the DocumentViewer renders. Checked BEFORE isCodeFile because
         // .md/.html count as code languages but belong in the document view.
         const docExts = new Set([
             'pdf', 'docx', 'xlsx', 'pptx', 'md', 'mdx', 'markdown', 'html', 'htm',
-            'txt', 'rtf', 'csv', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico',
+            'txt', 'rtf', 'csv',
         ]);
         if (!docExts.has(ext) && isCodeFile(name)) {
             setCodeViewerState({ isOpen: true, filePath: full, title: name });
@@ -1857,7 +1898,7 @@ function VAFDashboardContent() {
             setShowSubAgentPanel(true);
             setIsWorkspaceModalOpen(false);
         } catch { /* network/permission error - keep the workspace open */ }
-    }, [workspaceFileAbsPath, setDocumentViewerState, ws, currentSessionId]);
+    }, [workspaceFileAbsPath, setDocumentViewerState, ws, currentSessionId, openImageInViewer]);
 
     // Suggestion State
     const [suggestionList, setSuggestionList] = useState<any[]>([]);
@@ -2055,6 +2096,7 @@ function VAFDashboardContent() {
     const subAgentCustomViewRef = useRef(false);
     const subAgentOutputSetRef = useRef<Set<string>>(new Set());
     const [showSubAgentPanel, setShowSubAgentPanel] = useState(true);
+    const [subAgentSheetOpen, setSubAgentSheetOpen] = useState(false);  // mobile: dock opened as a full-screen sheet
     const subAgentUnmountRef = useRef<NodeJS.Timeout | null>(null);
 
     const preserveChatScroll = (update: () => void) => {
@@ -2272,8 +2314,12 @@ function VAFDashboardContent() {
     }, [currentSessionId]);
 
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
+    const [drawerOpen, setDrawerOpen] = useState(false);  // mobile sidebar drawer (max-md only; desktop keeps the hover-rail)
     useEffect(() => {
         if (typeof window === 'undefined') return;
+        // Only open the socket once authenticated — opening with an absent/expired token makes the
+        // backend reject the handshake, which (with reconnects) would otherwise hammer /ws.
+        if (authChecking || !isAuthenticated) return;
         let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
         let cancelled = false;
         (async () => {
@@ -2301,7 +2347,9 @@ function VAFDashboardContent() {
             }
             const socket = new WebSocket(wsUrl);
             wsSocketRef.current = socket;
+            let opened = false;
             socket.onopen = () => {
+            opened = true;
             setStatus('connected');
             socket.send(JSON.stringify({ type: 'get_sessions' }));
             socket.send(JSON.stringify({ type: 'get_config' }));
@@ -4036,13 +4084,44 @@ function VAFDashboardContent() {
                 }
             } catch (e) { console.error(e); }
         };
-        socket.onclose = () => {
-            setStatus('disconnected');
-            setWs(null);
+        const scheduleReconnect = () => {
+            if (cancelled) return;
+            // Exponential backoff with jitter, capped at 30s — no more fixed-interval hammering.
+            const delay = Math.min(1000 * 2 ** Math.min(reconnectAttempt, 5), 30000);
+            const jitter = Math.floor(Math.random() * 0.3 * delay);
             reconnectTimeout = setTimeout(() => {
                 setStatus('connecting');
                 setReconnectAttempt((a) => a + 1);
-            }, 3000);
+            }, delay + jitter);
+        };
+        socket.onclose = () => {
+            setStatus('disconnected');
+            setWs(null);
+            if (cancelled) return;
+            // A socket that closed WITHOUT ever opening = a rejected handshake (expired/invalid token,
+            // or the server briefly down). Re-check auth before reconnecting so an expired session
+            // routes cleanly to /login instead of hammering /ws.
+            if (!opened) {
+                const t = localStorage.getItem('vaf_token');
+                fetch(`${getApiBase() || ''}/api/auth/me`, {
+                    credentials: 'include',
+                    cache: 'no-store',
+                    headers: t ? { Authorization: `Bearer ${t}` } : {},
+                })
+                    .then((res) => {
+                        if (cancelled) return;
+                        if (res.status === 401 || res.status === 403) {
+                            localStorage.removeItem('vaf_token');
+                            setIsAuthenticated(false);
+                            window.location.replace(`${window.location.origin}/login`);
+                            return;
+                        }
+                        scheduleReconnect();
+                    })
+                    .catch(() => scheduleReconnect());
+                return;
+            }
+            scheduleReconnect();
         };
         socket.onerror = () => setStatus('disconnected');
         if (!cancelled) setWs(socket);
@@ -4056,7 +4135,7 @@ function VAFDashboardContent() {
             wsSocketRef.current = null;
             setWs(null);
         };
-    }, [reconnectAttempt]);
+    }, [reconnectAttempt, isAuthenticated, authChecking]);
 
     // Open Settings with Connections tab when returning from OAuth callback; refresh config to show new account
     useEffect(() => {
@@ -4310,6 +4389,20 @@ function VAFDashboardContent() {
             path: _cvChip.path,
             content: codeViewerState.loadedContent.slice(0, 30000),
         } : undefined;
+        // While the Image Viewer is open, send its vision description so the backend keeps it in
+        // the agent's context for this turn (stored in runtime_state, injected per-turn, NOT in history).
+        const imageViewerCtx = imageViewerState.isOpen && imageViewerState.description ? {
+            name: imageViewerState.title || imageViewerState.filePath.split('/').pop() || 'image',
+            path: imageViewerState.filePath,
+            description: imageViewerState.description.slice(0, 8000),
+        } : undefined;
+        // Yellow-marked region (annotated full image + zoomed crop) — sent while a marking is
+        // active so the backend runs vision on that region for THIS question.
+        const markedRegion = imageViewerState.isOpen && imageMark ? {
+            name: imageMark.name,
+            annotated: imageMark.annotated,
+            crop: imageMark.crop,
+        } : undefined;
         ws.send(JSON.stringify({
             type: 'chat',
             content: textToSend,
@@ -4318,6 +4411,8 @@ function VAFDashboardContent() {
             ...(editorDoc && editorDoc.content !== '' ? { editorDocument: editorDoc } : {}),
             ...(editorSelectionsPayload.length > 0 ? { editorSelections: editorSelectionsPayload } : {}),
             ...(codeViewerFile ? { codeViewerFile } : {}),
+            ...(imageViewerCtx ? { imageViewerContext: imageViewerCtx } : {}),
+            ...(markedRegion ? { markedRegion } : {}),
             // Vision: send images as file objects so web_server can route them to the vision pipeline
             ...(imagesToSend.length > 0 ? {
                 files: imagesToSend.map(img => ({
@@ -4328,6 +4423,9 @@ function VAFDashboardContent() {
             } : {}),
         }));
         setAttachedImages([]);
+        // One-shot marking: the region vision ran for this question — clear it so unrelated
+        // follow-up messages don't keep re-billing a region analysis (re-mark to ask again).
+        if (markedRegion) clearImageMark();
         setInput('');
         setSuggestion('');
     };
@@ -4942,6 +5040,14 @@ function VAFDashboardContent() {
         };
     }, [subAgentCanClose, subAgentState.isOpen]);
 
+    // Mobile: the right dock (sub-agent + document/code/browser viewers) is hidden <lg. A mini-bar opens it
+    // as a full-screen sheet on demand; reset the sheet once every dock panel has closed, so the next one
+    // doesn't auto-reopen full-screen.
+    const anyDockPanelOpen = subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen || imageViewerState.isOpen;
+    useEffect(() => {
+        if (!anyDockPanelOpen && subAgentSheetOpen) setSubAgentSheetOpen(false);
+    }, [anyDockPanelOpen, subAgentSheetOpen]);
+
     useEffect(() => {
         if (subAgentState.isOpen && !showSubAgentPanel) {
             setShowSubAgentPanel(true);
@@ -4993,6 +5099,12 @@ function VAFDashboardContent() {
                     <span className="text-lg font-medium text-blue-700">{tMain('dropFilesHere')}</span>
                 </div>
             )}
+            {/* Mobile top bar — hamburger opens the sidebar drawer (desktop keeps the hover-rail) */}
+            <div className="md:hidden shrink-0 h-14 flex items-center gap-2 px-3 border-b border-gray-200 bg-white z-30">
+                <button type="button" onClick={() => setDrawerOpen(true)} aria-label="Menu" className="p-2.5 -ml-1 rounded-lg text-gray-700 hover:bg-gray-100 active:bg-gray-200 touch-target">
+                    <Menu size={22} />
+                </button>
+            </div>
             {pendingContactReplies.length > 0 && (
                 <div className="shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center gap-4 flex-wrap">
                     {pendingContactReplies.slice(0, 3).map((p) => {
@@ -5036,15 +5148,24 @@ function VAFDashboardContent() {
                     )}
                 </div>
             )}
+            {/* Mobile drawer scrim — tap outside to dismiss (desktop never renders it) */}
+            {drawerOpen && (
+                <div className="md:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
+            )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
-                <aside className="group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 w-16 hover:w-72 transition-[width] duration-300 z-20 shadow-lg overflow-hidden">
+                <aside className={cn(
+                    "group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 transition-[width,transform] duration-300 shadow-lg overflow-hidden",
+                    "md:w-16 md:hover:w-72 md:z-20",
+                    "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:z-50 max-md:shadow-2xl",
+                    drawerOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
+                )}>
 
                     {/* App Header / Logo */}
                     <div className="h-16 flex items-center px-4 gap-3 shrink-0">
                         <div className="w-[38px] h-[38px] rounded-lg overflow-hidden shrink-0 -ml-[5.5px]">
                             <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
                         </div>
-                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
+                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
                     </div>
 
                     {/* Session-Liste: äußere Box overflow-hidden = feste Höhe, innere Box scrollt */}
@@ -5056,16 +5177,16 @@ function VAFDashboardContent() {
                         >
                             {/* New Chat Button */}
                             <div
-                                onClick={() => ws?.send(JSON.stringify({ type: 'new_session' }))}
-                                className="flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
+                                onClick={() => { setDrawerOpen(false); ws?.send(JSON.stringify({ type: 'new_session' })); }}
+                                className="flex items-center gap-3 p-2 pl-3 max-md:py-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
                             >
                                 <Plus size={16} className="shrink-0" />
-                                <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">New Chat</span>
+                                <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200">New Chat</span>
                             </div>
 
                             {sessions.map(s => (
-                                <div key={s.id} data-session-id={s.id} onClick={() => handleSessionSwitch(s.id)}
-                                    className={cn("flex items-center gap-3 p-2 pl-3 rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
+                                <div key={s.id} data-session-id={s.id} onClick={() => { setDrawerOpen(false); handleSessionSwitch(s.id); }}
+                                    className={cn("flex items-center gap-3 p-2 pl-3 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
                                     {/* Active Indicator (Dot) */}
                                     {currentSessionId === s.id && (
@@ -5085,7 +5206,7 @@ function VAFDashboardContent() {
                                         <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
                                     )}
 
-                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity min-w-0 pr-1">
+                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
                                         {editingId === s.id ? (
                                             <input
                                                 autoFocus
@@ -5106,7 +5227,7 @@ function VAFDashboardContent() {
                                         )}
 
                                         {/* Action Icons (Hover Only) */}
-                                        <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                                        <div className="flex items-center gap-1.5 opacity-0 group-hover/item:opacity-100 max-md:opacity-100 transition-opacity">
                                             {!editingId && (
                                                 <>
                                                     <Edit2 size={12} className="text-gray-400 hover:text-gray-900" onClick={(e) => { e.stopPropagation(); startEditing(s); }} />
@@ -5165,7 +5286,7 @@ function VAFDashboardContent() {
                             <div className="w-6 flex justify-center shrink-0">
                                 <Calendar size={20} />
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
                         </div>
 
                         {currentUser?.role === 'admin' && (
@@ -5180,7 +5301,7 @@ function VAFDashboardContent() {
                                     <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse" />
                                 )}
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
                         </div>
                         )}
 
@@ -5206,7 +5327,7 @@ function VAFDashboardContent() {
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Settings</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Settings</span>
                         </div>
                     </div>
                 </aside>
@@ -5280,7 +5401,7 @@ function VAFDashboardContent() {
                                 </div>
                             );
                         })()}
-                        <div className="flex-1 overflow-y-auto p-6" ref={containerRef}>
+                        <div className="flex-1 overflow-y-auto p-6 max-md:p-3" ref={containerRef}>
                             <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -5826,7 +5947,16 @@ function VAFDashboardContent() {
                                                             {isBot && msg.downloadFiles && msg.downloadFiles.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2">
                                                                     {msg.downloadFiles.map((f, fi) => (
-                                                                        isHtmlFile(f.path) ? (
+                                                                        isImageFile(f.path) ? (
+                                                                            <button
+                                                                                key={fi}
+                                                                                onClick={() => openImageInViewer(f.path, f.name)}
+                                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                                                                            >
+                                                                                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                                                                                {f.name}
+                                                                            </button>
+                                                                        ) : isHtmlFile(f.path) ? (
                                                                             <button
                                                                                 key={fi}
                                                                                 onClick={() => { setHtmlViewerState({ isOpen: true, filePath: f.path, title: f.name }); setShowSubAgentPanel(true); }}
@@ -5867,7 +5997,7 @@ function VAFDashboardContent() {
                                                             {isBot ? (
                                                                 hasTimeline ? (
                                                                     <div className={cn(
-                                                                        "w-full max-w-[85%] rounded-2xl transition-all duration-300",
+                                                                        "w-full max-w-[85%] max-md:max-w-full rounded-2xl transition-all duration-300",
                                                                         isLatestBot && stopHovered && isGenerating
                                                                             ? "outline outline-2 outline-red-400/60 shadow-[0_0_12px_4px_rgba(239,68,68,0.15)]"
                                                                             : ""
@@ -5888,7 +6018,7 @@ function VAFDashboardContent() {
                                                                         </TurnActionsTimeline>
                                                                     </div>
                                                                 ) : (
-                                                                <div className="w-full max-w-[85%] flex gap-4">
+                                                                <div className="w-full max-w-[85%] max-md:max-w-full flex gap-4 max-md:gap-2">
                                                                     <AgentAvatar mode={botAvatarMode} dim={botAvatarDim} />
                                                                     <div className={cn(
                                                                         "flex flex-col flex-1 min-w-0 shrink-0 items-start w-full rounded-2xl transition-all duration-300",
@@ -5965,14 +6095,14 @@ function VAFDashboardContent() {
                             className={cn(
                                 "absolute left-0 right-0 w-full z-40 transition-all duration-500 ease-out",
                                 messages.length === 0
-                                    ? "top-1/2 -translate-y-1/2 bottom-auto"
+                                    ? "top-1/2 -translate-y-1/2 bottom-auto max-md:top-[38%]"
                                     : "top-auto bottom-0 translate-y-0"
                             )}
                         >
-                            <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6">
+                            <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))]">
                                 {messages.length === 0 && !historyLoading && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
-                                        <div className="flex justify-center mb-8" style={{ transform: 'scale(1.8)', transformOrigin: 'center' }}>
+                                        <div className="flex justify-center mb-8 max-md:mb-4 origin-center scale-[1.8] max-md:scale-[1.35]">
                                             <AgentAvatar mode="idle" />
                                         </div>
                                         <h2 className="text-xl font-bold text-gray-800">
@@ -6121,11 +6251,13 @@ function VAFDashboardContent() {
 
                                 {/* Token Stats (Clickable) + RAG Badge */}
                                 <div className={cn(chatWidthClass, "mx-auto mb-1 flex items-center gap-2 min-h-[16px]")}>
-                                    {/* Mirror the input row geometry: the stop-button column (w-9) sits left
-                                        of the input box, so the indicators get the same spacer + inner padding
-                                        and never stick out beyond the input field's edges. */}
-                                    <div className="w-9 shrink-0" />
-                                    <div className="flex min-w-0 flex-1 items-baseline justify-end gap-2 px-2">
+                                    {/* Mirror the input row geometry: the stop-button column (w-9) only exists
+                                        while generating, so add the matching spacer ONLY then — otherwise the
+                                        indicators sit flush-left, aligned with the (slot-less) input field. */}
+                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
+                                        <div className="w-9 shrink-0" />
+                                    )}
+                                    <div className="flex min-w-0 flex-1 items-baseline justify-end gap-2 px-2 max-md:flex-wrap max-md:gap-y-1">
                                     {/* Workspace chip: leftmost element; mr-auto pushes RAG/tokens to the right edge */}
                                     {workspaceInfo?.path && (
                                         <span
@@ -6139,13 +6271,20 @@ function VAFDashboardContent() {
                                     )}
                                     {ragResults?.sources?.length > 0 && (
                                         <div className="group relative inline-flex items-center pt-3">
+                                            {/* mobile: tap-outside scrim closes the snippets panel (no hover on touch) */}
+                                            {ragSnipOpen && (
+                                                <div className="fixed inset-0 z-[79] md:hidden" onClick={() => setRagSnipOpen(false)} />
+                                            )}
                                             <span
-                                                className="text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-help border border-gray-200 bg-transparent leading-none group-hover:text-violet-600 group-hover:opacity-100 group-hover:bg-violet-50 group-hover:border-violet-200 transition-all"
+                                                tabIndex={0}
+                                                role="button"
+                                                onClick={() => setRagSnipOpen((o) => !o)}
+                                                className="text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-help max-md:cursor-pointer border border-gray-200 bg-transparent leading-none outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-violet-300 group-hover:text-violet-600 group-hover:opacity-100 group-hover:bg-violet-50 group-hover:border-violet-200 group-focus-within:text-violet-600 group-focus-within:opacity-100 group-focus-within:bg-violet-50 group-focus-within:border-violet-200 transition-all"
                                                 title="RAG snippets passed to model this turn"
                                             >
                                                 {tMain('ragHits', { count: ragResults.sources.length })}
                                             </span>
-                                            <div className="hidden group-hover:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left">
+                                            <div className={cn("hidden group-hover:block group-focus-within:block absolute right-0 bottom-full mb-0 pb-2 z-[80] w-80 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl p-3 text-left max-md:!fixed max-md:!inset-x-2 max-md:!bottom-[88px] max-md:!top-auto max-md:!w-auto max-md:!max-h-[55vh]", ragSnipOpen && "max-md:!block")}>
                                                 <div className="text-xs font-semibold text-gray-700 mb-2">{tMain('ragSnippetsThisTurn')}</div>
                                                 <div className="space-y-2">
                                                     {[...ragResults.sources].sort((a: { score?: number }, b: { score?: number }) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10).map((s: { text?: string; full_text?: string; score?: number; metadata?: { title?: string; source?: string; tags?: string[] } }, i: number) => {
@@ -6190,16 +6329,16 @@ function VAFDashboardContent() {
                                                 {"●".repeat(Math.min(10, Math.max(0, Math.round(contextStats.percent / 10))))}
                                                 {"○".repeat(Math.max(0, 10 - Math.min(10, Math.max(0, Math.round(contextStats.percent / 10)))))}
                                             </span>
-                                            {Math.round(contextStats.percent)}% ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})
+                                            {Math.round(contextStats.percent)}%<span className="max-md:hidden"> ({contextStats.tokens.toLocaleString()}/{contextStats.max_tokens.toLocaleString()})</span>
                                         </span>
                                     )}
                                     </div>
                                 </div>
 
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
-                                <div className={cn(chatWidthClass, "mx-auto flex items-center gap-2")}>
-                                    <div className="w-9 shrink-0 flex items-center justify-center">
-                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
+                                <div className={cn(chatWidthClass, "mx-auto flex items-center")}>
+                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
+                                        <div className="w-9 mr-2 shrink-0 flex items-center justify-center">
                                             <div className="relative flex items-center justify-center">
                                                 {/* Hover aura — inline, only needs to surround the button itself */}
                                                 {stopHovered && !stopPulsing && (
@@ -6228,8 +6367,8 @@ function VAFDashboardContent() {
                                                     )}
                                                 </button>
                                             </div>
-                                        )}
-                                    </div>
+                                        </div>
+                                    )}
                                     <form
                                         onSubmit={sendMessage}
                                         className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden"
@@ -6246,12 +6385,12 @@ function VAFDashboardContent() {
                                             type="button"
                                             onClick={() => fileInputRef.current?.click()}
                                             className={cn(
-                                                "p-4 transition-colors",
-                                                attachedImages.length > 0 ? "text-violet-600" : documentViewerState.isOpen ? "text-blue-600" : "text-gray-400 hover:text-gray-900"
+                                                "shrink-0 ml-2 mb-1.5 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
+                                                attachedImages.length > 0 ? "text-violet-600 hover:bg-violet-50" : documentViewerState.isOpen ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
                                             )}
                                             title={tMain('attachmentsDocumentViewer')}
                                         >
-                                            <Paperclip size={20} />
+                                            <Paperclip size={19} />
                                         </button>
                                         <div className="flex-1 relative flex flex-col min-w-0">
                                             {attachedImages.length > 0 && (
@@ -6272,6 +6411,20 @@ function VAFDashboardContent() {
                                                             >✕</button>
                                                         </div>
                                                     ))}
+                                                </div>
+                                            )}
+                                            {imageViewerState.isOpen && imageMark && (
+                                                <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
+                                                    <span className="inline-flex items-center gap-1.5 rounded-full border border-yellow-300 bg-yellow-50 px-2.5 py-1 text-xs font-medium text-yellow-800">
+                                                        <span className="h-2 w-2 rounded-sm bg-yellow-400" />
+                                                        Markierung aktiv — deine Frage bezieht sich auf den markierten Bereich
+                                                        <button
+                                                            type="button"
+                                                            onClick={clearImageMark}
+                                                            className="ml-0.5 rounded-full px-1 leading-none text-yellow-700 hover:bg-yellow-200"
+                                                            title="Markierung löschen"
+                                                        >✕</button>
+                                                    </span>
                                                 </div>
                                             )}
                                             {insertedSelections.length > 0 && (
@@ -6310,7 +6463,7 @@ function VAFDashboardContent() {
                                                     onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
                                                     placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : input ? "" : "Ask anything..."}
-                                                    className="w-full min-h-[2.5rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
+                                                    className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                                     disabled={isGenerating || isIndexing}
                                                 />
                                             </div>
@@ -6320,10 +6473,10 @@ function VAFDashboardContent() {
                                             onClick={isRecording ? stopRecording : startRecording}
                                             disabled={isProcessingAudio || isGenerating}
                                             className={cn(
-                                                "m-2 p-2 rounded-xl transition-all shadow-sm",
+                                                "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
                                                 isRecording ? "bg-red-500 text-white" :
-                                                    isProcessingAudio ? "bg-gray-300 text-gray-500" :
-                                                        "bg-gray-900 text-white hover:bg-black disabled:bg-gray-200"
+                                                    isProcessingAudio ? "text-gray-400" :
+                                                        "text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
                                             )}
                                             style={{
                                                 boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
@@ -6332,24 +6485,45 @@ function VAFDashboardContent() {
                                             title={isRecording ? tMain('stopRecording') : isProcessingAudio ? tMain('processing') : tMain('voiceInput')}
                                         >
                                             {isProcessingAudio ? (
-                                                <Loader2 size={18} className="mx-2 animate-spin" />
+                                                <Loader2 size={18} className="animate-spin" />
                                             ) : isRecording ? (
-                                                <MicOff size={18} className="mx-2" />
+                                                <MicOff size={18} />
                                             ) : (
-                                                <Mic size={18} className="mx-2" />
+                                                <Mic size={18} />
                                             )}
+                                        </button>
+                                        {/* Mobile-only Send button (40px square, primary) — desktop submits via Enter */}
+                                        <button
+                                            type="submit"
+                                            disabled={isGenerating || isIndexing || !input.trim()}
+                                            aria-label="Send"
+                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
+                                        >
+                                            <Send size={18} />
                                         </button>
                                     </form>
                                 </div>
                             </div>
                         </div>
                     </div>
+                    {/* Mobile: compact preview bar for the active agent window — tap to open it as a full-screen sheet */}
+                    {anyDockPanelOpen && !subAgentSheetOpen && (
+                        <button
+                            type="button"
+                            onClick={() => setSubAgentSheetOpen(true)}
+                            className="lg:hidden fixed left-1/2 -translate-x-1/2 bottom-[92px] z-[55] flex items-center gap-2 max-w-[88%] pl-2 pr-2.5 py-1.5 rounded-full bg-gray-900 text-white shadow-lg active:bg-black"
+                        >
+                            <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center shrink-0"><Bot size={14} /></span>
+                            <span className="text-xs font-medium truncate">{subAgentState.agentName || 'Agent-Fenster'}{subAgentState.status ? ` · ${subAgentState.status}` : ''}</span>
+                            <span className="text-[11px] font-semibold shrink-0 px-2 py-0.5 rounded-full bg-white/15">Öffnen</span>
+                        </button>
+                    )}
                     {/* Right Panel: CodeViewer, DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
                     {showSubAgentPanel && (
                         <div
                             className={cn(
                                 "hidden lg:flex h-full items-stretch overflow-hidden transition-all duration-300 ease-out",
-                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen)
+                                (subAgentState.isOpen || documentEditorState.isOpen || documentViewerState.isOpen || codeViewerState.isOpen || htmlViewerState.isOpen || imageViewerState.isOpen)
                                     // Wide window ONLY while the SubAgentWindow itself renders a
                                     // custom view (coder/research data or a browser frame). The
                                     // viewers/editors take render priority over the SubAgentWindow,
@@ -6357,17 +6531,44 @@ function VAFDashboardContent() {
                                     // research run) the panel must drop back to the classic width.
                                     ? ((subAgentState.coder || subAgentState.research || subAgentState.document || subAgentState.librarian || subAgentState.browserFrame || subAgentState.browser)
                                         && !documentEditorState.isOpen && !documentViewerState.isOpen
-                                        && !codeViewerState.isOpen && !htmlViewerState.isOpen
+                                        && !codeViewerState.isOpen && !htmlViewerState.isOpen && !imageViewerState.isOpen
                                         ? "w-[72%] min-w-[760px] max-w-[1400px] opacity-100"
                                         : "w-[58%] min-w-[704px] max-w-[1000px] opacity-100")
                                     : "w-0 min-w-0 max-w-0 opacity-0 pointer-events-none",
                                 stopHovered && isSubAgentRunning
                                     ? "outline outline-2 outline-red-400/60 shadow-[0_0_16px_6px_rgba(239,68,68,0.12)]"
+                                    : "",
+                                // Mobile: full-screen sheet when opened via the mini-bar (overrides the hidden/zero-width dock)
+                                subAgentSheetOpen
+                                    ? "max-lg:!flex max-lg:fixed max-lg:inset-0 max-lg:z-[70] max-lg:!w-full max-lg:!max-w-none max-lg:!min-w-0 max-lg:!opacity-100 max-lg:!pointer-events-auto max-lg:h-[100dvh] max-lg:bg-white"
                                     : ""
                             )}
-                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen && !htmlViewerState.isOpen}
+                            aria-hidden={!subAgentState.isOpen && !documentEditorState.isOpen && !documentViewerState.isOpen && !codeViewerState.isOpen && !htmlViewerState.isOpen && !imageViewerState.isOpen}
                         >
-                            {htmlViewerState.isOpen ? (
+                            {/* Mobile sheet: back-to-chat button (the desktop dock has no such button) */}
+                            {subAgentSheetOpen && (
+                                <button
+                                    type="button"
+                                    onClick={() => setSubAgentSheetOpen(false)}
+                                    aria-label="Back to chat"
+                                    className="lg:hidden absolute top-2 left-2 z-[80] h-9 w-9 flex items-center justify-center rounded-full bg-white/90 shadow-md border border-gray-200 text-gray-700 active:bg-gray-100"
+                                >
+                                    <ChevronLeft size={20} />
+                                </button>
+                            )}
+                            {imageViewerState.isOpen ? (
+                                <ImageViewer
+                                    isOpen={imageViewerState.isOpen}
+                                    filePath={imageViewerState.filePath}
+                                    title={imageViewerState.title}
+                                    initialContent={imageViewerState.src}
+                                    description={imageViewerState.description}
+                                    descriptionLoading={imageViewerState.descLoading}
+                                    onMark={setImageMark}
+                                    clearMarkToken={markClearToken}
+                                    onClose={() => { setImageViewerState(prev => ({ ...prev, isOpen: false })); setImageMark(null); }}
+                                />
+                            ) : htmlViewerState.isOpen ? (
                                 <HtmlViewer
                                     isOpen={htmlViewerState.isOpen}
                                     filePath={htmlViewerState.filePath}
@@ -6492,8 +6693,8 @@ function VAFDashboardContent() {
 
             {/* Context Window Modal - Clean & Professional */}
             {isWorkspaceModalOpen && (workspaceView === 'index' || workspaceInfo?.path) && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="relative bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 max-md:p-0 animate-in fade-in duration-200">
+                    <div className="relative bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200 max-md:max-w-none max-md:min-h-0 max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
                         {/* Header */}
                         <div className="shrink-0 px-8 py-5 border-b border-gray-100 bg-gray-50/80">
                             <div className="flex justify-between items-center">
@@ -6792,14 +6993,14 @@ function VAFDashboardContent() {
             )}
 
             {isContextModalOpen && contextStats && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 max-md:p-0 animate-in fade-in duration-200">
+                    <div className="bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200 max-md:max-w-none max-md:min-h-0 max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
                         {/* Header */}
-                        <div className="shrink-0 px-8 py-6 border-b border-gray-100 bg-gray-50/80">
+                        <div className="shrink-0 px-8 py-6 border-b border-gray-100 bg-gray-50/80 max-md:px-4 max-md:py-4">
                             <div className="flex justify-between items-start">
                                 <div>
-                                    <div className="flex items-center gap-4">
-                                        <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                                    <div className="flex items-center gap-4 max-md:flex-wrap max-md:gap-2">
+                                        <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2 max-md:text-xl">
                                             <Activity className="text-gray-800" />
                                             Context Window
                                         </h3>
@@ -6842,9 +7043,9 @@ function VAFDashboardContent() {
                         </div>
 
                         {/* Diagram area with legend */}
-                        <div className="flex px-8 py-6 flex-1 min-h-0 gap-6">
+                        <div className="flex px-8 py-6 flex-1 min-h-0 gap-6 max-md:flex-col max-md:px-4 max-md:py-4 max-md:gap-4 max-md:overflow-y-auto">
                             {/* Legend - Left side with token count and percentage */}
-                            <div className="shrink-0 w-52 flex flex-col justify-start gap-3 text-sm">
+                            <div className="shrink-0 w-52 flex flex-col justify-start gap-3 text-sm max-md:w-full">
                                 <div className="flex items-start gap-2">
                                     <div className="w-3 h-3 rounded-sm bg-gray-800 mt-1 shrink-0"></div>
                                     <div className="min-w-0">
@@ -6911,7 +7112,7 @@ function VAFDashboardContent() {
                             </div>
 
                             {/* Diagram - Center (uses contextBreakdown) */}
-                            <div className="flex-1 flex flex-col min-h-0">
+                            <div className="flex-1 flex flex-col min-h-0 max-md:flex-none max-md:min-h-[300px]">
                                 {contextBreakdown && (() => {
                                     const { totalCap, used, systemEst, toolsEst, historyEst } = contextBreakdown;
                                     const freeEst = totalCap - used;
@@ -7041,7 +7242,7 @@ function VAFDashboardContent() {
                             </div>
 
                             {/* Brain — same flat style as left legend, no extra box */}
-                            <div className="shrink-0 w-52 flex flex-col gap-3 text-sm border-l border-gray-100 pl-4 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                            <div className="shrink-0 w-52 flex flex-col gap-3 text-sm border-l border-gray-100 pl-4 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-md:w-full max-md:border-l-0 max-md:border-t max-md:pl-0 max-md:pt-3 max-md:overflow-visible">
                                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">🧠 Agent Brain</div>
 
                                 {/* Goal */}

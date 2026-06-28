@@ -194,14 +194,14 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[95vw] h-[90vh] overflow-hidden flex flex-col border border-gray-200 animate-in fade-in zoom-in duration-300 max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0">
                 
                 {/* Header */}
-                <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50">
-                    <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-2xl bg-gray-900 flex items-center justify-center shadow-lg shadow-gray-200">
-                            <Github className="w-6 h-6 text-white" />
+                <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50 max-md:px-4 max-md:py-3">
+                    <div className="flex items-center gap-4 max-md:gap-3 min-w-0">
+                        <div className="w-12 h-12 rounded-2xl bg-gray-900 flex items-center justify-center shadow-lg shadow-gray-200 shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
+                            <Github className="w-6 h-6 text-white max-md:w-5 max-md:h-5" />
                         </div>
-                        <div>
-                            <h2 className="text-2xl font-bold text-gray-900">{t('title')}</h2>
-                            <p className="text-sm text-gray-500">{t('subtitle')}</p>
+                        <div className="min-w-0">
+                            <h2 className="text-2xl font-bold text-gray-900 max-md:text-lg truncate">{t('title')}</h2>
+                            <p className="text-sm text-gray-500 max-md:text-xs truncate">{t('subtitle')}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -258,10 +258,10 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                     </div>
                 )}
 
-                <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-                    
+                <div className="flex-1 overflow-hidden flex flex-col md:flex-row max-md:overflow-y-auto">
+
                     {/* Left: Accounts + Event timeline */}
-                    <div className="w-full md:w-1/2 border-r border-gray-100 flex flex-col bg-white min-w-0">
+                    <div className="w-full md:w-1/2 border-r border-gray-100 flex flex-col bg-white min-w-0 max-md:shrink-0">
                         <div className="p-4 border-b border-gray-50 flex justify-between items-center shrink-0">
                             <h3 className="font-bold text-gray-900 flex items-center gap-2">
                                 <Shield size={18} className="text-blue-500" />

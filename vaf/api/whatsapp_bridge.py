@@ -754,12 +754,16 @@ def _is_jid_whitelisted(username: str, chat_jid: str, user_scope_id: Optional[st
     return _allow_from_match(chat_jid, allowed_phones)
 
 
-def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
+def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional[str] = None, user_scope_id: Optional[str] = None) -> bool:
     """Callback for headless_runner: enqueue reply. If voice_path, send as voice message.
-    When user sent a voice message, auto-reply with voice (TTS) when possible. user_scope_id helps resolve FO contacts (scoped storage)."""
+    When user sent a voice message, auto-reply with voice (TTS) when possible. user_scope_id helps resolve FO contacts (scoped storage).
+
+    Returns True only if the reply was actually placed on the outgoing queue for the Node bridge, False if
+    it was dropped (non-whitelisted recipient, no outgoing queue, or a queue error). Callers that need a real
+    delivery signal (e.g. send_to_main_messenger's fallback decision) rely on this."""
     if not _is_jid_whitelisted(username, chat_jid, user_scope_id=user_scope_id):
         logger.warning("WhatsApp: blocked reply to non-whitelisted JID %s for user %s", chat_jid, username)
-        return
+        return False
     # If no voice_path but user sent voice, try to synthesize TTS (like Telegram)
     if not voice_path and text:
         with _voice_reply_lock:
@@ -786,8 +790,10 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
     if _outgoing_queue is not None:
         try:
             _outgoing_queue.put((username, chat_jid, text, voice_path))
+            return True
         except Exception:
-            pass
+            return False
+    return False
 
 
 def send_whatsapp_with_confirmation(

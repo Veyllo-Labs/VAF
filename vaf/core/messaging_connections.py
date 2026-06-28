@@ -348,6 +348,57 @@ def get_messaging_connections(
     return {"available": available, "main_messenger": main_messenger}
 
 
+def send_to_main_messenger(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+    text: str,
+) -> "tuple[bool, Optional[str]]":
+    """Send ``text`` to the user's configured ``main_messenger`` (Telegram/WhatsApp/Discord).
+
+    Single source of truth for "reach the user on their main channel", reused by the thinking-mode
+    nudge AND the proactive-question delivery. Returns ``(sent, channel)``:
+      * ``(True, "telegram"|"whatsapp"|"discord")`` on success,
+      * ``(False, None)`` when no main_messenger is configured, the channel id is missing, or the
+        send fails.
+    Never raises. (E-mail is intentionally NOT a valid main_messenger here.)
+    """
+    text = (text or "").strip()
+    if not text:
+        return False, None
+    try:
+        conn = get_messaging_connections(
+            username=(username or "admin").strip() or "admin", user_scope_id=user_scope_id
+        )
+        main = (conn.get("main_messenger") or "").strip().lower()
+        if main == "telegram":
+            chat_id = get_telegram_chat_id(user_scope_id, username)
+            if chat_id:
+                from vaf.core.telegram_reply import send_telegram_reply
+                if send_telegram_reply(chat_id, text):
+                    return True, "telegram"
+        elif main == "whatsapp":
+            jid = get_whatsapp_chat_jid(user_scope_id, username)
+            if jid:
+                from vaf.core.whatsapp_reply import send_whatsapp_reply
+                # send_whatsapp_reply returns False when the bridge is down (callback unset), so a dead
+                # bridge correctly degrades to (False, None) -> the caller falls back to the Web UI,
+                # instead of falsely reporting success and silently swallowing the message.
+                if send_whatsapp_reply((username or "admin"), jid, text, user_scope_id=user_scope_id):
+                    return True, "whatsapp"
+        elif main == "discord":
+            user_id = get_discord_user_id(user_scope_id, username)
+            if user_id:
+                discord_config = Config.get("discord_config") or {}
+                bot_token = (discord_config.get("bot_token") or "").strip()
+                if bot_token:
+                    from vaf.core.discord_send import send_discord_dm
+                    if send_discord_dm(bot_token, user_id, text, chunk=True):
+                        return True, "discord"
+    except Exception:
+        pass
+    return False, None
+
+
 def get_contact_whitelist_telegram_entry(telegram_user_id: str) -> Optional[Dict[str, Any]]:
     """
     If telegram_user_id is in any user's contact list with allow_as_assistant_user=True,

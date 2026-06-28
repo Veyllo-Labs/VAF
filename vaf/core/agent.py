@@ -5638,6 +5638,10 @@ class Agent:
                         # normally. This only triggers AFTER a nudge was sent — a bare "ja" straight to the
                         # question (no nudge yet) is still handled as a normal answer below.
                         _presence_reentry = True
+                        # Preserve the delivery channel + escalation state across the re-arm: the question
+                        # was sent on the user's main messenger (or already escalated to web), and the reset
+                        # nudge/escalation lifecycle must keep targeting that same channel — defaulting them
+                        # back to "web" would silently move the follow-up nudge off the user's real channel.
                         set_waiting_for_reply(
                             _scope,
                             username=waiting.get("username") or "admin",
@@ -5645,6 +5649,8 @@ class Agent:
                             question_text=q_text,
                             request_id=_req_id or None,
                             session_id=waiting.get("session_id"),
+                            channel=waiting.get("channel") or "web",
+                            escalated_to_web=bool(waiting.get("escalated_to_web")),
                         )
                         self._thinking_reply_context = (
                             f"[Context: You earlier asked the user a background question and then sent a "
@@ -8993,14 +8999,22 @@ class Agent:
                     tool_args["user_scope_id"] = scope_id
                     # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                     append_domain_log("rag", f"[Agent] {name} called with user_scope_id={scope_id}")
-                if name == "ask_user" and os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
-                    # A background automation handing off to the user's main agent: give the tool the live
-                    # agent (so it can snapshot the full working history into a handoff bundle) + the real
-                    # scope/username. Scoped to the automation run, so the thinking-mode ask_user call (which
-                    # resolves its scope inside deliver_tracked_message) stays byte-identical.
-                    tool_args["_agent"] = self
-                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                if name == "ask_user":
+                    # Both background runs must deliver to the RUNNING user's real scope/username: on a
+                    # multi-user server a non-admin thinking run that left these blank fell back to the
+                    # LOCAL ADMIN inside deliver_tracked_message — which, now that delivery goes to the
+                    # configured main_messenger, would push that non-admin's private question to the
+                    # admin's Telegram/WhatsApp/Discord. Inject the real scope/username in thinking mode
+                    # AND automation; the handoff-bundle `_agent` is automation-only.
+                    _au = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
+                    _th = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                    if _au or _th:
+                        tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                        tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    if _au:
+                        # A background automation handing off to the user's main agent: give the tool the
+                        # live agent so it can snapshot the full working history into a handoff bundle.
+                        tool_args["_agent"] = self
                 if name in ("update_intent", "update_working_memory"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("set_timer", "list_timers", "cancel_timer"):

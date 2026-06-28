@@ -3668,9 +3668,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                 {/* Model preview dialog: "Download this model?" with card + GGUF list — fixed overlay so entire window is dimmed */}
                 {modelPreviewData && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 max-md:p-0">
                         <div
-                            className="bg-white rounded-2xl border border-gray-200 shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+                            className="bg-white rounded-2xl border border-gray-200 shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                             onClick={(e) => e.stopPropagation()}
                         >
                             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
@@ -3777,10 +3777,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Tools Modal */}
             {showToolsModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowToolsModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowToolsModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -4007,10 +4007,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             )}
 
             {codeModal && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setCodeModal(null)}>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 max-md:p-0" onClick={() => setCodeModal(null)}>
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
                     <div
-                        className="relative bg-[#1e1e1e] w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-[#1e1e1e] w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -4138,10 +4138,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* License Content Modal */}
             {showLicenseModal && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowLicenseModal(false)}>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowLicenseModal(false)}>
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col w-full max-w-2xl max-h-[80vh] animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white rounded-2xl border border-gray-200 shadow-2xl flex flex-col w-full max-w-2xl max-h-[80vh] animate-in fade-in zoom-in-95 duration-200 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="p-4 border-b border-gray-100 flex justify-between items-center shrink-0">
@@ -4172,9 +4172,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* MCP Servers Modal */}
             {showMcpModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowMcpModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowMcpModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-                    <div className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                    <div className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0" onClick={(e) => e.stopPropagation()}>
                         {/* Header */}
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
                             <div>
@@ -4296,10 +4296,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Workflows Modal */}
             {showWorkflowsModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowWorkflowsModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowWorkflowsModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -4438,10 +4438,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Skills Modal - same layout as the Workflows modal */}
             {showSkillsModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowSkillsModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowSkillsModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -4570,10 +4570,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Trusted Sources Modal - same size as Tools/Workflows */}
             {showTrustedSourcesModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowTrustedSourcesModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowTrustedSourcesModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[90vw] h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="h-20 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 bg-white z-10">
@@ -4765,10 +4765,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Workflow Visualizer Modal */}
             {workflowModal && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setWorkflowModal(null)}>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 max-md:p-0" onClick={() => setWorkflowModal(null)}>
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
                     <div
-                        className="relative bg-white w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}

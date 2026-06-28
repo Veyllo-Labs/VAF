@@ -251,46 +251,18 @@ def _add_account(
 
 
 def _effective_https_suffix() -> str:
-    """Return the ':<port>' suffix for the HTTPS URL that is ACTUALLY reachable, or '' for 443.
-
-    The integrated proxy cannot bind privileged 443 as a non-root user (Linux desktop) and
-    transparently falls back to 8443; runtime_status.effective_https_port() is the single source
-    of truth for the port it really bound (same value network_routes advertises). The OAuth
-    redirect MUST use this — the previous code hardcoded 443 (only special-casing Windows), so on
-    Linux the browser was sent to https://localhost:443 where nothing listens ("not reachable")."""
-    configured = int(Config.get("local_network_https_port", 443) or 443)
-    port = configured
-    try:
-        from vaf.network import runtime_status
-        eff = runtime_status.get_proxy_status().get("effective_https_port")
-        if eff:
-            port = int(eff)            # proxy confirmed the port it really bound (e.g. 8443)
-        elif configured == 443:
-            port = 8443                # not bound yet / unknown: 443 is privileged -> universal fallback
-    except Exception:
-        if configured == 443:
-            port = 8443
-    return "" if port == 443 else f":{port}"
+    """The ':<port>' suffix for the reachable HTTPS URL (shared helper; see vaf/network/oauth_redirect)."""
+    from vaf.network.oauth_redirect import effective_https_suffix
+    return effective_https_suffix()
 
 
 def _oauth_callback_base_url() -> str:
     """
     Base URL for OAuth redirect_uri. Must point to this backend so the callback is handled here.
-    When the frontend is behind a proxy (e.g. Next.js 3000 -> backend 8001), request.base_url
-    can be the frontend origin, which would send the user to the wrong server after sign-in.
+    Shared with the cloud flow via vaf/network/oauth_redirect so both stay reachable/consistent.
     """
-    explicit = (Config.get("email_oauth_callback_base_url") or "").strip().rstrip("/")
-    if explicit:
-        return explicit
-    # Default to the integrated HTTPS proxy when network mode is active.
-    # This avoids protocol mismatches (HTTP callback to a TLS-only backend),
-    # which surface in browsers as ERR_EMPTY_RESPONSE.
-    network_on = bool(Config.get("local_network_enabled", False))
-    tls_on = bool(Config.get("local_network_tls_enabled", False))
-    if network_on and tls_on:
-        return f"https://localhost{_effective_https_suffix()}"
-    port = int(Config.get("local_network_port", 8001) or 8001)
-    return f"http://localhost:{port}"
+    from vaf.network.oauth_redirect import oauth_callback_base_url
+    return oauth_callback_base_url("email_oauth_callback_base_url")
 
 
 def _frontend_base_url() -> str:

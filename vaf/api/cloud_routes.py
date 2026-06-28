@@ -208,8 +208,10 @@ async def oauth_start(
 
     _username = _user.get("username", "admin")
     _user_scope_id = _user.get("user_scope_id")
-    base_url = str(request.base_url).rstrip("/")
-    redirect_uri = get_cloud_callback_redirect_uri(base_url)
+    # Shared helper targets the actually-bound proxy port (8443 fallback); request.base_url is only a
+    # defensive fallback (it is unreliable behind the proxy). The exchange reuses the redirect_uri
+    # stored in the OAuth state, so authorize and callback stay consistent.
+    redirect_uri = get_cloud_callback_redirect_uri(str(request.base_url).rstrip("/"))
 
     try:
         auth_url, state = get_authorization_url(
@@ -239,8 +241,7 @@ async def oauth_callback(
     if not code or not state:
         return _redirect_error("Missing code or state", redirect_base)
 
-    base_url = str(request.base_url).rstrip("/")
-    redirect_uri = get_cloud_callback_redirect_uri(base_url)
+    redirect_uri = get_cloud_callback_redirect_uri(str(request.base_url).rstrip("/"))
 
     try:
         provider = get_state_provider(state)

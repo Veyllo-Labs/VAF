@@ -430,7 +430,13 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
         return access
 
 
-def get_cloud_callback_redirect_uri(request_base_url: str) -> str:
-    """Build redirect_uri for cloud OAuth callback."""
-    base = (Config.get("cloud_oauth_callback_base_url") or request_base_url).rstrip("/")
+def get_cloud_callback_redirect_uri(request_base_url: Optional[str] = None) -> str:
+    """Build redirect_uri for the cloud OAuth callback.
+
+    Uses the shared base-URL helper (same logic as email) so the callback targets the actually-bound
+    HTTPS proxy port (8443 fallback) in network+TLS mode, or the plain backend in localhost mode, with
+    the cloud_oauth_callback_base_url override taking precedence. request_base_url is only a defensive
+    last-resort fallback — it is unreliable behind the Next.js/HTTPS proxy."""
+    from vaf.network.oauth_redirect import oauth_callback_base_url
+    base = (oauth_callback_base_url("cloud_oauth_callback_base_url") or (request_base_url or "")).rstrip("/")
     return f"{base}/api/cloud/oauth/callback"

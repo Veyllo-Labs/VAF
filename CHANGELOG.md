@@ -54,6 +54,10 @@ To update an installed VAF, run `vaf update`.
 - Switching to an unowned/new session now resets the agent's current user scope/username,
   preventing cross-user identity bleed; UUID-scoped network users' mailboxes are now
   included in email auto-sync.
+- Cloud storage OAuth (Google Drive etc.) now opens in the system browser instead of the
+  embedded desktop webview, and its callback uses the same effective HTTPS proxy port as
+  email (shared `vaf/network/oauth_redirect` helper) instead of an unreliable
+  `request.base_url`, so connecting cloud accounts works on the Linux/macOS desktop.
 
 <!--
 Template for a new release (see docs/setup/RELEASING.md):

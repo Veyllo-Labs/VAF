@@ -1346,6 +1346,16 @@ vaf automation delete <id>   # Delete task
                 agent = Agent(verbose=False)
                 agent.load_model()
                 agent.init_chat()
+                # RUNAWAY GUARD: a prompt-based automation fallback must NOT recursively spawn workflows or
+                # more automations — that is what flooded /api/subagent/stream and required a process kill.
+                # Strip the recursive spawners (ordinary content sub-agents like coding_agent stay and are
+                # each already time-bounded by run_bounded). Belt-and-suspenders with the chat_step timeout below.
+                try:
+                    for _t in ("create_automation", "create_agent_workflow", "execute_workflow"):
+                        if isinstance(getattr(agent, "tools", None), dict):
+                            agent.tools.pop(_t, None)
+                except Exception:
+                    pass
                 # Background run: stay SILENT — tool_update emits must never broadcast into a live user's
                 # chat (no own web session -> the global session fallback would route tool bubbles to the
                 # active web user; observed as an automation leaking into a LAN client's chat).
@@ -1427,11 +1437,23 @@ vaf automation delete <id>   # Delete task
                 except Exception:
                     memory_context = ""
 
-                agent.chat_step(
-                    prompt,
-                    stream_callback=capture,
-                    memory_context=memory_context or None,
-                )
+                # RUNAWAY GUARD: bound the whole fallback turn so a stuck/looping provider (e.g. a stateful
+                # gateway 400ing every tool turn) can never run unbounded. On timeout the caller is freed and
+                # the automation lock released; the abandoned worker cannot keep spawning recursive workflows
+                # because those tools were stripped above.
+                try:
+                    from vaf.core.bounded_run import run_bounded as _run_bounded
+                    from vaf.core.config import Config as _CfgAuto
+                    _auto_to = float(_CfgAuto.get("automation_run_timeout_seconds", 180) or 180)
+
+                    def _do_chat():
+                        agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
+                        return True
+
+                    _run_bounded(_do_chat, timeout=_auto_to, label="automation_prompt_run")
+                except Exception:
+                    # Fallback to a plain call if run_bounded is unavailable for any reason.
+                    agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
                 raw_result = "".join(response_parts)
 
                 # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses

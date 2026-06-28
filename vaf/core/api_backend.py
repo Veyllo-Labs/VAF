@@ -955,10 +955,17 @@ class APIBackendManager:
     @staticmethod
     def _classify_failure(failure) -> str:
         """Best-effort bucket for a failure string/exception:
-        timeout | rate_limit | server_error | connection | unknown."""
+        client_error | timeout | rate_limit | server_error | connection | unknown."""
         s = str(failure).lower()
         if "429" in s or "rate limit" in s or "ratelimit" in s or "too many requests" in s:
             return "rate_limit"
+        # 4xx CLIENT errors are a problem with the REQUEST, not a provider outage. Failing over to a
+        # different provider cannot help (the same request fails everywhere) and — worse for stateful
+        # gateways like Veyllo — it forwards provider-bound tool_call ids to a provider that cannot honor
+        # them, turning one 400 into a cascade. Surface the real error instead. (429 is handled above.)
+        if (any(f"error code: {c}" in s for c in ("400", "401", "403", "404", "422"))
+                or "invalid_request_error" in s or "bad request" in s):
+            return "client_error"
         if "timeout" in s or "timed out" in s:
             return "timeout"
         if "reset by peer" in s or "connection" in s or "unreachable" in s or "refused" in s:
@@ -967,10 +974,31 @@ class APIBackendManager:
             return "server_error"
         return "unknown"
 
+    @staticmethod
+    def _messages_have_provider_bound_tool_calls(messages) -> bool:
+        """True if the conversation carries tool_call ids bound to the CURRENT provider — an assistant
+        message with `tool_calls`, or a role:`tool` result referencing a tool_call_id. Such ids are NOT
+        portable across providers (a stateful gateway like Veyllo issues its own ids and 400s on foreign
+        ones), so failing over mid-tool-sequence only yields another error. Used to suppress failover there."""
+        try:
+            for m in (messages or []):
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                if role == "assistant" and m.get("tool_calls"):
+                    return True
+                if role == "tool":
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _should_failover_on(self, failure) -> bool:
         """Whether a failure may trigger failover, honoring the failover_triggers config.
         Connection/unknown failures always do; an empty trigger list means 'any'."""
         bucket = self._classify_failure(failure)
+        if bucket == "client_error":
+            return False  # a 4xx is a request problem; another provider won't fix it and gets foreign state
         if bucket in ("connection", "unknown"):
             return True
         triggers = self._failover_cfg("failover_triggers", []) or []
@@ -1048,7 +1076,13 @@ class APIBackendManager:
             first, failure = self._first_chunk(gen, deadline)
             if failure is not None:
                 last_failure = failure
-                if not is_last and self._should_failover_on(failure):
+                _can_failover = not is_last and self._should_failover_on(failure)
+                if _can_failover and self._messages_have_provider_bound_tool_calls(messages):
+                    # Mid-tool-sequence: the history carries this provider's tool_call ids, which the next
+                    # provider cannot honor. Don't cascade — surface the primary's error.
+                    logger.info(f"[failover] {link_mgr.provider_name} failed ({self._classify_failure(failure)}) but conversation has provider-bound tool_call ids — NOT failing over")
+                    _can_failover = False
+                if _can_failover:
                     logger.info(f"[failover] {link_mgr.provider_name} failed ({self._classify_failure(failure)}); trying next provider")
                     continue
                 yield failure if isinstance(failure, str) else f"[API Error from {link_mgr.provider_name}: {failure}]"

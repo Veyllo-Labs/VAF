@@ -175,6 +175,8 @@ class Config:
                 # Enforced by vaf.core.bounded_run.run_bounded.
                 "tool_timeout_seconds": 120,           # generic in-process tool call
                 "subagent_timeout_seconds": 300,       # research/coding/document sub-agent step
+                "workflow_generation_timeout_seconds": 90,   # create_automation: bound the inline workflow-gen Agent so generation can't hang
+                "automation_run_timeout_seconds": 180,       # prompt-based automation fallback: bound the whole turn (runaway guard)
                 "librarian_timeout_seconds": 60,       # filesystem agent — should be fast
                 "browser_timeout_seconds": 1800,       # worst-case hard cap (30 min); liveness is the real guard
                 "tool_stop_poll_seconds": 0.5,         # how often the bounded wait checks stop/deadline

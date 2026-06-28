@@ -70,7 +70,7 @@ export default function AnnouncementModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'relative', width: '100%', maxWidth: 480, background: C.surface,
-          border: `1px solid ${C.line}`, borderRadius: 26, overflow: 'hidden',
+          border: `1px solid ${C.line}`, borderRadius: 26, overflowX: 'hidden', overflowY: 'auto', maxHeight: '88vh',
           boxShadow: '0 30px 70px -24px rgba(16,24,40,.22)',
           animation: 'vafAnnPop .24s cubic-bezier(.22,1,.36,1)', fontFamily: 'inherit',
         }}

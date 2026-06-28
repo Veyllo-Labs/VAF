@@ -1,4 +1,25 @@
 {
+  "onboarding": {
+    "stepAdmin": "Admin",
+    "stepSoul": "Soul",
+    "stepVeyllo": "Veyllo API",
+    "step2fa": "2FA",
+    "languageTitle": "Choose your language",
+    "languageSubtitle": "Pick the language for the setup and the app. You can change it later in Settings.",
+    "phoneTitle": "A phone is required",
+    "phoneBody": "To finish setup you need a phone: at the last step you scan a QR code to set up two-factor authentication (2FA) for your account.",
+    "phoneYes": "Yes, I have a phone",
+    "phoneCancel": "Cancel",
+    "veylloTitle": "Do you have a Veyllo API?",
+    "veylloBody": "If your computer is too weak to run a local model, or you'd rather not pay for the energy it uses, you can use the hosted Veyllo API instead. Paste your key below — or skip and run locally.",
+    "veylloCreate": "Create a Veyllo API key",
+    "veylloKeyLabel": "Veyllo API key",
+    "veylloKeyPlaceholder": "vaf_live_…",
+    "veylloSave": "Save & continue",
+    "veylloSkip": "Skip — I'll run locally",
+    "veylloInvalidKey": "That key could not be verified. Please check it and try again.",
+    "veylloNetworkError": "Could not reach the server to verify the key."
+  },
   "auth": {
     "checkingSession": "Checking session…",
     "redirectingToLogin": "Redirecting to login…",

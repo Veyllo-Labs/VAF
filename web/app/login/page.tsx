@@ -8,14 +8,15 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
-    Smartphone, CheckCircle, Check, Copy, Link2
+    Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
-import { CONNECTION_APPS, CATEGORIES, DiscordSetupWizard, TelegramSetupWizard, EmailSetupWizard } from '@/components/connections';
-import type { DiscordConfig, TelegramConfig } from '@/components/connections';
 import { getApiBase } from '@/lib/utils';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { useLocaleStore } from '@/lib/localeStore';
+import { languages } from '@/lib/languages';
 
 // On the 2FA step, the agent "wakes up" (materialises + the eye opens) where the logo would be, then
 // settles into the patient `waiting` loop. `lite` keeps it leak-safe (no border-radius morph).
@@ -32,10 +33,13 @@ function WakingAvatar() {
     );
 }
 
+// Where users create a Veyllo API key (marketing site; the key is *validated* against veyllo_base_url).
+const VEYLLO_CREATE_URL = 'https://veyllo.app';
+
 export default function LoginPage() {
     const router = useRouter();
     // Default to login; only show wizard when API explicitly says needs_setup: true (no admin yet)
-    const [step, setStep] = useState<'login' | '2fa' | 'create_admin' | 'soul_wizard' | 'connections' | 'setup_2fa'>('login');
+    const [step, setStep] = useState<'login' | '2fa' | 'language' | 'phone_notice' | 'create_admin' | 'soul_wizard' | 'veyllo_api' | 'setup_2fa'>('login');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -54,10 +58,13 @@ export default function LoginPage() {
     const [createAdminSubStep, setCreateAdminSubStep] = useState<'username' | 'password'>('username');
     const [pendingSoul, setPendingSoul] = useState<string | null>(null);
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
-    const [showDiscordWizard, setShowDiscordWizard] = useState(false);
-    const [showTelegramWizard, setShowTelegramWizard] = useState(false);
-    const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [backendUnreachable, setBackendUnreachable] = useState(false);
+    const [veylloKey, setVeylloKey] = useState('');
+    const [veylloTesting, setVeylloTesting] = useState(false);
+    const [veylloError, setVeylloError] = useState<string | null>(null);
+    const t = useTranslations('onboarding');
+    const setLocale = useLocaleStore((s) => s.setLocale);
+    const currentLocale = useLocaleStore((s) => s.locale);
 
     // If network TLS/proxy mode is active, avoid showing login on :3000.
     // Redirect to HTTPS access port so login/session use the correct origin.
@@ -87,7 +94,7 @@ export default function LoginPage() {
         // layout and avoid the last "Finish" unless you want the real action.
         if (typeof window !== 'undefined') {
             const preview = new URLSearchParams(window.location.search).get('preview');
-            const PREVIEW_STEPS = ['login', '2fa', 'create_admin', 'soul_wizard', 'connections', 'setup_2fa'];
+            const PREVIEW_STEPS = ['login', '2fa', 'language', 'phone_notice', 'create_admin', 'soul_wizard', 'veyllo_api', 'setup_2fa'];
             if (preview && PREVIEW_STEPS.includes(preview)) {
                 setStep(preview as typeof step);
                 setCheckingSetup(false);
@@ -115,8 +122,8 @@ export default function LoginPage() {
                 if (res.ok) {
                     // If we're in the middle of onboarding (e.g. refresh after 2FA), stay and show Soul/Connections
                     if (typeof window !== 'undefined' && sessionStorage.getItem('vaf_onboarding') === 'true') {
-                        const savedStep = sessionStorage.getItem('vaf_onboarding_step') as 'soul_wizard' | 'connections' | null;
-                        setStep(savedStep === 'connections' ? 'connections' : 'soul_wizard');
+                        const savedStep = sessionStorage.getItem('vaf_onboarding_step') as 'soul_wizard' | 'veyllo_api' | null;
+                        setStep(savedStep === 'veyllo_api' ? 'veyllo_api' : 'soul_wizard');
                         setCheckingSetup(false);
                         return;
                     }
@@ -142,7 +149,7 @@ export default function LoginPage() {
                     .then((data) => {
                         if (data?.needs_setup === true) {
                             if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding', 'true');
-                            setStep('create_admin');
+                            setStep('language');
                         }
                     })
                     .catch(() => {
@@ -171,6 +178,42 @@ export default function LoginPage() {
         // No API call yet — collect credentials locally and continue to soul setup.
         setBootstrapError(null);
         setStep('soul_wizard');
+    };
+
+    // "Cancel" on the phone-notice resets the wizard back to the first (Language) step.
+    const resetOnboarding = () => {
+        setUsername(''); setPassword(''); setConfirmPassword('');
+        setPendingSoul(null); setOnboardingConfig({});
+        setVeylloKey(''); setVeylloError(null);
+        setCreateAdminSubStep('username'); setBootstrapError(null);
+        if (typeof window !== 'undefined') sessionStorage.removeItem('vaf_onboarding_step');
+        setStep('language');
+    };
+
+    // Veyllo-API step: live-test the key (first-run-gated endpoint), then defer the save into
+    // onboardingConfig (PATCHed to /api/config after bootstrap, same path as connections used).
+    const handleSaveVeylloKey = async () => {
+        const key = veylloKey.trim();
+        if (!key) return;
+        setVeylloTesting(true); setVeylloError(null);
+        try {
+            const res = await fetch(`${getApiBase()}/api/auth/test-veyllo-key`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ api_key: key }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok === true) {
+                setOnboardingConfig((prev) => ({ ...prev, api_key_veyllo: key, provider: 'veyllo' }));
+                setStep('setup_2fa');
+                handleStartSetup2FA();
+            } else {
+                setVeylloError(t('veylloInvalidKey'));
+            }
+        } catch {
+            setVeylloError(t('veylloNetworkError'));
+        }
+        setVeylloTesting(false);
     };
 
     // Called from the 2FA step (step 4): bootstrap + setup-2fa + verify, then save pending data.
@@ -354,18 +397,18 @@ export default function LoginPage() {
     };
 
     const onboardingSteps = [
-        { id: 1, label: 'Create Admin' },
-        { id: 2, label: 'Soul' },
-        { id: 3, label: 'Connections' },
-        { id: 4, label: '2FA' },
+        { id: 1, label: t('stepAdmin') },
+        { id: 2, label: t('stepSoul') },
+        { id: 3, label: t('stepVeyllo') },
+        { id: 4, label: t('step2fa') },
     ];
     const onboardingCurrentStep =
-        step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'connections' ? 3 : step === 'setup_2fa' ? 4 : 0;
+        step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'veyllo_api' ? 3 : step === 'setup_2fa' ? 4 : 0;
     const showOnboardingProgress = onboardingCurrentStep >= 1;
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-            {step !== 'connections' && step !== 'setup_2fa' && (
+            {step !== 'setup_2fa' && (
                 <div className="mb-8 text-center">
                     {step === '2fa' ? <WakingAvatar /> : <img src="/logo.png" alt="Veyllo Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />}
                     <h1 className="text-2xl font-bold text-gray-900">Veyllo Agentic Framework</h1>
@@ -518,6 +561,82 @@ export default function LoginPage() {
                             </div>
                             <div className="bg-gray-50 px-8 py-4 border-t border-gray-100 flex items-center justify-center">
                                 <span className="text-sm text-gray-500">Need an account? Contact Admin</span>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {!checkingSetup && step === 'language' && (
+                    <motion.div
+                        key="language"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="w-full max-w-md"
+                    >
+                        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
+                                <Globe size={18} className="text-gray-700" />
+                                <span className="text-sm font-medium text-gray-700">{t('languageTitle')}</span>
+                            </div>
+                            <div className="p-8">
+                                <p className="text-sm text-gray-500 mb-5">{t('languageSubtitle')}</p>
+                                <div className="space-y-2">
+                                    {languages.map((lang) => (
+                                        <button
+                                            key={lang.code}
+                                            type="button"
+                                            onClick={() => { setLocale(lang.code); setStep('phone_notice'); }}
+                                            className={cn(
+                                                'w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all',
+                                                currentLocale === lang.code ? 'border-gray-900 bg-gray-50' : 'border-gray-200 hover:bg-gray-50'
+                                            )}
+                                        >
+                                            <span className="text-2xl">{lang.flag}</span>
+                                            <span className="font-medium text-gray-900">{lang.name}</span>
+                                            {currentLocale === lang.code && <Check className="w-4 h-4 text-gray-900 ml-auto" />}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {!checkingSetup && step === 'phone_notice' && (
+                    <motion.div
+                        key="phone_notice"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="w-full max-w-md"
+                    >
+                        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
+                                <Smartphone size={18} className="text-gray-700" />
+                                <span className="text-sm font-medium text-gray-700">{t('phoneTitle')}</span>
+                            </div>
+                            <div className="p-8">
+                                <div className="flex justify-center mb-5">
+                                    <div className="w-14 h-14 rounded-2xl bg-gray-900 text-white flex items-center justify-center">
+                                        <Smartphone size={26} />
+                                    </div>
+                                </div>
+                                <p className="text-sm text-gray-600 leading-relaxed text-center mb-6">{t('phoneBody')}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => setStep('create_admin')}
+                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2"
+                                >
+                                    {t('phoneYes')} <ArrowRight size={18} />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={resetOnboarding}
+                                    className="w-full mt-3 px-4 py-3 text-gray-600 hover:text-gray-900 border border-gray-200 rounded-xl transition-colors"
+                                >
+                                    {t('phoneCancel')}
+                                </button>
                             </div>
                         </div>
                     </motion.div>
@@ -708,116 +827,75 @@ export default function LoginPage() {
                     <SoulWizard
                         isOpen={true}
                         onClose={() => {
-                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'connections');
-                            setStep('connections');
+                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
+                            setStep('veyllo_api');
                         }}
                         username={username || 'Admin'}
                         onComplete={(content) => {
                             setPendingSoul(content);
-                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'connections');
-                            setStep('connections');
+                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
+                            setStep('veyllo_api');
                         }}
                     />
                 )}
 
-                {!checkingSetup && step === 'connections' && (
+                {!checkingSetup && step === 'veyllo_api' && (
                     <motion.div
-                        key="connections"
+                        key="veyllo_api"
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
-                        className="w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+                        className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
-                                <Link2 size={18} className="text-gray-700" />
-                                <span className="text-sm font-medium text-gray-700">Connections (optional)</span>
+                                <KeyRound size={18} className="text-gray-700" />
+                                <span className="text-sm font-medium text-gray-700">{t('veylloTitle')}</span>
                             </div>
-                            <div className="p-6">
-                                <p className="text-sm text-gray-500 mb-4">
-                                    Connect external apps to interact with your VAF agent. You can set these up later in Settings.
-                                </p>
-                                <div className="space-y-6">
-                                    {CATEGORIES.filter((cat) => CONNECTION_APPS.some((app) => app.category === cat.id)).map((category) => (
-                                        <div key={category.id} className="space-y-3">
-                                            <div>
-                                                <h4 className="text-sm font-medium text-gray-700">{category.label}</h4>
-                                                <p className="text-xs text-gray-400">{category.description}</p>
-                                            </div>
-                                            <div className="space-y-2">
-                                                {CONNECTION_APPS.filter((app) => app.category === category.id).map((app) => {
-                                                    const Icon = app.icon;
-                                                    const configured = (onboardingConfig[app.configKey] as { verified?: boolean })?.verified === true;
-                                                    const canSetup = (app.id === 'discord' || app.id === 'telegram' || app.id === 'email') && !app.comingSoon;
-                                                    return (
-                                                        <div
-                                                            key={app.id}
-                                                            className={cn(
-                                                                'p-4 rounded-xl border transition-all',
-                                                                configured ? 'bg-white border-gray-200 shadow-sm' : 'bg-gray-50 border-gray-200',
-                                                                app.comingSoon && 'opacity-60'
-                                                            )}
-                                                        >
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
-                                                                    <div
-                                                                        className={cn(
-                                                                            'w-10 h-10 rounded-xl flex items-center justify-center text-white',
-                                                                            configured ? (app.iconColor || 'bg-gray-900') : 'bg-gray-300 text-gray-500'
-                                                                        )}
-                                                                    >
-                                                                        <Icon className="w-5 h-5" />
-                                                                    </div>
-                                                                    <div>
-                                                                        <div className="flex items-center gap-2">
-                                                                            <span className="font-medium text-gray-900">{app.name}</span>
-                                                                            {app.comingSoon && (
-                                                                                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Coming Soon</span>
-                                                                            )}
-                                                                            {configured && !app.comingSoon && (
-                                                                                <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">Configured</span>
-                                                                            )}
-                                                                        </div>
-                                                                        <p className="text-sm text-gray-500">{app.description}</p>
-                                                                    </div>
-                                                                </div>
-                                                                {canSetup ? (
-                                                                    <button
-                                                                        onClick={() => {
-                                                                            if (app.id === 'discord') setShowDiscordWizard(true);
-                                                                            if (app.id === 'telegram') setShowTelegramWizard(true);
-                                                                            if (app.id === 'email') setShowEmailWizard(true);
-                                                                        }}
-                                                                        className={cn(
-                                                                            'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors shrink-0 whitespace-nowrap max-md:text-sm',
-                                                                            configured ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-gray-900 hover:bg-gray-800 text-white'
-                                                                        )}
-                                                                    >
-                                                                        {configured ? 'Edit' : 'Set up'}
-                                                                    </button>
-                                                                ) : (
-                                                                    <span className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 text-gray-400 font-medium">Coming Soon</span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    ))}
+                            <div className="p-8">
+                                <p className="text-sm text-gray-600 leading-relaxed mb-4">{t('veylloBody')}</p>
+                                <a
+                                    href={VEYLLO_CREATE_URL}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="w-full mb-5 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
+                                >
+                                    {t('veylloCreate')} <ExternalLink size={15} />
+                                </a>
+                                <label className="text-sm font-medium text-gray-700 ml-1">{t('veylloKeyLabel')}</label>
+                                <div className="relative mt-1.5 mb-3">
+                                    <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                                    <input
+                                        type="text"
+                                        value={veylloKey}
+                                        onChange={(e) => { setVeylloKey(e.target.value); setVeylloError(null); }}
+                                        className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
+                                        placeholder={t('veylloKeyPlaceholder')}
+                                    />
                                 </div>
-                                <div className="flex gap-3 mt-6">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setStep('setup_2fa');
-                                            handleStartSetup2FA();
-                                        }}
-                                        className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2"
-                                    >
-                                        Continue to 2FA Setup <ArrowRight size={18} />
-                                    </button>
-                                </div>
+                                {veylloError && (
+                                    <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-3">{veylloError}</p>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={handleSaveVeylloKey}
+                                    disabled={!veylloKey.trim() || veylloTesting}
+                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {veylloTesting ? (
+                                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                        <>{t('veylloSave')} <ArrowRight size={18} /></>
+                                    )}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setStep('setup_2fa'); handleStartSetup2FA(); }}
+                                    disabled={veylloTesting}
+                                    className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
+                                >
+                                    {t('veylloSkip')}
+                                </button>
                             </div>
                         </div>
                     </motion.div>
@@ -913,40 +991,6 @@ export default function LoginPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
-
-            <DiscordSetupWizard
-                isOpen={showDiscordWizard}
-                onClose={() => setShowDiscordWizard(false)}
-                onComplete={(config: DiscordConfig) => {
-                    setOnboardingConfig((prev) => ({ ...prev, discord_config: config }));
-                    setShowDiscordWizard(false);
-                }}
-                existingConfig={onboardingConfig.discord_config as DiscordConfig | undefined}
-            />
-
-            <TelegramSetupWizard
-                isOpen={showTelegramWizard}
-                onClose={() => setShowTelegramWizard(false)}
-                onComplete={(config: TelegramConfig) => {
-                    setOnboardingConfig((prev) => ({ ...prev, telegram_config: config }));
-                    setShowTelegramWizard(false);
-                }}
-                existingConfig={onboardingConfig.telegram_config as TelegramConfig | undefined}
-            />
-
-            <EmailSetupWizard
-                isOpen={showEmailWizard}
-                onClose={() => setShowEmailWizard(false)}
-                onComplete={() => {
-                    // Email wizard handles its own config persistence
-                    setShowEmailWizard(false);
-                    // Reload config to show updated email accounts
-                    fetch(`${getApiBase()}/api/config`, { credentials: 'include' })
-                        .then((res) => res.ok ? res.json() : {})
-                        .then((data) => setOnboardingConfig(data))
-                        .catch(() => { });
-                }}
-            />
         </div>
     );
 }

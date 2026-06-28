@@ -254,14 +254,14 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                     )}
                     onClick={e => e.stopPropagation()}
                 >
-                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 bg-gray-50">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-gray-600 flex items-center justify-center text-white">
-                                <Users className="w-5 h-5" />
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 bg-gray-50 max-md:px-4 max-md:py-3">
+                        <div className="flex items-center gap-3 max-md:gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-xl bg-gray-600 flex items-center justify-center text-white shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
+                                <Users className="w-5 h-5 max-md:w-5 max-md:h-5" />
                             </div>
-                            <div>
-                                <h2 className="text-xl font-bold text-gray-900">Contacts</h2>
-                                <p className="text-sm text-gray-500">Central list with personal file and assistant whitelist</p>
+                            <div className="min-w-0">
+                                <h2 className="text-xl font-bold text-gray-900 max-md:text-lg truncate">Contacts</h2>
+                                <p className="text-sm text-gray-500 max-md:text-xs truncate">Central list with personal file and assistant whitelist</p>
                             </div>
                         </div>
                         <button
@@ -403,7 +403,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                     </div>
                                 </>
                             ) : (
-                                <div className="flex-1 flex items-center justify-center p-8 text-center text-gray-500">
+                                <div className="flex-1 flex items-center justify-center p-8 text-center text-gray-500 max-md:p-4">
                                     <div>
                                         <Users className="w-12 h-12 mx-auto text-gray-300 mb-3" />
                                         <p className="font-medium text-gray-600">Select a contact or add one</p>
@@ -420,16 +420,16 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
             {showFormModal && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 max-md:p-0">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:mx-0 max-md:rounded-none max-md:border-0 max-md:min-h-0">
-                        <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 shrink-0">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-gray-600 flex items-center justify-center text-white">
-                                    <Users className="w-5 h-5" />
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 shrink-0 max-md:p-4">
+                            <div className="flex items-center gap-3 max-md:gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded-xl bg-gray-600 flex items-center justify-center text-white shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
+                                    <Users className="w-5 h-5 max-md:w-5 max-md:h-5" />
                                 </div>
-                                <div>
-                                    <h2 className="text-xl font-bold text-gray-900">
+                                <div className="min-w-0">
+                                    <h2 className="text-xl font-bold text-gray-900 max-md:text-lg truncate">
                                         {modalContact?.id ? 'Edit contact' : 'Add contact'}
                                     </h2>
-                                    <p className="text-sm text-gray-500">Channels and personal file</p>
+                                    <p className="text-sm text-gray-500 max-md:text-xs truncate">Channels and personal file</p>
                                 </div>
                             </div>
                             <button
@@ -441,7 +441,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                             </button>
                         </div>
 
-                        <div className="p-6 overflow-y-auto space-y-6">
+                        <div className="p-6 overflow-y-auto space-y-6 max-md:p-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
                                 <input
@@ -575,7 +575,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 shrink-0">
+                        <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 shrink-0 max-md:p-4">
                             <button
                                 type="button"
                                 onClick={() => { setShowFormModal(false); setModalContact(null); setForm({}); }}

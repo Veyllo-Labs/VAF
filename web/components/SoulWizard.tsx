@@ -9,6 +9,7 @@ import {
     ChevronRight, Check, X, Info, AlertTriangle, Sparkles, History
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTranslations } from 'next-intl';
 
 interface SoulWizardProps {
     isOpen: boolean;
@@ -46,6 +47,9 @@ const SUGGESTIONS = {
 };
 
 export default function SoulWizard({ isOpen, onClose, onComplete, username }: SoulWizardProps) {
+    const t = useTranslations('onboarding');
+    // UI labels only — the saved soul content (SUGGESTIONS + generateSoul) stays English on purpose.
+    const soulNames = [t('soulName1'), t('soulName2'), t('soulName3'), t('soulName4')];
     const [step, setStep] = useState(1);
     const [errors, setErrors] = useState<string | null>(null);
     const [selections, setSelections] = useState({
@@ -120,12 +124,12 @@ ${selections.continuity}`;
         const content = selections[currentKey].trim();
 
         if (content.length === 0) {
-            setErrors("This field cannot be empty. Please add at least one item or write your own.");
+            setErrors(t('soulErrEmpty'));
             return;
         }
 
         if (!isValidStep(content)) {
-            setErrors("Please provide more detail (at least 10 characters).");
+            setErrors(t('soulErrShort'));
             return;
         }
 
@@ -152,8 +156,8 @@ ${selections.continuity}`;
                             <Wand2 size={18} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-bold text-gray-900">Soul Configuration</h2>
-                            <p className="text-xs text-gray-500 font-medium">Step {step} of 4: {['Core Truths', 'Boundaries', 'Vibe', 'Continuity'][step - 1]}</p>
+                            <h2 className="text-lg font-bold text-gray-900">{t('soulTitle')}</h2>
+                            <p className="text-xs text-gray-500 font-medium">{t('soulStepOf', { n: step, name: soulNames[step - 1] })}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors">
@@ -178,10 +182,10 @@ ${selections.continuity}`;
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Anchor size={20} /></div>
-                                <h3 className="text-xl font-bold text-gray-900">Core Truths</h3>
+                                <h3 className="text-xl font-bold text-gray-900">{t('soulName1')}</h3>
                             </div>
                             <p className="text-sm text-gray-500 leading-relaxed">
-                                Define the fundamental mission and identity of your agent. What are the undeniable truths it lives by?
+                                {t('soulDesc1')}
                             </p>
 
                             <textarea
@@ -193,7 +197,7 @@ ${selections.continuity}`;
                             />
 
                             <div className="space-y-2">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('soulSuggestions')}</span>
                                 <div className="flex flex-wrap gap-2">
                                     {SUGGESTIONS.coreTruths.map(s => {
                                         const isAdded = addedSuggestions.coreTruths.includes(s);
@@ -221,10 +225,10 @@ ${selections.continuity}`;
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-red-50 text-red-600 rounded-lg"><Shield size={20} /></div>
-                                <h3 className="text-xl font-bold text-gray-900">Boundaries</h3>
+                                <h3 className="text-xl font-bold text-gray-900">{t('soulName2')}</h3>
                             </div>
                             <p className="text-sm text-gray-500 leading-relaxed">
-                                What will your agent NEVER do? Establish behavioral and ethical limits to ensure safe operation.
+                                {t('soulDesc2')}
                             </p>
 
                             <textarea
@@ -236,7 +240,7 @@ ${selections.continuity}`;
                             />
 
                             <div className="space-y-2">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('soulSuggestions')}</span>
                                 <div className="flex flex-wrap gap-2">
                                     {SUGGESTIONS.boundaries.map(s => {
                                         const isAdded = addedSuggestions.boundaries.includes(s);
@@ -264,10 +268,10 @@ ${selections.continuity}`;
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-yellow-50 text-yellow-600 rounded-lg"><Sparkles size={20} /></div>
-                                <h3 className="text-xl font-bold text-gray-900">Vibe</h3>
+                                <h3 className="text-xl font-bold text-gray-900">{t('soulName3')}</h3>
                             </div>
                             <p className="text-sm text-gray-500 leading-relaxed">
-                                Describe the personality and style. Is the agent technical, professional, or creative?
+                                {t('soulDesc3')}
                             </p>
 
                             <textarea
@@ -279,7 +283,7 @@ ${selections.continuity}`;
                             />
 
                             <div className="space-y-2">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('soulSuggestions')}</span>
                                 <div className="flex flex-wrap gap-2">
                                     {SUGGESTIONS.vibe.map(s => {
                                         const isAdded = addedSuggestions.vibe.includes(s);
@@ -307,10 +311,10 @@ ${selections.continuity}`;
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><History size={20} /></div>
-                                <h3 className="text-xl font-bold text-gray-900">Continuity</h3>
+                                <h3 className="text-xl font-bold text-gray-900">{t('soulName4')}</h3>
                             </div>
                             <p className="text-sm text-gray-500 leading-relaxed">
-                                How should the agent handle long-term goals and memory? Define how it evolves over sessions.
+                                {t('soulDesc4')}
                             </p>
 
                             <textarea
@@ -322,7 +326,7 @@ ${selections.continuity}`;
                             />
 
                             <div className="space-y-2">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Suggestions</span>
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('soulSuggestions')}</span>
                                 <div className="flex flex-wrap gap-2">
                                     {SUGGESTIONS.continuity.map(s => {
                                         const isAdded = addedSuggestions.continuity.includes(s);
@@ -352,6 +356,7 @@ ${selections.continuity}`;
                             {errors}
                         </div>
                     )}
+                    <p className="mt-4 flex items-center gap-1.5 text-[10px] text-gray-400"><Info size={12} /> {t('soulNote')}</p>
                 </div>
 
                 {/* Footer */}
@@ -360,13 +365,13 @@ ${selections.continuity}`;
                         onClick={() => step > 1 ? setStep(step - 1) : onClose()}
                         className="px-6 py-2.5 rounded-xl font-medium text-gray-600 hover:bg-gray-200 transition-colors"
                     >
-                        {step === 1 ? 'Cancel' : 'Back'}
+                        {step === 1 ? t('soulCancel') : t('soulBack')}
                     </button>
                     <button
                         onClick={handleNext}
                         className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-sm transition-all flex items-center gap-2"
                     >
-                        {step === 4 ? 'Complete Soul' : 'Next Step'}
+                        {step === 4 ? t('soulComplete') : t('soulNext')}
                         <ChevronRight size={16} />
                     </button>
                 </div>

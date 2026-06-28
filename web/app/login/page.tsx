@@ -8,7 +8,8 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
-    Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink
+    Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink,
+    Zap, Cpu, HardDrive
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import SoulWizard from '@/components/SoulWizard';
@@ -168,11 +169,11 @@ export default function LoginPage() {
     const handleBootstrapPasswordStep = (e: React.FormEvent) => {
         e.preventDefault();
         if (!password || password !== confirmPassword) {
-            setBootstrapError(password !== confirmPassword ? 'Passwords do not match' : 'Enter password');
+            setBootstrapError(password !== confirmPassword ? t('errPwMismatch') : t('errPwEnter'));
             return;
         }
         if (password.length < 8) {
-            setBootstrapError('Password must be at least 8 characters');
+            setBootstrapError(t('errPwShort'));
             return;
         }
         // No API call yet — collect credentials locally and continue to soul setup.
@@ -653,7 +654,7 @@ export default function LoginPage() {
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
                                 <ShieldCheck size={18} className="text-gray-700" />
-                                <span className="text-sm font-medium text-gray-700">First-time setup – Create Admin</span>
+                                <span className="text-sm font-medium text-gray-700">{t('adminHeader')}</span>
                             </div>
                             <div className="p-8">
                                 {createAdminSubStep === 'username' && (
@@ -661,7 +662,7 @@ export default function LoginPage() {
                                         onSubmit={(e) => {
                                             e.preventDefault();
                                             if (username.trim().length < 2) {
-                                                setBootstrapError('Username must be at least 2 characters');
+                                                setBootstrapError(t('errUsernameShort'));
                                                 return;
                                             }
                                             setBootstrapError(null);
@@ -669,11 +670,11 @@ export default function LoginPage() {
                                         }}
                                         className="space-y-5"
                                     >
-                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">Admin account</h2>
-                                        <p className="text-sm text-gray-500 mb-6">No admin exists yet. Enter the username for the first administrator.</p>
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('adminAccountTitle')}</h2>
+                                        <p className="text-sm text-gray-500 mb-6">{t('adminAccountSubtitle')}</p>
                                         <div className="space-y-5">
                                             <div className="space-y-1.5">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Username *</label>
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{t('usernameLabel')}</label>
                                                 <div className="relative">
                                                     <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                                                     <input
@@ -692,7 +693,7 @@ export default function LoginPage() {
                                                 disabled={username.trim().length < 2}
                                                 className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                             >
-                                                Weiter <ArrowRight size={18} />
+                                                {t('continue')} <ArrowRight size={18} />
                                             </button>
                                         </div>
                                     </form>
@@ -700,11 +701,11 @@ export default function LoginPage() {
 
                                 {createAdminSubStep === 'password' && (
                                     <>
-                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">Password</h2>
-                                        <p className="text-sm text-gray-500 mb-6">Choose a password for <span className="font-medium text-gray-700">{username || 'admin'}</span> (at least 8 characters).</p>
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('passwordTitle')}</h2>
+                                        <p className="text-sm text-gray-500 mb-6">{t('passwordSubtitle', { username: username || 'admin' })}</p>
                                         <form onSubmit={handleBootstrapPasswordStep} className="space-y-5">
                                             <div className="space-y-1.5">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Password *</label>
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{t('passwordLabel')}</label>
                                                 <div className="relative">
                                                     <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                                                     <input
@@ -721,7 +722,7 @@ export default function LoginPage() {
                                                 </div>
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-sm font-medium text-gray-700 ml-1">Confirm password *</label>
+                                                <label className="text-sm font-medium text-gray-700 ml-1">{t('confirmPasswordLabel')}</label>
                                                 <div className="relative">
                                                     <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                                                     <input
@@ -742,7 +743,7 @@ export default function LoginPage() {
                                                     onClick={() => setCreateAdminSubStep('username')}
                                                     className="px-4 py-3 text-gray-600 hover:text-gray-900 border border-gray-200 rounded-xl"
                                                 >
-                                                    Back
+                                                    {t('back')}
                                                 </button>
                                                 <button
                                                     type="submit"
@@ -752,7 +753,7 @@ export default function LoginPage() {
                                                     {isLoading ? (
                                                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                                     ) : (
-                                                        <>Continue <ArrowRight size={18} /></>
+                                                        <>{t('continue')} <ArrowRight size={18} /></>
                                                     )}
                                                 </button>
                                             </div>
@@ -845,57 +846,83 @@ export default function LoginPage() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
-                        className="w-full max-w-md"
+                        className="w-full max-w-3xl"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
                                 <KeyRound size={18} className="text-gray-700" />
                                 <span className="text-sm font-medium text-gray-700">{t('veylloTitle')}</span>
                             </div>
-                            <div className="p-8">
-                                <p className="text-sm text-gray-600 leading-relaxed mb-4">{t('veylloBody')}</p>
-                                <a
-                                    href={VEYLLO_CREATE_URL}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="w-full mb-5 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
-                                >
-                                    {t('veylloCreate')} <ExternalLink size={15} />
-                                </a>
-                                <label className="text-sm font-medium text-gray-700 ml-1">{t('veylloKeyLabel')}</label>
-                                <div className="relative mt-1.5 mb-3">
-                                    <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-                                    <input
-                                        type="text"
-                                        value={veylloKey}
-                                        onChange={(e) => { setVeylloKey(e.target.value); setVeylloError(null); }}
-                                        className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
-                                        placeholder={t('veylloKeyPlaceholder')}
-                                    />
+                            <div className="flex max-md:flex-col">
+                                {/* Left: brand mascot + value props. Tasteful, not pushy — the third point
+                                    reassures local/offline users. The avatar animation is compositor-only (lite). */}
+                                <div className="md:w-2/5 bg-gradient-to-br from-gray-900 via-gray-800 to-gray-700 px-7 pt-20 pb-8 flex flex-col items-center justify-start gap-12 text-white relative overflow-hidden">
+                                    {/* White starfield + an occasional shooting star above the agent. Leak-safe:
+                                        opacity/transform only (keyframes vafStarTwinkle / vafStarShoot in globals.css). */}
+                                    <div className="pointer-events-none absolute inset-x-0 top-0 h-40">
+                                        <span className="vaf-star vaf-star--big" style={{ left: '18%', top: 26, animationDelay: '0s' }} />
+                                        <span className="vaf-star" style={{ left: '34%', top: 14, animationDelay: '.6s' }} />
+                                        <span className="vaf-star" style={{ left: '52%', top: 30, animationDelay: '1.2s' }} />
+                                        <span className="vaf-star vaf-star--big" style={{ left: '70%', top: 18, animationDelay: '1.8s' }} />
+                                        <span className="vaf-star" style={{ left: '26%', top: 52, animationDelay: '.9s' }} />
+                                        <span className="vaf-star" style={{ left: '60%', top: 56, animationDelay: '1.5s' }} />
+                                        <span className="vaf-star" style={{ left: '82%', top: 44, animationDelay: '.3s' }} />
+                                        <span className="vaf-star" style={{ left: '44%', top: 66, animationDelay: '2.1s' }} />
+                                        <span className="vaf-shoot" style={{ left: '12%', top: 12 }} />
+                                    </div>
+                                    <div className="relative z-[1]" style={{ transform: 'translateY(8px) scale(1.5)' }}><AgentAvatar mode="thinking" lite /></div>
+                                    <ul className="space-y-3 w-full text-[13px] text-gray-200 relative z-[1]">
+                                        <li className="flex items-start gap-2.5"><Zap size={16} className="mt-0.5 shrink-0 text-yellow-300" /><span>{t('veylloValueSpeed')}</span></li>
+                                        <li className="flex items-start gap-2.5"><Cpu size={16} className="mt-0.5 shrink-0 text-sky-300" /><span>{t('veylloValueNoGpu')}</span></li>
+                                        <li className="flex items-start gap-2.5"><HardDrive size={16} className="mt-0.5 shrink-0 text-emerald-300" /><span>{t('veylloValueLocalOk')}</span></li>
+                                    </ul>
                                 </div>
-                                {veylloError && (
-                                    <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-3">{veylloError}</p>
-                                )}
-                                <button
-                                    type="button"
-                                    onClick={handleSaveVeylloKey}
-                                    disabled={!veylloKey.trim() || veylloTesting}
-                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {veylloTesting ? (
-                                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    ) : (
-                                        <>{t('veylloSave')} <ArrowRight size={18} /></>
+                                {/* Right: the actual form */}
+                                <div className="md:w-3/5 p-8">
+                                    <p className="text-sm text-gray-600 leading-relaxed mb-4">{t('veylloBody')}</p>
+                                    <a
+                                        href={VEYLLO_CREATE_URL}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="w-full mb-5 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
+                                    >
+                                        {t('veylloCreate')} <ExternalLink size={15} />
+                                    </a>
+                                    <label className="text-sm font-medium text-gray-700 ml-1">{t('veylloKeyLabel')}</label>
+                                    <div className="relative mt-1.5 mb-3">
+                                        <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                                        <input
+                                            type="text"
+                                            value={veylloKey}
+                                            onChange={(e) => { setVeylloKey(e.target.value); setVeylloError(null); }}
+                                            className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
+                                            placeholder={t('veylloKeyPlaceholder')}
+                                        />
+                                    </div>
+                                    {veylloError && (
+                                        <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-3">{veylloError}</p>
                                     )}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => { setStep('setup_2fa'); handleStartSetup2FA(); }}
-                                    disabled={veylloTesting}
-                                    className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
-                                >
-                                    {t('veylloSkip')}
-                                </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveVeylloKey}
+                                        disabled={!veylloKey.trim() || veylloTesting}
+                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {veylloTesting ? (
+                                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                        ) : (
+                                            <>{t('veylloSave')} <ArrowRight size={18} /></>
+                                        )}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setStep('setup_2fa'); handleStartSetup2FA(); }}
+                                        disabled={veylloTesting}
+                                        className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
+                                    >
+                                        {t('veylloSkip')}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </motion.div>
@@ -911,7 +938,7 @@ export default function LoginPage() {
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
                                 <Smartphone size={18} className="text-gray-600" />
-                                <span className="text-sm font-medium text-gray-700">Two-Factor Authentication</span>
+                                <span className="text-sm font-medium text-gray-700">{t('twoFAHeader')}</span>
                             </div>
                             <div className="p-8">
                                 {bootstrapError && (
@@ -922,13 +949,13 @@ export default function LoginPage() {
                                 {isLoading && !qrCodeBase64 && (
                                     <div className="flex flex-col items-center justify-center py-8">
                                         <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin mb-4" />
-                                        <p className="text-sm text-gray-500">Creating account…</p>
+                                        <p className="text-sm text-gray-500">{t('creatingAccount')}</p>
                                     </div>
                                 )}
                                 {!isLoading && !bootstrapError && (
                                     <>
-                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">Scan QR Code</h2>
-                                        <p className="text-sm text-gray-500 mb-6">Scan the code with your authenticator app (e.g. Google Authenticator), then enter the 6-digit code below.</p>
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('scanTitle')}</h2>
+                                        <p className="text-sm text-gray-500 mb-6">{t('scanSubtitle')}</p>
                                         {qrCodeBase64 && (
                                             <div className="flex justify-center mb-6">
                                                 <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-44 h-44 border border-gray-200 rounded-xl p-2" />
@@ -936,12 +963,12 @@ export default function LoginPage() {
                                         )}
                                         {twoFASecret && (
                                             <div className="mb-6">
-                                                <p className="text-xs text-gray-500 text-center mb-1.5">Or enter this key manually in your app:</p>
+                                                <p className="text-xs text-gray-500 text-center mb-1.5">{t('manualKeyHint')}</p>
                                                 <button
                                                     type="button"
                                                     onClick={() => { try { navigator.clipboard?.writeText(twoFASecret); setSecretCopied(true); setTimeout(() => setSecretCopied(false), 1500); } catch { /* clipboard unavailable */ } }}
                                                     className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-200 hover:bg-gray-100 active:bg-gray-200 transition-colors font-mono text-sm tracking-wider text-gray-800"
-                                                    title="Copy to clipboard"
+                                                    title={t('copyToClipboard')}
                                                 >
                                                     <span className="break-all">{twoFASecret}</span>
                                                     {secretCopied ? <Check size={15} className="shrink-0 text-green-600" /> : <Copy size={15} className="shrink-0 text-gray-400" />}
@@ -949,7 +976,7 @@ export default function LoginPage() {
                                             </div>
                                         )}
                                         <div className="space-y-1.5 mb-5">
-                                            <label className="text-sm font-medium text-gray-700 ml-1">Authenticator code</label>
+                                            <label className="text-sm font-medium text-gray-700 ml-1">{t('authCodeLabel')}</label>
                                             <input
                                                 type="text"
                                                 value={twoFACode}
@@ -972,7 +999,7 @@ export default function LoginPage() {
                                             {isLoading ? (
                                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                             ) : (
-                                                <><CheckCircle size={18} /> Finish Setup</>
+                                                <><CheckCircle size={18} /> {t('finishSetup')}</>
                                             )}
                                         </button>
                                     </>
@@ -983,7 +1010,7 @@ export default function LoginPage() {
                                         onClick={() => { setBootstrapError(null); handleStartSetup2FA(); }}
                                         className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all"
                                     >
-                                        Retry
+                                        {t('retry')}
                                     </button>
                                 )}
                             </div>

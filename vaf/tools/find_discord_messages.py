@@ -55,9 +55,11 @@ class FindDiscordMessagesTool(BaseTool):
         except ImportError as e:
             return f"Message store unavailable: {e}"
 
+        # Re-sync the derived index from the session JSONs so the search sees the full, current
+        # history (including auto-replies) before querying.
         try:
-            from vaf.core.discord_history import backfill_discord_history
-            backfill_discord_history()
+            from vaf.core.discord_history import sync_discord_history
+            sync_discord_history()
         except Exception:
             pass
 

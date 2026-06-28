@@ -42,9 +42,10 @@ class TelegramInboxTool(BaseTool):
         except ImportError as e:
             return f"Message store unavailable: {e}"
 
+        # Re-sync the derived index from the session JSONs so the chat list reflects current history.
         try:
-            from vaf.core.telegram_history import backfill_telegram_history
-            backfill_telegram_history()
+            from vaf.core.telegram_history import sync_telegram_history
+            sync_telegram_history()
         except Exception:
             pass
 

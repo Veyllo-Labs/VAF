@@ -41,9 +41,10 @@ class DiscordInboxTool(BaseTool):
         except ImportError as e:
             return f"Message store unavailable: {e}"
 
+        # Re-sync the derived index from the session JSONs so the chat list reflects current history.
         try:
-            from vaf.core.discord_history import backfill_discord_history
-            backfill_discord_history()
+            from vaf.core.discord_history import sync_discord_history
+            sync_discord_history()
         except Exception:
             pass
 

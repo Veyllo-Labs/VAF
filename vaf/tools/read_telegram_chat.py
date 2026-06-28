@@ -56,18 +56,14 @@ class ReadTelegramChatTool(BaseTool):
                 "(Settings → Connections → Telegram), or pass an explicit chat_id from telegram_inbox."
             )
 
+        # Read straight from the authoritative session JSON (always complete — includes the agent's
+        # auto-replies that the live write-hooks never recorded), not the derived store index.
         try:
-            from vaf.core.channel_message_store import get_chat_messages
+            from vaf.core.telegram_history import read_telegram_session
         except ImportError as e:
-            return f"Message store unavailable: {e}"
+            return f"Telegram history unavailable: {e}"
 
-        try:
-            from vaf.core.telegram_history import backfill_telegram_history
-            backfill_telegram_history()
-        except Exception:
-            pass
-
-        messages = get_chat_messages(username, chat_id, limit=limit, user_scope_id=user_scope_id, channel="telegram")
+        messages = read_telegram_session(chat_id, limit=limit)
         if not messages:
             return f"No Telegram messages found for chat {chat_id}. Messages are stored as they arrive."
 

@@ -77,7 +77,8 @@ After linking, the agent can use the tools `github_list_repos`, `github_get_file
 - **Proactive messaging**: The agent can send you messages via Discord (e.g. "send me the result via Discord") using the `send_discord` tool
 - **Admin verification**: Only verified admins can control the bot
 - **Persistent bridge**: Messages are routed through the headless agent; replies are sent back to Discord automatically
-- **Message history**: Incoming and outgoing Discord messages are recorded in a searchable store; the agent can recall past conversations with `read_discord_chat`, `find_discord_messages` and `discord_inbox`. Existing history is imported once on first use.
+- **Message history**: The per-chat conversation is the source of truth; `read_discord_chat` reads it directly (always complete, including the agent's own replies), and `find_discord_messages` / `discord_inbox` query a searchable index that is re-synced from the conversation on use.
+- **Edits & deletes**: When you edit or delete a Discord message, the history is updated to match — edits replace the original text, deletes leave a `[deleted]` placeholder. (Edits/deletes of messages no longer in the bot's cache cannot be matched and are skipped.)
 - **Attachments**: Images sent in a DM are processed by the vision pipeline; documents (PDF, DOCX, …) are extracted and indexed for retrieval.
 - **Secure**: Token stored locally, never sent to external servers
 
@@ -168,6 +169,8 @@ The Discord configuration is stored locally in your VAF config:
 
 - **Same pipeline as Web UI**: Messages are enqueued on the same task queue; the same agent, tools, RAG, and user scope apply.
 - **Whitelist**: Only whitelisted Telegram users can use the bot; each entry maps one Telegram user to one VAF user (user_scope_id, username).
+- **Message history**: The per-chat conversation is the source of truth; `read_telegram_chat` reads it directly (always complete), and `find_telegram_messages` / `telegram_inbox` query a searchable index re-synced from it on use.
+- **Edits**: Editing a Telegram message updates the stored history (matched by the originating message id). Limitations: rapidly-sent messages that were debounced into one turn only track the last id of the burst, and the Telegram Bot API does not deliver message deletions, so deletes are not reflected.
 - **Local storage**: Bot token and whitelist are stored in your local VAF config only.
 
 ### Setup

@@ -316,6 +316,42 @@ def _run_bot() -> None:
         _store_discord_message(str(message.author.id), text, "in", "text", str(message.id))
         logger.info("Discord message enqueued from %s", message.author.name)
 
+    @client.event
+    async def on_message_edit(before: "discord.Message", after: "discord.Message"):
+        # The user edited a Discord message. Discord delivers both the old and new text, so we match
+        # the user turn by its previous content and patch the authoritative session (which
+        # read_discord_chat / find_discord_messages derive from). Uncached edits arrive without
+        # `before.content`; we then fall back to matching nothing (handled inside the helper).
+        if after.author == client.user:
+            return
+        chat_id = str(after.author.id)
+        new = (after.content or "").strip()
+        if not new:
+            return
+        old = (before.content or "").strip()
+        try:
+            from vaf.core.channel_history import edit_channel_message
+            edit_channel_message("discord", chat_id, new, old_text=old or None)
+        except Exception as e:
+            logger.warning("Discord edit handling failed: %s", e)
+
+    @client.event
+    async def on_message_delete(message: "discord.Message"):
+        # The user deleted a Discord message. The delete event carries the cached content (when the
+        # message was in the bot's cache); we match it and tombstone the user turn in the session. An
+        # uncached delete arrives without content and is skipped (documented limitation).
+        if message.author == client.user:
+            return
+        old = (message.content or "").strip()
+        if not old:
+            return
+        chat_id = str(message.author.id)
+        try:
+            from vaf.core.channel_history import delete_channel_message
+            delete_channel_message("discord", chat_id, old_text=old, tombstone=True)
+        except Exception as e:
+            logger.warning("Discord delete handling failed: %s", e)
+
     set_discord_reply_callback(_enqueue_reply)
 
     try:

@@ -1828,7 +1828,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         }
                                         for _im in _task_images
                                     ]}
-                                session.add_message(role="user", content=_user_input.strip(), metadata=_img_meta)
+                                # Tag the turn with the originating channel message id (when the
+                                # bridge supplied one) so a later inbound edit/delete event can find
+                                # and patch exactly this turn. Purely additive; ignored elsewhere.
+                                _user_meta = dict(_img_meta) if _img_meta else {}
+                                _chan_msg_id = (task.metadata or {}).get("channel_message_id")
+                                if _chan_msg_id:
+                                    _user_meta["channel_message_id"] = str(_chan_msg_id)
+                                session.add_message(role="user", content=_user_input.strip(), metadata=(_user_meta or None))
                                 # Increment persistent user_turn_count in runtime_state
                                 if not hasattr(session, 'runtime_state') or session.runtime_state is None:
                                     session.runtime_state = {}

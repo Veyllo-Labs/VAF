@@ -178,3 +178,87 @@ def sync_channel_history(channel: str, chat_id: Optional[str] = None) -> int:
     except Exception as e:
         logger.warning("sync_channel_history(%s) failed: %s", channel, e)
         return 0
+
+
+def _find_user_message(session, *, message_id: Optional[str] = None,
+                       old_text: Optional[str] = None) -> Optional[int]:
+    """Index of the user-role turn to patch: prefer the one tagged with this channel message id
+    (``Message.metadata['channel_message_id']``), else the most-recent turn whose text exactly equals
+    ``old_text``. Scans newest-first. Returns None if nothing matches."""
+    msgs = getattr(session, "messages", []) or []
+    target_id = str(message_id) if message_id else None
+    if target_id:
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            if getattr(m, "role", "") != "user":
+                continue
+            meta = getattr(m, "metadata", None) or {}
+            if str(meta.get("channel_message_id") or "") == target_id:
+                return i
+    if isinstance(old_text, str):
+        target_text = old_text.strip()
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            if getattr(m, "role", "") != "user":
+                continue
+            body = getattr(m, "content", "")
+            if isinstance(body, str) and body.strip() == target_text:
+                return i
+    return None
+
+
+def edit_channel_message(channel: str, chat_id: str, new_text: str, *,
+                         message_id: Optional[str] = None, old_text: Optional[str] = None) -> bool:
+    """Apply an inbound message edit to the authoritative session: locate the user turn (by channel
+    message id, else by exact ``old_text``), replace its content with ``new_text``, save, and re-sync
+    the derived store index so reads and search both reflect the edit. Returns True if a turn was
+    patched. Never raises."""
+    try:
+        new_text = (new_text or "").strip()
+        if not new_text:
+            return False
+        from vaf.core.session import SessionManager
+        sm = SessionManager()
+        try:
+            session = sm.load(_session_id(channel, chat_id), restore_state=False)
+        except Exception:
+            return False
+        idx = _find_user_message(session, message_id=message_id, old_text=old_text)
+        if idx is None:
+            return False
+        session.messages[idx].content = new_text
+        sm.save(session, sync_state=False)
+        sync_channel_history(channel, str(chat_id))
+        return True
+    except Exception as e:
+        logger.warning("edit_channel_message(%s, %s) failed: %s", channel, chat_id, e)
+        return False
+
+
+def delete_channel_message(channel: str, chat_id: str, *, message_id: Optional[str] = None,
+                           old_text: Optional[str] = None, tombstone: bool = True,
+                           tombstone_text: str = "[deleted]") -> bool:
+    """Apply an inbound message deletion to the authoritative session: locate the user turn (by
+    channel message id, else by exact ``old_text``) and either tombstone it (content -> a placeholder,
+    default — keeps the turn structure) or remove it, then re-sync the derived store index. Returns
+    True if a turn was changed. Never raises."""
+    try:
+        from vaf.core.session import SessionManager
+        sm = SessionManager()
+        try:
+            session = sm.load(_session_id(channel, chat_id), restore_state=False)
+        except Exception:
+            return False
+        idx = _find_user_message(session, message_id=message_id, old_text=old_text)
+        if idx is None:
+            return False
+        if tombstone:
+            session.messages[idx].content = tombstone_text
+        else:
+            del session.messages[idx]
+        sm.save(session, sync_state=False)
+        sync_channel_history(channel, str(chat_id))
+        return True
+    except Exception as e:
+        logger.warning("delete_channel_message(%s, %s) failed: %s", channel, chat_id, e)
+        return False

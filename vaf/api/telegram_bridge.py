@@ -783,6 +783,9 @@ def _run_bot():
             "telegram_chat_id": str(chat_id),
             "origin_channel": "telegram",
             "task_class": "interactive",
+            # Carry the originating message id so the persisted user turn can be matched by a later
+            # edit event (a debounced burst carries the last id of the burst).
+            "channel_message_id": pending.get("message_id"),
         }
         if is_relay:
             metadata["relay"] = True
@@ -918,6 +921,39 @@ def _run_bot():
 
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+
+    async def handle_edited_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # The user edited a previously-sent Telegram message. The Bot API delivers the NEW text and
+        # the message id but no pre-edit text, so we match the recorded message id against the user
+        # turn (tagged at persist time) and patch the authoritative session, which read_telegram_chat
+        # and find_telegram_messages both derive from. Deletes are not delivered by the Bot API.
+        em = update.edited_message
+        if not em or not em.text:
+            return
+        user = update.effective_user
+        if not user:
+            return
+        telegram_user_id = str(user.id)
+        chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
+        entry, _is_relay = _resolve_telegram_user(telegram_user_id)
+        if not entry:
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "edited")
+            return
+        new_text = em.text.strip()
+        if not new_text:
+            return
+        try:
+            from vaf.core.channel_history import edit_channel_message
+            # Session is keyed by telegram_user_id (telegram_<id>), matching handle_message.
+            if edit_channel_message("telegram", telegram_user_id, new_text,
+                                    message_id=str(em.message_id)):
+                logger.info("Telegram edit applied to chat %s (message %s)", chat_id, em.message_id)
+        except Exception as e:
+            logger.warning("Telegram edited-message handling failed: %s", e)
+
+    application.add_handler(
+        MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.TEXT, handle_edited_message)
     )
 
     async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):

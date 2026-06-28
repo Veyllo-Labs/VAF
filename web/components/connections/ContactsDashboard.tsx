@@ -245,12 +245,12 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
     return (
         <>
             <div
-                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 max-md:p-0"
                 onClick={onClose}
             >
                 <div
                     className={cn(
-                        'relative bg-white w-full max-w-6xl h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden'
+                        'relative bg-white w-full max-w-6xl h-[85vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0'
                     )}
                     onClick={e => e.stopPropagation()}
                 >
@@ -273,9 +273,9 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                         </button>
                     </div>
 
-                    <div className="flex flex-1 min-h-0">
+                    <div className="flex flex-1 min-h-0 max-md:flex-col">
                         {/* Left: search + Add contact + contact list */}
-                        <div className="w-72 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/80">
+                        <div className="w-72 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/80 max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b">
                             <div className="p-3 space-y-2 shrink-0">
                                 <div className="relative">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -330,7 +330,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                         </div>
 
                         {/* Right: detail view or empty state */}
-                        <div className="flex-1 flex flex-col min-w-0 bg-white">
+                        <div className="flex-1 flex flex-col min-w-0 bg-white max-md:min-h-0">
                             {selectedContact ? (
                                 <>
                                     <div className="p-4 border-b border-gray-200 flex items-center justify-between shrink-0">
@@ -418,8 +418,8 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
 
             {/* Detail / Edit modal */}
             {showFormModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col">
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 max-md:p-0">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:mx-0 max-md:rounded-none max-md:border-0 max-md:min-h-0">
                         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 shrink-0">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-xl bg-gray-600 flex items-center justify-center text-white">

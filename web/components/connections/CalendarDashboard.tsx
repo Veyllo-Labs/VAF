@@ -135,10 +135,10 @@ export default function CalendarDashboard({ isOpen, onClose, onOpenAddWizard, re
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 max-md:p-0" onClick={onClose}>
             <div
                 className={cn(
-                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden'
+                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0'
                 )}
                 onClick={(e) => e.stopPropagation()}
             >
@@ -157,9 +157,9 @@ export default function CalendarDashboard({ isOpen, onClose, onOpenAddWizard, re
                     </button>
                 </div>
 
-                <div className="flex-1 flex min-h-0 overflow-hidden">
+                <div className="flex-1 flex min-h-0 overflow-hidden max-md:flex-col">
                     {/* Left sidebar: calendar accounts + links */}
-                    <aside className="w-72 shrink-0 flex flex-col border-r border-gray-200 bg-gray-50/80 overflow-hidden">
+                    <aside className="w-72 shrink-0 flex flex-col border-r border-gray-200 bg-gray-50/80 overflow-hidden max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b">
                         {error && typeof error === 'string' && (
                             <div className="mx-3 mt-3 p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
                                 {error}
@@ -230,7 +230,7 @@ export default function CalendarDashboard({ isOpen, onClose, onOpenAddWizard, re
                     </aside>
 
                     {/* Main content: events list */}
-                    <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-white">
+                    <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-white max-md:min-h-0">
                         {accounts.length === 0 && !accountsLoading && (
                             <div className="flex flex-col items-center justify-center flex-1 text-center max-w-sm mx-auto p-8">
                                 <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-3">

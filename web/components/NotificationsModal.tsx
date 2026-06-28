@@ -413,15 +413,26 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
   // hour12 comes from parent (page.tsx fetches it from /api/user/persona)
   const isHour12 = hour12 ?? false;
 
-  // Measure scroll-canvas width
+  // Measure scroll-canvas width.
+  // The ResizeObserver callback is deferred to the next animation frame so it never synchronously
+  // triggers another layout pass — that synchronous re-entry is what spams the console with
+  // "ResizeObserver loop completed with undelivered notifications" (very visible while hovering the
+  // timeline, where rapid re-renders churn layout). We also skip sub-pixel-only changes so an
+  // unchanged width never re-renders.
   useEffect(() => {
+    let raf = 0;
     const measure = () => {
-      if (scrollRef.current) setContainerW(scrollRef.current.getBoundingClientRect().width || 800);
+      if (!scrollRef.current) return;
+      const w = scrollRef.current.getBoundingClientRect().width || 800;
+      setContainerW(prev => (Math.abs(prev - w) > 0.5 ? w : prev));
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    });
     if (scrollRef.current) ro.observe(scrollRef.current);
-    return () => ro.disconnect();
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
   // Auto-scroll to right (newest) when content changes — only if user hasn't scrolled away
@@ -918,7 +929,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                     const isErr = ev.status === 'error';
                     const isRun = ev.status === 'running';
                     const col   = isErr ? '#ef4444' : isRun ? '#f59e0b' : lane.color;
-                    const isSelected = ev.call_id != null && ev.call_id === selectedCallId;
+                    const isSelected = detailEvent === ev || (ev.call_id != null && ev.call_id === selectedCallId);
                     return (
                       <div
                         key={i}
@@ -929,13 +940,20 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                           boxShadow: isSelected ? `0 0 0 2px ${col}, 0 2px 8px ${col}60` : `0 1px 4px ${col}40`,
                           outline: isSelected ? `2px solid ${col}` : 'none',
                           outlineOffset: 1,
-                          opacity: selectedCallId && !isSelected ? 0.45 : 1,
+                          opacity: (selectedCallId || detailEvent) && !isSelected ? 0.45 : 1,
                           transition: 'opacity 0.15s, box-shadow 0.15s',
                         }}
                         onMouseEnter={e => setHovered({ ev, mx: e.clientX, my: e.clientY })}
                         onMouseLeave={() => setHovered(null)}
                         onMouseMove={e => setHovered(p => p ? { ...p, mx: e.clientX, my: e.clientY } : null)}
-                        onClick={() => setSelectedCallId(id => id === ev.call_id ? null : (ev.call_id ?? null))}
+                        onClick={() => {
+                          // Clicking a timeline bar always surfaces it in the detail/log panel above
+                          // (mirrors the flow-canvas node click), and highlights it here — even for
+                          // events without a call_id. Re-clicking the same bar clears it.
+                          const isSame = detailEvent === ev;
+                          setDetailEvent(isSame ? null : ev);
+                          setSelectedCallId(isSame ? null : (ev.call_id ?? null));
+                        }}
                       />
                     );
                   })}

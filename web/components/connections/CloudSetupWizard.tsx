@@ -348,10 +348,10 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
         loading;
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm max-md:p-0">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col">
                 {/* Header */}
-                <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
+                <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
                             <Cloud className="w-5 h-5 text-white" />
@@ -391,7 +391,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 </div>
 
                 {/* Content */}
-                <div className="p-6 min-h-[350px]">
+                <div className="p-6 min-h-[350px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4">
                     {error && (
                         <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 flex items-center gap-2 text-red-700 text-sm">
                             <AlertCircle className="w-4 h-4 shrink-0" />
@@ -412,7 +412,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                     a &quot;VAF Sync&quot; folder in your cloud — files you place there appear locally, and vice versa.
                                 </p>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
                                     <Shield className="w-8 h-8 text-green-600 mb-2" />
                                     <h4 className="font-semibold text-gray-900">Secure</h4>
@@ -678,7 +678,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
+                <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <button
                         onClick={prevStep}
                         disabled={currentStep === 0}

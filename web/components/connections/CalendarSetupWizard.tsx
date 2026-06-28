@@ -97,9 +97,9 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
     const showMicrosoft = initialProvider !== 'google_calendar';
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-                <div className="p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 max-md:p-0">
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col">
+                <div className="p-6 max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4">
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
                             <div className="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center text-white">

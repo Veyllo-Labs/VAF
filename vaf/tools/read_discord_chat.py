@@ -56,18 +56,14 @@ class ReadDiscordChatTool(BaseTool):
                 "(Settings → Connections → Discord), or pass an explicit chat_id from discord_inbox."
             )
 
+        # Read straight from the authoritative session JSON (always complete — includes the agent's
+        # auto-replies that the live write-hooks never recorded), not the derived store index.
         try:
-            from vaf.core.channel_message_store import get_chat_messages
+            from vaf.core.discord_history import read_discord_session
         except ImportError as e:
-            return f"Message store unavailable: {e}"
+            return f"Discord history unavailable: {e}"
 
-        try:
-            from vaf.core.discord_history import backfill_discord_history
-            backfill_discord_history()
-        except Exception:
-            pass
-
-        messages = get_chat_messages(username, chat_id, limit=limit, user_scope_id=user_scope_id, channel="discord")
+        messages = read_discord_session(chat_id, limit=limit)
         if not messages:
             return f"No Discord messages found for chat {chat_id}. Messages are stored as they arrive."
 

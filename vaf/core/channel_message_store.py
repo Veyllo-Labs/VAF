@@ -29,6 +29,7 @@ _DEFAULT_RETENTION_DAYS = 90
 __all__ = [
     "init_store", "append_message", "search_messages",
     "list_chats_from_store", "get_chat_messages",
+    "delete_message", "mark_deleted", "replace_chat_rows",
 ]
 
 
@@ -173,6 +174,133 @@ def append_message(
         conn.commit()
     except sqlite3.IntegrityError:
         pass
+    finally:
+        conn.close()
+
+
+def delete_message(
+    username: str,
+    chat_id: str,
+    message_id: str,
+    direction: str = "in",
+    user_scope_id: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> int:
+    """Hard-delete one message by its primary key (username, chat_id, message_id, direction).
+    Returns the number of rows removed (0 if no match). message_id must be the real id stored on
+    the row. Used by reconcile paths and channels that deliver real delete events (e.g. Discord)."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            """
+            DELETE FROM channel_messages
+            WHERE username = ? AND chat_id = ? AND message_id = ? AND direction = ? AND channel = ?
+            """,
+            (
+                (username or "").strip() or "",
+                chat_id or "",
+                str(message_id or ""),
+                direction or "in",
+                channel or "whatsapp",
+            ),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def mark_deleted(
+    username: str,
+    chat_id: str,
+    message_id: str,
+    direction: str = "in",
+    user_scope_id: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> int:
+    """Tombstone a message in place (content_type='deleted', body='') without dropping the row.
+    Use when a delete event carries no content (e.g. Discord on_message_delete) but the row should
+    stay visible as a placeholder in chat history. Returns rows affected (0 if no match)."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE channel_messages
+            SET content_type = 'deleted', body = ''
+            WHERE username = ? AND chat_id = ? AND message_id = ? AND direction = ? AND channel = ?
+            """,
+            (
+                (username or "").strip() or "",
+                chat_id or "",
+                str(message_id or ""),
+                direction or "in",
+                channel or "whatsapp",
+            ),
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def replace_chat_rows(
+    username: str,
+    chat_id: str,
+    channel: str,
+    rows: List[Dict[str, Any]],
+    user_scope_id: Optional[str] = None,
+) -> int:
+    """Atomically make the store mirror `rows` for one (username, chat_id, channel): in a single
+    transaction, delete every existing row for that chat+channel, then bulk-insert `rows`. This is
+    the derived-index re-sync primitive — the store becomes an exact projection of the authoritative
+    session, so stale rows vanish and re-syncs never accumulate duplicates.
+
+    Each row is a dict with keys: body, direction ('in'/'out'), ts (Unix float), message_id,
+    content_type, chat_name, sender_jid (missing keys fall back to defaults). Rows without a
+    message_id get a stable per-index synthetic key so the bulk insert never collides on the PK.
+    Returns the number of rows inserted."""
+    import time
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        cid = chat_id or ""
+        ch = channel or "whatsapp"
+        conn.execute(
+            "DELETE FROM channel_messages WHERE username = ? AND chat_id = ? AND channel = ?",
+            (u, cid, ch),
+        )
+        inserted = 0
+        for idx, r in enumerate(rows or []):
+            direction = (r.get("direction") or "in")
+            ts = r.get("ts")
+            ts = float(ts) if ts is not None else time.time()
+            mid = r.get("message_id")
+            mid = str(mid) if mid else f"_sync_{idx}_{direction}"
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO channel_messages
+                (username, chat_id, chat_name, sender_jid, body, direction, ts, message_id, content_type, channel)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    u,
+                    cid,
+                    (r.get("chat_name") or ""),
+                    (r.get("sender_jid") or ""),
+                    (r.get("body") or ""),
+                    direction,
+                    ts,
+                    mid,
+                    (r.get("content_type") or "text"),
+                    ch,
+                ),
+            )
+            inserted += 1
+        conn.commit()
+        return inserted
     finally:
         conn.close()
 

@@ -575,7 +575,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         addSecs('ai', [tAi('provider'), tAi('localModelSettings'), tAi('visionModel'), tAdvanced('subAgents'), tAdvanced('thinker')]);
         addSecs('voice', [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
-        addSecs('advanced', [tAdvanced('attachments'), tAdvanced('system')]);
+        addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
@@ -1789,7 +1789,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 max-md:p-0">
             {/* Backdrop */}
             <div
                 className="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity"
@@ -1797,16 +1797,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             />
 
             {/* Modal Window */}
-            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-4xl h-[650px] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="relative bg-white/95 backdrop-blur-xl w-full max-w-4xl h-[650px] rounded-2xl shadow-2xl border border-white/20 flex overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:flex-col max-md:h-[100dvh] max-md:max-w-none max-md:rounded-none max-md:border-0">
 
                 {/* Sidebar */}
-                <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1">
-                    <div className="px-3 mb-3">
+                <div className="w-64 bg-gray-50/50 border-r border-gray-200 flex flex-col pt-6 pb-4 px-3 gap-1 max-md:w-full max-md:flex-row max-md:items-center max-md:overflow-x-auto max-md:border-r-0 max-md:border-b max-md:pt-2 max-md:pb-2 max-md:shrink-0">
+                    <div className="px-3 mb-3 max-md:hidden">
                         <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider">{t('settings.title')}</h2>
                     </div>
 
                     {/* Settings search — filter to matching sections/categories and jump to them */}
-                    <div className="px-1 mb-2">
+                    <div className="px-1 mb-2 max-md:hidden">
                         <div className="relative">
                             <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                             <input
@@ -1854,7 +1854,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 key={cat.id}
                                 onClick={() => setActiveTab(cat.id)}
                                 className={cn(
-                                    "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all",
+                                    "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all max-md:shrink-0 max-md:whitespace-nowrap",
                                     activeTab === cat.id
                                         ? "bg-gray-900 text-white shadow-md"
                                         : "text-gray-600 hover:bg-gray-200/50"
@@ -1869,7 +1869,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     {/* Connection-Indikator – über dem Trennstrich */}
                     <div
                         className={cn(
-                            "flex items-center gap-3 px-3 py-2 rounded-lg w-full transition-all mt-auto",
+                            "flex items-center gap-3 px-3 py-2 rounded-lg w-full transition-all mt-auto max-md:hidden",
                             !isConnected && onReconnect && "cursor-pointer hover:bg-gray-100"
                         )}
                         onClick={() => { if (!isConnected && onReconnect) onReconnect(); }}
@@ -1891,7 +1891,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     </div>
 
                     {/* Trennstrich, darunter Log out */}
-                    <div className="pt-2 border-t border-gray-200">
+                    <div className="pt-2 border-t border-gray-200 max-md:border-t-0 max-md:pt-0 max-md:shrink-0">
                         {currentUser && (
                             <button
                                 type="button"
@@ -1906,9 +1906,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 flex flex-col bg-white">
+                <div className="flex-1 flex flex-col bg-white min-h-0">
                     {/* Header */}
-                    <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 shrink-0">
+                    <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 shrink-0 max-md:px-4">
                         <h1 className="text-xl font-bold text-gray-800">
                             {(() => { const cat = CATEGORIES.find(c => c.id === activeTab); return cat ? tTabs(cat.labelKey) : ''; })()}
                         </h1>
@@ -1918,7 +1918,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     </div>
 
                     {/* Scrollable Form */}
-                    <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                    <div className="flex-1 overflow-y-auto p-8 space-y-8 max-md:p-4 max-md:space-y-5">
 
                         {activeTab === 'general' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
@@ -3118,6 +3118,167 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'advanced' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
+                                <Section title={tAdvanced('failover')}>
+                                    <p className="text-sm text-gray-600 mb-4">{tAdvanced('failoverDesc')}</p>
+                                    {(() => {
+                                        const LEVELS = ['off', 'basic', 'balanced', 'maximum'];
+                                        const level = (localConfig.failover_level as string) || 'off';
+                                        const idx = Math.max(0, LEVELS.indexOf(level));
+                                        const isOff = level === 'off';
+                                        const showBackup = level === 'balanced' || level === 'maximum';
+                                        const showLocal = level !== 'off';
+                                        const LEVEL_LABELS = [tAdvanced('failoverLevelOff'), tAdvanced('failoverLevelBasic'), tAdvanced('failoverLevelBalanced'), tAdvanced('failoverLevelMaximum')];
+                                        const LEVEL_DESCS = [tAdvanced('failoverLevelOffDesc'), tAdvanced('failoverLevelBasicDesc'), tAdvanced('failoverLevelBalancedDesc'), tAdvanced('failoverLevelMaximumDesc')];
+
+                                        const primaryProvider = (localConfig.provider as string) || 'local';
+                                        const primaryLabel = primaryProvider === 'local'
+                                            ? tAdvanced('failoverLocal')
+                                            : (PROVIDERS.find(p => p.id === primaryProvider)?.label || primaryProvider);
+
+                                        const bp = (localConfig.failover_backup_provider as string) || '';
+                                        const bpMeta = PROVIDERS.find(p => p.id === bp);
+                                        const bpDefault = bpMeta ? (localConfig[`api_model_${bp}`] || bpMeta.defaultModel) : '';
+                                        const bpList = bp ? (apiModels?.[bp] ?? []) : [];
+                                        const backupModelOpts = bp ? [
+                                            ...(bpDefault ? [{ value: bpDefault, label: bpList.includes(bpDefault) ? bpDefault : `${bpDefault} (${tAdvanced('failoverProviderDefault')})` }] : []),
+                                            ...bpList.filter((m: string) => m !== bpDefault).map((m: string) => ({ value: m, label: m })),
+                                        ] : [];
+                                        const localModelOpts = (availableModels ?? []).map((m: string) => ({ value: m, label: m }));
+
+                                        const rawTriggers = Array.isArray(localConfig.failover_triggers) ? (localConfig.failover_triggers as string[]) : [];
+                                        const effTriggers = rawTriggers.length ? rawTriggers : ['timeout', 'rate_limit', 'server_error'];
+                                        const toggleTrigger = (key: string) => {
+                                            const next = effTriggers.includes(key) ? effTriggers.filter(t => t !== key) : [...effTriggers, key];
+                                            handleChange('failover_triggers', next);
+                                        };
+                                        const TRIGGERS = [
+                                            { key: 'timeout', label: tAdvanced('failoverTriggerTimeout') },
+                                            { key: 'rate_limit', label: tAdvanced('failoverTriggerRateLimit') },
+                                            { key: 'server_error', label: tAdvanced('failoverTriggerServerError') },
+                                        ];
+                                        const timeoutVal = (localConfig.failover_timeout_s ?? 30) as number;
+
+                                        return (
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="text-base font-semibold text-gray-900">{LEVEL_LABELS[idx]}</span>
+                                                    {level === 'balanced' && (
+                                                        <span className="text-[10px] font-medium text-gray-500 border border-gray-200 px-1.5 py-0.5 rounded">{tAdvanced('failoverRecommended')}</span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-gray-500 mb-3 min-h-[2rem]">{LEVEL_DESCS[idx]}</p>
+
+                                                {/* 4-stop selector: each dot + its label live in the SAME centered grid
+                                                    column, so the marker is always exactly over its label (a native range
+                                                    thumb is inset by half its width and never lines up with the labels). */}
+                                                <div className="relative mt-2 select-none">
+                                                    {/* track between the first and last dot centers (12.5% .. 87.5%) */}
+                                                    <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-200" />
+                                                    <div
+                                                        className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 transition-all"
+                                                        style={{ width: `${(75 * idx) / 3}%` }}
+                                                    />
+                                                    <div className="grid grid-cols-4">
+                                                        {LEVEL_LABELS.map((lbl, i) => (
+                                                            <button
+                                                                key={i}
+                                                                type="button"
+                                                                onClick={() => handleChange('failover_level', LEVELS[i])}
+                                                                aria-pressed={i === idx}
+                                                                className="flex cursor-pointer flex-col items-center gap-1.5"
+                                                            >
+                                                                <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= idx ? 'border-gray-900 bg-gray-900' : 'border-gray-300 bg-white')} />
+                                                                <span className={cn('whitespace-nowrap text-[11px]', i === idx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-5 mb-2">{tAdvanced('failoverChain')}</div>
+                                                <div className="flex items-center flex-wrap gap-1.5">
+                                                    <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverPrimary')}: {primaryLabel}</span>
+                                                    {showBackup && bp && (<>
+                                                        <ChevronRight size={14} className="text-gray-300" />
+                                                        <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{bpMeta?.label || bp}</span>
+                                                    </>)}
+                                                    {showLocal && (<>
+                                                        <ChevronRight size={14} className="text-gray-300" />
+                                                        <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverLocal')}</span>
+                                                    </>)}
+                                                </div>
+
+                                                {showBackup && (
+                                                    <div className="mt-3 grid grid-cols-2 gap-3">
+                                                        <Select
+                                                            label={tAdvanced('failoverBackupProvider')}
+                                                            value={bp}
+                                                            onChange={(v: string) => handleChange('failover_backup_provider', v)}
+                                                            options={[{ value: '', label: tAdvanced('failoverNone') }, ...PROVIDERS.filter(p => p.id !== primaryProvider).map(p => ({ value: p.id, label: p.label }))]}
+                                                        />
+                                                        {bp && (
+                                                            <Select
+                                                                label={tAdvanced('failoverBackupModel')}
+                                                                value={(localConfig.failover_backup_model as string) || ''}
+                                                                onChange={(v: string) => handleChange('failover_backup_model', v)}
+                                                                options={[{ value: '', label: tAdvanced('failoverProviderDefault') }, ...backupModelOpts]}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {showLocal && (
+                                                    <div className="mt-3">
+                                                        <Select
+                                                            label={tAdvanced('failoverLocalModel')}
+                                                            value={(localConfig.failover_local_model as string) || ''}
+                                                            onChange={(v: string) => handleChange('failover_local_model', v)}
+                                                            options={[{ value: '', label: tAdvanced('failoverAuto') }, ...localModelOpts]}
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                {!isOff && (<>
+                                                    <div className="h-px bg-gray-100 my-4" />
+                                                    <div className="flex items-start justify-between gap-4">
+                                                        <div>
+                                                            <span className="text-sm font-medium text-gray-700">{tAdvanced('failoverTimeout')}</span>
+                                                            <p className="text-xs text-gray-400 mt-0.5 max-w-xs">{tAdvanced('failoverTimeoutDesc')}</p>
+                                                        </div>
+                                                        <div className="flex items-center gap-3 shrink-0 w-48">
+                                                            <input
+                                                                type="range" min={0} max={120} step={5}
+                                                                value={timeoutVal}
+                                                                onChange={(e) => handleChange('failover_timeout_s', parseInt(e.target.value, 10))}
+                                                                className="w-full accent-gray-900"
+                                                            />
+                                                            <span className="text-xs font-semibold text-gray-800 w-10 text-right">{timeoutVal}s</span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="h-px bg-gray-100 my-4" />
+                                                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{tAdvanced('failoverTriggers')}</div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {TRIGGERS.map(tg => (
+                                                            <button
+                                                                key={tg.key} type="button" onClick={() => toggleTrigger(tg.key)}
+                                                                className={cn('text-xs rounded-lg px-3 py-1.5 border transition-colors',
+                                                                    effTriggers.includes(tg.key) ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}
+                                                            >{tg.label}</button>
+                                                        ))}
+                                                    </div>
+
+                                                    <div className="h-4" />
+                                                    <Switch
+                                                        label={tAdvanced('failoverReturnToPrimary')}
+                                                        description={tAdvanced('failoverReturnToPrimaryDesc')}
+                                                        checked={localConfig.failover_return_to_primary ?? true}
+                                                        onChange={(v: boolean) => handleChange('failover_return_to_primary', v)}
+                                                    />
+                                                </>)}
+                                            </div>
+                                        );
+                                    })()}
+                                </Section>
+
                                 <Section title={tAdvanced('attachments')}>
                                     <Switch
                                         label={tAdvanced('hierarchicalIndexing')}
@@ -3149,6 +3310,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         description={tAdvanced('serverPersistenceDesc')}
                                         checked={localConfig.server_persistence_enabled ?? false}
                                         onChange={(v: boolean) => handleChange('server_persistence_enabled', v)}
+                                    />
+                                    <div className="h-4" />
+                                    <Switch
+                                        label={tAdvanced('channelTools')}
+                                        description={tAdvanced('channelToolsDesc')}
+                                        checked={localConfig.channel_tools_unrestricted ?? false}
+                                        onChange={(v: boolean) => handleChange('channel_tools_unrestricted', v)}
                                     />
                                     {/* Memory system + Debug logs toggles are intentionally hidden from the UI.
                                         Both default to ON (config.py: memory_enabled / debug_logs_enabled = True)

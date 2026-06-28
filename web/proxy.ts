@@ -28,6 +28,10 @@ function applyAuthGuards(request: NextRequest): NextResponse {
   const token = request.cookies.get('vaf_token')?.value?.trim();
   const isAuthenticated = Boolean(token);
   const isLoginRoute = pathname === '/login';
+  // Test/preview hook (DEV ONLY): /login?preview=… renders an onboarding step on demand, so an
+  // authenticated user must NOT be bounced to / there (see web/app/login/page.tsx). Gated to the
+  // dev build; in production NODE_ENV is 'production' so this is false and the hook is inert.
+  const isPreview = process.env.NODE_ENV === 'development' && request.nextUrl.searchParams.has('preview');
 
   // Never enforce auth for API/static assets.
   const isPublicAsset =
@@ -43,7 +47,7 @@ function applyAuthGuards(request: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
-  if (isLoginRoute && isAuthenticated) {
+  if (isLoginRoute && isAuthenticated && !isPreview) {
     const url = request.nextUrl.clone();
     url.pathname = '/';
     url.search = '';

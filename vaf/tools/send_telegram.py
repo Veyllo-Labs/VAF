@@ -157,7 +157,7 @@ class SendTelegramTool(BaseTool):
         # Also record the outgoing message in the shared channel store so read_telegram_chat /
         # find_telegram_messages can see it (parallel to the WhatsApp sender path).
         try:
-            from vaf.core.whatsapp_message_store import append_message
+            from vaf.core.channel_message_store import append_message
             append_message(
                 username=str(username or "admin"), chat_id=str(chat_id), body=text_to_send,
                 direction="out",

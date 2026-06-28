@@ -149,6 +149,9 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `read_telegram_chat` | read | Read messages from a Telegram chat. |
 | `find_telegram_messages` | read | Search Telegram messages. |
 | `send_discord` | write | Send a Discord message (irreversible). |
+| `discord_inbox` | read | List Discord chats with stored messages. |
+| `read_discord_chat` | read | Read messages from a Discord chat. |
+| `find_discord_messages` | read | Search Discord messages. |
 | `send_slack` | write | Send a Slack message (irreversible). |
 
 ## GitHub

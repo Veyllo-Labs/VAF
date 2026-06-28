@@ -42,6 +42,7 @@ In Front Office, only an **allow-list** of tools is available. All other tools (
 - **Reply/send:** `send_whatsapp`, `send_telegram`, `send_discord`, `send_slack`
 - **WhatsApp read:** `read_whatsapp_chat`, `find_whatsapp_messages`, `whatsapp_inbox`
 - **Telegram read:** `read_telegram_chat`, `find_telegram_messages`, `telegram_inbox`
+- **Discord read:** `read_discord_chat`, `find_discord_messages`, `discord_inbox`
 - **Mail:** `mail_inbox`, `find_mail`, `read_mail`, `send_mail`, `list_email_accounts`, `mark_mail_answered`, `label_mail`
 - **Search:** `web_search`
 

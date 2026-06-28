@@ -40,7 +40,7 @@ class WhatsAppInboxTool(BaseTool):
 
         try:
             from vaf.api.whatsapp_bridge import get_whatsapp_chats, is_bridge_running
-            from vaf.core.whatsapp_message_store import list_chats_from_store
+            from vaf.core.channel_message_store import list_chats_from_store
         except ImportError as e:
             return f"WhatsApp unavailable: {e}"
 

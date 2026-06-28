@@ -5125,9 +5125,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <X size={20} />
                             </button>
                         </div>
-                        <div className="flex-1 overflow-hidden flex min-h-0">
+                        <div className="flex-1 overflow-hidden flex min-h-0 max-md:flex-col">
                             {/* Left: User identity (human) – user_identity.json */}
-                            <div className="flex-1 min-w-0 border-r border-gray-200 overflow-y-auto p-5 bg-gray-50">
+                            <div className="flex-1 min-w-0 border-r border-gray-200 overflow-y-auto p-5 bg-gray-50 max-md:border-r-0 max-md:p-4">
                                 <div className="flex items-center justify-between mb-3">
                                     <h3 className="text-sm font-semibold text-gray-700">{tModals('userIdentity.identityHeading')}</h3>
                                     {personaData?.user_identity && !isEditingUserIdentity && (
@@ -5350,7 +5350,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 )}
                             </div>
                             {/* Right: Timeline (change_log) – schmal, scrollbar bei vielen Einträgen */}
-                            <div className="w-80 shrink-0 min-h-0 flex flex-col border-l border-gray-100">
+                            <div className="w-80 shrink-0 min-h-0 flex flex-col border-l border-gray-100 max-md:w-full max-md:border-l-0 max-md:border-t max-md:max-h-[40vh]">
                                 <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">{tModals('userIdentity.timeline')}</h3>
                                 {personaData?.user_identity?.change_log?.length > 0 ? (
                                     <div ref={timelineRef} className="flex-1 min-h-0 overflow-y-auto p-4 pt-3">

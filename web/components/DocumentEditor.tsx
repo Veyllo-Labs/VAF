@@ -1224,8 +1224,8 @@ function LegacyDocumentEditor({
 
     // Overlay mode - same layout as SubAgentWindow overlay mode
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
-            <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8 max-md:p-0">
+            <div className="relative flex h-[90vh] w-full max-w-[1400px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
                 {/* Workflow panel (left side) - only shown if steps exist */}
                 {hasWorkflow && (
                     <div className="flex w-[35%] min-w-[320px] flex-col border-r border-gray-200 bg-white">

@@ -170,7 +170,7 @@ export default function CustomToolEditor({
   // ── UI ───────────────────────────────────────────────────────────────────
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center p-4 max-md:p-0"
       onClick={onClose}
     >
       {/* Backdrop */}
@@ -178,7 +178,7 @@ export default function CustomToolEditor({
 
       {/* Panel */}
       <div
-        className="relative bg-[#1e1e1e] w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+        className="relative bg-[#1e1e1e] w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ─────────────────────────────────────────────────────── */}

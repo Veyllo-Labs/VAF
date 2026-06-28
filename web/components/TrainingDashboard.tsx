@@ -329,10 +329,10 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
     );
 
     return (
-        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 max-md:p-0" onClick={onClose}>
             <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
             <div
-                className="relative bg-white w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                className="relative bg-white w-full max-w-[90vw] h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}

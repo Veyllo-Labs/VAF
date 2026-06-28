@@ -17,6 +17,7 @@
     "veylloKeyPlaceholder": "vaf_live_…",
     "veylloSave": "Speichern & weiter",
     "veylloSkip": "Überspringen – lokal nutzen",
+    "veylloOtherProviders": "Lieber OpenAI, Anthropic, Google oder dein eigenes lokales Modell? Alles kein Problem – weitere Anbieter & Keys kannst du jederzeit in den Einstellungen ergänzen.",
     "veylloInvalidKey": "Dieser Key konnte nicht überprüft werden. Bitte prüfen und erneut versuchen.",
     "veylloNetworkError": "Server zum Überprüfen des Keys nicht erreichbar.",
     "veylloValueSpeed": "Läuft auf Veyllos Servern – schnelle Antworten, ohne deinen Rechner zu belasten.",

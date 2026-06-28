@@ -17,6 +17,7 @@
     "veylloKeyPlaceholder": "vaf_live_…",
     "veylloSave": "Save & continue",
     "veylloSkip": "Skip — I'll run locally",
+    "veylloOtherProviders": "Prefer OpenAI, Anthropic, Google or your own local model? No problem — you can add more providers & keys anytime in Settings.",
     "veylloInvalidKey": "That key could not be verified. Please check it and try again.",
     "veylloNetworkError": "Could not reach the server to verify the key.",
     "veylloValueSpeed": "Runs on Veyllo's servers — fast answers without taxing your machine.",

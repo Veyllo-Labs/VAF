@@ -205,7 +205,17 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.ok === true) {
-                setOnboardingConfig((prev) => ({ ...prev, api_key_veyllo: key, provider: 'veyllo' }));
+                // Use the Veyllo key as the default for chat AND vision: veyllo-chat is multimodal, so
+                // image analysis routes to the hosted API even if the user later switches chat to a local
+                // model on a weak machine. vision_model stays empty = the provider's default (veyllo-chat).
+                // Placeholder for hosted speech: once Veyllo offers TTS/STT, default them here too —
+                // e.g. speech_tts_engine: 'veyllo', speech_stt_engine: 'veyllo' (+ their docker_url keys).
+                setOnboardingConfig((prev) => ({
+                    ...prev,
+                    api_key_veyllo: key,
+                    provider: 'veyllo',
+                    vision_provider: 'veyllo',
+                }));
                 setStep('setup_2fa');
                 handleStartSetup2FA();
             } else {
@@ -922,6 +932,7 @@ export default function LoginPage() {
                                     >
                                         {t('veylloSkip')}
                                     </button>
+                                    <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t('veylloOtherProviders')}</p>
                                 </div>
                             </div>
                         </div>

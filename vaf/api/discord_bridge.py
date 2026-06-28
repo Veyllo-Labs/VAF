@@ -84,6 +84,119 @@ def _append_discord_activity(channel_id: str, direction: str = "in") -> None:
         pass
 
 
+def _store_discord_message(chat_id, body, direction, content_type="text", message_id=None) -> None:
+    """Record a Discord message in the shared channel store (whatsapp_message_store, channel='discord')
+    so the agent's read_discord_chat / find_discord_messages tools can read history. Discord is
+    admin-only: username='admin', user_scope_id=None. chat_id = the Discord user/author id (==
+    get_discord_user_id), so incoming and proactive-outgoing land in the same bucket. Best-effort."""
+    try:
+        from vaf.core.channel_message_store import append_message
+        append_message(
+            username="admin", chat_id=str(chat_id or ""), body=str(body or ""),
+            direction=direction, content_type=content_type, message_id=message_id,
+            channel="discord", user_scope_id=None,
+        )
+    except Exception:
+        pass
+
+
+# Accumulated RAG documents per Discord session (mirror of telegram_bridge); the RAG index is a
+# REPLACE per session, so we keep the full set and re-index on each new document. In-memory.
+_discord_session_documents: Dict[str, list] = {}
+
+
+async def _enqueue_discord_image(message, attachment, session_id, caption) -> bool:
+    """Route a Discord image attachment to the vision pipeline (mirror of the Telegram image path):
+    download -> persist into the user's attachments folder -> metadata['images'] -> agent turn."""
+    import base64 as _b64
+    import asyncio as _aio
+    try:
+        raw = await attachment.read()
+    except Exception:
+        return False
+    mime = (getattr(attachment, "content_type", "") or "image/jpeg") or "image/jpeg"
+    name = getattr(attachment, "filename", "") or "discord_image.jpg"
+    attached_images = [{"data": _b64.b64encode(raw).decode("ascii"), "mime_type": mime, "name": name}]
+    try:
+        from vaf.core.web_server import _persist_attached_images_to_files
+        attached_images = await _aio.to_thread(_persist_attached_images_to_files, attached_images, session_id, None)
+    except Exception as e:
+        logger.warning("discord image persist failed, keeping inline: %s", e)
+    author_id = str(message.author.id)
+    metadata = {
+        "user_scope_id": None, "username": "admin",
+        "discord_channel_id": str(message.channel.id), "discord_author_id": author_id,
+        "origin_channel": "discord", "task_class": "interactive",
+        "images": attached_images,  # -> vision pipeline (headless_runner reads metadata['images'])
+    }
+    user_message = f"[Photo] (User: {caption})" if caption else "[Photo]"
+    TaskQueue().add(session_id=session_id, input_text=user_message, source="discord", metadata=metadata)
+    _store_discord_message(author_id, user_message, "in", "image", str(message.id))
+    logger.info("Discord image enqueued for vision from %s", message.author.name)
+    return True
+
+
+async def _handle_discord_document(message, attachment, session_id, caption) -> bool:
+    """Extract text from a Discord document attachment, enqueue it inline, and index it for RAG
+    (mirror of the Telegram document path)."""
+    import os as _os
+    import tempfile as _tf
+    import asyncio as _aio
+    from pathlib import Path as _Path
+    file_name = getattr(attachment, "filename", "") or "document"
+    ext = _os.path.splitext(file_name.lower())[1]
+    _DOC_EXTS = (".pdf", ".docx", ".xlsx", ".pptx", ".xls", ".txt", ".md", ".csv", ".json", ".xml")
+    if ext not in _DOC_EXTS:
+        return False
+    try:
+        raw = await attachment.read()
+    except Exception:
+        return False
+    tmp = None
+    extracted = ""
+    try:
+        with _tf.NamedTemporaryFile(prefix="vaf_disc_", suffix=ext, delete=False) as f:
+            f.write(raw)
+            tmp = f.name
+        from vaf.tools.librarian import LibrarianTool
+        extracted = await _aio.to_thread(LibrarianTool()._read_file, _Path(tmp), True)
+    except Exception as e:
+        logger.warning("discord document extract failed: %s", e)
+        return False
+    finally:
+        if tmp:
+            try:
+                _os.unlink(tmp)
+            except Exception:
+                pass
+    author_id = str(message.author.id)
+    if caption:
+        user_message = f"[Document: {file_name}] (User: {caption})\n\n--- Document content ---\n{extracted}"
+    else:
+        user_message = f"[Document: {file_name}]\n\n--- Document content ---\n{extracted}"
+    metadata = {
+        "user_scope_id": None, "username": "admin",
+        "discord_channel_id": str(message.channel.id), "discord_author_id": author_id,
+        "origin_channel": "discord", "task_class": "interactive",
+    }
+    TaskQueue().add(session_id=session_id, input_text=user_message, source="discord", metadata=metadata)
+    _store_discord_message(author_id, f"[Document: {file_name}]" + (f" {caption}" if caption else ""),
+                           "in", "document", str(message.id))
+    # RAG indexing (additive): accumulate the session's docs and re-index (mirror Telegram).
+    try:
+        if bool(Config.get("attachment_rag_enabled", False)) and extracted and not extracted.lstrip().startswith("[ERROR]"):
+            new_doc = {"name": file_name, "content": extracted,
+                       "mimeType": getattr(attachment, "content_type", "") or "", "path": ""}
+            docs = [d for d in _discord_session_documents.get(session_id, []) if d.get("name") != file_name]
+            docs.append(new_doc)
+            _discord_session_documents[session_id] = docs
+            from vaf.memory.attachment_rag import index_session_attachments_sync
+            await _aio.to_thread(index_session_attachments_sync, session_id, None, list(docs))
+    except Exception as e:
+        logger.warning("discord document RAG indexing failed: %s", e)
+    return True
+
+
 def _enqueue_reply(channel_id: str, text: str) -> None:
     """Enqueue a reply for the sender thread to post to Discord."""
     try:
@@ -151,11 +264,33 @@ def _run_bot() -> None:
             return
 
         text = (message.content or "").strip()
+        channel_id = str(message.channel.id)
+        session_id = f"discord_{message.author.id}"
+
+        # Attachments: route images to the vision pipeline and documents to attachment RAG
+        # (mirror of the Telegram bridge). On Discord the message text doubles as the caption.
+        attachments = list(getattr(message, "attachments", None) or [])
+        if attachments:
+            try:
+                _append_discord_activity(channel_id, "in")
+            except Exception:
+                pass
+            for att in attachments:
+                mime = (getattr(att, "content_type", "") or "").lower()
+                fname = (getattr(att, "filename", "") or "").lower()
+                ext = fname[fname.rfind("."):] if "." in fname else ""
+                try:
+                    if mime.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+                        await _enqueue_discord_image(message, att, session_id, text)
+                    else:
+                        await _handle_discord_document(message, att, session_id, text)
+                except Exception as e:
+                    logger.warning("Discord attachment handling failed: %s", e)
+            return  # the message text is carried as the attachment caption
+
         if not text:
             return
 
-        channel_id = str(message.channel.id)
-        session_id = f"discord_{message.author.id}"
         metadata: Dict[str, Any] = {
             "user_scope_id": None,
             "username": "admin",
@@ -176,6 +311,9 @@ def _run_bot() -> None:
             source="discord",
             metadata=metadata,
         )
+        # Record in the channel store (canonical chat_id = author.id, matching session_id +
+        # get_discord_user_id) so read_discord_chat / find_discord_messages can read history.
+        _store_discord_message(str(message.author.id), text, "in", "text", str(message.id))
         logger.info("Discord message enqueued from %s", message.author.name)
 
     set_discord_reply_callback(_enqueue_reply)

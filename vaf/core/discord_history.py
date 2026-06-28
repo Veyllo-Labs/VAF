@@ -2,27 +2,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-One-time backfill of existing Telegram chat history into the shared channel message store.
+One-time backfill of existing Discord chat history into the shared channel message store.
 
-Telegram conversations have always been persisted as per-chat session JSONs
-(~/.vaf/sessions/telegram_<chat_id>.json). The read_telegram_chat / find_telegram_messages /
-telegram_inbox tools read from the searchable channel store (whatsapp_message_store, channel
-='telegram'), which is only filled by the live write-hooks. This imports the pre-existing
-session history once so those tools see history that predates the hooks.
+Discord conversations are persisted as per-chat session JSONs (~/.vaf/sessions/discord_<author_id>.json,
+bidirectional: user + assistant turns). The read_discord_chat / find_discord_messages / discord_inbox
+tools read from the searchable channel store (whatsapp_message_store, channel='discord'), filled by the
+live write-hooks. This imports the pre-existing session history once so those tools see history that
+predates the hooks.
 
-Idempotent: deterministic message ids + INSERT OR REPLACE. Gated by a sentinel file AND an
-in-process flag, so the read tools can call it cheaply on every invocation.
+Idempotent: deterministic message ids + INSERT OR REPLACE, gated by a sentinel file AND an in-process
+flag, so the read tools can call it cheaply on every invocation. Mirror of telegram_history.py.
 """
 
 import logging
 
-logger = logging.getLogger("vaf.core.telegram_history")
+logger = logging.getLogger("vaf.core.discord_history")
 
 _backfill_done_in_process = False
 
 
-def backfill_telegram_history() -> int:
-    """Import existing telegram_<id> sessions into the channel store. Returns messages imported
+def backfill_discord_history() -> int:
+    """Import existing discord_<id> sessions into the channel store. Returns messages imported
     (0 if already done / nothing to do). Never raises."""
     global _backfill_done_in_process
     if _backfill_done_in_process:
@@ -34,7 +34,7 @@ def backfill_telegram_history() -> int:
         from vaf.core.session import SessionManager
         from vaf.core.channel_message_store import append_message
 
-        sentinel = Path(Platform.data_dir()) / ".telegram_backfill_done"
+        sentinel = Path(Platform.data_dir()) / ".discord_backfill_done"
         if sentinel.exists():
             _backfill_done_in_process = True
             return 0
@@ -48,23 +48,20 @@ def backfill_telegram_history() -> int:
         sm = SessionManager()
         imported = 0
         seen_ids = set()
-        for f in sorted(sessions_dir.glob("telegram_*.json*")):
+        for f in sorted(sessions_dir.glob("discord_*.json*")):
             sid = f.name
             for suffix in (".json.gz", ".json"):
                 if sid.endswith(suffix):
                     sid = sid[: -len(suffix)]
                     break
-            if not sid.startswith("telegram_") or sid in seen_ids:
+            if not sid.startswith("discord_") or sid in seen_ids:
                 continue
             seen_ids.add(sid)
-            chat_id = sid[len("telegram_"):]
+            chat_id = sid[len("discord_"):]
             try:
                 session = sm.load(sid, restore_state=False)
             except Exception:
                 continue
-            meta = getattr(session, "metadata", None) or {}
-            username = str(meta.get("username") or "admin")
-            scope = meta.get("user_scope_id")
             for idx, m in enumerate(getattr(session, "messages", []) or []):
                 role = getattr(m, "role", "")
                 if role not in ("user", "assistant"):
@@ -82,10 +79,10 @@ def backfill_telegram_history() -> int:
                     ts = None
                 try:
                     append_message(
-                        username=username, chat_id=str(chat_id), body=body,
+                        username="admin", chat_id=str(chat_id), body=body,
                         direction=("in" if role == "user" else "out"),
-                        message_id=f"bf_{idx}", channel="telegram",
-                        user_scope_id=scope, ts=ts,
+                        message_id=f"bf_{idx}", channel="discord",
+                        user_scope_id=None, ts=ts,
                     )
                     imported += 1
                 except Exception:
@@ -94,8 +91,8 @@ def backfill_telegram_history() -> int:
         sentinel.write_text(f"imported={imported}")
         _backfill_done_in_process = True
         if imported:
-            logger.info("Telegram history backfill: imported %d message(s) into the channel store", imported)
+            logger.info("Discord history backfill: imported %d message(s) into the channel store", imported)
         return imported
     except Exception as e:
-        logger.warning("Telegram history backfill failed: %s", e)
+        logger.warning("Discord history backfill failed: %s", e)
         return 0

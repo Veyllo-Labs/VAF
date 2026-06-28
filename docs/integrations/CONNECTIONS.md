@@ -77,6 +77,8 @@ After linking, the agent can use the tools `github_list_repos`, `github_get_file
 - **Proactive messaging**: The agent can send you messages via Discord (e.g. "send me the result via Discord") using the `send_discord` tool
 - **Admin verification**: Only verified admins can control the bot
 - **Persistent bridge**: Messages are routed through the headless agent; replies are sent back to Discord automatically
+- **Message history**: Incoming and outgoing Discord messages are recorded in a searchable store; the agent can recall past conversations with `read_discord_chat`, `find_discord_messages` and `discord_inbox`. Existing history is imported once on first use.
+- **Attachments**: Images sent in a DM are processed by the vision pipeline; documents (PDF, DOCX, …) are extracted and indexed for retrieval.
 - **Secure**: Token stored locally, never sent to external servers
 
 ### Setup

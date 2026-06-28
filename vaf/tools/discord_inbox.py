@@ -2,24 +2,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-List Telegram chats that have stored messages (the Telegram counterpart of whatsapp_inbox).
-Also resolves the dead `telegram_inbox` reference in context.py's read-only auto-approve list.
+List Discord chats that have stored messages (the Discord counterpart of telegram_inbox).
 """
 
 from vaf.tools.base import BaseTool
 
 
-class TelegramInboxTool(BaseTool):
+class DiscordInboxTool(BaseTool):
     """
-    List Telegram chats that have message history, most recent first.
-    Use to discover which chats exist before calling read_telegram_chat.
+    List Discord chats that have message history, most recent first.
+    Use to discover which chats exist before calling read_discord_chat.
     """
-    name = "telegram_inbox"
+    name = "discord_inbox"
     permission_level = "read"
     side_effect_class = "none"
     description = (
-        "List Telegram chats that have stored messages (most recent first), with chat_id, name, "
-        "last activity and message count. Use to find a chat_id for read_telegram_chat."
+        "List Discord chats that have stored messages (most recent first), with chat_id, name, "
+        "last activity and message count. Use to find a chat_id for read_discord_chat."
     )
     parameters = {
         "type": "object",
@@ -43,14 +42,14 @@ class TelegramInboxTool(BaseTool):
             return f"Message store unavailable: {e}"
 
         try:
-            from vaf.core.telegram_history import backfill_telegram_history
-            backfill_telegram_history()
+            from vaf.core.discord_history import backfill_discord_history
+            backfill_discord_history()
         except Exception:
             pass
 
-        chats = list_chats_from_store(username, limit=max_chats, user_scope_id=user_scope_id, channel="telegram")
+        chats = list_chats_from_store(username, limit=max_chats, user_scope_id=user_scope_id, channel="discord")
         if not chats:
-            return "No Telegram chats with stored messages yet. Messages are stored as they arrive."
+            return "No Discord chats with stored messages yet. Messages are stored as they arrive."
 
         lines = []
         for i, c in enumerate(chats, 1):
@@ -64,6 +63,6 @@ class TelegramInboxTool(BaseTool):
             else:
                 ts_str = "—"
             lines.append(f"{i}. {name} (chat_id={cid}) | last {ts_str} | {count} msg(s)")
-        out = f"{len(chats)} Telegram chat(s):\n" + "\n".join(lines)
-        out += "\n\nUse read_telegram_chat(chat_id='...') to read a chat."
+        out = f"{len(chats)} Discord chat(s):\n" + "\n".join(lines)
+        out += "\n\nUse read_discord_chat(chat_id='...') to read a chat."
         return out

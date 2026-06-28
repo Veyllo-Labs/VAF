@@ -293,7 +293,7 @@ async def get_whatsapp_dashboard(request: Request):
         pass
     # Include chats from message store (persistent inbox: show all chats we have messages for, like mail/Telegram)
     try:
-        from vaf.core.whatsapp_message_store import list_chats_from_store
+        from vaf.core.channel_message_store import list_chats_from_store
         for row in list_chats_from_store(username, limit=500, user_scope_id=user_info.get("user_scope_id")):
             cid = (row.get("chat_id") or "").strip()
             if not cid:

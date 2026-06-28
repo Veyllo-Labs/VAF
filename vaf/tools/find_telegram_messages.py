@@ -51,7 +51,7 @@ class FindTelegramMessagesTool(BaseTool):
             return "query is required (e.g. 'invoice' or 'meeting')."
 
         try:
-            from vaf.core.whatsapp_message_store import search_messages
+            from vaf.core.channel_message_store import search_messages
         except ImportError as e:
             return f"Message store unavailable: {e}"
 

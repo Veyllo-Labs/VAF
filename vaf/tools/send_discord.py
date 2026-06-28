@@ -79,6 +79,32 @@ class SendDiscordTool(BaseTool):
         except Exception as e:
             return f"Failed to send Discord message: {e}"
 
+        # Append the sent message to the Discord session so the agent has context when the user
+        # replies later (mirror of send_telegram). Session key = discord_<user_id> (== author.id).
+        try:
+            from vaf.core.session import SessionManager, Session
+            session_id = f"discord_{user_id}"
+            sm = SessionManager()
+            try:
+                session = sm.load(session_id, restore_state=False)
+            except FileNotFoundError:
+                session = Session(id=session_id, name=f"Discord {user_id}")
+            session.add_message(role="assistant", content=out)
+            sm.save(session, sync_state=False)
+        except Exception:
+            pass
+
+        # Record the outgoing message in the shared channel store so read_discord_chat /
+        # find_discord_messages can see it (parallel to the send_telegram out-hook).
+        try:
+            from vaf.core.channel_message_store import append_message
+            append_message(
+                username=str(username or "admin"), chat_id=str(user_id), body=out,
+                direction="out", content_type="text", channel="discord", user_scope_id=user_scope_id,
+            )
+        except Exception:
+            pass
+
         try:
             from vaf.core.user_notifications import append_notification
             preview = (out[:100] + "…") if len(out) > 100 else out

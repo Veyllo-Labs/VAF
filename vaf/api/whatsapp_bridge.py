@@ -725,7 +725,7 @@ def _sender_loop() -> None:
                 pass
             try:
                 chat_id = f"+{_jid_to_e164(chat_jid)}" if _jid_to_e164(chat_jid) else str(chat_jid or "")
-                from vaf.core.whatsapp_message_store import append_message
+                from vaf.core.channel_message_store import append_message
                 if voice_path:
                     body = "[Voice message]"
                     ctype = "voice"
@@ -1028,7 +1028,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
     elif typ == "history_messages":
         # Chat history from WhatsApp (messaging-history.set); store so inbox has full history
         try:
-            from vaf.core.whatsapp_message_store import append_message
+            from vaf.core.channel_message_store import append_message
             stored = 0
             for m in obj.get("messages") or []:
                 chat_id = (m.get("chat_id") or "").strip()
@@ -1239,7 +1239,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 pass
         _append_chat_activity(chat_id, user_scope_id, "in")
         try:
-            from vaf.core.whatsapp_message_store import append_message
+            from vaf.core.channel_message_store import append_message
             append_message(
                 username, chat_id, body, direction="in", sender_jid=from_jid,
                 message_id=obj.get("messageId") or obj.get("message_id"),

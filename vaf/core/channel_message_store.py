@@ -1,0 +1,315 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""
+Persistent, channel-generic store for messaging-channel messages (SQLite).
+
+Stores incoming and outgoing messages across channels (WhatsApp/Telegram/Discord) so the agent can
+search and read chat history. Each row carries a `channel` column; queries filter by it.
+(Formerly `whatsapp_message_store`; renamed because it is channel-generic. A back-compat shim at
+`vaf.core.whatsapp_message_store` re-exports this module for one release.)
+
+Isolation: per user and per scope (UUID). When user_scope_id is passed, the DB path is
+scopes/<user_scope_id>/channel_messages.db (or data_dir/channel_messages.db for the local-admin scope).
+Otherwise per-username: data_dir/users/<username>/channel_messages.db or data_dir for the local admin.
+"""
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+from vaf.core.platform import Platform
+
+logger = logging.getLogger("vaf.core.channel_message_store")
+
+_DB_NAME = "channel_messages.db"
+_OLD_DB_NAME = "whatsapp_messages.db"   # legacy file name, migrated on first init
+_DEFAULT_RETENTION_DAYS = 90
+
+__all__ = [
+    "init_store", "append_message", "search_messages",
+    "list_chats_from_store", "get_chat_messages",
+]
+
+
+def _local_admin() -> str:
+    return get_local_admin_username().lower()
+
+
+def _local_admin_scope_id() -> str:
+    return get_local_admin_scope_id()
+
+
+def _db_path(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Path:
+    data_dir = Platform.data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if user_scope_id:
+        scope_str = str(user_scope_id).strip()
+        if scope_str == _local_admin_scope_id():
+            return data_dir / _DB_NAME
+        scope_dir = data_dir / "scopes" / scope_str
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        return scope_dir / _DB_NAME
+    u = (username or "").strip()
+    if not u or u.lower() == _local_admin():
+        return data_dir / _DB_NAME
+    user_dir = data_dir / "users" / u
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir / _DB_NAME
+
+
+def _get_conn(username: Optional[str] = None, user_scope_id: Optional[str] = None):
+    import sqlite3
+    path = _db_path(username, user_scope_id)
+    conn = sqlite3.connect(str(path), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _migrate_legacy_db(new_path: Path) -> None:
+    """One-time, non-destructive migration of the legacy whatsapp_messages.db into the new
+    channel_messages.db, BEFORE the new file is first opened. WAL-checkpoint the old file, then
+    copy it byte-for-byte (rows preserved by construction). The old file is left as a backup."""
+    import sqlite3
+    import shutil
+    old_path = new_path.parent / _OLD_DB_NAME
+    if new_path.exists() or not old_path.exists():
+        return
+    try:
+        c = sqlite3.connect(str(old_path), timeout=30.0)
+        try:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            c.close()
+        shutil.copy2(str(old_path), str(new_path))
+        logger.info("Migrated legacy %s -> %s", old_path.name, new_path.name)
+    except Exception as e:
+        logger.warning("Legacy message store migration failed (%s); starting fresh", e)
+
+
+def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = None) -> None:
+    """Create the channel_messages table if absent; migrate the legacy whatsapp_messages db/table."""
+    import sqlite3
+    new_path = _db_path(username, user_scope_id)
+    _migrate_legacy_db(new_path)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        # Rename the legacy table if the migrated/old db still uses the old name.
+        try:
+            conn.execute("ALTER TABLE whatsapp_messages RENAME TO channel_messages")
+        except sqlite3.OperationalError:
+            pass  # already renamed, or fresh install (no legacy table)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS channel_messages (
+                username TEXT NOT NULL DEFAULT '',
+                chat_id TEXT NOT NULL,
+                chat_name TEXT,
+                sender_jid TEXT,
+                body TEXT NOT NULL DEFAULT '',
+                direction TEXT NOT NULL DEFAULT 'in',
+                ts REAL NOT NULL,
+                message_id TEXT,
+                content_type TEXT DEFAULT 'text',
+                channel TEXT NOT NULL DEFAULT 'whatsapp',
+                PRIMARY KEY (username, chat_id, message_id, direction)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ch_msg_chat ON channel_messages(username, chat_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ch_msg_ts ON channel_messages(ts)")
+        # Older dbs (pre-channel-column) carried no `channel`; add it idempotently.
+        try:
+            conn.execute("ALTER TABLE channel_messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ch_msg_channel ON channel_messages(username, channel, chat_id)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def append_message(
+    username: str,
+    chat_id: str,
+    body: str,
+    direction: str = "in",
+    chat_name: Optional[str] = None,
+    sender_jid: Optional[str] = None,
+    message_id: Optional[str] = None,
+    content_type: str = "text",
+    user_scope_id: Optional[str] = None,
+    ts: Optional[float] = None,
+    channel: str = "whatsapp",
+) -> None:
+    """Append one message to the store. ts: optional Unix timestamp (e.g. from history sync); default now.
+    channel: messaging channel ('whatsapp' default, 'telegram', 'discord', ...)."""
+    import time
+    import sqlite3
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        ts = float(ts) if ts is not None else time.time()
+        # Use chat_id+ts+direction as fallback unique key when message_id missing
+        mid = message_id or f"_{ts}_{direction}"
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO channel_messages
+            (username, chat_id, chat_name, sender_jid, body, direction, ts, message_id, content_type, channel)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (username or "").strip() or "",
+                chat_id or "",
+                chat_name or "",
+                sender_jid or "",
+                body or "",
+                direction or "in",
+                ts,
+                mid,
+                content_type or "text",
+                channel or "whatsapp",
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    finally:
+        conn.close()
+
+
+def search_messages(
+    username: str,
+    query: str,
+    chat_id: Optional[str] = None,
+    limit: int = 20,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
+) -> List[Dict[str, Any]]:
+    """Search messages by query (matches body, chat_name, sender). channel: filter to one channel
+    ('whatsapp' default, 'telegram', ...); pass None/'' to search across all channels."""
+    import sqlite3
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        q = f"%{(query or '').strip()}%"
+        if not q or q == "%%":
+            return []
+        params = [u, q, q, q]
+        sql = """
+            SELECT chat_id, chat_name, body, direction, ts, content_type, channel
+            FROM channel_messages
+            WHERE username = ? AND (body LIKE ? OR chat_name LIKE ? OR sender_jid LIKE ?)
+        """
+        if channel:
+            sql += " AND channel = ?"
+            params.append(channel)
+        if chat_id:
+            sql += " AND chat_id = ?"
+            params.append(chat_id)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params.append(min(max(limit, 1), 100))
+        cur = conn.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_chats_from_store(
+    username: str,
+    limit: int = 500,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
+) -> List[Dict[str, Any]]:
+    """List all chats that have at least one message in the store (for inbox/dashboard merge).
+    Returns list of dicts with chat_id, last_ts, message_count; chat_name from latest message if present.
+    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
+    import sqlite3
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        u = (username or "").strip() or ""
+        limit = min(max(limit, 1), 500)
+        chan_clause = " AND channel = ?" if channel else ""
+        chan_param = [channel] if channel else []
+        cur = conn.execute(
+            f"""
+            SELECT chat_id, MAX(ts) AS last_ts, COUNT(*) AS message_count
+            FROM channel_messages
+            WHERE username = ?{chan_clause}
+            GROUP BY chat_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+            """,
+            (u, *chan_param, limit),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        # Optionally attach latest chat_name per chat
+        for r in rows:
+            cid = r.get("chat_id") or ""
+            cur2 = conn.execute(
+                f"""
+                SELECT chat_name FROM channel_messages
+                WHERE username = ? AND chat_id = ?{chan_clause} AND chat_name IS NOT NULL AND chat_name != ''
+                ORDER BY ts DESC LIMIT 1
+                """,
+                (u, cid, *chan_param),
+            )
+            row2 = cur2.fetchone()
+            r["chat_name"] = (dict(row2).get("chat_name") or "").strip() if row2 else ""
+        return rows
+    finally:
+        conn.close()
+
+
+def get_chat_messages(
+    username: str,
+    chat_id: str,
+    limit: int = 50,
+    user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
+) -> List[Dict[str, Any]]:
+    """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found.
+    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
+    import sqlite3
+    from vaf.core.config import Config
+    init_store(username, user_scope_id)
+    chat_ids_to_try = [chat_id or ""]
+    if (chat_id or "").strip().endswith("@lid"):
+        try:
+            wc = Config.get("whatsapp_config") or {}
+            if isinstance(wc, dict):
+                lid_map = wc.get("lid_to_e164") or {}
+                if isinstance(lid_map, dict):
+                    resolved = (lid_map.get(chat_id.strip()) or "").strip()
+                    if resolved and not resolved.startswith("+"):
+                        resolved = "+" + resolved
+                    if resolved:
+                        chat_ids_to_try.append(resolved)
+        except Exception:
+            pass
+    conn = _get_conn(username, user_scope_id)
+    try:
+        all_rows = []
+        seen = set()
+        for cid in chat_ids_to_try:
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            chan_clause = " AND channel = ?" if channel else ""
+            chan_param = [channel] if channel else []
+            cur = conn.execute(
+                f"""
+                SELECT chat_id, chat_name, body, direction, ts, content_type, channel
+                FROM channel_messages
+                WHERE username = ? AND chat_id = ?{chan_clause}
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                ((username or "").strip() or "", cid, *chan_param, min(max(limit, 1), 200)),
+            )
+            all_rows.extend([dict(row) for row in cur.fetchall()])
+        all_rows.sort(key=lambda r: -(r.get("ts") or 0))
+        return all_rows[: min(max(limit, 1), 200)]
+    finally:
+        conn.close()

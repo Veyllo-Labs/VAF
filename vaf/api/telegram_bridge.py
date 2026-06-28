@@ -55,7 +55,7 @@ def _store_telegram_message(username, chat_id, body, direction, content_type="te
     channel='telegram') so the agent's read_telegram_chat / find_telegram_messages tools can read
     history — the Telegram equivalent of the WhatsApp bridge's append_message calls. Best-effort."""
     try:
-        from vaf.core.whatsapp_message_store import append_message
+        from vaf.core.channel_message_store import append_message
         append_message(
             username=str(username or "admin"), chat_id=str(chat_id or ""), body=str(body or ""),
             direction=direction, content_type=content_type, message_id=message_id,
@@ -801,14 +801,16 @@ def _run_bot():
             metadata=metadata,
         )
         _store_telegram_message(vaf_username, chat_id, text, "in",
-                                "voice" if voice_lang else "text", user_scope_id)
+                                "voice" if voice_lang else "text", user_scope_id,
+                                message_id=pending.get("message_id"))
         try:
             TrayContext().register_telegram_activity()
         except Exception:
             pass
 
     async def _enqueue_telegram_image(file_id, display_name, mime, caption,
-                                      entry, is_relay, telegram_user_id, chat_id) -> bool:
+                                      entry, is_relay, telegram_user_id, chat_id,
+                                      message_id=None) -> bool:
         """Download a Telegram image and enqueue it for the VISION pipeline — the same path the
         Web UI uses (metadata['images'] with persisted file entries). Returns False on download
         failure. Shared by handle_photo (compressed photos) and handle_document (image sent as a file)."""
@@ -868,7 +870,8 @@ def _run_bot():
         user_message = f"[Photo] (User: {caption})" if caption else "[Photo]"
         TaskQueue().add(session_id=session_id, input_text=user_message,
                         source="telegram", metadata=metadata)
-        _store_telegram_message(vaf_username, chat_id, user_message, "in", "image", user_scope_id)
+        _store_telegram_message(vaf_username, chat_id, user_message, "in", "image", user_scope_id,
+                                message_id=message_id)
         try:
             TrayContext().register_telegram_activity()
         except Exception:
@@ -899,6 +902,7 @@ def _run_bot():
                 _pending_by_chat[chat_id] = {
                     "text": "",
                     "task": None,
+                    "message_id": None,
                     "user_scope_id": user_scope_id,
                     "vaf_username": vaf_username,
                     "telegram_user_id": telegram_user_id,
@@ -906,6 +910,7 @@ def _run_bot():
                     "from_contact": bool(entry.get("from_contact")),
                 }
             rec = _pending_by_chat[chat_id]
+            rec["message_id"] = str(update.message.message_id)  # last message of the burst (edit-stable key)
             rec["text"] = (rec["text"] + " " + msg_text).strip() if rec["text"] else msg_text
             if rec.get("task") and not rec["task"].done():
                 rec["task"].cancel()
@@ -952,6 +957,7 @@ def _run_bot():
                 _pending_by_chat[chat_id] = {
                     "text": "",
                     "task": None,
+                    "message_id": None,
                     "user_scope_id": user_scope_id,
                     "vaf_username": vaf_username,
                     "telegram_user_id": telegram_user_id,
@@ -959,6 +965,7 @@ def _run_bot():
                     "voice_lang": detected_lang,  # Store detected language for TTS reply
                 }
             rec = _pending_by_chat[chat_id]
+            rec["message_id"] = str(update.message.message_id)  # last message of the burst (edit-stable key)
             rec["text"] = (rec["text"] + " " + text).strip() if rec["text"] else text
             rec["voice_lang"] = detected_lang  # Update language
             if rec.get("task") and not rec["task"].done():
@@ -1001,6 +1008,7 @@ def _run_bot():
             ok = await _enqueue_telegram_image(
                 doc.file_id, file_name, doc_mime or "image/jpeg", caption,
                 entry, is_relay, telegram_user_id, chat_id,
+                message_id=str(update.message.message_id),
             )
             if not ok:
                 await update.message.reply_text("❌ Bild konnte nicht verarbeitet werden.")
@@ -1070,7 +1078,8 @@ def _run_bot():
             pass
         _store_telegram_message(vaf_username, chat_id,
                                 f"[Document: {file_name}]" + (f" {caption}" if caption else ""),
-                                "in", "document", user_scope_id)
+                                "in", "document", user_scope_id,
+                                message_id=str(update.message.message_id))
         logger.info("Document %s from chat %s enqueued, %d chars extracted", file_name, chat_id, len(extracted))
 
         # RAG indexing (additive): keep the document retrievable in later turns too. The inline
@@ -1114,6 +1123,7 @@ def _run_bot():
         ok = await _enqueue_telegram_image(
             photo.file_id, "telegram_photo.jpg", "image/jpeg", caption,
             entry, is_relay, telegram_user_id, chat_id,
+            message_id=str(update.message.message_id),
         )
         if not ok:
             await update.message.reply_text("❌ Foto konnte nicht verarbeitet werden. Bitte erneut senden.")

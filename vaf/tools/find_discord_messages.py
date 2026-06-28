@@ -2,35 +2,35 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Search WhatsApp messages by query (like find_mail for email).
+Search Discord messages by query (the Discord counterpart of find_telegram_messages).
 """
 
 from vaf.tools.base import BaseTool
 
 
-class FindWhatsAppMessagesTool(BaseTool):
+class FindDiscordMessagesTool(BaseTool):
     """
-    Search WhatsApp messages by query (matches body, chat name, sender).
-    Use when the user asks 'find messages from Alice' or 'what did X say in WhatsApp'.
+    Search Discord messages by query (matches message body and chat name).
+    Use when the user asks 'find the Discord message about X' or 'what did I send on Discord'.
     """
-    name = "find_whatsapp_messages"
+    name = "find_discord_messages"
     permission_level = "read"
     side_effect_class = "none"
     description = (
-        "Search WhatsApp messages by query. Matches message body, chat name, and sender. "
-        "Use when user asks 'find messages from Alice', 'what did X say in WhatsApp', etc. "
-        "Optional chat_id to limit search to one chat. Returns matches with chat_id; use read_whatsapp_chat to get full thread."
+        "Search past Discord messages by query. Matches message body and chat name. "
+        "Use when the user asks 'find the Discord message about the invoice', 'what did I say on Discord about X', etc. "
+        "Optional chat_id to limit to one chat. Returns matches with chat_id; use read_discord_chat for the full thread."
     )
     parameters = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search term (e.g. 'Alice', 'meeting', 'tomorrow').",
+                "description": "Search term (e.g. 'invoice', 'meeting', 'tomorrow').",
             },
             "chat_id": {
                 "type": "string",
-                "description": "Optional. Limit search to this chat (e.g. +49123456789).",
+                "description": "Optional. Limit search to this Discord chat id.",
             },
             "limit": {
                 "type": "integer",
@@ -42,22 +42,30 @@ class FindWhatsAppMessagesTool(BaseTool):
 
     def run(self, **kwargs) -> str:
         username = (kwargs.get("username") or "admin").strip()
+        user_scope_id = kwargs.get("user_scope_id")
         query = (kwargs.get("query") or "").strip()
         chat_id = (kwargs.get("chat_id") or "").strip() or None
         limit = min(max(int(kwargs.get("limit") or 20), 1), 100)
 
         if not query:
-            return "query is required (e.g. 'Alice' or 'meeting')."
+            return "query is required (e.g. 'invoice' or 'meeting')."
 
         try:
             from vaf.core.channel_message_store import search_messages
         except ImportError as e:
-            return f"WhatsApp store unavailable: {e}"
+            return f"Message store unavailable: {e}"
 
-        matches = search_messages(username, query, chat_id=chat_id, limit=limit)
+        try:
+            from vaf.core.discord_history import backfill_discord_history
+            backfill_discord_history()
+        except Exception:
+            pass
+
+        matches = search_messages(username, query, chat_id=chat_id, limit=limit,
+                                  user_scope_id=user_scope_id, channel="discord")
         if not matches:
             scope = f" in chat {chat_id}" if chat_id else ""
-            return f"No WhatsApp messages matching '{query}'{scope}. Messages are stored as they arrive; older chats may not be indexed yet."
+            return f"No Discord messages matching '{query}'{scope}. Messages are stored as they arrive."
 
         lines = []
         for i, m in enumerate(matches, 1):
@@ -71,11 +79,10 @@ class FindWhatsAppMessagesTool(BaseTool):
             ts = m.get("ts")
             if ts:
                 from datetime import datetime
-                dt = datetime.fromtimestamp(ts)
-                ts_str = dt.strftime("%Y-%m-%d %H:%M")
+                ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
             else:
                 ts_str = "—"
             lines.append(f"{i}. [{arrow}] {name} | {ts_str} | {body}")
-        out = f"Found {len(matches)} match(es) for '{query}':\n" + "\n".join(lines)
-        out += "\n\nTo read full chat, use read_whatsapp_chat(chat_id='...') with the chat_id from the list."
+        out = f"Found {len(matches)} Discord match(es) for '{query}':\n" + "\n".join(lines)
+        out += "\n\nTo read the full chat, use read_discord_chat(chat_id='...') with the chat_id from the list."
         return out

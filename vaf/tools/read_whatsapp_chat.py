@@ -43,7 +43,7 @@ class ReadWhatsAppChatTool(BaseTool):
             return "chat_id is required (e.g. +49123456789). Use whatsapp_inbox to list chats."
 
         try:
-            from vaf.core.whatsapp_message_store import get_chat_messages
+            from vaf.core.channel_message_store import get_chat_messages
         except ImportError as e:
             return f"WhatsApp store unavailable: {e}"
 

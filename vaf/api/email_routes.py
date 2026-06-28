@@ -39,7 +39,6 @@ from vaf.core.email_sync_store import (
 )
 from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
 from vaf.tools.mail_utils import annotate_messages_with_agent_visibility, store_candidates_for_mail
-from vaf.core.platform import Platform
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
     get_authorization_url,
@@ -251,6 +250,29 @@ def _add_account(
     _save_email_config(ec, username, user_scope_id=user_scope_id)
 
 
+def _effective_https_suffix() -> str:
+    """Return the ':<port>' suffix for the HTTPS URL that is ACTUALLY reachable, or '' for 443.
+
+    The integrated proxy cannot bind privileged 443 as a non-root user (Linux desktop) and
+    transparently falls back to 8443; runtime_status.effective_https_port() is the single source
+    of truth for the port it really bound (same value network_routes advertises). The OAuth
+    redirect MUST use this — the previous code hardcoded 443 (only special-casing Windows), so on
+    Linux the browser was sent to https://localhost:443 where nothing listens ("not reachable")."""
+    configured = int(Config.get("local_network_https_port", 443) or 443)
+    port = configured
+    try:
+        from vaf.network import runtime_status
+        eff = runtime_status.get_proxy_status().get("effective_https_port")
+        if eff:
+            port = int(eff)            # proxy confirmed the port it really bound (e.g. 8443)
+        elif configured == 443:
+            port = 8443                # not bound yet / unknown: 443 is privileged -> universal fallback
+    except Exception:
+        if configured == 443:
+            port = 8443
+    return "" if port == 443 else f":{port}"
+
+
 def _oauth_callback_base_url() -> str:
     """
     Base URL for OAuth redirect_uri. Must point to this backend so the callback is handled here.
@@ -266,11 +288,7 @@ def _oauth_callback_base_url() -> str:
     network_on = bool(Config.get("local_network_enabled", False))
     tls_on = bool(Config.get("local_network_tls_enabled", False))
     if network_on and tls_on:
-        https_port = int(Config.get("local_network_https_port", 443) or 443)
-        if Platform.is_windows() and https_port == 443:
-            https_port = 8443
-        suffix = "" if https_port == 443 else f":{https_port}"
-        return f"https://localhost{suffix}"
+        return f"https://localhost{_effective_https_suffix()}"
     port = int(Config.get("local_network_port", 8001) or 8001)
     return f"http://localhost:{port}"
 
@@ -280,11 +298,7 @@ def _frontend_base_url() -> str:
     network_on = bool(Config.get("local_network_enabled", False))
     tls_on = bool(Config.get("local_network_tls_enabled", False))
     if network_on and tls_on:
-        https_port = int(Config.get("local_network_https_port", 443) or 443)
-        if Platform.is_windows() and https_port == 443:
-            https_port = 8443
-        suffix = "" if https_port == 443 else f":{https_port}"
-        return f"https://localhost{suffix}"
+        return f"https://localhost{_effective_https_suffix()}"
     port = __import__("os").environ.get("VAF_WEB_UI_PORT", "3000")
     return f"http://localhost:{port}"
 

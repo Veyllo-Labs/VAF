@@ -9,15 +9,20 @@ Covers the security/correctness invariants that are easy to break silently:
   - recipient strings must be parsed/validated (for cc/bcc + SMTP envelope)
   - the SSRF guard must reject non-public mail hosts (with an explicit opt-in override)
   - auto-sync must include UUID-scoped (network) users, not just legacy/per-username configs
+  - the OAuth callback binding allows a genuine loopback (desktop) callback via signed state, but
+    still requires a matching session for LAN callers and cannot be bypassed by a spoofed XFF
 
 All tests are network-free and Pillow-free.
 """
 import pytest
 
+from fastapi import HTTPException
+
 from vaf.core.config import Config
 from vaf.core.email_transport import _decode_mail_header, normalize_recipients
 from vaf.network.binding import assert_safe_remote_host
 import vaf.api.email_routes as er
+import vaf.api.oauth_session_binding as ob
 
 
 # --- A.1: config secret redaction -------------------------------------------------
@@ -144,3 +149,75 @@ def test_collect_auto_sync_includes_per_scope(monkeypatch):
             assert scope == "scope-alice" and cfg_user is None
         if acc.get("account_id") == "admin@x.com":
             assert scope is None
+
+
+# --- OAuth callback binding: loopback (desktop) vs LAN vs spoofing -----------------
+
+class _FakeClient:
+    def __init__(self, host): self.host = host
+
+class _FakeHeaders:
+    def __init__(self, d): self._d = {k.lower(): v for k, v in (d or {}).items()}
+    def get(self, k, default=None): return self._d.get(k.lower(), default)
+
+class _FakeState:
+    def __init__(self, user): self.user = user
+
+class _FakeRequest:
+    def __init__(self, host, headers=None, user=None):
+        self.client = _FakeClient(host)
+        self.headers = _FakeHeaders(headers)
+        self.state = _FakeState(user)
+
+
+@pytest.fixture
+def _network_mode_on(monkeypatch):
+    _orig = Config.get
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda k, d=None: True if k == "local_network_enabled" else _orig(k, d)))
+
+
+def _raises(req):
+    try:
+        ob.enforce_callback_actor_binding(req, "alice", "scope-alice")
+        return None
+    except HTTPException as e:
+        return e.status_code
+
+
+def test_oauth_binding_loopback_desktop_allowed_without_cookie(_network_mode_on):
+    # Desktop: system browser callback arrives via the local proxy (peer 127.0.0.1, XFF 127.0.0.1),
+    # no session cookie. Trusted via signed state -> allowed.
+    req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "127.0.0.1"}, user=None)
+    assert _raises(req) is None
+
+
+def test_oauth_binding_lan_requires_login(_network_mode_on):
+    # LAN user via the proxy (real peer 192.168.x via XFF), no cookie -> 401.
+    req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "192.168.1.50"}, user=None)
+    assert _raises(req) == 401
+
+
+def test_oauth_binding_spoofed_xff_cannot_fake_loopback(_network_mode_on):
+    # LAN attacker connecting DIRECTLY (peer is a real LAN IP) forging XFF=127.0.0.1 must NOT be
+    # treated as loopback (XFF is only trusted when the immediate peer is itself loopback/the proxy).
+    req = _FakeRequest("192.168.1.50", {"x-forwarded-for": "127.0.0.1"}, user=None)
+    assert _raises(req) == 401
+
+
+def test_oauth_binding_lan_user_mismatch_rejected(_network_mode_on):
+    req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "192.168.1.50"},
+                       user={"username": "bob", "user_scope_id": "scope-bob"})
+    assert _raises(req) == 403
+
+
+def test_oauth_binding_lan_user_match_allowed(_network_mode_on):
+    req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "192.168.1.50"},
+                       user={"username": "alice", "user_scope_id": "scope-alice"})
+    assert _raises(req) is None
+
+
+def test_oauth_binding_noop_when_network_off(monkeypatch):
+    monkeypatch.setattr(Config, "get", staticmethod(lambda k, d=None: False if k == "local_network_enabled" else d))
+    req = _FakeRequest("192.168.1.50", {"x-forwarded-for": "10.0.0.9"}, user=None)
+    assert _raises(req) is None  # binding disabled entirely when not in network mode

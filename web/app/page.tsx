@@ -5170,9 +5170,14 @@ function VAFDashboardContent() {
                 <div className="md:hidden fixed inset-0 z-[45] bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
-                <aside className={cn(
+                <aside
+                    data-editing={editingId ? 'true' : undefined}
+                    className={cn(
                     "group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 transition-[width,transform] duration-300 shadow-lg overflow-hidden",
-                    "md:w-16 md:hover:w-72 md:z-20",
+                    // While renaming a chat, pin the sidebar open (it only expands on hover otherwise)
+                    // so the rename input never collapses out from under the user. The data-editing
+                    // attribute reveals the labels via group-data-[editing=true]:opacity-100.
+                    editingId ? "md:w-72 md:z-20" : "md:w-16 md:hover:w-72 md:z-20",
                     "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-72 max-md:z-50 max-md:shadow-2xl",
                     drawerOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
                 )}>
@@ -5182,7 +5187,7 @@ function VAFDashboardContent() {
                         <div className="w-[38px] h-[38px] rounded-lg overflow-hidden shrink-0 -ml-[5.5px]">
                             <img src="/logo.png" alt="VAF" className="w-full h-full object-cover" />
                         </div>
-                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
+                        <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
                     </div>
 
                     {/* Session-Liste: äußere Box overflow-hidden = feste Höhe, innere Box scrollt */}
@@ -5195,19 +5200,21 @@ function VAFDashboardContent() {
                             {/* New Chat Button */}
                             <div
                                 onClick={() => { setDrawerOpen(false); ws?.send(JSON.stringify({ type: 'new_session' })); }}
-                                className="flex items-center gap-3 p-2 pl-3 max-md:py-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
+                                className="flex items-center gap-3 p-2 pl-3.5 max-md:py-3 rounded-lg cursor-pointer hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition-colors"
                             >
                                 <Plus size={16} className="shrink-0" />
-                                <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200">New Chat</span>
+                                <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200">New Chat</span>
                             </div>
 
                             {sessions.map(s => (
                                 <div key={s.id} data-session-id={s.id} onClick={() => { setDrawerOpen(false); handleSessionSwitch(s.id); }}
-                                    className={cn("flex items-center gap-3 p-2 pl-3 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
+                                    className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative", currentSessionId === s.id ? 'bg-transparent' : 'hover:bg-gray-100')}>
 
-                                    {/* Active Indicator (Dot) */}
+                                    {/* Active Indicator (Dot) — only while the sidebar is expanded, so the
+                                        collapsed rail keeps the active bubble aligned with the inactive ones
+                                        (the active state is still conveyed by the darker icon colour). */}
                                     {currentSessionId === s.id && (
-                                        <div className="absolute left-1 my-auto w-1 h-1 bg-black rounded-full" />
+                                        <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-1 bg-black rounded-full opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity" />
                                     )}
 
                                     {/* Unread message indicator — shown when agent sent a message while session was not open */}
@@ -5223,7 +5230,7 @@ function VAFDashboardContent() {
                                         <MessageSquare size={16} className={cn("shrink-0", currentSessionId === s.id ? "text-gray-900" : "text-gray-400")} />
                                     )}
 
-                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
+                                    <div className="flex-1 flex justify-between items-center opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity min-w-0 pr-1">
                                         {editingId === s.id ? (
                                             <input
                                                 autoFocus
@@ -5303,7 +5310,7 @@ function VAFDashboardContent() {
                             <div className="w-6 flex justify-center shrink-0">
                                 <Calendar size={20} />
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Automation</span>
                         </div>
 
                         {currentUser?.role === 'admin' && (
@@ -5318,7 +5325,7 @@ function VAFDashboardContent() {
                                     <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse" />
                                 )}
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">{tNav('notifications')}</span>
                         </div>
                         )}
 
@@ -5344,7 +5351,7 @@ function VAFDashboardContent() {
                             <div className="w-6 flex justify-center shrink-0">
                                 <Settings size={20} />
                             </div>
-                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Settings</span>
+                            <span className="overflow-hidden opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200 font-medium whitespace-nowrap text-sm">Settings</span>
                         </div>
                     </div>
                 </aside>

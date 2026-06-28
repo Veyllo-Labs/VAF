@@ -149,7 +149,7 @@ setup(
     extras_require=EXTRAS,
     include_package_data=True,
     package_data={
-        "vaf": ["media/*", "media/**/*"],
+        "vaf": ["py.typed", "media/*", "media/**/*"],
     },
     cmdclass={
         'install': PostInstallCommand,

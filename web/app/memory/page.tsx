@@ -455,8 +455,10 @@ export default function MemoryPage() {
             {/* Main Content: Graph links, Memory Search komplett rechts */}
             <main className="flex-1 w-full p-4 overflow-hidden">
                 <div className="flex flex-col lg:flex-row gap-4 h-full">
-                    {/* Graph – nimmt restlichen Platz */}
-                    <div className="flex-1 min-w-0 h-full">
+                    {/* Graph – nimmt restlichen Platz. Auf Mobile (< lg) ausgeblendet: dort ist die
+                        Such-/Detail-Ansicht die Hauptansicht (sehen + editieren), und zwei h-full-Spalten
+                        gestapelt würden sich überlappen/abschneiden. */}
+                    <div className="flex-1 min-w-0 h-full max-lg:hidden">
                         <MemoryGraph
                             className="h-full"
                             showTagConnections={showTagConnections}

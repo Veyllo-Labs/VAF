@@ -4836,41 +4836,41 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Memory System Modal */}
             {showMemoryModal && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => setShowMemoryModal(false)}>
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowMemoryModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header (DESIGN: modal header, gray palette) */}
-                        <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0 bg-gray-50 z-10">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                        <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0 bg-gray-50 z-10 max-md:p-4 max-md:gap-2">
+                            <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center shrink-0 max-md:w-9 max-md:h-9">
                                     <Brain size={20} className="text-white" />
                                 </div>
-                                <div>
-                                    <h2 className="text-xl font-bold text-gray-900">{tModals('memory.title')}</h2>
+                                <div className="min-w-0">
+                                    <h2 className="text-xl font-bold text-gray-900 max-md:text-base truncate">{tModals('memory.title')}</h2>
                                     <p className="text-sm text-gray-500">
                                         {memoryStats?.memories ?? 0} memories • {memoryStats?.chunks ?? 0} chunks • {memoryEdges.length} connections
                                     </p>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <button 
+                            <div className="flex items-center gap-3 shrink-0 max-md:gap-1.5">
+                                <button
                                     onClick={fetchMemoryGraph}
                                     disabled={memoryLoading}
-                                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
+                                    className="flex items-center gap-2 px-4 py-2 max-md:px-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors text-sm disabled:opacity-50"
                                 >
                                     <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
-                                    {tCommon('refresh')}
+                                    <span className="max-md:hidden">{tCommon('refresh')}</span>
                                 </button>
                                 <a
                                     href="/memory"
                                     target="_blank"
-                                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm"
+                                    className="flex items-center gap-2 px-4 py-2 max-md:px-2.5 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors text-sm whitespace-nowrap"
                                 >
                                     {tModals('memory.openFullView')}
-                                    <ChevronRight size={16} />
+                                    <ChevronRight size={16} className="max-md:hidden" />
                                 </a>
                                 <button onClick={() => setShowMemoryModal(false)} className="p-2 hover:bg-gray-200 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title={tCommon('close')}>
                                     <X size={20} />
@@ -5016,6 +5016,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onPaneClick={() => setSelectedMemoryNodeId(null)}
                                         fitView
                                         fitViewOptions={{ padding: 0.3 }}
+                                        minZoom={0.05}
+                                        maxZoom={4}
+                                        panOnDrag
+                                        zoomOnPinch
                                         proOptions={{ hideAttribution: true }}
                                         defaultEdgeOptions={{ type: 'smoothstep' }}
                                     >

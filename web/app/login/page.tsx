@@ -87,13 +87,12 @@ export default function LoginPage() {
     }, []);
 
     useEffect(() => {
-        // ── Test/preview hook ──────────────────────────────────────────────────────
-        // /login?preview=soul_wizard  (also: connections | create_admin | 2fa | setup_2fa)
-        // forces the REAL onboarding step to render on demand — no admin reset, no backend
-        // mutation — so the setup wizard's (mobile) layout can be verified without a real
-        // first run. A final submit still hits the auth-protected backend, so interact for
-        // layout and avoid the last "Finish" unless you want the real action.
-        if (typeof window !== 'undefined') {
+        // ── Test/preview hook (DEV ONLY) ────────────────────────────────────────────
+        // /login?preview=veyllo_api  (also: language | phone_notice | create_admin | soul_wizard | 2fa | setup_2fa)
+        // forces the REAL onboarding step to render on demand — no admin reset, no backend mutation —
+        // so the setup wizard's layout can be verified without a real first run. Gated to the dev build
+        // (npm run dev); in a production build NODE_ENV is 'production' so this is inert.
+        if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
             const preview = new URLSearchParams(window.location.search).get('preview');
             const PREVIEW_STEPS = ['login', '2fa', 'language', 'phone_notice', 'create_admin', 'soul_wizard', 'veyllo_api', 'setup_2fa'];
             if (preview && PREVIEW_STEPS.includes(preview)) {
@@ -880,7 +879,7 @@ export default function LoginPage() {
                                         <span className="vaf-star" style={{ left: '44%', top: 66, animationDelay: '2.1s' }} />
                                         <span className="vaf-shoot" style={{ left: '12%', top: 12 }} />
                                     </div>
-                                    <div className="relative z-[1]" style={{ transform: 'translateY(8px) scale(1.5)' }}><AgentAvatar mode="thinking" lite /></div>
+                                    <div className="relative z-[1]" style={{ transform: 'translateY(11px) scale(1.5)' }}><AgentAvatar mode="thinking" lite /></div>
                                     <ul className="space-y-3 w-full text-[13px] text-gray-200 relative z-[1]">
                                         <li className="flex items-start gap-2.5"><Zap size={16} className="mt-0.5 shrink-0 text-yellow-300" /><span>{t('veylloValueSpeed')}</span></li>
                                         <li className="flex items-start gap-2.5"><Cpu size={16} className="mt-0.5 shrink-0 text-sky-300" /><span>{t('veylloValueNoGpu')}</span></li>

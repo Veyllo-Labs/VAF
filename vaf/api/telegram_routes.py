@@ -116,14 +116,18 @@ async def start_verification(request: StartVerificationRequest):
                     await update.message.reply_text(
                         "Verification successful! You can now add this Telegram to the whitelist in the wizard."
                     )
-                    await application.stop()
+                    # Stop run_polling() from within the handler (graceful, thread-safe).
+                    application.stop_running()
 
             application.add_handler(
                 MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message)
             )
 
             try:
-                application.run_polling(allowed_updates=Update.ALL_TYPES)
+                # run_polling() normally installs SIGINT/SIGTERM handlers, which only works on
+                # the main thread. This bot runs in a background thread, so disable them with
+                # stop_signals=None and stop it via application.stop_running() instead.
+                application.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
             except Exception as e:
                 err_msg = str(e)
                 if "rejected" in err_msg.lower() or "invalid token" in err_msg.lower():

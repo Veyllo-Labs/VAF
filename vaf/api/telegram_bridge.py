@@ -42,6 +42,28 @@ _outgoing_queue: Optional[queue.Queue] = None
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
 
+# Accumulated RAG documents per Telegram session (session_id -> [{name, content, ...}]).
+# index_session_attachments_sync REPLACES a session's index, so we keep the full set and
+# re-index it on each new document. In-memory (reset on restart); the agent always also sees
+# the freshly-sent document inline this turn, so a reset only forgets *older* docs from RAG.
+_telegram_session_documents: Dict[str, list] = {}
+
+
+def _store_telegram_message(username, chat_id, body, direction, content_type="text",
+                            user_scope_id=None, message_id=None) -> None:
+    """Record a Telegram message in the shared channel message store (whatsapp_message_store,
+    channel='telegram') so the agent's read_telegram_chat / find_telegram_messages tools can read
+    history — the Telegram equivalent of the WhatsApp bridge's append_message calls. Best-effort."""
+    try:
+        from vaf.core.whatsapp_message_store import append_message
+        append_message(
+            username=str(username or "admin"), chat_id=str(chat_id or ""), body=str(body or ""),
+            direction=direction, content_type=content_type, message_id=message_id,
+            channel="telegram", user_scope_id=user_scope_id,
+        )
+    except Exception:
+        pass
+
 
 def _to_telegram_html(text: str) -> str:
     """
@@ -778,10 +800,81 @@ def _run_bot():
             source="telegram",
             metadata=metadata,
         )
+        _store_telegram_message(vaf_username, chat_id, text, "in",
+                                "voice" if voice_lang else "text", user_scope_id)
         try:
             TrayContext().register_telegram_activity()
         except Exception:
             pass
+
+    async def _enqueue_telegram_image(file_id, display_name, mime, caption,
+                                      entry, is_relay, telegram_user_id, chat_id) -> bool:
+        """Download a Telegram image and enqueue it for the VISION pipeline — the same path the
+        Web UI uses (metadata['images'] with persisted file entries). Returns False on download
+        failure. Shared by handle_photo (compressed photos) and handle_document (image sent as a file)."""
+        user_scope_id = entry.get("user_scope_id")
+        vaf_username = entry.get("vaf_username") or "admin"
+        import mimetypes as _mt
+        ext = _mt.guess_extension((mime or "image/jpeg").split(";")[0].strip()) or ".jpg"
+        temp_path = await _download_telegram_file(bot_token, file_id, ext)
+        if not temp_path:
+            return False
+        try:
+            with open(temp_path, "rb") as _f:
+                b64 = base64.b64encode(_f.read()).decode("ascii")
+        finally:
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+
+        session_id = f"telegram_{telegram_user_id}"
+        attached_images = [{"data": b64, "mime_type": mime or "image/jpeg",
+                            "name": display_name or "telegram_image.jpg"}]
+        # Reuse the exact Web-UI persistence: writes the image into the user-siloed attachments
+        # folder and replaces inline base64 with a {name, mime_type, path} entry (falls back to
+        # inline base64 on any failure, so vision never breaks).
+        try:
+            from vaf.core.web_server import _persist_attached_images_to_files
+            loop = asyncio.get_event_loop()
+            attached_images = await loop.run_in_executor(
+                None, _persist_attached_images_to_files, attached_images, session_id, user_scope_id
+            )
+        except Exception as e:
+            logger.warning("telegram image persist failed, keeping inline: %s", e)
+
+        _append_chat_activity(chat_id, user_scope_id, "in")
+        try:
+            from vaf.core.messaging_connections import save_telegram_chat_id
+            save_telegram_chat_id(user_scope_id, vaf_username, str(chat_id))
+        except Exception:
+            pass
+
+        metadata = {
+            "user_scope_id": user_scope_id,
+            "username": vaf_username,
+            "telegram_chat_id": str(chat_id),
+            "origin_channel": "telegram",
+            "task_class": "interactive",
+            "images": attached_images,  # -> vision pipeline (headless_runner reads metadata['images'])
+        }
+        if is_relay:
+            metadata["relay"] = True
+            metadata["relay_to_username"] = vaf_username
+        if entry.get("from_contact"):
+            metadata["from_contact"] = True
+            metadata["telegram_user_id"] = str(telegram_user_id)
+
+        user_message = f"[Photo] (User: {caption})" if caption else "[Photo]"
+        TaskQueue().add(session_id=session_id, input_text=user_message,
+                        source="telegram", metadata=metadata)
+        _store_telegram_message(vaf_username, chat_id, user_message, "in", "image", user_scope_id)
+        try:
+            TrayContext().register_telegram_activity()
+        except Exception:
+            pass
+        logger.info("Image from chat %s enqueued for vision", chat_id)
+        return True
 
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.message.text:
@@ -899,6 +992,19 @@ def _run_bot():
 
         file_name = doc.file_name or "document"
         ext = os.path.splitext(file_name.lower())[1]
+        doc_mime = getattr(doc, "mime_type", "") or ""
+
+        # Image sent as a file (uncompressed) → route to the vision pipeline, not text/RAG
+        # (RAG intentionally skips image/*). Mirrors the Web UI's mime-based routing.
+        if doc_mime.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+            caption = (update.message.caption or "").strip()
+            ok = await _enqueue_telegram_image(
+                doc.file_id, file_name, doc_mime or "image/jpeg", caption,
+                entry, is_relay, telegram_user_id, chat_id,
+            )
+            if not ok:
+                await update.message.reply_text("❌ Bild konnte nicht verarbeitet werden.")
+            return
 
         if ext not in _DOCUMENT_EXTS:
             await update.message.reply_text(
@@ -962,40 +1068,55 @@ def _run_bot():
             TrayContext().register_telegram_activity()
         except Exception:
             pass
+        _store_telegram_message(vaf_username, chat_id,
+                                f"[Document: {file_name}]" + (f" {caption}" if caption else ""),
+                                "in", "document", user_scope_id)
         logger.info("Document %s from chat %s enqueued, %d chars extracted", file_name, chat_id, len(extracted))
+
+        # RAG indexing (additive): keep the document retrievable in later turns too. The inline
+        # text above already covers THIS turn. index_session_attachments_sync REPLACES the session
+        # index, so we re-index the accumulated set (see _telegram_session_documents).
+        if bool(Config.get("attachment_rag_enabled", False)) and extracted and not extracted.lstrip().startswith("[ERROR]"):
+            try:
+                new_doc = {"name": file_name, "content": extracted, "mimeType": doc_mime, "path": ""}
+                docs = [d for d in _telegram_session_documents.get(session_id, []) if d.get("name") != file_name]
+                docs.append(new_doc)
+                _telegram_session_documents[session_id] = docs
+                from vaf.memory.attachment_rag import index_session_attachments_sync
+                await asyncio.get_event_loop().run_in_executor(
+                    None, index_session_attachments_sync, session_id, user_scope_id, list(docs)
+                )
+                logger.info("Document %s indexed for RAG (%d doc(s) in session)", file_name, len(docs))
+            except Exception as e:
+                logger.warning("telegram document RAG indexing failed: %s", e)
 
     application.add_handler(
         MessageHandler(filters.Document.ALL, handle_document)
     )
 
-    # -------------------------------------------------------------------------
-    # PHOTO HANDLER – Placeholder for future implementation
-    # -------------------------------------------------------------------------
-    # When implementing photo support, consider:
-    # 1. Download photo via _download_telegram_file(bot_token, photo.file_id, ".jpg")
-    # 2. Option A (OCR): Use pytesseract.image_to_string() for text extraction (receipts, screenshots)
-    # 3. Option B (Vision): If LLM supports vision, pass base64 image to multimodal API
-    # 4. Build user_message similar to documents: "[Photo] (caption)\n\n--- OCR/Vision output ---"
-    # 5. Register: MessageHandler(filters.PHOTO, handle_photo)
-    # Dependencies: pytesseract + Tesseract (OCR), or vision-capable model (GPT-4V, Claude, etc.)
-    # -------------------------------------------------------------------------
-
     async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Placeholder: Photo support not yet implemented. Replies with info for future implementation."""
+        """Handle incoming photos: download the highest-resolution rendition and route it to the
+        vision pipeline (same image path as the Web UI)."""
         if not update.message or not update.message.photo:
             return
         user = update.effective_user
         if not user:
             return
-        entry, _ = _resolve_telegram_user(str(user.id))
+        telegram_user_id = str(user.id)
+        chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
+        entry, is_relay = _resolve_telegram_user(telegram_user_id)
         if not entry:
-            _drop_unauthorized_telegram(str(user.id), str(update.effective_chat.id if update.effective_chat else user.id), "photo")
-            return  # Silently ignore unauthorized
-        await update.message.reply_text(
-            "📷 Foto-Unterstützung kommt bald. Aktuell kannst du mir Dokumente (PDF, DOCX) schicken – "
-            "diese werden verarbeitet. Für Fotos (z.B. Rechnung abfotografiert) ist OCR/Vision in Planung."
+            _drop_unauthorized_telegram(telegram_user_id, chat_id, "photo")
+            return
+        # Telegram sends several JPEG renditions; the last is the highest resolution.
+        photo = update.message.photo[-1]
+        caption = (update.message.caption or "").strip()
+        ok = await _enqueue_telegram_image(
+            photo.file_id, "telegram_photo.jpg", "image/jpeg", caption,
+            entry, is_relay, telegram_user_id, chat_id,
         )
-        logger.info("Photo received from user %s – placeholder reply (photo support planned)", user.id)
+        if not ok:
+            await update.message.reply_text("❌ Foto konnte nicht verarbeitet werden. Bitte erneut senden.")
 
     application.add_handler(
         MessageHandler(filters.PHOTO, handle_photo)
@@ -1037,7 +1158,10 @@ def _run_bot():
     set_telegram_reply_callback(_enqueue_reply)
 
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        # This runs in a background thread (see start_bridge), so disable run_polling()'s
+        # signal handlers — add_signal_handler only works on the main thread (Python 3.13
+        # raises RuntimeError otherwise). Stop is handled by the check_stop job above.
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, stop_signals=None)
     except Exception as e:
         logger.exception("Telegram bridge bot error: %s", e)
     finally:

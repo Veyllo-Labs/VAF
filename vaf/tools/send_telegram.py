@@ -154,6 +154,19 @@ class SendTelegramTool(BaseTool):
         except Exception:
             pass  # Do not fail the tool if session append fails
 
+        # Also record the outgoing message in the shared channel store so read_telegram_chat /
+        # find_telegram_messages can see it (parallel to the WhatsApp sender path).
+        try:
+            from vaf.core.whatsapp_message_store import append_message
+            append_message(
+                username=str(username or "admin"), chat_id=str(chat_id), body=text_to_send,
+                direction="out",
+                content_type=("voice" if voice_lang else ("document" if file_path else "text")),
+                channel="telegram", user_scope_id=user_scope_id,
+            )
+        except Exception:
+            pass
+
         try:
             from vaf.core.user_notifications import append_notification
             preview = (text_to_send[:100] + "…") if len(text_to_send) > 100 else text_to_send

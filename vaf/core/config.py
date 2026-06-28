@@ -135,6 +135,16 @@ class Config:
         "api_timeout_pool": 20.0,           # s — connection-pool acquire
         "api_retry_after_max": 30,          # s — cap honored on a 429 Retry-After header (avoid huge sleeps)
 
+        # Provider failover (Settings → Advanced → Failover). Off by default → no behaviour change.
+        # On a failure BEFORE the first token, the request is retried down a provider chain.
+        "failover_level": "off",            # "off" | "basic" (→local) | "balanced" (→backup→local) | "maximum"
+        "failover_backup_provider": "",     # provider id for the backup API link (e.g. "anthropic"); "" = none
+        "failover_backup_model": "",        # model for the backup link; "" = that provider's default
+        "failover_local_model": "",         # GGUF filename for the local link; "" = auto
+        "failover_timeout_s": 30,           # s — first-token deadline before failing over (0 = no extra deadline)
+        "failover_triggers": [],            # subset of ["timeout","rate_limit","server_error"]; [] = any error
+        "failover_return_to_primary": True, # prefer the primary again on the next request after a failover
+
         # Sub-Agent Provider Configuration
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
         "subagent_use_separate_provider": False,
@@ -441,6 +451,14 @@ class Config:
             "discord": {"mode": "inherit", "allow_contact_fallback": False},
         },
 
+        # Messaging-channel tool access. By default, channel sessions (Telegram/WhatsApp/Discord)
+        # cannot use channel-restricted tools (browser_agent, python_exec, …) and have no
+        # interactive confirmation path. When True, channel sessions get the SAME tools as the
+        # main agent — channel restrictions and per-call confirmations are lifted — gated only by
+        # the channel whitelist and the per-user admin check (admin_only tools still need an admin
+        # session). Admin-only setting; default off.
+        "channel_tools_unrestricted": False,
+
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
         "front_office_contact_reply_require_approval": False,
@@ -575,6 +593,7 @@ class Config:
         "thinking_",
         "librarian_",
         "document_conversion_",
+        "failover_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",
@@ -582,7 +601,7 @@ class Config:
         "debug_logs_enabled", "server_idle_timeout", "telegram_idle_timeout", "telegram_debounce_seconds",
         "redis_url", "redis_enabled", "use_docker",
         "local_admin_scope_id", "local_admin_username",
-        "channel_ingress_policy",
+        "channel_ingress_policy", "channel_tools_unrestricted",
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",

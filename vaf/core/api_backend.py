@@ -865,6 +865,7 @@ class APIBackendManager:
         self.provider = self._create_provider()
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
+        self._failover_pinned_idx = 0  # sticky link when failover_return_to_primary is off
 
     def _create_provider(self) -> BaseAIProvider:
         # Local/Ollama provider doesn't need an API key
@@ -895,11 +896,179 @@ class APIBackendManager:
         else:
             raise ValueError(f"Unsupported provider: {self.provider_name}")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # FAILOVER  (Settings → Advanced → Failover)
+    # Wraps the single-provider call with an optional provider chain: if the
+    # primary is unreachable/errors *before the first token*, the request is
+    # retried against a backup API and/or a local model. With failover off
+    # (default) this layer is bypassed and behaviour is byte-identical to before.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # level → ordered fallback links appended after the primary
+    _FAILOVER_LINKS = {
+        "off": [],
+        "basic": ["local"],
+        "balanced": ["backup", "local"],
+        "maximum": ["backup", "local"],
+    }
+
+    def _failover_cfg(self, key, default):
+        """Read a failover setting, preferring this manager's own (embedded/agent) config,
+        falling back to the global Config. Returns ``default`` when unset/None."""
+        try:
+            if isinstance(self.config, dict) and self.config.get(key) is not None:
+                return self.config.get(key)
+        except Exception:
+            pass
+        val = Config.get(key, default)
+        return default if val is None else val
+
+    def _build_failover_chain(self, model):
+        """Ordered provider chain for this request as a list of (manager, model) tuples,
+        primary first. Empty / duplicate / key-less links are dropped. Returns just the
+        primary (length 1) whenever failover is off or nothing valid can be added."""
+        level = str(self._failover_cfg("failover_level", "off") or "off").lower()
+        chain = [(self, model)]
+        wanted = self._FAILOVER_LINKS.get(level, [])
+        if not wanted:
+            return chain
+        seen = {self.provider_name}
+        for kind in wanted:
+            try:
+                if kind == "backup":
+                    bp = str(self._failover_cfg("failover_backup_provider", "") or "").strip()
+                    if not bp or bp == "local" or bp in seen or not Config.get_api_key(bp):
+                        continue
+                    bm = str(self._failover_cfg("failover_backup_model", "") or "").strip() or None
+                    chain.append((APIBackendManager(bp, config=self.config, api_key=Config.get_api_key(bp)), bm))
+                    seen.add(bp)
+                elif kind == "local":
+                    if "local" in seen:
+                        continue
+                    lm = str(self._failover_cfg("failover_local_model", "") or "").strip() or None
+                    chain.append((APIBackendManager("local", config=self.config), lm))
+                    seen.add("local")
+            except Exception as e:
+                logger.warning(f"[failover] could not add {kind} link: {e}")
+        return chain
+
+    @staticmethod
+    def _classify_failure(failure) -> str:
+        """Best-effort bucket for a failure string/exception:
+        timeout | rate_limit | server_error | connection | unknown."""
+        s = str(failure).lower()
+        if "429" in s or "rate limit" in s or "ratelimit" in s or "too many requests" in s:
+            return "rate_limit"
+        if "timeout" in s or "timed out" in s:
+            return "timeout"
+        if "reset by peer" in s or "connection" in s or "unreachable" in s or "refused" in s:
+            return "connection"
+        if any(c in s for c in ("500", "502", "503", "504", "529", "server error", "internal server", "overloaded")):
+            return "server_error"
+        return "unknown"
+
+    def _should_failover_on(self, failure) -> bool:
+        """Whether a failure may trigger failover, honoring the failover_triggers config.
+        Connection/unknown failures always do; an empty trigger list means 'any'."""
+        bucket = self._classify_failure(failure)
+        if bucket in ("connection", "unknown"):
+            return True
+        triggers = self._failover_cfg("failover_triggers", []) or []
+        if not triggers:
+            return True
+        return bucket in triggers
+
+    def _first_chunk(self, gen, deadline):
+        """Pull the first chunk of a provider generator. Returns (chunk, None) on success,
+        or (None, failure) where failure is an exception or the '[API Error from …]'
+        sentinel the providers yield. With a deadline (seconds, non-last links only) a
+        slow first token counts as a failure so we can fail over to the next provider."""
+        try:
+            if deadline:
+                import concurrent.futures as _futures
+                ex = _futures.ThreadPoolExecutor(max_workers=1)
+                try:
+                    first = ex.submit(lambda: next(gen)).result(timeout=deadline)
+                except _futures.TimeoutError:
+                    return None, f"timeout after {deadline:.0f}s"
+                finally:
+                    ex.shutdown(wait=False)
+            else:
+                first = next(gen)
+        except StopIteration:
+            return "", None
+        except Exception as e:  # any pre-first-token error is a failover candidate
+            return None, e
+        if isinstance(first, str) and first.startswith("[API Error from "):
+            return None, first
+        return first, None
+
+    def _stream_link(self, link_mgr, first, gen):
+        """Yield the buffered first chunk then the rest of a link's stream, mirroring the
+        link's token usage back onto this manager so the agent sees correct counts."""
+        try:
+            if first:
+                yield first
+            for chunk in gen:
+                yield chunk
+        finally:
+            if link_mgr is not self:
+                try:
+                    lr = link_mgr.last_request_usage
+                    self.last_request_usage["input_tokens"] = lr.get("input_tokens", 0)
+                    self.last_request_usage["output_tokens"] = lr.get("output_tokens", 0)
+                    self.session_usage["input_tokens"] += lr.get("input_tokens", 0)
+                    self.session_usage["output_tokens"] += lr.get("output_tokens", 0)
+                except Exception:
+                    pass
+
     def chat_completion(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
-        """Unified entry point for chat completion.
-        
+        """Public chat-completion entry point. Transparently adds automatic provider
+        failover when configured (Settings → Advanced → Failover); with failover off it
+        delegates straight to the single-provider path and is byte-identical to before."""
+        chain = self._build_failover_chain(model)
+        if len(chain) <= 1:
+            yield from self._chat_single(messages, temperature, max_tokens, stream, model, tools, tool_choice)
+            return
+
+        return_primary = bool(self._failover_cfg("failover_return_to_primary", True))
+        pinned = 0 if return_primary else max(0, min(getattr(self, "_failover_pinned_idx", 0), len(chain) - 1))
+        order = list(range(pinned, len(chain))) + list(range(0, pinned))
+        try:
+            timeout_s = float(self._failover_cfg("failover_timeout_s", 0) or 0)
+        except Exception:
+            timeout_s = 0.0
+
+        last_failure = None
+        for pos, idx in enumerate(order):
+            link_mgr, link_model = chain[idx]
+            is_last = pos == len(order) - 1
+            gen = link_mgr._chat_single(messages, temperature, max_tokens, stream, link_model, tools, tool_choice)
+            deadline = timeout_s if (timeout_s > 0 and not is_last) else None
+            first, failure = self._first_chunk(gen, deadline)
+            if failure is not None:
+                last_failure = failure
+                if not is_last and self._should_failover_on(failure):
+                    logger.info(f"[failover] {link_mgr.provider_name} failed ({self._classify_failure(failure)}); trying next provider")
+                    continue
+                yield failure if isinstance(failure, str) else f"[API Error from {link_mgr.provider_name}: {failure}]"
+                return
+            self._failover_pinned_idx = 0 if return_primary else idx
+            if link_mgr is not self:
+                logger.info(f"[failover] serving response from {link_mgr.provider_name}")
+            yield from self._stream_link(link_mgr, first, gen)
+            return
+
+        if isinstance(last_failure, str):
+            yield last_failure
+        elif last_failure is not None:
+            yield f"[API Error: {last_failure}]"
+
+    def _chat_single(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
+        """Execute one chat completion against THIS manager's single provider (no failover).
+
         Args:
-            tool_choice: Control tool usage - 'auto' (default), 'none', 'required', 
+            tool_choice: Control tool usage - 'auto' (default), 'none', 'required',
                         or {'type': 'function', 'function': {'name': '...'}} for specific tool
         """
         # Determine model — defaults derive from Config.PROVIDER_MODELS (single source).

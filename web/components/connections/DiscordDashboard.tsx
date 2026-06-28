@@ -135,10 +135,10 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
 
     return (
         <>
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 max-md:p-0" onClick={onClose}>
             <div
                 className={cn(
-                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden'
+                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0'
                 )}
                 onClick={e => e.stopPropagation()}
             >
@@ -267,11 +267,11 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             data?.admin_username &&
             createPortal(
                 <div
-                    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
+                    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 max-md:p-0"
                     onClick={() => setHistoryPopoutOpen(false)}
                 >
                     <div
-                        className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw]"
+                        className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw] max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:min-h-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">

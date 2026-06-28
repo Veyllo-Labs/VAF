@@ -171,10 +171,10 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
 
     return (
         <>
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 max-md:p-0" onClick={onClose}>
             <div
                 className={cn(
-                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden'
+                    'relative bg-white w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0'
                 )}
                 onClick={e => e.stopPropagation()}
             >
@@ -185,9 +185,9 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     </button>
                 </div>
 
-                <div className="flex-1 flex min-h-0">
+                <div className="flex-1 flex min-h-0 max-md:flex-col">
                     {/* Left sidebar: session list (chats for this bot only) */}
-                    <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50">
+                    <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50 max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b">
                         <div className="px-3 py-2 border-b border-gray-200">
                             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Sessions</p>
                             <p className="text-xs text-gray-400 mt-0.5">Chats with this bot</p>
@@ -238,7 +238,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     </div>
 
                     {/* Main content */}
-                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0">
+                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0">
                     {loading ? (
                         <div className="py-8 text-center text-gray-500">Loading…</div>
                     ) : data ? (
@@ -388,11 +388,11 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             sessionHistoryPopoutChatId &&
             createPortal(
                 <div
-                    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
+                    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 max-md:p-0"
                     onClick={() => setSessionHistoryPopoutChatId(null)}
                 >
                     <div
-                        className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw]"
+                        className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw] max-md:max-w-none max-md:w-full max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:min-h-0"
                         onClick={e => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">

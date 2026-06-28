@@ -190,8 +190,8 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 md:p-8">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[95vw] h-[90vh] overflow-hidden flex flex-col border border-gray-200 animate-in fade-in zoom-in duration-300">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 md:p-8 max-md:p-0">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[95vw] h-[90vh] overflow-hidden flex flex-col border border-gray-200 animate-in fade-in zoom-in duration-300 max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0">
                 
                 {/* Header */}
                 <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50">

@@ -16,6 +16,50 @@ from vaf.core.automation import (
 )
 
 
+def _extract_first_json_array(text: str) -> Optional[List[Any]]:
+    """Extract the first VALID top-level JSON array from a model response.
+
+    The model often wraps the workflow array in prose or markdown, or emits trailing text/a second array.
+    A greedy ``re.search(r'\\[.*\\]')`` then grabs from the first ``[`` to the LAST ``]`` and json.loads
+    fails with 'Extra data ...' — which used to route the run into the (previously unbounded) prompt-based
+    fallback. This scans bracket-balanced candidates and returns the first one that parses to a list, or None.
+    """
+    if not text:
+        return None
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "]":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    candidate = text[start:i + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                    start = -1
+    return None
+
+
 def _manager_for_scope(user_scope_id: Optional[str], user_role: Optional[str] = None) -> Tuple[AutomationManager, Optional[str]]:
     """Return (manager, effective_scope) for user-scoped automation access.
 
@@ -665,30 +709,28 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                         agent.load_model()
                         agent.init_chat()
                         
-                        # Use agent's chat_step to get response
+                        # Use agent's chat_step to get response (time-bounded; shutdown guaranteed)
                         response_parts = []
-                        agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True)
-                        content = "".join(response_parts).strip()
-                        agent.shutdown()
-                        
-                        # Try to extract JSON from response
-                        json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                        if not json_match:
-                            from vaf.cli.ui import UI
-                            UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
-                            return []
-                        
-                        content = json_match.group(0).strip()
-                        if not content:
-                            from vaf.cli.ui import UI
-                            UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
-                            return []
-                        
                         try:
-                            workflow_steps = json.loads(content)
-                        except json.JSONDecodeError as e:
+                            from vaf.core.bounded_run import run_bounded as _run_bounded
+                            from vaf.core.config import Config as _CfgWf
+                            _wf_to = float(_CfgWf.get("workflow_generation_timeout_seconds", 90) or 90)
+                            _run_bounded(
+                                lambda: agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True),
+                                timeout=_wf_to, label="workflow_generation",
+                            )
+                        finally:
+                            try:
+                                agent.shutdown()
+                            except Exception:
+                                pass
+                        content = "".join(response_parts).strip()
+                        
+                        # Robustly extract the first VALID JSON array (tolerates prose / trailing text)
+                        workflow_steps = _extract_first_json_array(content)
+                        if not workflow_steps:
                             from vaf.cli.ui import UI
-                            UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
+                            UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
                             return []
                         
                         # Validate and return
@@ -716,30 +758,28 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                     agent.load_model()
                     agent.init_chat()
                     
-                    # Use agent's chat_step to get response
+                    # Use agent's chat_step to get response (time-bounded; shutdown guaranteed)
                     response_parts = []
-                    agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True)
-                    content = "".join(response_parts).strip()
-                    agent.shutdown()
-                    
-                    # Try to extract JSON from response
-                    json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                    if not json_match:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
-                        return []
-                    
-                    content = json_match.group(0).strip()
-                    if not content:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
-                        return []
-                    
                     try:
-                        workflow_steps = json.loads(content)
-                    except json.JSONDecodeError as e:
+                        from vaf.core.bounded_run import run_bounded as _run_bounded
+                        from vaf.core.config import Config as _CfgWf
+                        _wf_to = float(_CfgWf.get("workflow_generation_timeout_seconds", 90) or 90)
+                        _run_bounded(
+                            lambda: agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True),
+                            timeout=_wf_to, label="workflow_generation",
+                        )
+                    finally:
+                        try:
+                            agent.shutdown()
+                        except Exception:
+                            pass
+                    content = "".join(response_parts).strip()
+                    
+                    # Robustly extract the first VALID JSON array (tolerates prose / trailing text)
+                    workflow_steps = _extract_first_json_array(content)
+                    if not workflow_steps:
                         from vaf.cli.ui import UI
-                        UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
+                        UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
                         return []
                     
                     # Validate and return
@@ -772,24 +812,11 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
                 
                 content = response_data['choices'][0]['message']['content'].strip()
                 
-                # Try to extract JSON from response (might be wrapped in markdown)
-                json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                if not json_match:
+                # Robustly extract the first VALID JSON array (tolerates markdown / prose / trailing text)
+                workflow_steps = _extract_first_json_array(content)
+                if not workflow_steps:
                     from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: No JSON array found in response, using prompt-based execution", style="dim")
-                    return []
-                
-                content = json_match.group(0).strip()
-                if not content:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: Empty JSON content, using prompt-based execution", style="dim")
-                    return []
-                
-                try:
-                    workflow_steps = json.loads(content)
-                except json.JSONDecodeError as e:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
+                    UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
                     return []
                 
                 # Validate workflow steps

@@ -871,8 +871,8 @@ export default function DocumentViewer({
     }
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8">
-            <div className="relative flex flex-row h-[90vh] w-full max-w-[1500px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 sm:p-8 max-md:p-0">
+            <div className="relative flex flex-row h-[90vh] w-full max-w-[1500px] overflow-hidden rounded-2xl bg-[#F3F4F6] shadow-2xl min-w-0 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
                 <div
                     className={cn(
                         'flex flex-1 flex-col min-w-0 bg-[#F9FAFB] overflow-hidden transition-[padding] duration-300 ease-out',

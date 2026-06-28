@@ -140,9 +140,9 @@ export default function McpServerEditor({ server, isSaving = false, backendError
   const labelCls = 'block text-xs font-semibold text-gray-600 mb-1.5';
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 max-md:p-0" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div className="relative bg-white w-full max-w-4xl aspect-[3/2] max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-white w-full max-w-4xl aspect-[3/2] max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:aspect-auto max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0">
           <h2 className="text-lg font-bold text-gray-800">{isEdit ? t('editTitle') : t('addTitle')}</h2>

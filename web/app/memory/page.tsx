@@ -62,8 +62,8 @@ function CreateMemoryModal({
     if (!isOpen) return null;
     
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 max-md:p-0">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0 max-md:mx-0">
                 {/* Header per DESIGN 4.4 */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
                     <div className="flex items-center gap-3">
@@ -113,7 +113,7 @@ function CreateMemoryModal({
                             />
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">
                                     Tags
@@ -220,8 +220,8 @@ function TagLinksModal({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 max-md:p-0">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col">
                 <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
@@ -236,7 +236,7 @@ function TagLinksModal({
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
                 </div>
-                <div className="p-4 space-y-4">
+                <div className="p-4 space-y-4 max-md:overflow-y-auto max-md:flex-1">
                     <form onSubmit={handleCreate} className="flex gap-2">
                         <input
                             type="text"

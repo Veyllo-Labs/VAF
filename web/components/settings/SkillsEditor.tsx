@@ -135,11 +135,11 @@ export default function SkillsEditor({
 
   // ─── render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 max-md:p-0">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
 
       <div
-        className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+        className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ── */}
@@ -180,7 +180,7 @@ export default function SkillsEditor({
           )}
 
           {/* Name + ID */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Name *</label>
               <input

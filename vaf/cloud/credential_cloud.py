@@ -45,8 +45,13 @@ def _store() -> SecureBlobStore:
 
 def _credential_key(account_id: str, provider: str, username: Optional[str] = None) -> str:
     safe_id = (account_id or "").strip().lower().replace(" ", "_")
-    if username and str(username).strip():
-        safe_user = str(username).strip().lower().replace(" ", "_")
+    # Normalize the username identically for store AND lookup (local admin -> None, i.e. no username
+    # segment). Without this, set_cloud_oauth_tokens stored under the raw admin username
+    # (e.g. "cloud:google_drive:mert:<id>") while get_cloud_credentials looked it up normalized
+    # ("cloud:google_drive:<id>"), so a local admin's tokens were never found ("Credentials not found").
+    key_user = _cred_key_username(username)
+    if key_user:
+        safe_user = key_user.strip().lower().replace(" ", "_")
         return f"cloud:{provider}:{safe_user}:{safe_id}"
     return f"cloud:{provider}:{safe_id}"
 

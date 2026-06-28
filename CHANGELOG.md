@@ -66,6 +66,9 @@ To update an installed VAF, run `vaf update`.
   embedded desktop webview, and its callback uses the same effective HTTPS proxy port as
   email (shared `vaf/network/oauth_redirect` helper) instead of an unreliable
   `request.base_url`, so connecting cloud accounts works on the Linux/macOS desktop.
+- Cloud OAuth tokens for the local admin are found again: the cloud credential key is now
+  normalized identically for storage and lookup (tokens were stored under the raw admin
+  username but looked up normalized, causing a false "Credentials not found").
 
 <!--
 Template for a new release (see docs/setup/RELEASING.md):

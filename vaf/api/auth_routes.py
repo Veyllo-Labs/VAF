@@ -92,6 +92,10 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class TestVeylloKeyRequest(BaseModel):
+    api_key: str
+
+
 # --- Endpoints ---
 
 @router.get("/needs-setup")
@@ -226,6 +230,58 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Setup failed: {e!s}",
         ) from e
+
+
+@router.post("/test-veyllo-key")
+async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
+    """
+    First-run-only: validate a Veyllo API key during onboarding (before an admin exists, so there is
+    no session yet). Server-side so the key isn't exposed cross-origin and CORS doesn't block it.
+    Gated exactly like /bootstrap (refuses once an admin exists) so it can't be abused as an open
+    key-probe oracle; also rate-limited (see _RATE_LIMITED_PATHS). Returns {"ok": bool}.
+    """
+    # First-run gate: only usable while no admin exists.
+    try:
+        async with get_auth_db() as db:
+            result = await db.execute(
+                select(LocalUser).where(LocalUser.role == "admin", LocalUser.is_active == True)
+            )
+            if result.scalar_one_or_none() is not None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Setup already completed")
+    except HTTPException:
+        raise
+    except Exception:
+        # If the DB can't be reached we can't prove first-run -> refuse (fail closed).
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Setup state unavailable")
+
+    api_key = (body.api_key or "").strip()
+    if not api_key:
+        return {"ok": False, "error": "empty"}
+
+    ok = False
+    try:
+        import httpx
+        base = (Config.load().get("veyllo_base_url") or "https://api.veyllo.app/v1").rstrip("/")
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0,
+            )
+        ok = resp.status_code == 200
+    except Exception as e:
+        logger.info("Veyllo key test failed: %s", e)
+        ok = False
+
+    if not ok:
+        # Feed the shared per-IP rate limiter (this route returns 200 even on failure).
+        try:
+            from vaf.auth.rate_limit import record_login_failure
+            client_ip = request.client.host if request.client else "unknown"
+            record_login_failure(client_ip)
+        except Exception:
+            pass
+    return {"ok": ok}
 
 
 @router.post("/setup-2fa")

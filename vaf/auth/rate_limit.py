@@ -35,6 +35,9 @@ _RATE_LIMITED_PATHS: set[str] = {
     # records a failure (via record_login_failure) when a login test fails, so the same
     # IP-based sliding-window block applies here as for /api/auth/login.
     "/api/email/accounts/test",
+    # First-run Veyllo key validation (onboarding): unauthenticated + first-run-gated; the route
+    # records a failure on a bad/invalid key, so the same per-IP window applies.
+    "/api/auth/test-veyllo-key",
 }
 
 

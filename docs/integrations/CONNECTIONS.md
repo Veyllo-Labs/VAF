@@ -598,8 +598,10 @@ Single-user (no login or local admin) continues to use the legacy `email_config`
 For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
 
 1. Enable **Google Drive API** for the project.
-2. Add redirect URIs: `http://127.0.0.1:8001/api/cloud/oauth/callback` and `http://localhost:8001/api/cloud/oauth/callback` (adjust port if needed).
+2. Add redirect URIs that match your mode (same effective-port rule as email): in TLS/network mode `https://localhost:8443/api/cloud/oauth/callback` (8443 is the cross-platform fallback when 443 is not bindable) and `https://localhost/api/cloud/oauth/callback` (when the proxy binds 443); in localhost mode `http://localhost:8001/api/cloud/oauth/callback` (and the `127.0.0.1` variant). Registering all variants covers every platform. The base is overridable via `cloud_oauth_callback_base_url`.
 3. Set `cloud_oauth_google_client_id` and `cloud_oauth_google_client_secret` in config or env: `VAF_CLOUD_OAUTH_GOOGLE_CLIENT_ID`, `VAF_CLOUD_OAUTH_GOOGLE_CLIENT_SECRET`.
+
+> **Google Drive shares the email OAuth client.** If you use VAF's shipped Google client (an installed-app type), loopback redirects are auto-allowed and you do **not** need to register a redirect URI — connecting Drive works out of the box like email. The steps above apply only when you bring your own **Web application** client.
 
 **Scopes**: `drive.readonly` (browse full Drive), `drive.file` (read/write app-created files, e.g. VAF Sync), `userinfo.email`.
 

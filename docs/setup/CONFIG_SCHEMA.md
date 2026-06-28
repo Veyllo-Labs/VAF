@@ -310,6 +310,8 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `email_oauth_*_client_id` | `""` | Email OAuth client IDs (Google/Microsoft/Apple). |
 | `email_allow_private_hosts` | `False` | SSRF guard for IMAP/SMTP. When false (default), VAF refuses to connect to a mail host that resolves to loopback, RFC-1918 private, or link-local addresses (incl. the `169.254.169.254` cloud-metadata endpoint); set true only to use a legitimate LAN / self-hosted mail server. Multicast/reserved addresses are always refused. |
 | `cloud_config` / `cloud_config_by_user` | `None` / `{}` | Cloud storage config. |
+| `cloud_oauth_*_client_id` | (shipped) / `""` | Cloud OAuth client IDs (Google Drive / OneDrive / Dropbox). Google Drive falls back to the email Google client. |
+| `cloud_oauth_callback_base_url` | `""` | Override for the cloud OAuth redirect_uri base. Empty = derive automatically (effective HTTPS proxy port in network+TLS mode, else the local backend), same logic as email. |
 | `cloud_sync_enabled` | `False` | Enable cloud sync. |
 | `cloud_sync_interval_minutes` | `15` | Cloud sync interval. |
 | `cloud_sync_max_file_size_mb` | `100` | Max synced file size. |

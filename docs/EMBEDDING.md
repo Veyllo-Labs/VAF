@@ -11,10 +11,12 @@ For the desktop/server product, see the main [README](../README.md).
 
 ## Install
 
-The base install is intentionally slim — only what a headless agent needs:
+The base install is intentionally slim — only what a headless agent needs. VAF is not
+on PyPI yet, so install from source (this is also what `install.sh` uses):
 
 ```bash
-pip install vaf
+git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
+pip install -e .
 ```
 
 This pulls the core runtime and the LLM provider SDKs (OpenAI, Anthropic,
@@ -34,9 +36,11 @@ bridges. Add those only if you need them, via extras:
 | `vaf[all]` | everything above | parity with the full product |
 
 ```bash
-pip install "vaf[memory,server]"      # mix and match
-pip install "vaf[all]"                # the whole product
+pip install -e ".[memory,server]"     # mix and match
+pip install -e ".[all]"               # everything (parity with the full product)
 ```
+
+(Once VAF is published to PyPI, the same works as `pip install "vaf[memory,server]"`.)
 
 Tools whose extra is not installed are not loaded at startup (they are
 unavailable until you install the extra); the agent still runs.

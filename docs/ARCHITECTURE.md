@@ -136,7 +136,7 @@ needs to change, that is a deliberate, versioned event.
 ## Best practices by what you are doing
 
 **Using VAF as a library (most common).**
-Install the slim base (`pip install vaf`), add only the extras you need, and use
+Install the slim base from source (`pip install -e .`; PyPI release planned), add only the extras you need, and use
 `from vaf import Agent`. Do not import from `vaf.core.*` directly unless you
 truly need the full engine — that couples you to internals. See
 [EMBEDDING.md](EMBEDDING.md).

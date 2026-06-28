@@ -2100,7 +2100,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 ) : (
                                     <>
                                         <Section title={tPersona('identity')}>
-                                            <div className="grid grid-cols-2 gap-4">
+                                            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                                 <Input
                                                     label={tPersona('agentName')}
                                                     value={personaData?.identity?.name || ''}
@@ -2311,7 +2311,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         )}
 
-                                        <div className="grid grid-cols-2 gap-4 mt-4">
+                                        <div className="grid grid-cols-2 gap-4 mt-4 max-md:grid-cols-1">
                                             <Input
                                                 label={tAi('contextWindow')}
                                                 value={localConfig.n_ctx || 8192}
@@ -3178,7 +3178,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 transition-all"
                                                         style={{ width: `${(75 * idx) / 3}%` }}
                                                     />
-                                                    <div className="grid grid-cols-4">
+                                                    <div className="grid grid-cols-4 max-md:grid-cols-2">
                                                         {LEVEL_LABELS.map((lbl, i) => (
                                                             <button
                                                                 key={i}
@@ -3208,7 +3208,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
 
                                                 {showBackup && (
-                                                    <div className="mt-3 grid grid-cols-2 gap-3">
+                                                    <div className="mt-3 grid grid-cols-2 gap-3 max-md:grid-cols-1">
                                                         <Select
                                                             label={tAdvanced('failoverBackupProvider')}
                                                             value={bp}
@@ -5415,10 +5415,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Add User Modal */}
             {showAddUserModal && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setShowAddUserModal(false)}>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 max-md:p-0" onClick={() => setShowAddUserModal(false)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-hidden"
+                        className="relative bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -5440,7 +5440,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Content */}
                         <div className="p-6 space-y-6 overflow-y-auto">
                             {/* Basic Info */}
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                 <Input
                                     label={tModals('addUser.usernameRequired')}
                                     value={newUser.username}
@@ -5545,10 +5545,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* Edit User Modal */}
             {editingUser && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={() => setEditingUser(null)}>
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 max-md:p-0" onClick={() => setEditingUser(null)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-3xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                        className="relative bg-white w-full max-w-3xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl shrink-0">
@@ -5568,7 +5568,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         
                         <div className="flex-1 overflow-y-auto p-6 space-y-6">
                             <div className="space-y-4">
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                     <Input
                                         label={tLocalNet('username')}
                                         value={editingUser.username}
@@ -5673,10 +5673,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
             {/* User Detail Modal */}
             {selectedUser && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" onClick={() => setSelectedUser(null)}>
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 max-md:p-0" onClick={() => setSelectedUser(null)}>
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
                     <div
-                        className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+                        className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}

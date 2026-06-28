@@ -1342,6 +1342,23 @@ function VAFDashboardContent() {
     const [isContextModalOpen, setIsContextModalOpen] = useState(false);
     // Mobile RAG-snippets popover: hover doesn't exist on touch, so a tap toggles it (works on iOS too).
     const [ragSnipOpen, setRagSnipOpen] = useState(false);
+    const ragGroupRef = useRef<HTMLDivElement | null>(null);
+    // Close the RAG popover on any tap or scroll OUTSIDE it. A fixed scrim can't be used here: the popover
+    // lives inside the composer wrapper which carries a transform, so a `fixed` child is clipped to that
+    // wrapper instead of the viewport. A document-level listener is transform-proof.
+    useEffect(() => {
+        if (!ragSnipOpen) return;
+        const onDown = (e: Event) => {
+            if (!ragGroupRef.current?.contains(e.target as Node)) setRagSnipOpen(false);
+        };
+        const onScroll = () => setRagSnipOpen(false);
+        document.addEventListener('pointerdown', onDown, true);
+        document.addEventListener('scroll', onScroll, true);
+        return () => {
+            document.removeEventListener('pointerdown', onDown, true);
+            document.removeEventListener('scroll', onScroll, true);
+        };
+    }, [ragSnipOpen]);
 
     // Session workspace window: file browser over the chat's own folder
     // (VAF_Projects/<uid>/<session_id>) with download/upload + drag and drop
@@ -5150,7 +5167,7 @@ function VAFDashboardContent() {
             )}
             {/* Mobile drawer scrim — tap outside to dismiss (desktop never renders it) */}
             {drawerOpen && (
-                <div className="md:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
+                <div className="md:hidden fixed inset-0 z-[45] bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
             )}
             <div className="flex-1 flex min-h-0 overflow-hidden">
                 <aside className={cn(
@@ -5347,7 +5364,7 @@ function VAFDashboardContent() {
                             const displayed = userPrompts.slice(-MAX_DASHES);
                             return (
                                 // Outer wrapper is the hover target — wide enough to bridge dashes + popup gap
-                                <div className="group/promptnav absolute right-0 top-1/2 -translate-y-1/2 z-20 flex flex-row-reverse items-center">
+                                <div className="group/promptnav absolute right-0 top-1/2 -translate-y-1/2 z-20 flex flex-row-reverse items-center max-md:hidden">
                                     {/* Dots — always visible, right edge */}
                                     <div className="flex flex-col gap-3 items-end px-2 py-3">
                                         {displayed.map((_, i) => (
@@ -6093,13 +6110,13 @@ function VAFDashboardContent() {
 
                         <div
                             className={cn(
-                                "absolute left-0 right-0 w-full z-40 transition-all duration-500 ease-out",
+                                "absolute left-0 right-0 w-full z-40 transition-all duration-500 ease-out max-md:pointer-events-none",
                                 messages.length === 0
                                     ? "top-1/2 -translate-y-1/2 bottom-auto max-md:top-[38%]"
                                     : "top-auto bottom-0 translate-y-0"
                             )}
                         >
-                            <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))]">
+                            <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))] max-md:[&>*]:pointer-events-auto">
                                 {messages.length === 0 && !historyLoading && (
                                     <div className={cn(chatWidthClass, "mx-auto mb-4 text-center")}>
                                         <div className="flex justify-center mb-8 max-md:mb-4 origin-center scale-[1.8] max-md:scale-[1.35]">
@@ -6270,11 +6287,7 @@ function VAFDashboardContent() {
                                         </span>
                                     )}
                                     {ragResults?.sources?.length > 0 && (
-                                        <div className="group relative inline-flex items-center pt-3">
-                                            {/* mobile: tap-outside scrim closes the snippets panel (no hover on touch) */}
-                                            {ragSnipOpen && (
-                                                <div className="fixed inset-0 z-[79] md:hidden" onClick={() => setRagSnipOpen(false)} />
-                                            )}
+                                        <div ref={ragGroupRef} className="group relative inline-flex items-center pt-3">
                                             <span
                                                 tabIndex={0}
                                                 role="button"

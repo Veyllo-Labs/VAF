@@ -171,8 +171,8 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 max-md:p-0">
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col max-md:overflow-y-auto max-md:p-4">
                 <div className="flex items-center justify-between mb-6">
                     <h3 className="text-lg font-semibold text-gray-900">WhatsApp Setup</h3>
                     <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg">

@@ -6,6 +6,7 @@
 import { ReactNode, useLayoutEffect, useRef } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 
 // One entry on the timeline: the turn's thinking (first) followed by each tool call. `state`
@@ -37,6 +38,7 @@ interface Props {
 const RAIL_DOT_CENTER = 13 + 11 / 2;
 
 export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, expanded, onToggle, children }: Props) {
+    const isMobile = useIsMobile();
     const rowRef = useRef<HTMLDivElement | null>(null);
     const avaRef = useRef<HTMLDivElement | null>(null);
     const railRef = useRef<HTMLSpanElement | null>(null);
@@ -67,7 +69,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 : '0px';
         }
         if (ava) {
-            if (activeIdx >= 0 && items[activeIdx]) {
+            if (expanded && activeIdx >= 0 && items[activeIdx]) {
                 const dotCenter = items[activeIdx].getBoundingClientRect().top + RAIL_DOT_CENTER;
                 const y = dotCenter - row.getBoundingClientRect().top - (ava.offsetHeight || 36) / 2;
                 ava.style.transform = `translateY(${Math.max(0, Math.round(y))}px)`;
@@ -101,7 +103,8 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
     const label = `${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
 
     return (
-        <div ref={rowRef} className="flex gap-4">
+        <div className="flex flex-col">
+        <div ref={rowRef} className="flex gap-4 max-md:gap-2">
             <div
                 ref={avaRef}
                 className="shrink-0 self-start transition-transform duration-300 ease-out will-change-transform"
@@ -169,9 +172,13 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                     </div>
                 </div>
 
-                {/* the answer bubble, below the timeline (shares the avatar gutter) */}
-                {children}
+                {/* desktop: the answer stays in the indented content column, unchanged */}
+                {!isMobile && children}
             </div>
+        </div>
+        {/* mobile: the answer drops below the avatar row at full width — no left gutter and no
+            negative-margin hack (the −ml hack clipped the avatar's top). */}
+        {isMobile && children}
         </div>
     );
 }

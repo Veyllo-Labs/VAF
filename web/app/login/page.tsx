@@ -8,7 +8,7 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
-    Smartphone, CheckCircle, Check, Link2
+    Smartphone, CheckCircle, Check, Copy, Link2
 } from 'lucide-react';
 import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
@@ -46,6 +46,8 @@ export default function LoginPage() {
     const [tempToken, setTempToken] = useState<string | null>(null);
     const [twoFACode, setTwoFACode] = useState('');
     const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
+    const [twoFASecret, setTwoFASecret] = useState<string | null>(null);
+    const [secretCopied, setSecretCopied] = useState(false);
     const [loginError, setLoginError] = useState<string | null>(null);
     const [twoFAError, setTwoFAError] = useState<string | null>(null);
     const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -77,6 +79,21 @@ export default function LoginPage() {
     }, []);
 
     useEffect(() => {
+        // ── Test/preview hook ──────────────────────────────────────────────────────
+        // /login?preview=soul_wizard  (also: connections | create_admin | 2fa | setup_2fa)
+        // forces the REAL onboarding step to render on demand — no admin reset, no backend
+        // mutation — so the setup wizard's (mobile) layout can be verified without a real
+        // first run. A final submit still hits the auth-protected backend, so interact for
+        // layout and avoid the last "Finish" unless you want the real action.
+        if (typeof window !== 'undefined') {
+            const preview = new URLSearchParams(window.location.search).get('preview');
+            const PREVIEW_STEPS = ['login', '2fa', 'create_admin', 'soul_wizard', 'connections', 'setup_2fa'];
+            if (preview && PREVIEW_STEPS.includes(preview)) {
+                setStep(preview as typeof step);
+                setCheckingSetup(false);
+                return;
+            }
+        }
         // Empty string = same-origin /api via Next proxy or HTTPS proxy (e.g. https://localhost:8443).
         const apiPrefix = getApiBase() || '';
         setBackendUnreachable(false);
@@ -206,6 +223,7 @@ export default function LoginPage() {
                     if (setupRes.ok) {
                         const setupData = await setupRes.json();
                         setQrCodeBase64(setupData.qr_code_base64 || null);
+                        setTwoFASecret(setupData.secret || null);
                     }
                 } catch { /* optional QR */ }
             }
@@ -280,6 +298,7 @@ export default function LoginPage() {
                         if (setupRes.ok) {
                             const setupData = await setupRes.json();
                             setQrCodeBase64(setupData.qr_code_base64 || null);
+                            setTwoFASecret(setupData.secret || null);
                         }
                     } catch {
                         // optional QR
@@ -740,7 +759,7 @@ export default function LoginPage() {
                                                             )}
                                                         >
                                                             <div className="flex items-center justify-between">
-                                                                <div className="flex items-center gap-3">
+                                                                <div className="flex items-center gap-3 min-w-0 flex-1">
                                                                     <div
                                                                         className={cn(
                                                                             'w-10 h-10 rounded-xl flex items-center justify-center text-white',
@@ -770,7 +789,7 @@ export default function LoginPage() {
                                                                             if (app.id === 'email') setShowEmailWizard(true);
                                                                         }}
                                                                         className={cn(
-                                                                            'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors',
+                                                                            'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors shrink-0 whitespace-nowrap max-md:text-sm',
                                                                             configured ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-gray-900 hover:bg-gray-800 text-white'
                                                                         )}
                                                                     >
@@ -835,6 +854,20 @@ export default function LoginPage() {
                                         {qrCodeBase64 && (
                                             <div className="flex justify-center mb-6">
                                                 <img src={`data:image/png;base64,${qrCodeBase64}`} alt="2FA QR" className="w-44 h-44 border border-gray-200 rounded-xl p-2" />
+                                            </div>
+                                        )}
+                                        {twoFASecret && (
+                                            <div className="mb-6">
+                                                <p className="text-xs text-gray-500 text-center mb-1.5">Or enter this key manually in your app:</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { try { navigator.clipboard?.writeText(twoFASecret); setSecretCopied(true); setTimeout(() => setSecretCopied(false), 1500); } catch { /* clipboard unavailable */ } }}
+                                                    className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-200 hover:bg-gray-100 active:bg-gray-200 transition-colors font-mono text-sm tracking-wider text-gray-800"
+                                                    title="Copy to clipboard"
+                                                >
+                                                    <span className="break-all">{twoFASecret}</span>
+                                                    {secretCopied ? <Check size={15} className="shrink-0 text-green-600" /> : <Copy size={15} className="shrink-0 text-gray-400" />}
+                                                </button>
                                             </div>
                                         )}
                                         <div className="space-y-1.5 mb-5">

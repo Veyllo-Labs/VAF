@@ -7,6 +7,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { X, ChevronRight, Zap, Trash2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import CreateAutomationPopup, { type CreateAutomationPayload } from './CreateAutomationPopup';
 
 export type AutomationNoteItem = { id: string; title?: string | null; content: string; created_at: string };
@@ -128,6 +129,7 @@ function formatPlannerDate(iso: string, userTimeFormat?: '24h' | '12h'): string 
 
 export default function AutomationCalendarModal({ isOpen, onClose, currentUser, automations = [], automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onSubmitCreateAutomation, onAutomationCreated, onEditAutomation }: AutomationCalendarModalProps) {
     const t = useTranslations('settings.automations');
+    const isMobile = useIsMobile();
     const [automationCalendarViewDate, setAutomationCalendarViewDate] = useState(() => new Date());
     const [selectedDayForView, setSelectedDayForView] = useState<Date | null>(null);
 
@@ -211,22 +213,67 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
 
     if (!isOpen) return null;
 
+    // The notes panel renders in two places: on desktop as a full-width strip BELOW the body
+    // (compact=false), on mobile stacked between the to-do list and the calendar (compact=true,
+    // giving the requested To-do → Notes → Calendar order). Same inner content; only the wrapper's
+    // direction/sizing differs.
+    const notesPanel = (compact: boolean) => (
+        <div
+            className={compact
+                ? "rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col gap-3"
+                : "shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-row gap-4 h-[160px]"}
+            style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
+        >
+            <div className="shrink-0 flex flex-col">
+                <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">Notes</h3>
+                <button
+                    type="button"
+                    onClick={() => setShowAddNotePopup(true)}
+                    className="shrink-0 flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800 mb-0"
+                >
+                    <Plus className="w-3.5 h-3.5" /> Add note
+                </button>
+            </div>
+            <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2 items-center">
+                {automationNotes.map((note) => (
+                    <div key={note.id} className="flex flex-col p-3 rounded-lg bg-white border border-gray-200 min-w-[180px] max-w-[280px] max-h-[120px] shrink-0 overflow-hidden">
+                        <div className="flex items-start justify-between gap-2 shrink-0">
+                            {note.title ? <span className="text-sm font-medium text-gray-800 min-w-0 flex-1 truncate">{note.title}</span> : <span className="flex-1" />}
+                            <button
+                                type="button"
+                                onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_note', id: note.id })}
+                                className="p-1 text-gray-400 hover:text-red-600 shrink-0"
+                                title="Delete"
+                            >
+                                <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                        <div className="flex-1 min-h-0 overflow-y-auto mt-0.5">
+                            <p className="text-sm text-gray-700 break-words pr-0.5">{note.content}</p>
+                            <p className="text-xs text-gray-500 mt-1 shrink-0">{formatPlannerDate(note.created_at, userTimeFormat)}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={onClose}>
             <div className="absolute inset-0 bg-black/50" />
             <div
-                className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white"
+                className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:overflow-y-auto"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Planner header: User, Months, Title + Close */}
-                <div className="flex items-center shrink-0 px-4 py-3 border-b border-gray-200 gap-4">
+                <div className="flex items-center shrink-0 px-4 py-3 border-b border-gray-200 gap-4 max-md:flex-wrap max-md:gap-2 max-md:px-3 max-md:sticky max-md:top-0 max-md:z-20 max-md:bg-white">
                     <div className="flex items-center gap-2 shrink-0">
                         <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-gray-700 font-semibold text-sm">
                             {(currentUser?.username ?? 'User').slice(0, 1).toUpperCase()}
                         </div>
                         <span className="text-sm font-medium text-gray-900 truncate">{currentUser?.username ?? 'User'}</span>
                     </div>
-                    <div className="flex flex-wrap items-center justify-center gap-1.5 flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center justify-center gap-1.5 flex-1 min-w-0 max-md:order-last max-md:w-full max-md:flex-none max-md:flex-nowrap max-md:overflow-x-auto max-md:justify-start max-md:pb-1">
                         {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((label, i) => {
                             const isSelected = automationCalendarViewDate.getMonth() === i;
                             const isActualMonth = automationCalendarViewDate.getFullYear() === new Date().getFullYear() && new Date().getMonth() === i;
@@ -236,7 +283,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                     type="button"
                                     onClick={() => setAutomationCalendarViewDate(d => new Date(d.getFullYear(), i))}
                                     className={cn(
-                                        'px-3.5 py-2 rounded-lg text-xs font-medium transition-colors',
+                                        'px-3.5 py-2 rounded-lg text-xs font-medium transition-colors shrink-0',
                                         isSelected ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
                                         isActualMonth && 'ring-2 ring-red-500'
                                     )}
@@ -246,17 +293,17 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                             );
                         })}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                        <h2 className="text-lg font-bold text-gray-900 truncate">Automations {automationCalendarViewDate.getFullYear()}</h2>
+                    <div className="flex items-center gap-2 shrink-0 max-md:ml-auto">
+                        <h2 className="text-lg font-bold text-gray-900 truncate max-md:text-base">Automations {automationCalendarViewDate.getFullYear()}</h2>
                         <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700" title="Close">
                             <X size={18} />
                         </button>
                     </div>
                 </div>
                 {/* Body: To-do (left) + Calendar (center) */}
-                <div className="flex-1 flex gap-4 min-h-0 p-4 overflow-auto">
+                <div className="flex-1 flex gap-4 min-h-0 p-4 overflow-auto max-md:flex-col max-md:p-3 max-md:flex-none max-md:overflow-visible">
                     <div
-                        className="min-w-[220px] w-[220px] shrink-0 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col min-h-[200px]"
+                        className="min-w-[220px] w-[220px] shrink-0 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-col min-h-[200px] max-md:w-full max-md:min-w-0"
                         style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
                     >
                         <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">To-do list</h3>
@@ -296,7 +343,9 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                             ))}
                         </div>
                     </div>
-                    <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden">
+                    {/* mobile: Notes sit between the to-do list and the calendar (To-do → Notes → Calendar) */}
+                    {isMobile && notesPanel(true)}
+                    <div className="flex-1 flex flex-col min-w-0 min-h-0 rounded-xl border-2 border-dashed border-gray-200 p-3 overflow-hidden max-md:flex-none max-md:min-h-[400px]">
                         {selectedDayForView ? (
                             (() => {
                                 const now = new Date();
@@ -419,42 +468,8 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                         )}
                     </div>
                 </div>
-                <div
-                    className="shrink-0 mx-4 mb-4 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 p-4 flex flex-row gap-4 h-[160px]"
-                    style={{ backgroundImage: 'radial-gradient(circle, #d1d5db 1.5px, transparent 1.5px)', backgroundSize: '10px 10px' }}
-                >
-                    <div className="shrink-0 flex flex-col">
-                        <h3 className="text-sm font-medium text-gray-700 mb-1.5 shrink-0">Notes</h3>
-                        <button
-                            type="button"
-                            onClick={() => setShowAddNotePopup(true)}
-                            className="shrink-0 flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800 mb-0"
-                        >
-                            <Plus className="w-3.5 h-3.5" /> Add note
-                        </button>
-                    </div>
-                    <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2 items-center">
-                        {automationNotes.map((note) => (
-                            <div key={note.id} className="flex flex-col p-3 rounded-lg bg-white border border-gray-200 min-w-[180px] max-w-[280px] max-h-[120px] shrink-0 overflow-hidden">
-                                <div className="flex items-start justify-between gap-2 shrink-0">
-                                    {note.title ? <span className="text-sm font-medium text-gray-800 min-w-0 flex-1 truncate">{note.title}</span> : <span className="flex-1" />}
-                                    <button
-                                        type="button"
-                                        onClick={() => onSendPlannerMessage?.({ type: 'delete_automation_note', id: note.id })}
-                                        className="p-1 text-gray-400 hover:text-red-600 shrink-0"
-                                        title="Delete"
-                                    >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                                <div className="flex-1 min-h-0 overflow-y-auto mt-0.5">
-                                    <p className="text-sm text-gray-700 break-words pr-0.5">{note.content}</p>
-                                    <p className="text-xs text-gray-500 mt-1 shrink-0">{formatPlannerDate(note.created_at, userTimeFormat)}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                {/* desktop: Notes as a full-width strip below the body */}
+                {!isMobile && notesPanel(false)}
             </div>
 
             {showAddNotePopup && (

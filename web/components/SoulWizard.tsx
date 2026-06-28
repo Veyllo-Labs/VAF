@@ -141,12 +141,12 @@ ${selections.continuity}`;
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 max-md:p-0">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-gray-200">
+            <div className="relative bg-white w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-gray-200 max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0">
 
                 {/* Header */}
-                <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 bg-gray-50/50">
+                <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 bg-gray-50/50 shrink-0 max-md:px-4">
                     <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center shadow-sm">
                             <Wand2 size={18} />
@@ -172,7 +172,7 @@ ${selections.continuity}`;
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 p-8 overflow-y-auto">
+                <div className="flex-1 min-h-0 p-8 overflow-y-auto max-md:p-4">
 
                     {step === 1 && (
                         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
@@ -355,7 +355,7 @@ ${selections.continuity}`;
                 </div>
 
                 {/* Footer */}
-                <div className="h-20 border-t border-gray-100 flex items-center justify-between px-8 bg-gray-50/50">
+                <div className="h-20 border-t border-gray-100 flex items-center justify-between px-8 bg-gray-50/50 shrink-0 max-md:px-4">
                     <button
                         onClick={() => step > 1 ? setStep(step - 1) : onClose()}
                         className="px-6 py-2.5 rounded-xl font-medium text-gray-600 hover:bg-gray-200 transition-colors"

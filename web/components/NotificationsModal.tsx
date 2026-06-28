@@ -8,11 +8,12 @@ import { useTranslations } from 'next-intl';
 import {
   X, RefreshCw, ChevronDown, ChevronRight, Activity, Search,
   GitBranch, ShieldCheck, ShieldAlert, Clock, CheckCircle2,
-  XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info, GraduationCap,
+  XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info, GraduationCap, Menu,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import ReactFlow, {
   Background, Controls, MiniMap,
   ReactFlowProvider,
@@ -408,6 +409,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
   const [detailLogs,      setDetailLogs]      = useState<Array<{file:string;ts:string;line:string}>>([]);
   const [loadingDetailLogs, setLoadingDetailLogs] = useState(false);
   const [cursorTs,        setCursorTs]        = useState<number | null>(null);
+  const isMobile = useIsMobile();
   // hour12 comes from parent (page.tsx fetches it from /api/user/persona)
   const isHour12 = hour12 ?? false;
 
@@ -613,11 +615,12 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
     // Outer: flex-col — top = EventGraph, bottom = timeline ruler+lanes
     <div className="flex-1 flex flex-col min-h-0" style={{ background: BG }}>
 
-      {/* ── TOP: 2:3 split — left=Activity panel, right=ReactFlow canvas ── */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, borderBottom: `1px solid ${BORDER}` }}>
+      {/* ── TOP: 2:3 split — left=Activity panel, right=ReactFlow canvas. On mobile the two
+            stack vertically (Activity over Flow) so neither gets crushed in a side-by-side. ── */}
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', flex: 1, minHeight: 0, borderBottom: `1px solid ${BORDER}` }}>
 
         {/* ── LEFT (2): Activity / detail panel ── */}
-        <div style={{ flex: 2, minWidth: 0, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${BORDER}`, background: '#fff', position: 'relative' }}>
+        <div style={{ flex: 2, minWidth: 0, minHeight: isMobile ? 160 : 0, display: 'flex', flexDirection: 'column', borderRight: isMobile ? 'none' : `1px solid ${BORDER}`, borderBottom: isMobile ? `1px solid ${BORDER}` : 'none', background: '#fff', position: 'relative' }}>
           {/* Header */}
           <div style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: `1px solid ${BORDER}`, background: BG_LABEL }}>
             <div style={{ width: 7, height: 7, borderRadius: '50%', background: cursorTs !== null ? '#6366f1' : '#d1d5db' }} />
@@ -766,7 +769,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
         </div>
 
         {/* ── RIGHT (3): ReactFlow canvas ── */}
-        <div style={{ flex: 3, minWidth: 0, position: 'relative', background: '#f8fafc' }}>
+        <div style={{ flex: 3, minWidth: 0, minHeight: isMobile ? 200 : 0, position: 'relative', background: '#f8fafc' }}>
           {cursorTs === null ? (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
               <span style={{ fontSize: 10, color: '#d1d5db', fontFamily: 'monospace' }}>{i18n?.canvasHint ?? 'Flow'}</span>
@@ -994,6 +997,10 @@ export default function NotificationsModal({
   const [timelineDate, setTimelineDate]       = useState<string>('');
   const [timelineChainOk, setTimelineChainOk] = useState<boolean | null>(null);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
+  // mobile: the left nav is an off-canvas drawer opened from a hamburger in the header;
+  // picking a section closes it again.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => { setSidebarOpen(false); }, [selectedSource]);
   const [expandedCallId, setExpandedCallId]   = useState<string | null>(null);
   const [showChainInfo, setShowChainInfo]     = useState(false);
 
@@ -1189,7 +1196,7 @@ export default function NotificationsModal({
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 max-md:p-0" onClick={onClose}>
       <style>{`
         @keyframes flash-new {
           0%   { box-shadow: none; }
@@ -1202,11 +1209,19 @@ export default function NotificationsModal({
       `}</style>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
       <div
-        className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white"
+        className="relative w-full max-w-[95vw] h-[90vh] rounded-2xl shadow-2xl border border-gray-200 flex flex-col animate-in fade-in zoom-in-95 duration-200 overflow-hidden bg-white max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ── */}
-        <div className="shrink-0 px-4 py-3 border-b border-gray-200 flex items-center gap-2.5 bg-white">
+        <div className="shrink-0 px-4 py-3 border-b border-gray-200 flex items-center gap-2.5 max-md:gap-1.5 max-md:px-3 bg-white">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="hidden max-md:inline-flex items-center justify-center -ml-1 h-8 w-8 rounded-lg text-gray-500 hover:bg-gray-100 shrink-0"
+            aria-label="Sections"
+          >
+            <Menu size={18} />
+          </button>
           <h2 className="text-base font-bold text-gray-900 shrink-0">{t('title')}</h2>
 
           {isFileView && (
@@ -1235,8 +1250,8 @@ export default function NotificationsModal({
                 )}
               >
                 {timelineChainOk
-                  ? <><ShieldCheck size={11} />{t('chainOk')}</>
-                  : <><ShieldAlert size={11} />{t('chainFailed')}</>}
+                  ? <><ShieldCheck size={11} /><span className="max-md:hidden">{t('chainOk')}</span></>
+                  : <><ShieldAlert size={11} /><span className="max-md:hidden">{t('chainFailed')}</span></>}
               </button>
 
               {showChainInfo && (
@@ -1273,7 +1288,7 @@ export default function NotificationsModal({
             <select
               value={timelineDate}
               onChange={e => setTimelineDate(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400 bg-gray-50 shrink-0"
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400 bg-gray-50 shrink-0 max-md:max-w-[120px] max-md:px-1.5"
             >
               {timelineDates.length === 0 && <option value={today}>{t('today')}</option>}
               {timelineDates.map(d => (
@@ -1320,12 +1335,12 @@ export default function NotificationsModal({
               }}
               title={t('autoRefreshTitle')}
               className={cn(
-                'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors shrink-0',
+                'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors shrink-0 max-md:px-2',
                 autoRefresh ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               )}
             >
               <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', autoRefresh ? 'bg-white animate-pulse' : 'bg-gray-400')} />
-              {t('autoRefresh')}
+              <span className="max-md:hidden">{t('autoRefresh')}</span>
             </button>
           )}
 
@@ -1339,7 +1354,7 @@ export default function NotificationsModal({
               }}
               disabled={loadingContent || loadingTimeline}
               title={t('refresh')}
-              className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700 shrink-0 disabled:opacity-50"
+              className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700 shrink-0 disabled:opacity-50 max-md:hidden"
             >
               <RefreshCw size={15} className={(loadingContent || loadingTimeline) ? 'animate-spin' : ''} />
             </button>
@@ -1354,8 +1369,17 @@ export default function NotificationsModal({
         {/* ── Body ── */}
         <div className="flex-1 flex min-h-0">
 
-          {/* ── Sidebar ── */}
-          <div className="w-44 shrink-0 border-r border-gray-100 flex flex-col min-h-0 bg-gray-50/60">
+          {/* mobile: scrim behind the off-canvas drawer */}
+          {sidebarOpen && (
+            <div className="fixed inset-0 z-40 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />
+          )}
+
+          {/* ── Sidebar (off-canvas drawer on mobile) ── */}
+          <div className={cn(
+            "w-44 shrink-0 border-r border-gray-100 flex flex-col min-h-0 bg-gray-50/60",
+            "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-64 max-md:shadow-2xl max-md:transition-transform max-md:duration-300",
+            sidebarOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full"
+          )}>
             <div className="flex-1 overflow-auto py-2 px-1.5 space-y-0.5">
 
               {/* Timeline section */}

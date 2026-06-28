@@ -88,6 +88,20 @@ print(agent.run("In one sentence, what is Python?"))
 | `subagent_use_separate_provider` | `False` | Use `subagent_provider` instead of inheriting. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |
 
+## Failover & resilience
+
+Automatic provider failover: if the primary provider is unreachable or errors out **before the first token**, the request is retried down a chain of fallback providers. Once a real token has streamed, no switch happens (it would duplicate output). Off by default — behaviour is unchanged unless `failover_level` is set. Configured in the UI under Settings → Advanced → Failover. All keys are admin-only.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `failover_level` | `"off"` | Resilience level: `off` (primary only), `basic` (→ local model), `balanced` (→ backup API → local), `maximum` (full chain, more aggressive triggers). |
+| `failover_backup_provider` | `""` | Provider id used as the backup API link (e.g. `anthropic`, `openai`). Empty = no backup-API link. Skipped automatically if its API key is missing. |
+| `failover_backup_model` | `""` | Model for the backup link; empty = that provider's default. |
+| `failover_local_model` | `""` | GGUF filename for the local link; empty = auto. |
+| `failover_timeout_s` | `30` | First-token deadline (s) before failing over to the next link; `0` = no extra deadline (rely on the provider's own timeout). |
+| `failover_triggers` | `[]` | Subset of `["timeout","rate_limit","server_error"]` that may trigger a switch; empty = any error. Connection/unknown errors always switch. |
+| `failover_return_to_primary` | `True` | After a fallback, prefer the primary again on the next request; when off, stay on the working link until it also fails. |
+
 ## Local generation (llama-server)
 
 These are sent only on the local path; cloud APIs ignore them.
@@ -130,6 +144,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `task_overwrite_confirm_window_seconds` | `120` | Re-call within this window = confirmed. |
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |
 | `workflow_step_validation_max_retries` | `3` | Retries before accepting the result. |
+| `channel_tools_unrestricted` | `False` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent — `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist still apply. Off by default. |
 
 ## Sub-agents & timeouts
 

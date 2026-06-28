@@ -10,6 +10,7 @@ import pytest
 sys.modules.setdefault("llama_cpp", MagicMock())
 
 from vaf.core.agent import Agent
+from vaf.core.config import Config
 from vaf.core.tool_contract import evaluate_tool_policy, resolve_tool_contract
 from vaf.tools.base import BaseTool
 from vaf.tools.delete_contact import DeleteContactTool
@@ -135,3 +136,93 @@ def test_execute_tool_uses_contract_for_noninteractive_gating():
         result = Agent.execute_tool(fake_agent, "dangerous_dummy", {})
 
     assert result.startswith("[ERROR] Tool 'dangerous_dummy' requires confirmation")
+
+
+# ── Channel full-access opt-in (channel_tools_unrestricted) ────────────────────
+
+class ChannelRestrictedDangerousDummyTool(BaseTool):
+    name = "channel_restricted_dangerous_dummy"
+    description = "Channel-restricted + dangerous dummy tool"
+    permission_level = "dangerous"
+    side_effect_class = "irreversible"
+    channel_restrictions = ["channel", "telegram"]
+
+    def run(self, **kwargs) -> str:
+        return "ok"
+
+
+class AdminOnlyChannelDummyTool(BaseTool):
+    name = "admin_only_channel_dummy"
+    description = "Admin-only + channel-restricted dummy tool"
+    admin_only = True
+    channel_restrictions = ["channel", "telegram"]
+
+    def run(self, **kwargs) -> str:
+        return "ok"
+
+
+def _patch_channel_flag(value):
+    """Patch Config.get so channel_tools_unrestricted reads `value`; other keys pass through."""
+    orig = Config.get
+
+    def fake_get(key, default=None):
+        if key == "channel_tools_unrestricted":
+            return value
+        return orig(key, default)
+
+    return patch.object(Config, "get", new=fake_get)
+
+
+def test_channel_full_access_allows_restricted_tool_when_enabled():
+    # Flag ON: a channel-restricted, dangerous tool runs on Telegram with no confirmation.
+    with _patch_channel_flag(True):
+        decision = evaluate_tool_policy(
+            tool_name="channel_restricted_dangerous_dummy",
+            tool=ChannelRestrictedDangerousDummyTool(),
+            current_source="telegram",
+            is_channel_session=True,
+            is_admin=True,
+        )
+    assert decision.blocked is False
+    assert decision.requires_confirmation is False
+
+
+def test_channel_full_access_off_still_blocks():
+    # Flag OFF (default): channel restriction is still enforced.
+    with _patch_channel_flag(False):
+        decision = evaluate_tool_policy(
+            tool_name="channel_blocked_dummy",
+            tool=ChannelBlockedDummyTool(),
+            current_source="telegram",
+            is_channel_session=True,
+            is_admin=True,
+        )
+    assert decision.blocked is True
+
+
+def test_channel_full_access_still_enforces_admin_only():
+    # Even with full channel access, a NON-admin cannot reach an admin-only tool.
+    with _patch_channel_flag(True):
+        decision = evaluate_tool_policy(
+            tool_name="admin_only_channel_dummy",
+            tool=AdminOnlyChannelDummyTool(),
+            current_source="telegram",
+            is_channel_session=True,
+            is_admin=False,
+        )
+    assert decision.blocked is True
+    assert "admin session" in decision.reason
+
+
+def test_channel_full_access_does_not_affect_web_sessions():
+    # The opt-in only touches channel sessions; web still gates dangerous tools.
+    with _patch_channel_flag(True):
+        decision = evaluate_tool_policy(
+            tool_name="dangerous_dummy",
+            tool=DangerousDummyTool(),
+            current_source="web",
+            is_channel_session=False,
+            is_admin=True,
+        )
+    assert decision.blocked is False
+    assert decision.requires_confirmation is True

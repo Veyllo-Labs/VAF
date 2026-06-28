@@ -877,6 +877,7 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
         target = candidates[0]
         try:
             target.mkdir(parents=True, exist_ok=True)
+            _apply_channel_workspace_label(target, sid)
             return target
         except Exception:
             return None
@@ -940,6 +941,7 @@ def get_session_attachments_dir(
     if create:
         try:
             target.mkdir(parents=True, exist_ok=True)
+            _apply_channel_workspace_label(target.parent, session_id)
         except Exception:
             return None
     return target
@@ -973,6 +975,26 @@ def write_workspace_label(folder: Path, label: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _apply_channel_workspace_label(workspace_root: Path, session_id: Optional[str]) -> None:
+    """Give a freshly-created messaging-channel workspace a friendly display label
+    ('Telegram'/'WhatsApp'/'Discord') instead of the raw 'telegram_<id>' folder name.
+    The on-disk folder is never renamed (rename = label only, by design). Idempotent: a
+    user-set (or already-applied) label is never overwritten. Fully exception-guarded."""
+    try:
+        sid = str(session_id or "")
+        label = None
+        for prefix, name in (("telegram_", "Telegram"), ("whatsapp_", "WhatsApp"), ("discord_", "Discord")):
+            if sid.startswith(prefix):
+                label = name
+                break
+        if not label:
+            return
+        if not (Path(workspace_root) / WORKSPACE_LABEL_FILE).exists():
+            write_workspace_label(workspace_root, label)
+    except Exception:
+        pass
 
 
 def resolve_workspace_display_name(folder: Path, session_id: str, live_title: Optional[str]) -> str:

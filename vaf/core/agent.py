@@ -9062,6 +9062,9 @@ class Agent:
                 if name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                if name in ("telegram_inbox", "find_telegram_messages", "read_telegram_chat"):
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

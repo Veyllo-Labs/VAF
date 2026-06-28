@@ -175,6 +175,26 @@ def evaluate_tool_policy(
             ),
         )
 
+    # ── 1b. Channel full-access (admin opt-in) ────────────────────────────
+    # Messaging channels (Telegram/WhatsApp/Discord) normally cannot use
+    # channel-restricted tools and have no interactive confirmation path. When
+    # the admin enables `channel_tools_unrestricted`, channel sessions get the
+    # same tools as the main agent: channel restrictions (section 2) and per-call
+    # confirmations (sections 3–4) are lifted. This runs AFTER the admin_only
+    # check above, so a non-admin channel user still cannot reach admin-only
+    # tools — and the channel whitelist remains the primary gate upstream.
+    if is_channel_session:
+        try:
+            from vaf.core.config import Config
+            if Config.get("channel_tools_unrestricted", False):
+                logger.info(
+                    "POLICY_ALLOW tool=%s reason=channel_full_access source=%s",
+                    tool_name, source or "channel",
+                )
+                return ToolPolicyDecision(blocked=False, requires_confirmation=False, reason="")
+        except Exception:
+            pass
+
     # ── 2. Channel restrictions ───────────────────────────────────────────
     # Hard block based on chat source (Telegram, WhatsApp, Discord, …).
     # Unrelated to user role — a tool can be blocked on messaging channels

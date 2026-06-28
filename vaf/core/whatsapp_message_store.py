@@ -79,6 +79,14 @@ def init_store(username: Optional[str] = None, user_scope_id: Optional[str] = No
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wa_msg_chat ON whatsapp_messages(username, chat_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wa_msg_ts ON whatsapp_messages(ts)")
+        # Shared-channel migration: this store is reused across messaging channels
+        # (WhatsApp/Telegram/Discord). Older rows default to 'whatsapp'. Idempotent.
+        import sqlite3
+        try:
+            conn.execute("ALTER TABLE whatsapp_messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wa_msg_channel ON whatsapp_messages(username, channel, chat_id)")
         conn.commit()
     finally:
         conn.close()
@@ -95,8 +103,10 @@ def append_message(
     content_type: str = "text",
     user_scope_id: Optional[str] = None,
     ts: Optional[float] = None,
+    channel: str = "whatsapp",
 ) -> None:
-    """Append one message to the store. ts: optional Unix timestamp (e.g. from history sync); default now."""
+    """Append one message to the store. ts: optional Unix timestamp (e.g. from history sync); default now.
+    channel: messaging channel ('whatsapp' default, 'telegram', 'discord', ...)."""
     import time
     import sqlite3
     init_store(username, user_scope_id)
@@ -108,8 +118,8 @@ def append_message(
         conn.execute(
             """
             INSERT OR REPLACE INTO whatsapp_messages
-            (username, chat_id, chat_name, sender_jid, body, direction, ts, message_id, content_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (username, chat_id, chat_name, sender_jid, body, direction, ts, message_id, content_type, channel)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (username or "").strip() or "",
@@ -121,6 +131,7 @@ def append_message(
                 ts,
                 mid,
                 content_type or "text",
+                channel or "whatsapp",
             ),
         )
         conn.commit()
@@ -136,8 +147,10 @@ def search_messages(
     chat_id: Optional[str] = None,
     limit: int = 20,
     user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
 ) -> List[Dict[str, Any]]:
-    """Search messages by query (matches body, chat_name, sender)."""
+    """Search messages by query (matches body, chat_name, sender). channel: filter to one channel
+    ('whatsapp' default, 'telegram', ...); pass None/'' to search across all channels."""
     import sqlite3
     init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
@@ -148,10 +161,13 @@ def search_messages(
             return []
         params = [u, q, q, q]
         sql = """
-            SELECT chat_id, chat_name, body, direction, ts, content_type
+            SELECT chat_id, chat_name, body, direction, ts, content_type, channel
             FROM whatsapp_messages
             WHERE username = ? AND (body LIKE ? OR chat_name LIKE ? OR sender_jid LIKE ?)
         """
+        if channel:
+            sql += " AND channel = ?"
+            params.append(channel)
         if chat_id:
             sql += " AND chat_id = ?"
             params.append(chat_id)
@@ -167,37 +183,41 @@ def list_chats_from_store(
     username: str,
     limit: int = 500,
     user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
 ) -> List[Dict[str, Any]]:
     """List all chats that have at least one message in the store (for inbox/dashboard merge).
-    Returns list of dicts with chat_id, last_ts, message_count; chat_name from latest message if present."""
+    Returns list of dicts with chat_id, last_ts, message_count; chat_name from latest message if present.
+    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
     import sqlite3
     init_store(username, user_scope_id)
     conn = _get_conn(username, user_scope_id)
     try:
         u = (username or "").strip() or ""
         limit = min(max(limit, 1), 500)
+        chan_clause = " AND channel = ?" if channel else ""
+        chan_param = [channel] if channel else []
         cur = conn.execute(
-            """
+            f"""
             SELECT chat_id, MAX(ts) AS last_ts, COUNT(*) AS message_count
             FROM whatsapp_messages
-            WHERE username = ?
+            WHERE username = ?{chan_clause}
             GROUP BY chat_id
             ORDER BY last_ts DESC
             LIMIT ?
             """,
-            (u, limit),
+            (u, *chan_param, limit),
         )
         rows = [dict(row) for row in cur.fetchall()]
         # Optionally attach latest chat_name per chat
         for r in rows:
             cid = r.get("chat_id") or ""
             cur2 = conn.execute(
-                """
+                f"""
                 SELECT chat_name FROM whatsapp_messages
-                WHERE username = ? AND chat_id = ? AND chat_name IS NOT NULL AND chat_name != ''
+                WHERE username = ? AND chat_id = ?{chan_clause} AND chat_name IS NOT NULL AND chat_name != ''
                 ORDER BY ts DESC LIMIT 1
                 """,
-                (u, cid),
+                (u, cid, *chan_param),
             )
             row2 = cur2.fetchone()
             r["chat_name"] = (dict(row2).get("chat_name") or "").strip() if row2 else ""
@@ -211,8 +231,10 @@ def get_chat_messages(
     chat_id: str,
     limit: int = 50,
     user_scope_id: Optional[str] = None,
+    channel: Optional[str] = "whatsapp",
 ) -> List[Dict[str, Any]]:
-    """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found."""
+    """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found.
+    channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels."""
     import sqlite3
     from vaf.core.config import Config
     init_store(username, user_scope_id)
@@ -238,15 +260,17 @@ def get_chat_messages(
             if not cid or cid in seen:
                 continue
             seen.add(cid)
+            chan_clause = " AND channel = ?" if channel else ""
+            chan_param = [channel] if channel else []
             cur = conn.execute(
-                """
-                SELECT chat_id, chat_name, body, direction, ts, content_type
+                f"""
+                SELECT chat_id, chat_name, body, direction, ts, content_type, channel
                 FROM whatsapp_messages
-                WHERE username = ? AND chat_id = ?
+                WHERE username = ? AND chat_id = ?{chan_clause}
                 ORDER BY ts DESC
                 LIMIT ?
                 """,
-                ((username or "").strip() or "", cid, min(max(limit, 1), 200)),
+                ((username or "").strip() or "", cid, *chan_param, min(max(limit, 1), 200)),
             )
             all_rows.extend([dict(row) for row in cur.fetchall()])
         all_rows.sort(key=lambda r: -(r.get("ts") or 0))

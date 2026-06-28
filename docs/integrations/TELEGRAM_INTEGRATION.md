@@ -340,16 +340,31 @@ When the user sends a **document** (PDF, DOCX, XLSX, PPTX, TXT, etc.) via Telegr
 
 The agent can then answer questions about the document, summarize it, or extract data.
 
+The extracted text is inlined for the current turn and **additionally indexed for attachment RAG** (when `attachment_rag_enabled` is on), so it stays retrievable in later turns of the conversation.
+
 **Supported formats:** `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.xls`, `.txt`, `.md`, `.csv`, `.json`, `.xml`
 
-### Incoming Photos (Placeholder)
+### Incoming Photos (Vision)
 
-Photo support is **planned** but not yet implemented. When a user sends a photo, the bot replies with a "coming soon" message. Future implementation options:
+When the user sends a **photo**, the bridge downloads the highest-resolution rendition and routes it to the **vision pipeline** — the same path the Web UI uses for image attachments:
 
-- **OCR (pytesseract):** Extract text from receipts, screenshots, photographed documents
-- **Vision API:** Pass image to multimodal LLM (GPT-4V, Claude) for content understanding
+1. Bridge downloads the photo and persists it to the user's attachments folder (`_persist_attached_images_to_files`)
+2. The image is attached to the agent turn via `metadata["images"]` (referenced by path)
+3. The vision backend generates a base description; the agent can call `analyze_image` for details on demand
 
-See the inline comment block in `telegram_bridge.py` above `handle_photo` for implementation notes.
+An image sent as a **file** (uncompressed document) is detected by MIME type and routed to the same vision path (attachment RAG intentionally skips `image/*`).
+
+> **Requires a vision model.** Configure `vision_provider` / `vision_model` (Settings → AI & Model). Without one, the image is received but not described.
+
+### Reading Telegram history (agent tools)
+
+Incoming and outgoing Telegram messages are recorded in a searchable, per-user message store, so the agent can recall past conversations — the Telegram counterpart of the WhatsApp read tools:
+
+- `read_telegram_chat` — read a Telegram chat's recent messages (defaults to the user's own chat)
+- `find_telegram_messages` — search Telegram messages by keyword
+- `telegram_inbox` — list Telegram chats that have stored messages
+
+They respect per-user scope isolation. History that predates this feature is imported into the store once, on first use.
 
 ---
 

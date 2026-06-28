@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""
+Search Telegram messages by query (the Telegram counterpart of find_whatsapp_messages).
+"""
+
+from vaf.tools.base import BaseTool
+
+
+class FindTelegramMessagesTool(BaseTool):
+    """
+    Search Telegram messages by query (matches message body and chat name).
+    Use when the user asks 'find the Telegram message about X' or 'what did I send on Telegram'.
+    """
+    name = "find_telegram_messages"
+    permission_level = "read"
+    side_effect_class = "none"
+    description = (
+        "Search past Telegram messages by query. Matches message body and chat name. "
+        "Use when the user asks 'find the Telegram message about the invoice', 'what did I say on Telegram about X', etc. "
+        "Optional chat_id to limit to one chat. Returns matches with chat_id; use read_telegram_chat for the full thread."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search term (e.g. 'invoice', 'meeting', 'tomorrow').",
+            },
+            "chat_id": {
+                "type": "string",
+                "description": "Optional. Limit search to this Telegram chat id.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max matches to return (default 20).",
+            },
+        },
+        "required": ["query"],
+    }
+
+    def run(self, **kwargs) -> str:
+        username = (kwargs.get("username") or "admin").strip()
+        user_scope_id = kwargs.get("user_scope_id")
+        query = (kwargs.get("query") or "").strip()
+        chat_id = (kwargs.get("chat_id") or "").strip() or None
+        limit = min(max(int(kwargs.get("limit") or 20), 1), 100)
+
+        if not query:
+            return "query is required (e.g. 'invoice' or 'meeting')."
+
+        try:
+            from vaf.core.whatsapp_message_store import search_messages
+        except ImportError as e:
+            return f"Message store unavailable: {e}"
+
+        try:
+            from vaf.core.telegram_history import backfill_telegram_history
+            backfill_telegram_history()
+        except Exception:
+            pass
+
+        matches = search_messages(username, query, chat_id=chat_id, limit=limit,
+                                  user_scope_id=user_scope_id, channel="telegram")
+        if not matches:
+            scope = f" in chat {chat_id}" if chat_id else ""
+            return f"No Telegram messages matching '{query}'{scope}. Messages are stored as they arrive."
+
+        lines = []
+        for i, m in enumerate(matches, 1):
+            chat = m.get("chat_id") or ""
+            name = m.get("chat_name") or chat
+            body = (m.get("body") or "")[:100]
+            if len((m.get("body") or "")) > 100:
+                body += "..."
+            direction = m.get("direction") or "in"
+            arrow = "←" if direction == "in" else "→"
+            ts = m.get("ts")
+            if ts:
+                from datetime import datetime
+                ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+            else:
+                ts_str = "—"
+            lines.append(f"{i}. [{arrow}] {name} | {ts_str} | {body}")
+        out = f"Found {len(matches)} Telegram match(es) for '{query}':\n" + "\n".join(lines)
+        out += "\n\nTo read the full chat, use read_telegram_chat(chat_id='...') with the chat_id from the list."
+        return out

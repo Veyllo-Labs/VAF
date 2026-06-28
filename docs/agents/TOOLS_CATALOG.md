@@ -145,6 +145,9 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `find_whatsapp_messages` | read | Search WhatsApp messages. |
 | `whatsapp_call` | write | Placeholder — WhatsApp call (not implemented). |
 | `send_telegram` | write | Send a Telegram message (irreversible). |
+| `telegram_inbox` | read | List Telegram chats with stored messages. |
+| `read_telegram_chat` | read | Read messages from a Telegram chat. |
+| `find_telegram_messages` | read | Search Telegram messages. |
 | `send_discord` | write | Send a Discord message (irreversible). |
 | `send_slack` | write | Send a Slack message (irreversible). |
 

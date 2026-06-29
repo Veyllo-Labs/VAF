@@ -967,7 +967,7 @@ def should_defer_model_unload() -> bool:
             return True
         # 2) A run is eligible to start now: some user idle past the threshold AND cooldown elapsed.
         idle_minutes = float(Config.get("thinking_idle_minutes", 10) or 10)
-        cooldown = float(Config.get("thinking_cooldown_minutes", 60) or 60)
+        cooldown = float(Config.get("thinking_cooldown_minutes", 110) or 110)
         for scope in get_idle_user_scope_ids(idle_minutes):
             if is_locked(scope) or _minutes_since_last_run(scope) >= cooldown:
                 return True
@@ -3088,7 +3088,7 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
         return False
 
     # Cooldown: skip if a thinking run completed recently
-    cooldown_min = int(Config.get("thinking_cooldown_minutes", 60) or 60)
+    cooldown_min = int(Config.get("thinking_cooldown_minutes", 110) or 110)
     mins_since = _minutes_since_last_run(user_scope_id)
     if mins_since < cooldown_min:
         logger.debug("Thinking skipped for user: cooldown (%d/%d min)", int(mins_since), cooldown_min)

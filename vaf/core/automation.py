@@ -99,30 +99,31 @@ class AutomationTask:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
     
     def calculate_next_run(self) -> datetime:
-        """Calculate the next execution time."""
-        now = datetime.now()
+        """Next execution time, interpreted in the OWNER's timezone, returned as a SERVER-local
+        naive datetime.
+
+        Wall-clock times (self.time) are the user's local times, so "now" is taken in the owner's
+        timezone (user_identity.timezone — single source of truth; server-local when unset). The
+        result is converted back to a naive server-local datetime so sort/min over tasks and
+        comparisons with naive datetime.now() never mix aware+naive (which would raise).
+        """
+        from vaf.core.user_time import user_now
+        now = user_now(_resolve_username(self.user_scope_id))
         hour, minute = map(int, self.time.split(":"))
-        
+
         if self.frequency == Frequency.ONCE:
-            # Run once: today at the specified time.
-            # If that time has already passed, schedule for tomorrow.
+            # Run once: today at the specified time. If already passed, schedule for tomorrow.
             next_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if next_time <= now:
                 next_time += timedelta(days=1)
-            return next_time
-        
         elif self.frequency == Frequency.HOURLY:
             next_time = now.replace(minute=minute, second=0, microsecond=0)
             if next_time <= now:
                 next_time += timedelta(hours=1)
-            return next_time
-        
         elif self.frequency == Frequency.DAILY:
             next_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if next_time <= now:
                 next_time += timedelta(days=1)
-            return next_time
-        
         elif self.frequency == Frequency.WEEKLY:
             weekdays = {
                 "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
@@ -134,8 +135,6 @@ class AutomationTask:
             if days_ahead < 0 or (days_ahead == 0 and next_time <= now):
                 days_ahead += 7
             next_time += timedelta(days=days_ahead)
-            return next_time
-        
         elif self.frequency == Frequency.MONTHLY:
             target_day = self.day or 1
             next_time = now.replace(day=target_day, hour=hour, minute=minute, second=0, microsecond=0)
@@ -145,9 +144,9 @@ class AutomationTask:
                     next_time = next_time.replace(year=now.year + 1, month=1)
                 else:
                     next_time = next_time.replace(month=now.month + 1)
-            return next_time
-        
-        return now
+        else:
+            next_time = now
+        return _to_server_local_naive(next_time)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -170,6 +169,14 @@ def _safe_filename_stem(name: str, max_len: int = 50) -> str:
     s = _re.sub(r"[^\w\-]", "", s, flags=_re.UNICODE)   # keep unicode word chars (umlauts) + dash
     s = s.strip("._-")[:max_len].strip("._-")
     return s or "automation"
+
+
+def _to_server_local_naive(dt: datetime) -> datetime:
+    """Convert a (possibly tz-aware) datetime to a naive SERVER-local datetime, so it stays
+    comparable with naive datetime.now() and sortable alongside other naive task times."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone().replace(tzinfo=None)
 
 
 def _resolve_username(user_scope_id: Optional[str]) -> str:
@@ -339,9 +346,12 @@ def _last_effective_completion_local_date(task: AutomationTask) -> Optional[date
 
 def _stamp_successful_run(task: AutomationTask) -> None:
     """Record completion time and local calendar day (survives restarts via _save_task)."""
+    from vaf.core.user_time import user_now
     now = datetime.now()
     task.last_run = now.isoformat()
-    task.last_completed_local_date = now.date().isoformat()
+    # "local date" = the OWNER's calendar day (their timezone), so daily "done today" checks
+    # match the user's day, not the server's.
+    task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
 
 
 def _briefing_family_name(name: str) -> bool:
@@ -383,15 +393,19 @@ def format_daily_calendar_status(task: AutomationTask) -> str:
     except Exception:
         pass
 
+    # All "today"/slot checks below are in the OWNER's timezone (single source of truth).
+    from vaf.core.user_time import user_now
+    _now = user_now(_resolve_username(task.user_scope_id))
+
     freq = (task.frequency or "").strip().lower()
     if freq != "daily":
         done_d = _last_effective_completion_local_date(task)
-        today_d = datetime.now().date()
+        today_d = _now.date()
         if done_d == today_d:
             return "Done (today)"
         return f"Next: {task.next_run_datetime.strftime('%Y-%m-%d %H:%M')}"
 
-    today_d = datetime.now().date()
+    today_d = _now.date()
     done_d = _last_effective_completion_local_date(task)
     if done_d == today_d:
         return "Done (today)"
@@ -399,11 +413,11 @@ def format_daily_calendar_status(task: AutomationTask) -> str:
     try:
         parts = (task.time or "06:00").split(":")
         hh, mm = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
-        slot_t = datetime.now().replace(hour=hh, minute=mm, second=0, microsecond=0).time()
+        slot_t = _now.replace(hour=hh, minute=mm, second=0, microsecond=0).time()
     except (ValueError, TypeError, IndexError):
         return "Due (not yet run today)"
 
-    if datetime.now().time() < slot_t:
+    if _now.time() < slot_t:
         return "Scheduled (later today)"
     return "Due (not yet run today)"
 
@@ -784,7 +798,8 @@ vaf automation delete <id>   # Delete task
         """
         if str(new_task.frequency or "").lower() != "daily":
             return False, ""
-        today = datetime.now().date()
+        from vaf.core.user_time import user_now
+        today = user_now(_resolve_username(new_task.user_scope_id)).date()
         for peer in self.list():
             if peer.id == new_task.id:
                 continue
@@ -1738,38 +1753,45 @@ vaf automation delete <id>   # Delete task
             )
             return
         
+        # Owner timezone (IANA name) so wall-clock times fire in the USER's zone, not the server's.
+        # schedule's Job.at(time, tz) handles DST; tz=None -> server-local (unchanged behavior).
+        from vaf.core.user_time import resolve_user_timezone_name, user_now
+        _owner_user = _resolve_username(task.user_scope_id)
+        _tz = resolve_user_timezone_name(_owner_user)
+
         # Run in new terminal window by default
         job_func = lambda t=task: self._run_scheduled_task(t)
-        
+
         if task.frequency == Frequency.HOURLY:
-            schedule.every().hour.at(f":{task.time.split(':')[1]}").do(job_func)
+            schedule.every().hour.at(f":{task.time.split(':')[1]}", _tz).do(job_func)
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=hourly time={task.time}"
             )
         
         elif task.frequency == Frequency.DAILY:
-            schedule.every().day.at(task.time).do(job_func)
+            schedule.every().day.at(task.time, _tz).do(job_func)
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=daily time={task.time}"
             )
         
         elif task.frequency == Frequency.WEEKLY:
             weekday = task.weekday or "monday"
-            getattr(schedule.every(), weekday).at(task.time).do(job_func)
+            getattr(schedule.every(), weekday).at(task.time, _tz).do(job_func)
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=weekly weekday={weekday} time={task.time}"
             )
         
         elif task.frequency == Frequency.MONTHLY:
             # Monthly is trickier - check daily and run if day matches
-            def monthly_check(t=task):
-                if datetime.now().day == (t.day or 1):
+            def monthly_check(t=task, _u=_owner_user):
+                _cur_day = user_now(_u).day  # day-of-month in the owner's timezone
+                if _cur_day == (t.day or 1):
                     self._run_scheduled_task(t)
                 else:
                     self._log_scheduler_event(
-                        f"MONTHLY_SKIP task_id={t.id} name={t.name!r} expected_day={t.day or 1} current_day={datetime.now().day}"
+                        f"MONTHLY_SKIP task_id={t.id} name={t.name!r} expected_day={t.day or 1} current_day={_cur_day}"
                     )
-            schedule.every().day.at(task.time).do(monthly_check)
+            schedule.every().day.at(task.time, _tz).do(monthly_check)
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=monthly day={task.day or 1} time={task.time}"
             )
@@ -1794,7 +1816,7 @@ vaf automation delete <id>   # Delete task
             def once_job(t=task):
                 self._run_scheduled_task(t)
                 return schedule.CancelJob
-            schedule.every().day.at(task.time).do(once_job)
+            schedule.every().day.at(task.time, _tz).do(once_job)
             self._log_scheduler_event(
                 f"REGISTERED task_id={task.id} name={task.name!r} frequency=once time={task.time}"
             )

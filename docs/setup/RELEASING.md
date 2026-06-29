@@ -22,6 +22,14 @@ a release is therefore the act that makes a new version available to all clients
 - Config migrations are **additive only**: a migration may add keys, never remove
   or rename a key that an older version still reads (a client may roll back). Add
   migrations in `vaf/core/migrations.py`.
+- DB schema changes follow the same additive rule. A new **column** on an existing
+  model needs no migration — the schema reconcile in `vaf/memory/database.py` adds
+  any missing column automatically on the next start (and during `vaf update`). A
+  non-additive change (a new index, a rename, a backfill) goes in
+  `vaf/memory/db_migrations.py` as an idempotent ordered migration. Changing the
+  embedding model to a different **dimension** is a breaking change with no in-place
+  migration: the reconcile detects and loudly reports the mismatch, and the memory
+  store must be re-embedded/reset.
 
 ## Cutting a release
 

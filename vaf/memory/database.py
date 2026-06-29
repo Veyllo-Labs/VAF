@@ -79,27 +79,135 @@ def get_owner_database_url() -> str:
     return url
 
 
+def _columns_to_add(table, existing_names, dialect=None):
+    """PURE: model columns present on ``table`` but missing from the live table.
+
+    Returns ``[(column_name, compiled_ddl_type), ...]`` (e.g. ``("user_scope_id", "UUID")``,
+    ``("embedding", "VECTOR(384)")``). Each type is compiled for PostgreSQL. Columns are always
+    added as NULLable downstream — a NOT NULL column cannot be added to a table that already has
+    rows; the app fills them via its Python-side defaults on new writes and existing rows get NULL.
+    Testable without a database (pass a real ``Base`` table + the set of existing column names).
+    """
+    if dialect is None:
+        from sqlalchemy.dialects import postgresql
+        dialect = postgresql.dialect()
+    existing = {str(n).lower() for n in (existing_names or set())}
+    out = []
+    for col in table.columns:
+        if col.name.lower() in existing:
+            continue
+        try:
+            ddl_type = col.type.compile(dialect=dialect)
+        except Exception:
+            # A type we can't render generically — leave it to an explicit db_migrations entry.
+            continue
+        out.append((col.name, ddl_type))
+    return out
+
+
+async def _reconcile_columns(conn) -> dict:
+    """Add any model column missing from an EXISTING live table (generic additive reconcile).
+
+    Brand-new tables are handled by ``create_all``; this only ALTERs tables that already exist, so a
+    new additive column on memories/chunks/connections/local_users/user_sessions lands automatically
+    after an update — no per-change migration needed. Returns ``{table_name: [added_columns]}``.
+    """
+    # Ensure auth models are registered on the shared Base so their tables are covered too.
+    try:
+        import vaf.auth.models  # noqa: F401
+    except Exception:
+        pass
+    from sqlalchemy.dialects import postgresql
+    dialect = postgresql.dialect()
+
+    res = await conn.execute(text(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    ))
+    live_tables = {row[0] for row in res.fetchall()}
+
+    added: dict = {}
+    for tname, table in Base.metadata.tables.items():
+        if tname not in live_tables:
+            continue  # create_all creates brand-new tables; nothing to reconcile here
+        res = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = :t"
+        ), {"t": tname})
+        existing = {row[0] for row in res.fetchall()}
+        to_add = _columns_to_add(table, existing, dialect)
+        for name, ddl_type in to_add:
+            await conn.execute(text(f'ALTER TABLE "{tname}" ADD COLUMN IF NOT EXISTS "{name}" {ddl_type}'))
+        if to_add:
+            added[tname] = [n for n, _ in to_add]
+    return added
+
+
+async def _check_embedding_dim(conn) -> None:
+    """Loudly flag (never auto-fix) a mismatch between the live pgvector column dimension and the
+    dimension this build expects (``EMBEDDING_DIM``). A changed embedding model with a different
+    dimension is a hard, manual case (re-embed / reset) — surfacing it beats failing queries silently.
+    """
+    import re as _re
+    for tname in ("memories", "chunks"):
+        try:
+            res = await conn.execute(text("""
+                SELECT format_type(a.atttypid, a.atttypmod)
+                FROM pg_attribute a JOIN pg_class c ON a.attrelid = c.oid
+                WHERE c.relname = :t AND a.attname = 'embedding' AND a.attnum > 0 AND NOT a.attisdropped
+            """), {"t": tname})
+            row = res.first()
+            if not row or not row[0]:
+                continue
+            m = _re.search(r"\((\d+)\)", str(row[0]))
+            if not m:
+                continue
+            live_dim = int(m.group(1))
+            if live_dim != EMBEDDING_DIM:
+                logger.error(
+                    "EMBEDDING DIMENSION MISMATCH on %s.embedding: live DB column is vector(%d) but this "
+                    "VAF build expects vector(%d) — the configured embedding model changed dimension. "
+                    "Vector search will fail until the memory store is re-embedded/reset. Not auto-changing it.",
+                    tname, live_dim, EMBEDDING_DIM,
+                )
+        except Exception as e:
+            logger.warning("Embedding-dimension check on %s skipped: %s", tname, e)
+
+
 async def _run_schema_migrations(engine: AsyncEngine) -> None:
+    """Reconcile the live DB schema with the models (runs once per process; the restart after an
+    update triggers it). Three idempotent, phase-isolated parts: (1) ordered explicit migrations
+    from ``db_migrations.py`` (indexes/renames/backfills, e.g. memories.user_scope_id + its index);
+    (2) a generic "add missing columns" pass so a new additive column on any existing table is
+    applied without boilerplate; (3) an embedding-dimension mismatch check. Failures are logged
+    LOUDLY (ERROR) — not swallowed — so an out-of-date/half-applied schema is visible rather than
+    breaking queries silently. Phases run in separate transactions so one failure can't undo another.
     """
-    Add missing columns/indexes to existing DBs (e.g. user_scope_id added later).
-    Safe to run multiple times (IF NOT EXISTS / IF NOT EXISTS).
-    """
+    # 1. Ordered explicit migrations (indexes / renames / backfills).
+    try:
+        from vaf.memory import db_migrations as _dbm
+        async with engine.begin() as conn:
+            applied = await _dbm.run_db_migrations(conn)
+        if applied:
+            logger.info("DB ordered migrations ran: %s", applied)
+    except Exception as e:
+        logger.error("DB ordered migrations FAILED (schema may be out of date): %s", e, exc_info=True)
+
+    # 2. Generic additive reconcile — add any model column missing from an existing table.
     try:
         async with engine.begin() as conn:
-            # PostgreSQL: add user_scope_id if table exists but column was added in a later model
-            await conn.execute(text("""
-                DO $$
-                BEGIN
-                    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'memories')
-                       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'user_scope_id')
-                    THEN
-                        ALTER TABLE memories ADD COLUMN user_scope_id UUID NULL;
-                        CREATE INDEX ix_memories_user_scope_id ON memories (user_scope_id);
-                    END IF;
-                END $$;
-            """))
+            added = await _reconcile_columns(conn)
+        if added:
+            logger.info("DB schema reconcile added missing columns: %s", added)
     except Exception as e:
-        logger.warning("Schema migration (user_scope_id) skipped or failed: %s", e)
+        logger.error("DB column reconcile FAILED (new columns may be missing — queries could break): %s",
+                     e, exc_info=True)
+
+    # 3. Embedding-dimension mismatch (loud, no auto-fix).
+    try:
+        async with engine.begin() as conn:
+            await _check_embedding_dim(conn)
+    except Exception as e:
+        logger.warning("Embedding-dimension check skipped: %s", e)
 
 
 async def get_engine() -> AsyncEngine:

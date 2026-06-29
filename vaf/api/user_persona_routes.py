@@ -164,7 +164,7 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
         if "change_log" not in current or not isinstance(current["change_log"], list):
             current["change_log"] = []
         current["change_log"].append({
-            "at": datetime.now().isoformat(),
+            "at": datetime.now().astimezone().isoformat(),
             "action": f"Manual edit: updated {', '.join(changes)}",
             "source": "settings_ui"
         })
@@ -203,7 +203,7 @@ async def update_user_identity_entry(data: UserIdentityEntryUpdate, username: st
         # Delete
         del field_list[index]
         current["change_log"].append({
-            "at": datetime.now().isoformat(),
+            "at": datetime.now().astimezone().isoformat(),
             "action": f"Deleted from {field}: \"{old_value}\"",
             "source": "settings_ui"
         })
@@ -211,7 +211,7 @@ async def update_user_identity_entry(data: UserIdentityEntryUpdate, username: st
         # Update
         field_list[index] = value
         current["change_log"].append({
-            "at": datetime.now().isoformat(),
+            "at": datetime.now().astimezone().isoformat(),
             "action": f"Edited {field}: \"{old_value}\" → \"{value}\"",
             "source": "settings_ui"
         })
@@ -248,7 +248,7 @@ async def delete_user_identity_entry(data: UserIdentityEntryDelete, username: st
     if "change_log" not in current or not isinstance(current["change_log"], list):
         current["change_log"] = []
     current["change_log"].append({
-        "at": datetime.now().isoformat(),
+        "at": datetime.now().astimezone().isoformat(),
         "action": f"Deleted from {field}: \"{old_value}\"",
         "source": "settings_ui"
     })

@@ -94,6 +94,27 @@ class WorkflowResult:
     waiting_for_task: Optional[str] = None  # Task ID we're waiting for
 
 
+def _temporal_builtins() -> Dict[str, str]:
+    """Built-in {date}/{time}/... variables seeded into every workflow run so step templates can
+    reference them without the caller declaring them. Filename-safe forms are used for the values
+    that commonly land in write_file paths ({date}/{time}/{today}/{timestamp} contain no ':' or '/'
+    -> safe on Windows too); {now}/{datetime}/{iso_date} keep human/ISO formatting."""
+    now = datetime.now()
+    return {
+        "date": now.strftime("%Y-%m-%d"),
+        "today": now.strftime("%Y-%m-%d"),
+        "current_date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H-%M"),
+        "now": now.strftime("%Y-%m-%d %H:%M"),
+        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "iso_date": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "timestamp": now.strftime("%Y%m%d_%H%M%S"),
+        "year": now.strftime("%Y"),
+        "month": now.strftime("%m"),
+        "day": now.strftime("%d"),
+    }
+
+
 class WorkflowEngine:
     """
     Executes multi-step workflows with automatic output chaining.
@@ -185,6 +206,17 @@ class WorkflowEngine:
         for key, value in self._workflow_defaults.items():
             if key not in outputs:
                 outputs[key] = value
+
+        # ── Built-in temporal variables ────────────────────────────────────────
+        # LLM-generated workflows routinely reference {date}/{time}/etc. in step templates
+        # (the automation generation prompt even demonstrates `..._{date}.html`), but nothing
+        # ever provided a value — so a single placeholder killed the whole run with
+        # "Missing variable: 'date'". Seed a fixed set of temporal built-ins here so they
+        # ALWAYS resolve. setdefault() means a real user-supplied variable of the same name
+        # always wins.
+        for _k, _v in _temporal_builtins().items():
+            outputs.setdefault(_k, _v)
+
         final_output = None
         error = None
 
@@ -1258,7 +1290,13 @@ class WorkflowEngine:
             elif key in defaults:
                 return str(defaults[key])
             else:
-                raise KeyError(key)
+                # Non-fatal: a single unknown/hallucinated placeholder must not kill the whole
+                # workflow (it used to raise KeyError -> "Missing variable: '...'" -> Workflow
+                # Failed). Pass the literal "{key}" through so the template stays debuggable and a
+                # downstream coding_agent can still see/handle it. Common temporal vars
+                # ({date}/{time}/...) are seeded in execute(), so this only fires for genuinely
+                # unknown names. Nested {a.b} still raises above and is handled by the caller.
+                return "{" + key + "}"
         
         return re.sub(r"\{([^}]+)\}", replacer, template)
     

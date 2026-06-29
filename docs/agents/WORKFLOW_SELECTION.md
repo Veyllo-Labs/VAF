@@ -206,6 +206,23 @@ The path is also available as `{workflow_project_path}` in step input templates:
  "tool": "coding_agent", "output": "report"}
 ```
 
+##### Built-in variables (`{date}`, `{time}`, …)
+
+Every run seeds a fixed set of **temporal built-ins** into the variable scope, so a step template (or a model-generated workflow) can reference them without the caller declaring anything:
+
+| Variable | Example | Notes |
+|----------|---------|-------|
+| `{date}`, `{today}`, `{current_date}` | `2026-06-29` | filename-safe |
+| `{time}` | `14-05` | filename-safe (no `:`) |
+| `{timestamp}` | `20260629_140512` | filename-safe; ideal for unique filenames |
+| `{now}`, `{datetime}` | `2026-06-29 14:05` | human-readable |
+| `{iso_date}` | `2026-06-29T14:05:12` | ISO 8601 |
+| `{year}`, `{month}`, `{day}` | `2026` / `06` / `29` | individual parts |
+
+A real user-supplied variable of the same name always wins (built-ins are seeded with `setdefault`). These exist because LLM-generated automation workflows routinely write filenames like `report_{date}.html`; without a value, the run used to abort.
+
+**Unknown placeholders are non-fatal.** A simple `{var}` the engine cannot resolve (not a step output, not a built-in) is left **literally** in the text (`"{var}"`) instead of aborting the workflow — so one hallucinated placeholder can no longer fail an entire scheduled automation. Nested access to a missing object (`{step.field}`) still raises, surfaced as a per-step `Missing variable` error.
+
 ##### Assertions (selective step-retry)
 
 ```python

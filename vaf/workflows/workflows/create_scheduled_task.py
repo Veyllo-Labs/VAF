@@ -43,45 +43,36 @@ WORKFLOW = {
         "task_description": "What the automation should do (e.g., 'weather summary for Berlin tomorrow')",
         "time": "Time to run (HH:MM format, e.g., '21:07')",
         "frequency": "How often (daily, weekly, hourly, monthly)",
-        "output_path": "Where to save results (e.g., 'Desktop', 'Documents')",
-        "format": "Output format (html, markdown, txt)",
     },
     "defaults": {
         "frequency": "daily",
-        "output_path": "Desktop",
-        "format": "html",
     },
+    # NOTE: This prompt is deliberately file-NEUTRAL. It becomes create_automation's `prompt`, which
+    # create_automation scans both for (a) whether to pre-generate a multi-tool workflow and (b)
+    # whether the user wants a saved FILE vs a chat/messenger-only result. Naming tools/formats here
+    # (web_search/html/save/datei/…) would force BOTH on every scheduled task, re-introducing the
+    # slow workflow-gen for simple "tell me X daily" tasks AND always writing a file. Keeping it
+    # neutral lets only the embedded {task_description} carry the user's real intent. output_path/
+    # format are intentionally NOT passed: create_automation derives them from {task_description}
+    # (no file is written unless the user actually asked for one).
     "steps": [
         {
             "tool": "create_automation",
             "args": {
                 "name": "{task_description}",
                 "prompt": (
-                    "You are running as an automation. Your task: {task_description}\n\n"
-                    "EXECUTE THESE STEPS IN ORDER:\n"
-                    "1) Use web_search to get any needed information (weather, quotes, news, data, etc.)\n"
-                    "2) Generate the content as specified in the task description\n"
-                    "3) Create a complete {format} file with the content:\n"
-                    "   - HTML: Full HTML document with <!DOCTYPE html>, <head>, <body>, embedded CSS styling\n"
-                    "   - Markdown: Well-structured .md with headers, sections, proper formatting\n"
-                    "   - txt: Clean plain text with proper line breaks and formatting\n"
-                    "4) Save the file to {output_path} with a descriptive filename\n\n"
-                    "IMPORTANT REQUIREMENTS:\n"
-                    "- Include timestamps in the content (when generated, when data is for)\n"
-                    "- If weather: Include location, date, temperature, conditions, forecast\n"
-                    "- If quotes: Include the quote text and source if available\n"
-                    "- Make it visually appealing (especially for HTML - use CSS for styling)\n"
-                    "- Save with a descriptive filename (include date if needed, e.g., weather_berlin_2025-12-25.html)\n"
-                    "- Include sources/URLs at the bottom if you used web_search\n"
-                    "- Keep content concise but complete\n"
+                    "You are running as a scheduled automation. Task: {task_description}\n\n"
+                    "Carry out the task now and return a clear, concise, well-structured result. "
+                    "Gather any information you need first, and cite any sources you used. "
+                    "Produce a document only if the task itself explicitly requests one; otherwise "
+                    "return the result as text — it is delivered to the user automatically."
                 ),
                 "frequency": "{frequency}",
                 "time": "{time}",
-                "output_path": "{output_path}",
             },
             "input": "{task_description}",
             "output": "final",
-            "description": "Create the scheduled automation task with multi-tool prompt",
+            "description": "Create the scheduled automation task",
         },
     ],
 }

@@ -5,7 +5,9 @@
 Discord send utilities: REST API helpers and text chunking.
 Discord message limit: 2000 characters. We chunk long messages and preserve code blocks.
 """
+import json
 import logging
+import os
 from typing import List, Optional
 
 import requests
@@ -97,13 +99,42 @@ def send_discord_message(
     text: str,
     *,
     chunk: bool = True,
+    file_path: Optional[str] = None,
 ) -> bool:
     """
     Send a message to a Discord channel (DM or guild channel).
     Automatically chunks if text exceeds 2000 chars.
+    When ``file_path`` is given and the file exists, the file is uploaded as an attachment via a
+    single multipart request (content truncated to the 2000-char limit) — used to deliver an
+    automation's output document to the user's main channel.
     Returns True on success.
     """
-    if not bot_token or not channel_id or not text:
+    if not bot_token or not channel_id:
+        return False
+
+    # Attachment path: one multipart POST with the file + (truncated) content.
+    if file_path and os.path.isfile(file_path):
+        url = f"{DISCORD_API}/channels/{channel_id}/messages"
+        headers = {"Authorization": f"Bot {bot_token}"}  # no Content-Type: requests sets multipart
+        payload = {"content": (text or "")[:DISCORD_MAX_CHARS]}
+        try:
+            with open(file_path, "rb") as fh:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    data={"payload_json": json.dumps(payload)},
+                    files={"files[0]": (os.path.basename(file_path), fh)},
+                    timeout=60,
+                )
+            if not resp.ok:
+                logger.warning("Discord file send failed: %s %s", resp.status_code, resp.text[:200])
+                return False
+            return True
+        except Exception as e:
+            logger.warning("Discord file send error: %s", e)
+            return False
+
+    if not text:
         return False
 
     texts: List[str] = []
@@ -135,12 +166,20 @@ def send_discord_message(
     return True
 
 
-def send_discord_dm(bot_token: str, user_id: str, text: str, *, chunk: bool = True) -> bool:
+def send_discord_dm(
+    bot_token: str,
+    user_id: str,
+    text: str,
+    *,
+    chunk: bool = True,
+    file_path: Optional[str] = None,
+) -> bool:
     """
     Send a DM to a Discord user. Resolves DM channel from user_id, then sends.
+    ``file_path`` (optional) uploads a document attachment to the DM.
     Returns True on success.
     """
     channel_id = _get_dm_channel_id(bot_token, user_id)
     if not channel_id:
         return False
-    return send_discord_message(bot_token, channel_id, text, chunk=chunk)
+    return send_discord_message(bot_token, channel_id, text, chunk=chunk, file_path=file_path)

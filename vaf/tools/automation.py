@@ -206,6 +206,10 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                 "type": "integer",
                 "description": "Minutes to wait between retries. Only relevant if max_retries > 0. Only set if user explicitly requests it.",
                 "minimum": 1
+            },
+            "confirm_duplicate": {
+                "type": "boolean",
+                "description": "Set true ONLY after the user explicitly confirmed they want a SECOND, near-identical automation at a different time than one that already exists. Leave false/unset normally — if a similar automation exists, the tool will tell you to ask the user first instead of creating a duplicate."
             }
         },
         "required": ["name", "prompt", "frequency", "time"]
@@ -216,6 +220,10 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         prompt = kwargs.get("prompt", "")
         frequency = (kwargs.get("frequency") or "").lower().strip()
         schedule_time = kwargs.get("time", "06:00")
+        # Explicit user confirmation to create a SECOND near-identical automation at a different time.
+        # When False (default), a near-duplicate at a different time is NOT created — the tool returns a
+        # truthful "nothing created, ask the user" prompt instead of silently creating (and lying about it).
+        confirm_duplicate = bool(kwargs.get("confirm_duplicate", False))
         weekday_arg = kwargs.get("weekday")
         day_arg = kwargs.get("day")
         # Normalize weekday to English lowercase (e.g. Montag -> monday)
@@ -237,7 +245,10 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         # IMPORTANT: Distinguish between "not provided" (None) and "default value"
         # This allows us to detect if user explicitly passed a path or not
         output_path_arg = kwargs.get("output_path")
-        output_path = output_path_arg or "Documents"  # Fallback only if not provided
+        # Default to CHAT-ONLY: a file is written only when the user actually wants one. The path is
+        # finalised after parameter extraction below (see wants_file). output_path=None -> run_task
+        # skips the file-write block and the result is delivered to WebUI/messenger as a message.
+        output_path = output_path_arg  # may be None; finalised after extraction
         params = kwargs.get("parameters", {})
         max_retries = kwargs.get("max_retries")
         retry_delay_minutes = kwargs.get("retry_delay_minutes")
@@ -267,33 +278,45 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
             # Merge: extracted params as base, explicit params override
             params = {**extracted_params, **params}
         
-        # Also extract output_path from prompt if not explicitly provided or if it's invalid
-        # Check if output_path looks suspicious (time format, digits, too short)
-        is_suspicious_path = output_path and (
-            (":" in output_path and len(output_path) <= 6) or 
-            output_path.isdigit() or
-            len(output_path) <= 3
+        # Decide FILE vs CHAT-ONLY and finalise the output path. A file is produced only when the
+        # user wants one: an explicit output_path arg, a file/save phrase in the prompt, or a path
+        # the clarifier extracted from the prompt. Otherwise output_path stays None and run_task
+        # delivers the result as a chat/WebUI/messenger message without writing anything.
+        wants_file = (
+            bool(output_path_arg)
+            or self._prompt_wants_file(prompt)
+            or bool(extracted_params.get("output_path"))
         )
-        
-        # LOGIC FIX: Override path with extracted_params if:
-        # 1. No path was explicitly provided (output_path_arg is None)
-        # 2. OR the explicit path is the default "Documents" placeholder
-        # 3. OR the path looks suspicious/invalid (time format, etc.)
-        # This works regardless of system language (Documents vs Dokumente)
-        if (not output_path_arg or output_path == "Documents" or is_suspicious_path) and "output_path" in extracted_params:
-            output_path = extracted_params["output_path"]
-        
-        # Safety fallback: if path is still suspicious after extraction, use default
-        if is_suspicious_path and output_path == output_path_arg:
-            output_path = "Documents"
+        if output_path:
+            # Explicit path given — keep it unless it looks suspicious (time format, digits, too
+            # short), in which case prefer an extracted path or fall back to Documents. Works
+            # regardless of system language (Documents vs Dokumente).
+            is_suspicious_path = (
+                (":" in output_path and len(output_path) <= 6)
+                or output_path.isdigit()
+                or len(output_path) <= 3
+            )
+            if is_suspicious_path:
+                output_path = extracted_params.get("output_path") or "Documents"
+        elif wants_file:
+            # File wanted but no explicit path — use the extracted path, else default to Documents.
+            output_path = extracted_params.get("output_path") or "Documents"
+        else:
+            output_path = None  # chat-only
         
         # Generate a better name from prompt if name is generic (language-independent)
-        # Check if name is generic: untitled, just digits, time format (HH:MM), or very short
+        # Check if name is generic: untitled, just digits, time format (HH:MM), or very short.
+        # ALSO treat a long/whole-prompt name as generic: the create_scheduled_task workflow passes
+        # name="{task_description}" (the entire request), which otherwise gets stored verbatim — an
+        # unwieldy title in lists and the root of the "[Errno 36] File name too long" filename. A
+        # name == prompt or > 40 chars triggers the shortener below to derive a concise title.
         is_generic_name = (
-            name == "untitled" or 
-            name.isdigit() or 
+            name == "untitled" or
+            name.isdigit() or
             (":" in name and len(name) <= 6) or
-            len(name) <= 3
+            len(name) <= 3 or
+            name.strip() == (prompt or "").strip() or
+            len(name) > 40
         )
         
         if is_generic_name:
@@ -451,38 +474,27 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                         f"2. Then use `update_automation(task_id='{existing_task.id}', ...)` with new values\n\n"
                         f"**Or:** If you really want to create a new automation, choose a different name or time."
                     )
-                else:
-                    # Different time - inform user but allow creation
-                    similar_tasks = [t for t in existing_tasks if t.id != existing_task.id and 
-                                   ((t.name.lower() == name.lower()) or 
+                elif not confirm_duplicate:
+                    # Different time + NOT explicitly confirmed: do NOT silently create a near-duplicate.
+                    # The old code returned a "wird erstellt / both run in parallel" message but RETURNED
+                    # without creating anything — a lie the agent then relayed to the user ("I created a
+                    # second one"). Return a TRUTHFUL decision prompt; nothing is created here. The agent
+                    # asks the user, then either updates the existing one or re-calls with confirm_duplicate=True.
+                    similar_tasks = [t for t in existing_tasks if t.id != existing_task.id and
+                                   ((t.name.lower() == name.lower()) or
                                     (t.prompt and prompt and len(set(t.prompt.lower().split()) & set(prompt.lower().split())) / max(len(t.prompt.lower().split()), len(prompt.lower().split())) > 0.6))]
-                    
-                    if similar_tasks:
-                        similar_info = "\n".join([f"- '{t.name}' ({t.id}) - {t.frequency} at {t.time}" for t in similar_tasks[:3]])
-                        return (
-                            f"ℹ️ **Ähnliche Automatisierungen existieren bereits (aber zu anderen Zeiten):**\n\n"
-                            f"**Gefundene ähnliche Automatisierungen:**\n"
-                            f"- '{existing_task.name}' ({existing_task.id}) - {existing_task.frequency} at {existing_task.time}\n"
-                            f"{similar_info if similar_tasks else ''}\n\n"
-                            f"**Neue Automatisierung:**\n"
-                            f"- Name: {name}\n"
-                            f"- Zeit: {schedule_time} ({frequency})\n\n"
-                            f"**Optionen:**\n"
-                            f"1. **Neue Automatisierung erstellen** (wird fortgesetzt) - da die Zeit unterschiedlich ist, ist das in Ordnung\n"
-                            f"2. **Bestehende aktualisieren** - verwende `read_automation(task_id='{existing_task.id}')` und dann `update_automation`\n\n"
-                            f"**Hinweis:** Da die Zeiten unterschiedlich sind ({existing_task.time} vs {schedule_time}), können beide Automatisierungen parallel laufen."
-                        )
-                    else:
-                        # Just one similar task at different time - allow creation
-                        return (
-                            f"ℹ️ **Ähnliche Automatisierung existiert bereits (aber zu anderer Zeit):**\n\n"
-                            f"Eine ähnliche Automatisierung '{existing_task.name}' ({existing_task.id}) existiert bereits, "
-                            f"aber zu einer anderen Zeit ({existing_task.time} vs {schedule_time}).\n\n"
-                            f"**Da die Zeiten unterschiedlich sind, wird die neue Automatisierung erstellt.**\n"
-                            f"Beide können parallel laufen.\n\n"
-                            f"**Falls du stattdessen die bestehende aktualisieren möchtest:**\n"
-                            f"Verwende `read_automation(task_id='{existing_task.id}')` und dann `update_automation`."
-                        )
+                    _more = ("\n" + "\n".join(f"- '{t.name}' ({t.id}) — {t.frequency} um {t.time}" for t in similar_tasks[:3])) if similar_tasks else ""
+                    return (
+                        f"⚠️ **Noch NICHTS erstellt.** Es existiert bereits eine ähnliche Automatisierung zu einer anderen Zeit:\n"
+                        f"- '{existing_task.name}' ({existing_task.id}) — {existing_task.frequency} um {existing_task.time}{_more}\n\n"
+                        f"Gewünscht: '{name}' um {schedule_time} ({frequency}).\n\n"
+                        f"**Frag den Nutzer, was er möchte, und handle DANN entsprechend:**\n"
+                        f"1. Bestehende auf die neue Zeit ändern → `update_automation(task_id='{existing_task.id}', time='{schedule_time}')`\n"
+                        f"2. Wirklich eine ZWEITE parallel anlegen → erneut `create_automation(...)` mit `confirm_duplicate=true`\n\n"
+                        f"WICHTIG: Behaupte NICHT, die Automatisierung sei angelegt — es wurde nichts erstellt, bis der Nutzer entscheidet."
+                    )
+                # else: same-time is handled above; a different time WITH confirm_duplicate falls through and
+                # is actually created (the success result below is then truthful).
             
             # Check cooldown BEFORE creating automation (so agent can inform user)
             # Only apply cooldown if there's a time conflict with existing automations
@@ -505,18 +517,30 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                 else:
                     format_type = "html"  # Default
             
-            # Generate structured workflow using LLM (n8n-like)
-            workflow_steps = self._generate_workflow_with_llm(
-                task_description=prompt,
-                format=format_type,
-                output_path=output_path
-            )
-            
-            # If workflow generation failed, log a warning but still create the task
+            # Generate the (LLM-produced, slow, fragile) workflow step-array ONLY when the prompt clearly
+            # needs deterministic multi-tool orchestration. A simple "tell me X / remind me daily" runs fine
+            # prompt-based at trigger time, so pre-generating a JSON step-array just adds latency + a failure
+            # path that — on a slow reasoning provider — fed the create_automation runaway. Either way it is
+            # time-bounded (workflow_generation_timeout_seconds) and the create returns promptly.
+            if self._prompt_needs_workflow_gen(prompt):
+                workflow_steps = self._generate_workflow_with_llm(
+                    task_description=prompt,
+                    format=format_type,
+                    output_path=output_path
+                )
+            else:
+                workflow_steps = []
+
+            # If workflow generation was skipped or failed, the task simply runs prompt-based.
             if not workflow_steps or len(workflow_steps) == 0:
                 from vaf.cli.ui import UI
-                UI.event("Warning", "Workflow generation failed - automation will use prompt-based execution", style="yellow")
+                UI.event("Debug", "Automation will use prompt-based execution", style="dim")
             
+            # Chat-only run (no file wanted): clear the format so the stored task reflects "no file"
+            # (run_task gates the file write on `if task.output_path:`, which is None here anyway).
+            if not output_path:
+                format_type = ""
+
             # Create the task (user_scope_id so run_task uses this user's tools/memory)
             task = AutomationTask(
                 name=name,
@@ -637,12 +661,58 @@ vaf automation start
 - `vaf automation list` - View all automations
 - `vaf automation run {task.id}` - Run manually
 - `vaf automation delete {task.id}` - Remove"""
-            
+
+            # Terminal signal: the automation is created and scheduled — there is NOTHING left to do.
+            # Without this an agent (esp. a slow reasoning model) kept calling list_automations/
+            # read_automation/update_automation to "verify", grinding the turn loop. Tell it to stop.
+            result += (
+                "\n\n**Done — the automation is created and scheduled. No further action needed: "
+                "do NOT call list_automations, read_automation or update_automation to verify. "
+                "Just confirm to the user in one short sentence.**"
+            )
+
             return result
             
         except Exception as e:
             return f"Error creating automation: {e}"
     
+    @staticmethod
+    def _prompt_needs_workflow_gen(prompt: str) -> bool:
+        """True only when the automation prompt clearly needs deterministic MULTI-TOOL orchestration
+        (web search + content generation + file write/open, or explicit numbered steps). A simple
+        "tell me X / remind me daily" returns False → the create skips the slow, fragile LLM workflow
+        pre-generation and runs prompt-based at trigger time. Removes the per-create latency/failure path
+        that fed the create_automation runaway on slow reasoning providers."""
+        p = (prompt or "").lower()
+        if any(s in p for s in (
+            "web_search", "coding_agent", "write_file", "document_viewer", "html",
+            "speichere", "save the", "save it", "öffne", "open the", "open it", "schritt", "step",
+        )):
+            return True
+        return bool(re.search(r"\b[1-9]\)", prompt or ""))
+
+    @staticmethod
+    def _prompt_wants_file(prompt: str) -> bool:
+        """True when the user actually wants a FILE produced (and saved) — e.g. "als HTML/PDF",
+        "speichere/save", "erstelle eine Datei/create a file", "exportiere/export". When False, the
+        automation delivers its result as a chat/WebUI/messenger MESSAGE only and no file is written
+        (output_path stays None -> run_task skips the file-write block). Multilingual (DE+EN) to match
+        the rest of the codebase (datei/file, speichere/save, öffne/open)."""
+        p = (prompt or "").lower()
+        # Unambiguous substrings: file extensions + explicit tool/phrase markers.
+        if any(s in p for s in (
+            ".html", ".pdf", ".md", ".txt", ".csv", ".json", ".xlsx", ".docx",
+            "write_file", "document_viewer", "save the", "save it", "save a",
+            "open the", "open it",
+        )):
+            return True
+        # Word-boundary tokens so 'file' does not match 'profile', etc. (DE + EN).
+        return bool(re.search(
+            r"\b(datei\w*|file|files|speicher\w*|abspeicher\w*|save|saved|export\w*|"
+            r"herunterladen|download\w*|pdf|csv|html|markdown|öffne\w*)\b",
+            p,
+        ))
+
     def _generate_workflow_with_llm(self, task_description: str, format: str, output_path: str) -> List[Dict[str, Any]]:
         """
         Use LLM to generate a structured workflow for the automation (n8n-like).
@@ -677,7 +747,9 @@ Rules:
 3. Middle steps should process/generate content (coding_agent)
 4. Last step should save the result (write_file)
 5. Use {{previous_step.output}} to reference previous step outputs
-6. For write_file, use descriptive filename with date if needed
+6. For write_file, use a descriptive filename. The ONLY placeholders you may use are the
+   declared step outputs above PLUS these built-in variables (do NOT invent others):
+   {{date}} {{time}} {{datetime}} {{timestamp}} {{today}} {{now}} {{year}} {{month}} {{day}}
 
 Example for weather report:
 [

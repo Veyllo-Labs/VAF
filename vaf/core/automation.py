@@ -157,24 +157,58 @@ class AutomationTask:
 MIN_AUTOMATION_INTERVAL_MINUTES = 10
 
 
+def _safe_filename_stem(name: str, max_len: int = 50) -> str:
+    """A filesystem-safe, length-bounded stem from an automation name.
+
+    An automation's `name` is often the WHOLE task prompt (the create_scheduled_task workflow sets
+    name = task_description), so building an output filename as ``f"{name}_{date}.html"`` produced a path
+    component well over the OS limit -> "[Errno 36] File name too long". This slugifies (keeps word chars
+    + dash, collapses whitespace to '_') and truncates so ``<stem>_<date>.<ext>`` always fits comfortably.
+    """
+    import re as _re
+    s = _re.sub(r"\s+", "_", (name or "").strip())
+    s = _re.sub(r"[^\w\-]", "", s, flags=_re.UNICODE)   # keep unicode word chars (umlauts) + dash
+    s = s.strip("._-")[:max_len].strip("._-")
+    return s or "automation"
+
+
 def _resolve_username(user_scope_id: Optional[str]) -> str:
-    """Resolve username from config for notification lookups."""
+    """Resolve the account username for a task's ``user_scope_id``.
+
+    SECURITY (cross-user leak): a non-admin scope must resolve to its OWN account username, never
+    the literal "admin". The username keys the per-user workspace + messenger lookups, so handing a
+    non-admin "admin" would deliver their automation result to the LOCAL ADMIN's messenger. Mirrors
+    the thinking-mode resolver: admin only for the admin scope (or empty scope = single-user/local),
+    a synthetic ``scope_<hex>`` for an unknown scope, never "admin" for a non-admin scope.
+    """
     try:
-        from vaf.core.config import Config
-        return Config.get("username", "admin") or "admin"
+        from vaf.core.config import get_local_admin_username, get_local_admin_scope_id
+        admin_user = get_local_admin_username() or "admin"
+        if not user_scope_id or str(user_scope_id).strip() == str(get_local_admin_scope_id()).strip():
+            return admin_user
+        from vaf.core.thinking_mode import _resolve_username_for_scope
+        resolved = _resolve_username_for_scope(user_scope_id)
+        return resolved or ("scope_" + str(user_scope_id).replace("-", "")[:8])
     except Exception:
         return "admin"
 
 
-def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) -> bool:
+def _push_result_to_web_ui(
+    task: "AutomationTask", status: str, summary: str, output_file: Optional[str] = None
+) -> bool:
     """Push automation result to Web UI and, if configured, to the user's messenger.
 
     Delivers to BOTH channels so the user always sees the result regardless of
     whether they have Telegram/WhatsApp/Discord configured.
+    When ``output_file`` is given (the automation produced a file), it is referenced in the Web UI
+    message AND delivered as an attachment on the messenger.
     Returns True if at least the Web UI push succeeded.
     """
     status_icon = "\u2705" if status == "success" else "\u274c"
     msg = f"{status_icon} **Automation: {task.name}**\n\n{(summary or '').strip()[:1200]}"
+    # Web UI gets a note about the saved file (the messenger receives the file itself as an
+    # attachment, so its text stays clean \u2014 the local path means nothing to a Telegram user).
+    web_msg = msg + (f"\n\n\U0001F4CE Gespeichert: {output_file}" if output_file else "")
     web_ok = False
 
     # 1. Web UI — deliver as a chat message to the user's active session.
@@ -213,62 +247,44 @@ def _push_result_to_web_ui(task: "AutomationTask", status: str, summary: str) ->
 
         loaded = sm.load(sid)
         if loaded:
-            loaded.add_message(role="assistant", content=msg)
+            loaded.add_message(role="assistant", content=web_msg)
             sm.save(loaded)
         if wi:
             # Append as a standalone bubble — automation results are proactive and
             # have no live agent turn, so the streaming update path would overwrite
             # the previous reply instead of showing a new "done" message.
-            wi.emit_agent_message_append(msg, session_id=sid)
+            wi.emit_agent_message_append(web_msg, session_id=sid)
             wi.emit_session_unread(sid)
         web_ok = True
     except Exception as _e:
         append_domain_log("backend", f"[AUTOMATION] Web UI delivery failed: {_e}")
 
-    # 2. Messenger — send proactively if a main messenger is configured.
+    # 2. Messenger — send proactively if a main messenger is configured, via the ONE canonical
+    # "reach the user on their main channel" helper (single source of truth, shared with thinking
+    # mode). It resolves the per-channel chat id/jid, attaches the output file (Telegram/WhatsApp/
+    # Discord all support it), and never raises. The username is resolved to the TASK OWNER (not the
+    # local admin) so a per-user automation result never leaks onto the admin's messenger.
     try:
-        from vaf.core.messaging_connections import get_messaging_connections, get_telegram_chat_id
+        from vaf.core.messaging_connections import send_to_main_messenger
         username = _resolve_username(task.user_scope_id)
-        conn = get_messaging_connections(username=username, user_scope_id=task.user_scope_id)
-        main_messenger = (conn.get("main_messenger") or "").strip().lower()
-
-        if main_messenger == "telegram":
-            from vaf.core.config import Config
-            tg_cfg = Config.get("telegram_config") or {}
-            bot_token = (tg_cfg.get("bot_token") or "").strip()
-            chat_id = get_telegram_chat_id(task.user_scope_id, username)
-            if bot_token and chat_id:
-                from vaf.api.telegram_bridge import send_telegram_message_direct
-                send_telegram_message_direct(bot_token, chat_id, msg)
-
-        elif main_messenger == "discord":
-            from vaf.core.config import Config
-            from vaf.core.discord_send import send_discord_message
-            disc_cfg = Config.get("discord_config") or {}
-            bot_token = (disc_cfg.get("bot_token") or "").strip()
-            for entry in (disc_cfg.get("users") or []):
-                scope_match = str(entry.get("user_scope_id", "")) == str(task.user_scope_id or "")
-                channel_id = (entry.get("channel_id") or "").strip()
-                if scope_match and bot_token and channel_id:
-                    send_discord_message(bot_token, channel_id, msg)
-                    break
-
-        elif main_messenger == "whatsapp":
-            # WhatsApp proactive send requires an active session — best-effort only.
-            from vaf.core.config import Config
-            wa_cfg = Config.get("whatsapp_config") or {}
-            for entry in (wa_cfg.get("whitelist") or []):
-                if str(entry.get("user_scope_id", "")) == str(task.user_scope_id or ""):
-                    phone = (entry.get("phone") or "").strip()
-                    if phone:
-                        try:
-                            from vaf.api.whatsapp_bridge import send_whatsapp_text
-                            send_whatsapp_text(phone, msg)
-                        except Exception:
-                            pass
-                    break
+        send_to_main_messenger(task.user_scope_id, username, msg, file_path=output_file)
     except Exception as _e:
         append_domain_log("backend", f"[AUTOMATION] Messenger delivery failed: {_e}")
+
+    # 3. Notification store — surface the result in the WebUI NotificationsModal (kind 'automation',
+    # already understood by the frontend) so it appears alongside other proactive results.
+    try:
+        from vaf.core.user_notifications import append_notification
+        append_notification(
+            task.user_scope_id,
+            kind="automation",
+            title=f"Automation: {task.name}",
+            status=status,
+            summary=(summary or "").strip()[:500],
+            task_name=task.name,
+        )
+    except Exception:
+        pass
 
     return web_ok
 
@@ -1159,7 +1175,10 @@ vaf automation delete <id>   # Delete task
                 return f"Automation '{task.name}' started in background thread (new terminal unavailable)"
         
         result = ""
-        
+        # Final path of the saved output file (if any). Initialised here so it survives to the
+        # delivery call after the try/finally; set only when a file is actually written.
+        saved_output_path: Optional[str] = None
+
         try:
             # ... (Rest of the method logic) ...
 
@@ -1330,7 +1349,9 @@ vaf automation delete <id>   # Delete task
                         f"{saved_path}\n\n"
                         f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
                     ).strip()
-                    _push_result_to_web_ui(task, "success", short_summary)
+                    # If the workflow's write_file step produced an actual file, deliver it as an
+                    # attachment on the messenger (the helper ignores a non-file string).
+                    _push_result_to_web_ui(task, "success", short_summary, output_file=(saved_path or None))
                     return result
             else:
                 # Legacy: Use prompt-based execution (backwards compatibility)
@@ -1516,10 +1537,12 @@ vaf automation delete <id>   # Delete task
                                 output_path = alias_path
                                 break
                 
-                # Create filename with date
+                # Create filename with date. Use a sanitized, length-bounded stem — task.name can be the
+                # whole prompt, which produced "[Errno 36] File name too long".
                 date_str = datetime.now().strftime("%Y-%m-%d")
+                _stem = _safe_filename_stem(task.name)
                 if task.output_format == "html":
-                    filename = f"{task.name}_{date_str}.html"
+                    filename = f"{_stem}_{date_str}.html"
                     # If result already contains HTML structure, use it directly
                     # Otherwise, wrap it in a basic HTML structure
                     if result.strip().startswith("<!DOCTYPE") or result.strip().startswith("<html"):
@@ -1575,13 +1598,13 @@ vaf automation delete <id>   # Delete task
 </body>
 </html>"""
                 elif task.output_format == "markdown":
-                    filename = f"{task.name}_{date_str}.md"
+                    filename = f"{_stem}_{date_str}.md"
                     content = f"# {task.name}\n\n*Generated: {datetime.now().isoformat()}*\n\n{result}"
                 elif task.output_format == "json":
-                    filename = f"{task.name}_{date_str}.json"
+                    filename = f"{_stem}_{date_str}.json"
                     content = json.dumps({"task": task.name, "date": date_str, "content": result}, indent=2)
                 else:
-                    filename = f"{task.name}_{date_str}.txt"
+                    filename = f"{_stem}_{date_str}.txt"
                     content = result
                 
                 output_file = output_path / filename
@@ -1600,7 +1623,8 @@ vaf automation delete <id>   # Delete task
                                 UI.warning(f"Could not write to Desktop, using Documents instead: {output_file}")
                 
                 output_file.write_text(content, encoding='utf-8')
-                
+                saved_output_path = str(output_file)
+
                 UI.success(f"Output saved: {output_file}")
             
             # Update task (local completion date persists across restarts)
@@ -1653,7 +1677,8 @@ vaf automation delete <id>   # Delete task
         try:
             status = "error" if (result or "").strip().startswith("Error:") else "success"
             # For prompt-based tasks the result IS the summary (already clean text).
-            _push_result_to_web_ui(task, status, result or "Completed")
+            # saved_output_path is None for chat-only runs (no file produced) -> text-only delivery.
+            _push_result_to_web_ui(task, status, result or "Completed", output_file=saved_output_path)
         except Exception:
             pass
         try:

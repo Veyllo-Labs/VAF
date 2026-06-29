@@ -352,19 +352,32 @@ def send_to_main_messenger(
     user_scope_id: Optional[Any],
     username: Optional[str],
     text: str,
+    file_path: Optional[str] = None,
 ) -> "tuple[bool, Optional[str]]":
     """Send ``text`` to the user's configured ``main_messenger`` (Telegram/WhatsApp/Discord).
 
     Single source of truth for "reach the user on their main channel", reused by the thinking-mode
-    nudge AND the proactive-question delivery. Returns ``(sent, channel)``:
+    nudge, the proactive-question delivery AND proactive automation results. Returns ``(sent, channel)``:
       * ``(True, "telegram"|"whatsapp"|"discord")`` on success,
       * ``(False, None)`` when no main_messenger is configured, the channel id is missing, or the
         send fails.
     Never raises. (E-mail is intentionally NOT a valid main_messenger here.)
+
+    ``file_path`` (optional): when given and the file exists, the text is sent as a normal message
+    and the file is delivered as a *separate* attachment with a short caption. Sending the file
+    separately (rather than as the text's caption) avoids the per-channel caption length limit
+    (Telegram 1024 chars) so the full text AND the file always arrive. The attachment is
+    best-effort: overall success is decided by the text send, so a too-large/failed attachment
+    never reports the whole delivery as failed (the Web UI still carries the file link).
     """
     text = (text or "").strip()
     if not text:
         return False, None
+
+    import os as _os
+    attach = file_path if (file_path and _os.path.isfile(file_path)) else None
+    caption = ("\U0001F4CE " + _os.path.basename(attach)) if attach else ""
+
     try:
         conn = get_messaging_connections(
             username=(username or "admin").strip() or "admin", user_scope_id=user_scope_id
@@ -375,6 +388,11 @@ def send_to_main_messenger(
             if chat_id:
                 from vaf.core.telegram_reply import send_telegram_reply
                 if send_telegram_reply(chat_id, text):
+                    if attach:
+                        try:
+                            send_telegram_reply(chat_id, caption, file_path=attach)
+                        except Exception:
+                            pass
                     return True, "telegram"
         elif main == "whatsapp":
             jid = get_whatsapp_chat_jid(user_scope_id, username)
@@ -384,6 +402,14 @@ def send_to_main_messenger(
                 # bridge correctly degrades to (False, None) -> the caller falls back to the Web UI,
                 # instead of falsely reporting success and silently swallowing the message.
                 if send_whatsapp_reply((username or "admin"), jid, text, user_scope_id=user_scope_id):
+                    if attach:
+                        try:
+                            from vaf.api.whatsapp_bridge import send_whatsapp_with_confirmation
+                            send_whatsapp_with_confirmation(
+                                (username or "admin"), jid, caption, document_path=attach
+                            )
+                        except Exception:
+                            pass
                     return True, "whatsapp"
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
@@ -393,6 +419,11 @@ def send_to_main_messenger(
                 if bot_token:
                     from vaf.core.discord_send import send_discord_dm
                     if send_discord_dm(bot_token, user_id, text, chunk=True):
+                        if attach:
+                            try:
+                                send_discord_dm(bot_token, user_id, caption, file_path=attach)
+                            except Exception:
+                                pass
                         return True, "discord"
     except Exception:
         pass

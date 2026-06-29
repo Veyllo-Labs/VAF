@@ -5313,6 +5313,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_end: e.target.value })}
                                                                 className={`w-20 px-2 py-1 border rounded-lg text-sm font-mono text-center focus:outline-none focus:ring-2 ${userIdentityDraft.quiet_hours_end && !/^([01]\d|2[0-3]):[0-5]\d$/.test(userIdentityDraft.quiet_hours_end) ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-amber-500'}`} />
                                                         </label>
+                                                        {/* Show the user's configured time format so they know which scale they're entering. */}
+                                                        <span className="text-[11px] text-gray-400 self-center px-1.5 py-0.5 bg-gray-100 rounded">{((personaData?.user_identity as { time_format?: string })?.time_format === '12h') ? '12h' : '24h'}</span>
                                                     </div>
                                                 )}
                                             </div>

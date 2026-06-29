@@ -946,13 +946,28 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                         onMouseEnter={e => setHovered({ ev, mx: e.clientX, my: e.clientY })}
                         onMouseLeave={() => setHovered(null)}
                         onMouseMove={e => setHovered(p => p ? { ...p, mx: e.clientX, my: e.clientY } : null)}
-                        onClick={() => {
+                        onClick={e => {
+                          // Don't let the click bubble to the scroll-container handler, which sets
+                          // cursorTs from the raw click pixel (t0 + clickX/pxPerMs). For short bars
+                          // (clamped to MIN_EV_W=6px) that pixel maps to a time far outside the
+                          // event's real duration window, so the event would be excluded from
+                          // activeAtCursor and the right-panel node graph would render empty.
+                          e.stopPropagation();
                           // Clicking a timeline bar always surfaces it in the detail/log panel above
                           // (mirrors the flow-canvas node click), and highlights it here — even for
                           // events without a call_id. Re-clicking the same bar clears it.
                           const isSame = detailEvent === ev;
                           setDetailEvent(isSame ? null : ev);
                           setSelectedCallId(isSame ? null : (ev.call_id ?? null));
+                          // Anchor the cursor INSIDE this event's own time window (its center) so
+                          // activeAtCursor always includes it, regardless of how thin the rendered
+                          // bar was. This drives the right-panel canvas. Re-clicking clears it.
+                          if (isSame) {
+                            setCursorTs(null);
+                          } else {
+                            const startTs = new Date(ev.ts).getTime();
+                            setCursorTs(startTs + ((ev.duration_s ?? 0) * 1000) / 2);
+                          }
                         }}
                       />
                     );

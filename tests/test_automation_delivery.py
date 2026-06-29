@@ -71,8 +71,8 @@ def test_engine_seeds_builtins_wiring_present():
     import inspect
     import vaf.workflows.engine as _eng
     src = inspect.getsource(_eng)
-    assert "_temporal_builtins()" in src
-    assert "outputs.setdefault" in src
+    assert "_temporal_builtins(" in src      # seeded each run (called with the user for tz-correct dates)
+    assert "outputs.setdefault" in src       # user-supplied variables still win over the built-ins
 
 
 # ── C) file-intent detector + conditional create_scheduled_task ──────────────────────────────────

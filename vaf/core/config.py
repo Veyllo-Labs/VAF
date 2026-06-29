@@ -340,7 +340,7 @@ class Config:
         "thinking_nudge_activity_minutes": 5,                # Do not nudge if user was active on any channel in the last N minutes
         "thinking_provider": "inherit",                      # AI provider for thinking mode ('inherit' or e.g. 'openai', 'local')
         "thinking_model": None,                              # Specific model for thinking mode (None = use provider default)
-        "thinking_cooldown_minutes": 60,                     # After a thinking run completes: wait this many minutes before starting another
+        "thinking_cooldown_minutes": 110,                    # After a thinking run completes: wait this many minutes before starting another
         "thinking_gc_hours": 12,                              # GC deletes thinking-mode sessions older than this many hours
         "thinking_quiet_hours_enabled": False,               # Do not run thinking mode during quiet hours (local time)
         "thinking_quiet_hours_start": "23:00",                # Quiet period start (HH:MM, 24h); e.g. 23:00 = 11 PM

@@ -293,7 +293,7 @@ highlights:
 | `thinking_provider` | `"inherit"` | Provider for thinking runs. |
 | `thinking_model` | `None` | Model override; `None` = inherit. |
 | `thinking_idle_minutes` | `10` | Idle time before a thinking pass. |
-| `thinking_cooldown_minutes` | `60` | Cooldown between passes. |
+| `thinking_cooldown_minutes` | `110` | Cooldown between passes. |
 | `thinking_max_duration_minutes` | `30` | Hard cap per pass. |
 | `thinking_proactive_enabled` | `True` | Allow proactive follow-up questions. |
 | `thinking_quiet_hours_enabled` | `False` | Suppress thinking during quiet hours. |

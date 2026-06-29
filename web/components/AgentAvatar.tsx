@@ -201,15 +201,24 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const [shown, setShown] = React.useState<AvatarMode>(mode);
     const [settling, setSettling] = React.useState(false);
     const isMobile = useIsMobile();  // mobile: reserve the scene width as the avatar's footprint instead of the desktop leftward lean
+    // Settle-to-neutral, but STARVATION-PROOF. One in-flight 200ms timer always lands on the LATEST
+    // requested mode; subsequent rapid changes do NOT restart it. The old code cleared+rescheduled the
+    // timeout on every mode change, so a burst of flips faster than 200ms (e.g. thinking<->web_search
+    // around a tool call) meant setShown never fired: `settling` stayed true, and for a scene mode like
+    // web_search the cross-dissolve `opacity:0` (sceneFade) got stuck -> the avatar vanished.
+    const latestMode = React.useRef(mode);
+    latestMode.current = mode;
+    const settleTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     React.useEffect(() => {
-        if (mode === shown) return;
+        if (mode === shown || settleTimer.current != null) return;   // settled, or a settle already in flight
         setSettling(true);                            // 1) drop animation -> ease to neutral
-        const t = setTimeout(() => {
-            setShown(mode);                           // 2) swap mode (and props) at rest
+        settleTimer.current = setTimeout(() => {
+            settleTimer.current = null;
+            setShown(latestMode.current);             // 2) swap to the LATEST mode at rest
             setSettling(false);                       // 3) start the new animation from neutral
         }, 200);
-        return () => clearTimeout(t);                 // debounce: a new change resets the settle
     }, [mode, shown]);
+    React.useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current); }, []);
 
     // The "living" Working satellite: while Working is shown, a rAF loop eases its angular speed toward a
     // new random target every ~0.6–2s and occasionally (~40%) flips direction, so it speeds up / slows
@@ -301,7 +310,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // Cross-dissolve transitions that involve a scene mode (e.g. thinking → web search): during the settle
     // window the whole content fades OUT, the DOM swaps while invisible, then the new scene/body fades IN —
     // so the separate .tsc/.asc DOM no longer pops. Normal↔normal keeps its in-place morph (no fade here).
-    const sceneFade = settling && (isSceneMode(shown) || isSceneMode(mode));
+    const sceneFade = !isMobile && settling && (isSceneMode(shown) || isSceneMode(mode));
 
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';

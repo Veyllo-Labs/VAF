@@ -228,7 +228,7 @@ class UpdateUserIdentityTool(BaseTool):
             change_log = user_identity.get("change_log")
             if not isinstance(change_log, list):
                 change_log = []
-            change_log.append({"at": datetime.now().isoformat(), "action": summary})
+            change_log.append({"at": datetime.now().astimezone().isoformat(), "action": summary})
             user_identity["change_log"] = change_log[-50:]  # keep last 50
             ws.save_user_identity(user_identity)
             return "User identity updated. You can use this in your next reply (e.g. greet by name, follow preferences and do's/don'ts)."

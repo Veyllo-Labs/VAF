@@ -834,6 +834,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         preferences: string;
         dos: string;
         donts: string;
+        quiet_hours_enabled: boolean;
+        quiet_hours_start: string;
+        quiet_hours_end: string;
     } | null>(null);
     const [newTimelineEntryCount, setNewTimelineEntryCount] = useState(0); // Track new entries for animation
     const timelineRef = useRef<HTMLDivElement>(null);
@@ -912,6 +915,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             preferences: (ui.preferences || []).join('\n'),
             dos: (ui.dos || []).join('\n'),
             donts: (ui.donts || []).join('\n'),
+            quiet_hours_enabled: !!(ui as { quiet_hours_enabled?: boolean }).quiet_hours_enabled,
+            quiet_hours_start: (ui as { quiet_hours_start?: string }).quiet_hours_start || '',
+            quiet_hours_end: (ui as { quiet_hours_end?: string }).quiet_hours_end || '',
         });
         setIsEditingUserIdentity(true);
     };
@@ -934,6 +940,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             preferences: parseList(userIdentityDraft.preferences),
             dos: parseList(userIdentityDraft.dos),
             donts: parseList(userIdentityDraft.donts),
+            quiet_hours_enabled: userIdentityDraft.quiet_hours_enabled,
+            quiet_hours_start: userIdentityDraft.quiet_hours_start.trim() || null,
+            quiet_hours_end: userIdentityDraft.quiet_hours_end.trim() || null,
         };
 
         // Get current change_log length to calculate how many new entries were added
@@ -5276,6 +5285,29 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     placeholder="Don't use formal address&#10;Don't add emojis"
                                                 />
                                             </div>
+                                            <div>
+                                                <label className="flex items-center gap-2 text-gray-500 font-medium text-xs uppercase tracking-wide">
+                                                    <input type="checkbox" checked={userIdentityDraft.quiet_hours_enabled}
+                                                        onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_enabled: e.target.checked })}
+                                                        className="rounded border-gray-300 text-amber-500 focus:ring-amber-500" />
+                                                    {tModals('userIdentity.quietHours')}
+                                                </label>
+                                                <p className="text-gray-400 font-normal text-xs mt-1">{tModals('userIdentity.quietHoursHint')}</p>
+                                                {userIdentityDraft.quiet_hours_enabled && (
+                                                    <div className="flex items-center gap-4 mt-2">
+                                                        <label className="text-xs text-gray-500 flex items-center gap-2">{tModals('userIdentity.quietHoursStart')}
+                                                            <input type="time" value={userIdentityDraft.quiet_hours_start}
+                                                                onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_start: e.target.value })}
+                                                                className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                                                        </label>
+                                                        <label className="text-xs text-gray-500 flex items-center gap-2">{tModals('userIdentity.quietHoursEnd')}
+                                                            <input type="time" value={userIdentityDraft.quiet_hours_end}
+                                                                onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_end: e.target.value })}
+                                                                className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                                                        </label>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     ) : (
                                         /* View Mode - Display values */
@@ -5342,6 +5374,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 ) : (
                                                     <p className="text-gray-400 mt-1">—</p>
                                                 )}
+                                            </div>
+                                            <div className="bg-white rounded-lg p-3 border border-gray-100">
+                                                <span className="text-gray-500 font-medium text-xs uppercase tracking-wide">{tModals('userIdentity.quietHours')}</span>
+                                                <p className="text-gray-900 mt-1">{(personaData.user_identity as { quiet_hours_enabled?: boolean }).quiet_hours_enabled ? `${(personaData.user_identity as { quiet_hours_start?: string }).quiet_hours_start || '23:00'} – ${(personaData.user_identity as { quiet_hours_end?: string }).quiet_hours_end || '07:00'}` : tModals('userIdentity.quietHoursOff')}</p>
                                             </div>
                                         </div>
                                     )

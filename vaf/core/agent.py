@@ -2933,6 +2933,16 @@ class Agent:
                             continue
 
                     entry = {"role": role, "content": content}
+                    # Restore attached images (+ their persisted base_description) for user
+                    # turns so multi-turn vision survives a reload / worker-pool pickup. Without
+                    # this, _prepare_messages has no base description to inject and the model
+                    # loses the image — wrongly claiming it had "guessed" its earlier analysis.
+                    # Raw bytes are not sent to the main model (degraded to text); they let the
+                    # analyze_image tool re-inspect the image, and skip costly re-description.
+                    if role == "user":
+                        _img_meta = (getattr(msg, "metadata", None) or {}).get("images")
+                        if _img_meta:
+                            entry["images"] = _img_meta
                     # Preserve tool-call linkage so restored history keeps valid
                     # tool_use/tool_result pairs (otherwise the pairing cleanup in
                     # _prepare_messages drops the orphaned results).
@@ -5642,6 +5652,43 @@ class Agent:
             pass
         return "\n".join(parts).strip()
 
+    def _ensure_image_base_descriptions(self, images: List[Dict]) -> None:
+        """Generate the one-time base description for each freshly attached image (in place).
+
+        Vision-as-a-tool design: the main reasoning model is text-only and never receives
+        raw image bytes. On the upload turn we run each image ONCE through the vision backend
+        to produce a neutral, comprehensive description, stored on the image dict as
+        ``base_description``. _prepare_messages then injects that text every turn, and the
+        model uses analyze_image to look closer on demand. Idempotent (skips images that
+        already carry a description, so a reloaded image is not re-analysed). Never raises.
+
+        Skipped in the legacy ``vision_mode="inline_multimodal"`` mode, where the main model
+        sees the raw image directly and no description is needed.
+        """
+        try:
+            if (Config.get("vision_mode", "description_tool") or "").strip() == "inline_multimodal":
+                return
+            pending = [
+                img for img in (images or [])
+                if isinstance(img, dict) and (img.get("data") or img.get("path")) and not img.get("base_description")
+            ]
+            if not pending:
+                return
+            from vaf.core.vision_infer import describe_image_cached
+            _max = int(Config.get("vision_description_max_tokens", 1024) or 1024)
+            for img in pending:
+                # Shared process-wide cache so the Image Viewer's describe endpoint reuses this
+                # (and vice versa) — the same image is never described/billed twice.
+                desc = describe_image_cached(img, max_tokens=_max)
+                if desc:
+                    img["base_description"] = desc
+        except Exception as e:
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log("backend", f"[BASE_DESCRIPTION] generation failed: {e}")
+            except Exception:
+                pass
+
     def chat_step(
         self,
         user_input: str,
@@ -5975,7 +6022,11 @@ class Agent:
         if user_input:
             _user_msg: Dict = {"role": "user", "content": user_input}
             if images:
-                _user_msg["images"] = images  # [{data: str, mime_type: str}] — converted to multimodal in _prepare_messages
+                # Generate a one-time base description per image so the (text-only) main
+                # model and every later turn stay grounded without re-sending raw bytes.
+                # The model inspects the stored image on demand via the analyze_image tool.
+                self._ensure_image_base_descriptions(images)
+                _user_msg["images"] = images  # [{data, mime_type, name, base_description}] — see _prepare_messages
             self.history.append(_user_msg)
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
@@ -9128,6 +9179,15 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["session_id"] = getattr(self, "current_session_id", None)
                     tool_args["_agent"] = self
+                if name == "analyze_image":
+                    # The vision tool re-inspects the image attached to THIS session on demand.
+                    # Pass the LIVE agent: on the upload turn the image lives in agent.history but
+                    # is not persisted to disk until the turn ends, so a disk-only read would miss
+                    # it (the primary "look closer on turn 1" case). session_id is the disk fallback
+                    # (covers images that aged out of history via compaction but remain on disk).
+                    tool_args["_agent"] = self
+                    tool_args["session_id"] = getattr(self, "current_session_id", None)
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "librarian_agent":
                     # Drives the per-user filesystem jail (is_safe_path) so the librarian only reads the
                     # caller's own data, never another user's VAF_Projects/<uid8>.
@@ -9807,24 +9867,37 @@ class Agent:
         # If vision is supported: convert to OpenAI list-content format (Anthropic/Google
         # providers convert further in their own chat_completion methods).
         # If NOT supported: strip images, append human-readable text placeholder instead.
+        # vision_mode (default "description_tool"): the main reasoning model is TEXT-ONLY.
+        # Each attached image is replaced by a VISUAL CONTEXT text block built from its
+        # one-time base description (generated in chat_step, persisted, reload-safe); the
+        # model inspects the stored image on demand via analyze_image. No raw base64 ever
+        # reaches the main model. "inline_multimodal" restores the legacy behavior below
+        # (raw image blocks straight to a multimodal main model / per-turn vision fallback).
+        _legacy_inline = (Config.get("vision_mode", "description_tool") or "description_tool").strip() == "inline_multimodal"
         multimodal_messages: List[Dict] = []
         for msg in messages:
             if msg.get("role") == "user" and msg.get("images"):
                 imgs = msg["images"]
                 text = msg.get("content", "")
                 msg = {k: v for k, v in msg.items() if k != "images"}
-                if _vision_ok:
+                if not _legacy_inline:
+                    # Option A (default): text-only main model — inject the base description,
+                    # never the raw bytes. The image stays on disk for analyze_image to fetch.
+                    from vaf.core.vision_infer import build_visual_context_text
+                    msg["content"] = build_visual_context_text(imgs, text)
+                elif _vision_ok:
                     blocks: List[Dict] = []
                     if text:
                         blocks.append({"type": "text", "text": text})
                     from vaf.core.image_utils import downscale_image_b64 as _downscale_img
+                    from vaf.core.vision_infer import image_to_b64 as _img_to_b64
                     _img_max_edge = int(Config.get("vision_image_max_edge", 2000) or 2000)
                     _img_quality = int(Config.get("vision_image_jpeg_quality", 85) or 85)
                     for img in imgs:
-                        raw = img.get("data", "")
-                        mime = img.get("mime_type", "image/jpeg")
-                        if raw.startswith("data:"):
-                            raw = raw.split(",", 1)[1] if "," in raw else raw
+                        _got = _img_to_b64(img)  # data (legacy) or path (current)
+                        if not _got:
+                            continue
+                        raw, mime = _got
                         # Shrink oversized images: full-res photos make OpenAI 500 and waste tokens.
                         raw, mime = _downscale_img(raw, mime, _img_max_edge, _img_quality)
                         blocks.append({
@@ -9860,13 +9933,14 @@ class Agent:
                             if text:
                                 _vb_blocks.append({"type": "text", "text": text})
                             from vaf.core.image_utils import downscale_image_b64 as _downscale_img
+                            from vaf.core.vision_infer import image_to_b64 as _img_to_b64
                             _img_max_edge = int(Config.get("vision_image_max_edge", 2000) or 2000)
                             _img_quality = int(Config.get("vision_image_jpeg_quality", 85) or 85)
                             for _vi in imgs:
-                                _raw = _vi.get("data", "")
-                                _mime = _vi.get("mime_type", "image/jpeg")
-                                if _raw.startswith("data:"):
-                                    _raw = _raw.split(",", 1)[1] if "," in _raw else _raw
+                                _got = _img_to_b64(_vi)  # data (legacy) or path (current)
+                                if not _got:
+                                    continue
+                                _raw, _mime = _got
                                 _raw, _mime = _downscale_img(_raw, _mime, _img_max_edge, _img_quality)
                                 _vb_blocks.append({
                                     "type": "image_url",

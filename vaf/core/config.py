@@ -126,6 +126,14 @@ class Config:
         # Only images whose longest edge exceeds max_edge are shrunk (small images untouched).
         "vision_image_max_edge": 2000,      # px; OpenAI internally caps high-detail at ~2048
         "vision_image_jpeg_quality": 85,    # re-encode quality when downscaling
+        # Vision strategy for chat images (token-efficient by default):
+        #   "description_tool" — the main model is TEXT-ONLY. An attached image is run once
+        #       through the vision backend → a base description that is injected as text; the
+        #       model calls the analyze_image tool to inspect the image on demand. No raw bytes
+        #       are ever re-sent to the main model. Works even with non-vision main providers.
+        #   "inline_multimodal" — legacy: send the raw image straight to a multimodal main model.
+        "vision_mode": "description_tool",
+        "vision_description_max_tokens": 1024,  # output bound for the base description + analyze_image
 
         # OpenAI-compatible request resilience (openai/deepseek/openrouter/local).
         "api_retry_attempts": 2,            # VAF-level retries on transient 5xx/timeout (atop the SDK's own)

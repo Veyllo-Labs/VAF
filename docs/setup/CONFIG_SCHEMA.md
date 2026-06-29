@@ -74,8 +74,10 @@ print(agent.run("In one sentence, what is Python?"))
 |-----|---------|---------|
 | `api_key_veyllo` | `""` | API key for the first-party Veyllo API. |
 | `veyllo_base_url` | `"https://api.veyllo.app/v1"` | Veyllo API base URL (OpenAI-compatible wire protocol); override for staging or self-host. |
-| `vision_provider` | `""` | Fallback provider for image input when the primary has no vision (e.g. `google`). Empty = strip images. |
-| `vision_model` | `""` | Model for the vision fallback; empty = provider default. |
+| `vision_mode` | `"description_tool"` | How attached images reach the model. `description_tool` (default): the main model is text-only — an image is run once through the vision backend to a base description that is injected as text, and the model calls the `analyze_image` tool to inspect it on demand (token-efficient; works even with a non-vision main provider). `inline_multimodal`: legacy — send the raw image straight to a multimodal main model. See the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
+| `vision_description_max_tokens` | `1024` | Output bound for the one-time base description and for each `analyze_image` call. |
+| `vision_provider` | `""` | Provider used for vision (base description + `analyze_image`). Empty = use the main provider if it is vision-capable, else none. Set it (e.g. `google`) to use a different provider for seeing when the main one cannot (e.g. DeepSeek). |
+| `vision_model` | `""` | Model for the vision provider; empty = that provider's default. |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |
 | `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
 | `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout or connection drop — for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |

@@ -114,10 +114,21 @@ class AskUserTool(BaseTool):
             # message was non-empty (checked above) but delivery returned nothing. WHY depends on the
             # per-run proactive MODE — give mode-specific guidance so the model stops retrying blindly.
             try:
-                from vaf.core.thinking_mode import get_proactive_mode
+                from vaf.core.thinking_mode import get_proactive_mode, take_reject_reason
+                _reason = take_reject_reason(kwargs.get("user_scope_id"))
                 _mode = get_proactive_mode(kwargs.get("user_scope_id"))
             except Exception:
+                _reason = ""
                 _mode = "grounded"
+            if _reason == "too_similar":
+                # The semantic-dedup gate rejected it: too close to a question already asked/declined.
+                # Steer the model to a CLEARLY different area instead of rewording the same topic.
+                return (
+                    "Not sent: that question is too similar to one you already asked recently. Pick a "
+                    "CLEARLY different area — e.g. a hobby, daily life, health/wellbeing, people in their "
+                    "life, learning, or future goals — NOT work/VAF if that was your recent topic. Call "
+                    "ask_user again now with a fresh, different question."
+                )
             if _mode == "off":
                 # Not in a proactive step (gather / forced-resolution), or a message was already delivered
                 # this run. Retrying cannot succeed — stop now.

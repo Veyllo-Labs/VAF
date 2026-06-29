@@ -1420,6 +1420,19 @@ def deliver_tracked_message(
                 logger.info("Thinking: proactive suggestion dropped — neither message nor details grounded in retrieved memory")
                 return None
         # _mode == "open" -> allowed (get-to-know question)
+        # SEMANTIC DEDUP: for either proactive mode, reject a question too close to one asked/declined
+        # recently so the model is pushed to a genuinely different topic (breaks the "always work/VAF"
+        # loop). Enforcement is per-turn (the loop disables it on the final get-to-know attempt so a run
+        # never ends in silence). Fail-open inside _question_too_similar. Note/todo-sourced asks are exempt
+        # (this whole block only runs for FREE messages). A FOLLOW-UP re-ask is ALSO exempt: it intentionally
+        # repeats the SAME open question (a pointed yes/no), which the gate would otherwise reject as a
+        # near-duplicate of the very request it is following up on.
+        if (_mode in ("open", "grounded")
+                and get_dedup_enforce(user_scope_id)
+                and not get_followup_context(user_scope_id)):
+            if _question_too_similar(user_scope_id, message):
+                set_reject_reason(user_scope_id, "too_similar")
+                return None
 
     run_seq = current_run_seq(user_scope_id)
     _fu_id = get_followup_context(user_scope_id)
@@ -1575,6 +1588,9 @@ def get_run_evidence(user_scope_id: Optional[str]) -> str:
 def clear_run_evidence(user_scope_id: Optional[str]) -> None:
     _RUN_EVIDENCE.pop(_key(user_scope_id), None)
     _PROACTIVE_MODE.pop(_key(user_scope_id), None)
+    # Semantic-dedup per-scope flags must also reset each run so stale state never carries over.
+    _DEDUP_ENFORCE.pop(_key(user_scope_id), None)
+    _REJECT_REASON.pop(_key(user_scope_id), None)
 
 
 def set_proactive_mode(user_scope_id: Optional[str], mode: str) -> None:
@@ -1584,6 +1600,32 @@ def set_proactive_mode(user_scope_id: Optional[str], mode: str) -> None:
 
 def get_proactive_mode(user_scope_id: Optional[str]) -> str:
     return _PROACTIVE_MODE.get(_key(user_scope_id), "off")
+
+
+# Per-scope flags for the semantic question-dedup (small bool/str ONLY — never vectors).
+#   _DEDUP_ENFORCE: whether the dedup gate is active this turn (the loop disables it on the final
+#     get-to-know attempt so a run never ends in silence). Default True.
+#   _REJECT_REASON: why deliver_tracked_message last returned None this turn, so ask_user.run can give
+#     the right guidance ("too_similar" vs the generic gates). Read-once (popped) by the tool.
+_DEDUP_ENFORCE: Dict[str, bool] = {}
+_REJECT_REASON: Dict[str, str] = {}
+
+
+def set_dedup_enforce(user_scope_id: Optional[str], enforce: bool) -> None:
+    _DEDUP_ENFORCE[_key(user_scope_id)] = bool(enforce)
+
+
+def get_dedup_enforce(user_scope_id: Optional[str]) -> bool:
+    return _DEDUP_ENFORCE.get(_key(user_scope_id), True)
+
+
+def set_reject_reason(user_scope_id: Optional[str], reason: str) -> None:
+    _REJECT_REASON[_key(user_scope_id)] = reason
+
+
+def take_reject_reason(user_scope_id: Optional[str]) -> str:
+    """Pop the last delivery-rejection reason for this scope ('' if none)."""
+    return _REJECT_REASON.pop(_key(user_scope_id), "")
 
 
 # Per-scope "the free message being delivered this run is a FOLLOW-UP on request <id>" — set in the
@@ -1631,6 +1673,111 @@ def _evidence_grounded(details: str, pool: str, min_chars: int) -> bool:
         if d[i:i + n] in p:
             return True
     return False
+
+
+# --- Semantic question de-duplication (Stufe 3: topic breadth) ------------------------------------
+# Text-based "don't repeat" only blocks the same WORDING, so the model kept re-asking the SAME topic
+# reworded (always "work/VAF"). These helpers embed the candidate proactive question and reject it when it
+# is semantically too close to a recently asked/declined one, forcing a genuinely different area.
+# LEAK-SAFE: reuse the SAME embedding singleton the run already uses every run (no new vector lane), bound
+# to <= max_compare + 1 embeds/turn (recent ones are LRU cache hits), nothing persisted, fully sync, and
+# fail-OPEN on any error so a question is never lost to the gate.
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    """Cosine similarity with DEFENSIVE normalization — embed_sync does NOT L2-normalize MiniLM vectors."""
+    try:
+        import numpy as _np
+        va = _np.asarray(a, dtype=_np.float32)
+        vb = _np.asarray(b, dtype=_np.float32)
+        na = float(_np.linalg.norm(va))
+        nb = float(_np.linalg.norm(vb))
+        if na == 0.0 or nb == 0.0:
+            return 0.0
+        return float(_np.dot(va, vb) / (na * nb))
+    except Exception:
+        return 0.0
+
+
+def _embed_question(text: str) -> List[float]:
+    """Embed ONE short question via the shared embedding singleton (leak-safe; monkeypatched in tests)."""
+    from vaf.memory.embeddings import get_embedding_service
+    return get_embedding_service().embed_sync((text or "").strip(), prefix="query")
+
+
+def _recent_question_texts(user_scope_id: Optional[str], current_run_seq_val: int) -> List[str]:
+    """Recent proactive questions to compare against: asked/declined within the recency window, newest
+    first, exact-deduped and capped (small bound keeps the per-turn embed work tiny)."""
+    from vaf.core.config import Config
+    runs = int(Config.get("thinking_question_similarity_runs", 12) or 12)
+    cap = int(Config.get("thinking_question_similarity_max_compare", 12) or 12)
+    texts: List[str] = []
+    seen: set = set()
+
+    def _add(q: str) -> None:
+        q = (q or "").strip()
+        if not q:
+            return
+        key = q.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        texts.append(q)
+
+    try:
+        from vaf.core import thinking_requests as _treq
+        for r in _treq.list_requests(user_scope_id, within_runs=runs, current_run_seq=current_run_seq_val):
+            _add(r.get("question") or "")
+    except Exception:
+        pass
+    try:
+        for e in _load_declined(user_scope_id):
+            _add(e.get("question") or "")
+    except Exception:
+        pass
+    return texts[:cap]
+
+
+def _question_too_similar(user_scope_id: Optional[str], candidate: str) -> bool:
+    """True if `candidate` is semantically too close to a recently asked/declined question. Fail-OPEN: any
+    error (dedup off, memory off, no model, embedding failure) returns False so a question is never lost."""
+    candidate = (candidate or "").strip()
+    if not candidate:
+        return False
+    try:
+        from vaf.core.config import Config
+        if not Config.get("thinking_question_dedup_enabled", True):
+            return False
+        if not Config.get("memory_enabled", True):
+            return False
+        recent = _recent_question_texts(user_scope_id, current_run_seq(user_scope_id))
+        if not recent:
+            return False
+        threshold = float(Config.get("thinking_question_similarity_threshold", 0.80) or 0.80)
+        cand_vec = _embed_question(candidate)
+        best = 0.0
+        for q in recent:
+            sim = _cosine(cand_vec, _embed_question(q))
+            if sim > best:
+                best = sim
+        if best >= threshold:
+            logger.info(
+                "Thinking: proactive question rejected as too similar (cosine=%.3f >= %.2f): %r",
+                best, threshold, candidate[:80],
+            )
+            return True
+        return False
+    except Exception as e:
+        logger.debug("Thinking: question-dedup check failed (fail-open): %s", e)
+        return False
+
+
+def _getto_should_enforce(attempts: int, getto_max: int, is_last_turn: bool) -> bool:
+    """Whether the semantic-dedup gate is enforced on this get-to-know attempt. It is DISABLED on the final
+    allowed attempt (attempts >= getto_max) OR on the last loop turn, so a too-similar rejection can never
+    leave the run silent — a question always lands once we stop enforcing. Pure/testable (no I/O)."""
+    if is_last_turn:
+        return False
+    return attempts < getto_max
 
 
 def proactive_rate_limited(user_scope_id: Optional[str], current_run_seq_val: int, min_runs: int) -> bool:
@@ -1683,6 +1830,10 @@ def deliver_thinking_done_fallback(
         return f" (message delivered to the user, tracked as request {req['id']})"
     if req:
         return f" (message recorded as request {req['id']}; it will surface on the user's next visit)"
+    # None: a gate rejected it. Unlike ask_user.run (which consumes the reason to craft guidance), this
+    # fallback has no model turn to steer — so clear any reject_reason it set, to avoid leaving stale
+    # per-scope state that a later ask_user could misread as its own "too_similar" rejection.
+    take_reject_reason(scope)
     return " (the fallback message was not grounded/eligible and was not sent)"
 
 
@@ -1909,6 +2060,16 @@ _PROMPT_GET_TO_KNOW = (
     "their current focus or work, a routine they would like automated, a recurring task, or an interest. "
     "Emit EXACTLY ONE tool call: ask_user(message=\"<the question, in the user's language>\"). Make it "
     "specific and natural (NOT 'how can I help?'); never repeat a recent or declined question. No other tools."
+)
+
+# Appended to the get-to-know prompt on a RETRY after the semantic-dedup gate rejected the previous
+# attempt as too similar to a recent question. Pushes the model OFF the over-used topic into a clearly
+# different life area, so the proactive questions fan out instead of circling the same subject.
+_GET_TO_KNOW_RETRY_HINT = (
+    "\n\nIMPORTANT: your previous question was too similar to one you already asked recently. Choose a "
+    "CLEARLY DIFFERENT area this time — for example a hobby or interest, daily life, health/wellbeing, "
+    "people in their life, learning something new, travel, food, or a future goal — and AVOID the work/"
+    "project topic if that is what you keep asking about. Pick a genuinely fresh subject."
 )
 
 # Floor clear but proactive disabled / rate-limited: just finish.
@@ -2440,6 +2601,7 @@ def _run_thinking_for_user(
             # (rate-limit removed: a clear floor ALWAYS reaches out; repeats handled by dedup prompts.)
             # Proactive grounding turns: 0,1 = grounded (model also searches itself); 2 = get-to-know; 3 = done.
             _proactive_step = 0
+            _getto_attempts = 0       # get-to-know retries: dedup enforced until the final attempt (no silence)
             _proactive_digest = ""    # real memories retrieved in code, shown to the model + in the pool
             clear_run_evidence(user_scope_id)
             set_proactive_mode(user_scope_id, "off")
@@ -2543,9 +2705,24 @@ def _run_thinking_for_user(
                     # GET-TO-KNOW (FORCED): nothing grounded -> still ask ONE get-to-know question (no
                     # evidence-gate; a question states no fact). Always ends the run with a question.
                     prompt = _PROMPT_GET_TO_KNOW
+                    if _getto_attempts > 0:
+                        # The previous attempt was rejected by the semantic-dedup gate (too similar to a
+                        # recent question). Steer the model to a genuinely different area this time.
+                        prompt += _GET_TO_KNOW_RETRY_HINT
                     _force_tc = "required"
                     set_proactive_mode(user_scope_id, "open")
-                    _proactive_step = 3
+                    # Enforce the dedup gate on the first attempts, but DISABLE it on the final allowed
+                    # attempt OR the last loop turn so a question ALWAYS lands (a too-similar rejection must
+                    # never leave the run silent). Independent of max_turns: the last-turn check guarantees
+                    # the bypass even with a low turn budget.
+                    _getto_max = int(Config.get("thinking_getto_max_attempts", 3) or 3)
+                    _enforce = _getto_should_enforce(_getto_attempts, _getto_max, turn >= max_turns - 1)
+                    set_dedup_enforce(user_scope_id, _enforce)
+                    _getto_attempts += 1
+                    # Keep the loop alive across enforced retries (step stays < 3 so the post-step keep-alive
+                    # re-enters this branch next turn); only mark the proactive flow done once we stop
+                    # enforcing (the question on this turn will pass the gate and end the run).
+                    _proactive_step = 3 if not _enforce else 2
                 _turn_hist_start = len(getattr(agent, "history", []) or [])
                 mem_ctx = (memory_context or None) if turn == 0 else None
                 agent.chat_step(

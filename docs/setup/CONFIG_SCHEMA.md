@@ -292,8 +292,9 @@ highlights:
 | `thinking_proactive_enabled` | `True` | Allow proactive follow-up questions. |
 | `thinking_quiet_hours_enabled` | `False` | Suppress thinking during quiet hours. |
 | `thinking_quiet_hours_start/end` | `23:00` / `07:00` | Quiet-hours window. |
+| `thinking_question_dedup_enabled` | `True` | Semantic (embedding) de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Kill-switch; reuses the existing embedding singleton, fail-open. Tuning keys: `thinking_question_similarity_threshold` (`0.80`), `thinking_question_similarity_runs`/`_max_compare` (`12`), `thinking_getto_max_attempts` (`3`). |
 
-(~20 more `thinking_*` tuning keys exist — see config.py.)
+(~24 more `thinking_*` tuning keys exist — see config.py.)
 
 ## Connections (messaging, email, cloud)
 

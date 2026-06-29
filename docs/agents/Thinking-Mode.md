@@ -74,7 +74,9 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   never re-proposes a `declined` one. This is also enforced at the gate
   level: `thinking_ledger.item_resolved(..., recent_runs=N)` treats an item with a request raised in the
   last N runs as handled-for-now, so the forced-resolution node does not re-ask it (and the completion
-  gate does not block on it) while the user has not yet replied; it re-surfaces after the window.
+  gate does not block on it) while the user has not yet replied; it re-surfaces after the window. These
+  prompts are **text-based** (they block the same wording); a **semantic** layer additionally blocks the
+  same *topic* reworded — see [Semantic de-duplication](#proactive-intelligence-stufe-2).
 - **Multiple notes/todos:** the ledger lists **todos before notes** (a todo usually converts into an
   automation — an act with no message; a note usually resolves by sending help/a question, which ends the
   run — max 1 message). The forced node resolves the first open item each turn; act continues to the next
@@ -134,6 +136,11 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_proactive_evidence_min_chars_api` | `12` | Evidence-gate backstop when the thinking run uses a hosted model (lenient bar; selected automatically by provider). |
 | `thinking_proactive_min_runs` | `6` | **Deprecated** — rate-limiting no longer silences runs; repeats are prevented by the recent/declined dedup prompts. Unused. |
 | `thinking_proactive_memory_k` | `4` | Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also `memory_search` once itself). |
+| `thinking_question_dedup_enabled` | `true` | Semantic de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Reuses the shared embedding singleton; fails open; also requires `memory_enabled`. See [Proactive intelligence](#proactive-intelligence-stufe-2). |
+| `thinking_question_similarity_threshold` | `0.80` | Cosine ≥ this vs a recent/declined question → rejected as too similar (MiniLM runs ~0.78–0.85; tune per deployment). |
+| `thinking_question_similarity_runs` | `12` | Compare a candidate question against questions asked within this many recent runs. |
+| `thinking_question_similarity_max_compare` | `12` | Hard cap on how many recent questions are embedded/compared per turn (cost/leak bound). |
+| `thinking_getto_max_attempts` | `3` | Get-to-know retries enforcing dedup before the final attempt bypasses it (never end a run in silence; must be < the turn limit). |
 
 **Cost efficiency:** Set `thinking_provider` and optionally `thinking_model` to use a cheaper model for background runs (e.g. a small local model or a low-cost API tier) while keeping the main chat on a more capable model. Configurable in the Web UI under **Settings → AI & Model → Thinker (background)**.
 
@@ -201,6 +208,18 @@ that silences a run; a REPEAT is prevented by the recent/declined dedup prompts,
    focus/work, a routine they'd like automated, an interest), so future runs can help. A question states no
    fact, so it can never be a fabrication; this is the safe way to honour "always ask one question". The
    completion gate keeps the run from finishing while this is still pending (`_proactive_step < 3`).
+
+   - **Semantic de-duplication (topic breadth):** the text-based recent/declined prompts only block the same
+     *wording*, so the model used to re-ask the same *topic* reworded (always "work/VAF"). Before a proactive
+     question (open or grounded) is delivered, `deliver_tracked_message` runs a semantic gate
+     (`_question_too_similar`): it embeds the candidate and compares it by cosine similarity against the last
+     `thinking_question_similarity_runs` (12) asked/declined questions; at ≥ `thinking_question_similarity_threshold`
+     (0.80) the delivery is rejected (`return None`), `ask_user` tells the model the question is too similar and to
+     pick a clearly different area, and the loop re-asks. The candidate is embedded via the **shared embedding
+     singleton** the run already uses (`get_embedding_service().embed_sync`, ≤ `thinking_question_similarity_max_compare`
+     (12) comparisons per turn) — no new model load, nothing persisted, and the check **fails open** (any embedding
+     error → delivered). The final get-to-know attempt (after `thinking_getto_max_attempts`, default 3) bypasses the
+     gate so a run never ends in silence. Toggle with `thinking_question_dedup_enabled` (also requires `memory_enabled`).
 
 - **Follow up on the open question, then rest (anti-repetition):** before proposing a NEW topic, the run
   checks for the most recent **unanswered** free proactive request (`thinking_requests.get_open_proactive_request`

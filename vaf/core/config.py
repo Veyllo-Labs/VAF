@@ -344,6 +344,16 @@ class Config:
         "thinking_proactive_evidence_min_chars_api": 12,     # Evidence-gate when the thinking run uses a HOSTED/strong model (fabricates rarely -> lenient bar); selected automatically by provider
         "thinking_proactive_min_runs": 6,                    # DEPRECATED: rate-limiting no longer silences runs (silence is never the goal); repeats are prevented by the recent/declined dedup prompts. Unused.
         "thinking_proactive_memory_k": 4,                    # Per-query top-K when the proactive step pre-fetches real memories to hand the model (it may also memory_search once itself)
+        # Semantic de-duplication of proactive questions: text-based "don't repeat" only blocks the same wording,
+        # so the model kept re-asking the SAME topic reworded (always "work/VAF"). This embeds the candidate
+        # question and rejects it when it is too similar to a recently asked/declined one, forcing the model to
+        # pick a genuinely different area. Reuses the SAME embedding singleton the run already uses every run
+        # (no new vector lane); fail-open; the last get-to-know attempt bypasses the gate so a run never ends silent.
+        "thinking_question_dedup_enabled": True,             # Master kill-switch for the semantic question-dedup (also requires memory_enabled)
+        "thinking_question_similarity_threshold": 0.80,      # Cosine >= this vs a recent question -> reject as too similar (MiniLM runs ~0.78-0.85; tune per deployment)
+        "thinking_question_similarity_runs": 12,             # Compare against questions asked within this many recent runs
+        "thinking_question_similarity_max_compare": 12,      # Hard cap on how many recent questions are embedded/compared per turn (leak/cost bound)
+        "thinking_getto_max_attempts": 3,                    # Get-to-know retries that enforce dedup before the gate is bypassed; the bypass also fires on the loop's last turn, so a low turn budget can never cause silence
 
         # Garbage Collector Settings
         "gc_enabled": True,                    # Enable automatic temp file / log cleanup

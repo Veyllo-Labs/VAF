@@ -65,6 +65,12 @@ non-localhost client must come from an RFC1918 IP, present a valid `access` JWT,
 | Auth-phase error (secret/import/other) for a **non-localhost** client | reject — close `4003` (fail-closed) |
 | Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
 
+**Client reconnect (`web/app/page.tsx`).** The browser only opens `/ws` once `GET /api/auth/me` reports an
+authenticated session, and reconnects with **exponential backoff + jitter (capped 30s)** rather than a fixed
+interval. When a socket closes **without ever opening** — the handshake was rejected (`4001`/`4003`, e.g. an
+expired token mid-session) — the client re-checks `/api/auth/me`; a `401`/`403` clears the token and routes
+to `/login` instead of retrying. This stops a stale/expired token from hammering `/ws` once per reload.
+
 **Fail-closed guarantee.** A non-localhost connection is **never** established without a resolved
 `user_scope_id`. RAG no longer treats a missing scope as global/admin: for an unscoped/`None` request
 `RagPipeline.search()` returns `[]`, and `run_memory_search_sync` denies in server mode (and floors to

@@ -326,7 +326,9 @@ async def setup_2fa(request: Request):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     qr_base64 = base64.b64encode(buf.getvalue()).decode()
-    return {"qr_code_base64": qr_base64}
+    # `secret` (base32) is returned so the UI can show it under the QR for manual entry
+    # in an authenticator app. The QR already encodes it; this endpoint is auth-required.
+    return {"qr_code_base64": qr_base64, "secret": secret}
 
 
 @router.post("/verify-2fa")

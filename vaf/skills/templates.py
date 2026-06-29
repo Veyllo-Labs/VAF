@@ -46,11 +46,54 @@ def _discover_skills() -> Dict[str, Dict[str, Any]]:
     return skills
 
 
-# Loaded once at import; refreshed via reload_skills().
+def _skills_signature() -> tuple:
+    """Cheap fingerprint of ~/.vaf/skills (skill count + newest SKILL.md mtime).
+
+    Changes whenever a skill is added, removed, or edited. Used to auto-refresh
+    the in-memory cache on read without a restart — and regardless of which
+    process wrote the file (a hand-dropped SKILL.md or one created by a sub-agent
+    running in a separate process). Just a handful of stat() calls; no watcher.
+    """
+    directory = _skills_dir()
+    count = 0
+    latest = 0
+    try:
+        if directory.exists():
+            for child in directory.iterdir():
+                if not child.is_dir():
+                    continue
+                try:
+                    st = (child / "SKILL.md").stat()
+                except OSError:
+                    continue
+                count += 1
+                if st.st_mtime_ns > latest:
+                    latest = st.st_mtime_ns
+    except Exception:
+        pass
+    return (count, latest)
+
+
+# Loaded once at import; auto-refreshed on read when the skills dir changes
+# (see _ensure_fresh) and force-refreshed via reload_skills().
 SKILLS: Dict[str, Dict[str, Any]] = _discover_skills()
+_SKILLS_SIG: tuple = _skills_signature()
+
+
+def _ensure_fresh() -> None:
+    """Re-scan the skills dir and rebind SKILLS only when its signature changed."""
+    global SKILLS, _SKILLS_SIG
+    try:
+        sig = _skills_signature()
+    except Exception:
+        return
+    if sig != _SKILLS_SIG:
+        SKILLS = _discover_skills()
+        _SKILLS_SIG = sig
 
 
 def get_skill(skill_id: str) -> Optional[Dict[str, Any]]:
+    _ensure_fresh()
     return SKILLS.get(skill_id)
 
 
@@ -65,6 +108,7 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
 
     Returns [{id, name, description, valid, error, shared_with, created_by}].
     """
+    _ensure_fresh()
     from vaf.core import skills_registry
     visible_ids = set(skills_registry.get_visible_skill_ids_for_user(user_scope_id))
     manifest = skills_registry.load_manifest().get("skills", {})
@@ -92,5 +136,6 @@ def list_skills(user_scope_id: Optional[str] = None, include_invalid: bool = Fal
 
 def reload_skills() -> None:
     """Reload all skills (after create / update / delete / import)."""
-    global SKILLS
+    global SKILLS, _SKILLS_SIG
     SKILLS = _discover_skills()
+    _SKILLS_SIG = _skills_signature()

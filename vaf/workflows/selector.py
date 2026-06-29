@@ -14,7 +14,7 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 
-from vaf.workflows.templates import WORKFLOW_TEMPLATES, get_template
+from vaf.workflows.templates import get_workflow_templates
 
 
 @dataclass
@@ -45,9 +45,11 @@ class WorkflowSelector:
         Initialize the selector.
         
         Args:
-            templates: Custom templates (default: WORKFLOW_TEMPLATES)
+            templates: Custom templates (default: the live workflow registry)
         """
-        self.templates = templates or WORKFLOW_TEMPLATES
+        # Use the freshness-checked accessor (not the module-level snapshot) so a
+        # selector built mid-session sees workflows added after import.
+        self.templates = templates if templates is not None else get_workflow_templates()
     
     def select(self, user_input: str) -> SelectorResult:
         """
@@ -381,7 +383,7 @@ class WorkflowSelector:
             desc = var_descs.get(var, var)
             suggestions.append(f"  • {var}: {desc}")
         
-        return f"Please provide:\n" + "\n".join(suggestions)
+        return "Please provide:\n" + "\n".join(suggestions)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # UTILITY METHODS

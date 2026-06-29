@@ -18,7 +18,6 @@ Each workflow file must define a WORKFLOW dictionary with:
 - steps: List of tool call steps
 """
 
-import os
 import importlib.util
 from pathlib import Path
 from typing import Dict, Any, List
@@ -116,8 +115,61 @@ def _load_all_workflows() -> Dict[str, Dict[str, Any]]:
     return workflows
 
 
-# Load all workflows automatically
+def _workflows_signature() -> tuple:
+    """Cheap fingerprint of the workflow dirs (count + newest .py mtime over the
+    built-in and ~/.vaf/workflows directories). Changes when a workflow file is
+    added, removed, or edited. Lets a newly-created or cross-process-written
+    workflow become live without a restart. Just a few stat() calls; no watcher."""
+    count = 0
+    latest = 0
+    for directory in (Path(__file__).parent / "workflows", Path.home() / ".vaf" / "workflows"):
+        try:
+            if not directory.exists():
+                continue
+            for f in directory.glob("*.py"):
+                if f.name == "__init__.py":
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                count += 1
+                if st.st_mtime_ns > latest:
+                    latest = st.st_mtime_ns
+        except Exception:
+            pass
+    return (count, latest)
+
+
+# Load all workflows automatically; auto-refreshed on read when the dirs change
+# (see ensure_fresh_workflows) and force-refreshed via reload_workflows().
 WORKFLOW_TEMPLATES: Dict[str, Dict[str, Any]] = _load_all_workflows()
+_WF_SIG: tuple = _workflows_signature()
+
+
+def ensure_fresh_workflows() -> None:
+    """Rescan the workflow dirs and rebind WORKFLOW_TEMPLATES only when files
+    changed. Call before reading the registry so newly-added/edited workflows are
+    picked up live, regardless of which process wrote them."""
+    global WORKFLOW_TEMPLATES, _WF_SIG
+    try:
+        sig = _workflows_signature()
+    except Exception:
+        return
+    if sig != _WF_SIG:
+        WORKFLOW_TEMPLATES = _load_all_workflows()
+        _WF_SIG = sig
+
+
+def get_workflow_templates() -> Dict[str, Dict[str, Any]]:
+    """Freshness-checked accessor for the workflow registry.
+
+    Prefer this over importing the WORKFLOW_TEMPLATES global directly: a plain
+    `from ... import WORKFLOW_TEMPLATES` binds a stale snapshot, whereas this
+    rebinds the global on disk changes first and returns the current dict.
+    """
+    ensure_fresh_workflows()
+    return WORKFLOW_TEMPLATES
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -126,11 +178,13 @@ WORKFLOW_TEMPLATES: Dict[str, Dict[str, Any]] = _load_all_workflows()
 
 def get_template(name: str) -> Dict[str, Any]:
     """Get a workflow template by name."""
+    ensure_fresh_workflows()
     return WORKFLOW_TEMPLATES.get(name)
 
 
 def list_templates() -> List[Dict[str, str]]:
     """List all available templates with name and description."""
+    ensure_fresh_workflows()
     user_dir = Path.home() / ".vaf" / "workflows"
     return [
         {
@@ -147,10 +201,12 @@ def list_templates() -> List[Dict[str, str]]:
 
 def get_template_names() -> List[str]:
     """Get list of template names."""
+    ensure_fresh_workflows()
     return list(WORKFLOW_TEMPLATES.keys())
 
 
 def reload_workflows() -> None:
     """Reload all workflows (useful after adding new user workflows)."""
-    global WORKFLOW_TEMPLATES
+    global WORKFLOW_TEMPLATES, _WF_SIG
     WORKFLOW_TEMPLATES = _load_all_workflows()
+    _WF_SIG = _workflows_signature()

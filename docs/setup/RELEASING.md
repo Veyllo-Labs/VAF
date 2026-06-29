@@ -14,6 +14,16 @@ a release is therefore the act that makes a new version available to all clients
 - A tag whose version is exactly `X.Y.Z` is published as a normal release; a tag
   with a prerelease suffix is published as a GitHub *prerelease*.
 
+### Prereleases and `vaf update`
+
+`vaf update` reads the releases **list** (not `/releases/latest`, which excludes prereleases) and
+picks the newest **eligible** release. Eligibility defaults to **auto**: a build that is itself a
+prerelease (e.g. `2.6.0a0`) tracks prereleases, while a stable build tracks stable releases only.
+Override per install with the `update_include_prereleases` config key (`null` = auto, `true` =
+always, `false` = stable-only) or per command with `vaf update --pre` / `--stable`. So during the
+alpha, clients running `2.6.0aN` see and install newer `aN` releases automatically — without
+waiting for a stable `X.Y.Z`.
+
 ## Backward-compatibility rules
 
 - Do not break the public surface (`from vaf import Agent`, `BaseTool`, documented
@@ -50,5 +60,7 @@ a release is therefore the act that makes a new version available to all clients
 ## Verifying
 
 - The release appears at `https://github.com/Veyllo-Labs/VAF/releases`.
-- `gh api repos/Veyllo-Labs/VAF/releases/latest` returns the new `tag_name`.
-- On any installed checkout, `vaf update check` reports the new version.
+- `gh api repos/Veyllo-Labs/VAF/releases` lists it (the first entry is the newest). Note
+  `releases/latest` only returns **stable** releases, so during the alpha it stays empty.
+- On any installed checkout, `vaf update check` reports the new version (a `2.6.0aN` build sees
+  newer prereleases automatically; see *Prereleases and `vaf update`*).

@@ -278,6 +278,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `queue_policy` | `"legacy"` | Request queue policy (admin-only): `legacy` (single priority heap) or `weighted_fair` (lane fairness across interactive/automation/background). Recommended `weighted_fair` when `parallel_main_workers > 1`. |
 | `queue_weight_interactive/automation/background` | `5` / `3` / `1` | Queue priorities. |
 | `update_check_on_start` | `True` | One-line "update available" hint at startup. |
+| `update_include_prereleases` | `null` | `vaf update` prerelease tracking. `null` = auto (track prereleases only when the installed build is itself a prerelease), `true` = always, `false` = stable-only. Also overridable per command via `vaf update --pre`/`--stable`. See [RELEASING.md](RELEASING.md). |
 | `config_format_version` | `1` | Bumped by config migrations. |
 | `default_language` | `""` | Forced UI language; empty = auto. |
 

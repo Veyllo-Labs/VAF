@@ -67,6 +67,7 @@ class Config:
     DEFAULTS = {
         "config_format_version": 1,  # bumped by vaf/core/migrations.py when the config format changes
         "update_check_on_start": True,  # one-line "update available" hint at startup (vaf update)
+        "update_include_prereleases": None,  # `vaf update` prerelease tracking: None=auto (track prereleases iff the installed build is itself a prerelease), True=always, False=stable-only
         "web_search_cache_enabled": True,        # serve identical web_search queries from a short-lived cache
         "web_search_cache_ttl_seconds": 900,     # 15 minutes
         "model": "auto",  # "auto" = VRAM-adaptive local default: Qwen3.5-4B (<=10 GB VRAM) or Qwen3.5-9B (>10 GB), unsloth GGUF, quant auto-picked. Or set an explicit "repo/file.gguf".

@@ -32,7 +32,10 @@ from vaf.cli.ui import UI
 app = typer.Typer(help="Check for and apply VAF updates")
 
 GITHUB_REPO = "Veyllo-Labs/VAF"
-_RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# The LIST endpoint (newest first) — unlike /releases/latest it INCLUDES prereleases, so an alpha
+# build (e.g. 2.6.0aN, published as a GitHub prerelease) is visible to the updater. Eligibility is
+# then decided in code (_eligible_prereleases) rather than by the endpoint.
+_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 
 class _UpdateError(Exception):
@@ -41,24 +44,71 @@ class _UpdateError(Exception):
 
 # ── version / release helpers ────────────────────────────────────────────────
 
-def _resolve_latest_release():
-    """Fetch the latest published VAF release from GitHub (offline-safe -> None).
+def _eligible_prereleases(include_prereleases: "bool | None" = None) -> bool:
+    """Whether the update check should consider GitHub PRERELEASES.
 
-    Mirrors ServerManager.resolve_latest_release (vaf/core/backend.py). On success
-    returns {tag, version (tag without leading 'v'), html_url, body, prerelease}.
+    `include_prereleases` wins if given (CLI --pre/--stable). Else the `update_include_prereleases`
+    config key wins if set (True/False). Else AUTO: track prereleases only when the INSTALLED build
+    is itself a prerelease — so an alpha (2.6.0aN) follows alpha releases, while a stable build
+    follows stable releases only.
     """
+    if include_prereleases is not None:
+        return bool(include_prereleases)
     try:
-        resp = requests.get(_RELEASES_LATEST_URL, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            tag = data.get("tag_name", "") or ""
-            return {
-                "tag": tag,
-                "version": tag[1:] if tag.startswith("v") else tag,
-                "html_url": data.get("html_url", ""),
-                "body": data.get("body", ""),
-                "prerelease": bool(data.get("prerelease", False)),
-            }
+        from vaf.core.config import Config
+        cfg = Config.get("update_include_prereleases", None)
+        if cfg is not None:
+            return bool(cfg)
+    except Exception:
+        pass
+    try:
+        from packaging.version import Version
+        return Version(__version__).is_prerelease
+    except Exception:
+        return False
+
+
+def _resolve_latest_release(include_prereleases: "bool | None" = None):
+    """Fetch the newest ELIGIBLE published VAF release from GitHub (offline-safe -> None).
+
+    Uses the releases LIST endpoint (newest first) instead of /releases/latest, because the latter
+    excludes prereleases — during the alpha that hides every release. Stable releases are always
+    eligible; prereleases only when `_eligible_prereleases()` allows. Returns the highest-version
+    eligible release as {tag, version (tag without leading 'v'), html_url, body, prerelease}.
+    """
+    incl = _eligible_prereleases(include_prereleases)
+    try:
+        from packaging.version import parse as _parse
+        resp = requests.get(_RELEASES_URL, timeout=5, headers={"Accept": "application/vnd.github+json"})
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not isinstance(data, list):
+            return None
+        best = None
+        best_v = None
+        for r in data:
+            if not isinstance(r, dict) or r.get("draft"):
+                continue
+            if r.get("prerelease") and not incl:
+                continue
+            tag = r.get("tag_name", "") or ""
+            ver = tag[1:] if tag.startswith("v") else tag
+            if not ver:
+                continue
+            try:
+                pv = _parse(ver)
+            except Exception:
+                continue
+            if best_v is None or pv > best_v:
+                best_v, best = pv, {
+                    "tag": tag,
+                    "version": ver,
+                    "html_url": r.get("html_url", ""),
+                    "body": r.get("body", ""),
+                    "prerelease": bool(r.get("prerelease", False)),
+                }
+        return best
     except Exception:
         pass
     return None
@@ -276,7 +326,8 @@ def _rollback(root: Path, anchor: str) -> None:
 
 # ── apply ─────────────────────────────────────────────────────────────────────
 
-def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None) -> None:
+def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
+           include_prereleases: "bool | None" = None) -> None:
     root = _repo_root()
     if not is_git_repo(str(root)):
         UI.error(f"VAF at {root} is not a git checkout; `vaf update` needs one. Re-install from git.")
@@ -288,7 +339,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None) -> None:
         target_version = target[1:]
         notes_url = ""
     else:
-        rel = _resolve_latest_release()
+        rel = _resolve_latest_release(include_prereleases)
         if not rel or not rel.get("tag"):
             UI.error("Could not determine the latest release (offline, or none published yet).")
             raise typer.Exit(1)
@@ -409,6 +460,7 @@ def _update_main(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen; change nothing"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not prompt for confirmation"),
     tag: str = typer.Option(None, "--tag", help="Update to a specific tag instead of the latest release"),
+    pre: bool = typer.Option(None, "--pre/--stable", help="Force including / excluding prereleases (default: auto by the installed version)"),
     recover: bool = typer.Option(False, "--recover", help="Recover from an interrupted update"),
 ):
     """Update VAF to the latest published release (bare `vaf update`)."""
@@ -417,16 +469,18 @@ def _update_main(
     if recover:
         _recover()
         return
-    _apply(dry_run=dry_run, assume_yes=yes, target_tag=tag)
+    _apply(dry_run=dry_run, assume_yes=yes, target_tag=tag, include_prereleases=pre)
 
 
 @app.command("check")
-def check():
+def check(
+    pre: bool = typer.Option(None, "--pre/--stable", help="Force including / excluding prereleases (default: auto by the installed version)"),
+):
     """Check whether a newer VAF release is available (read-only)."""
     UI.event("Update", f"Installed version: {__version__}")
     if _breadcrumb_path().exists():
         UI.warning("A previous update did not finish. Run `vaf update --recover`.")
-    rel = _resolve_latest_release()
+    rel = _resolve_latest_release(pre)
     if rel is None:
         UI.event("Update", "Could not reach GitHub to check for updates (offline?).", style="warning")
         raise typer.Exit(0)

@@ -499,14 +499,14 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                 )}
                 onClick={e => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-red-500 flex items-center justify-center">
-                            <Mail className="w-5 h-5 text-white" />
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
+                    <div className="flex items-center gap-3 max-md:gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-red-500 flex items-center justify-center shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
+                            <Mail className="w-5 h-5 text-white max-md:w-5 max-md:h-5" />
                         </div>
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-900">Email</h3>
-                            <p className="text-xs text-gray-500">Manage your accounts</p>
+                        <div className="min-w-0">
+                            <h3 className="text-lg font-semibold text-gray-900 max-md:text-lg truncate">Email</h3>
+                            <p className="text-xs text-gray-500 max-md:text-xs truncate">Manage your accounts</p>
                         </div>
                     </div>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
@@ -514,10 +514,10 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                     </button>
                 </div>
 
-                <div className="flex-1 flex min-h-0 overflow-hidden max-md:flex-col">
+                <div className="flex-1 flex min-h-0 overflow-hidden max-md:flex-col max-md:overflow-y-auto">
                     {/* Left sidebar: accounts + Add account. On mobile it stacks on top (capped height,
                         scrolls) and the mail list takes the rest. */}
-                    <aside className="w-72 shrink-0 flex flex-col border-r border-gray-200 bg-gray-50/80 overflow-hidden max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b">
+                    <aside className="w-72 shrink-0 flex flex-col border-r border-gray-200 bg-gray-50/80 overflow-hidden max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b max-md:shrink-0">
                         {error && (
                             <div className="mx-3 mt-3 p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
                                 {error}
@@ -641,9 +641,9 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                         </div>
                     </aside>
                     {/* Main content area: synced mail list */}
-                    <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-white max-md:min-h-0">
+                    <main className="flex-1 min-w-0 flex flex-col overflow-hidden bg-white max-md:min-h-0 max-md:shrink-0">
                         {accounts.length === 0 && !loading && (
-                            <div className="flex flex-col items-center justify-center flex-1 text-center max-w-sm mx-auto p-8">
+                            <div className="flex flex-col items-center justify-center flex-1 text-center max-w-sm mx-auto p-8 max-md:p-4">
                                 <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center mb-3">
                                     <Mail className="w-7 h-7 text-gray-400" />
                                 </div>

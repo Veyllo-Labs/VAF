@@ -76,6 +76,10 @@ class UserWorkspace:
                 "timezone": None,
                 "date_format": None,
                 "time_format": None,
+                # Per-user proactive "quiet hours" (None = inherit the global thinking config).
+                "quiet_hours_enabled": None,
+                "quiet_hours_start": None,
+                "quiet_hours_end": None,
                 "last_seen_announcement_version": None,
                 "change_log": [],
             }
@@ -139,6 +143,10 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
             "timezone": None,
             "date_format": None,
             "time_format": None,
+            # Per-user proactive "quiet hours" (None = inherit the global thinking config).
+            "quiet_hours_enabled": None,
+            "quiet_hours_start": None,
+            "quiet_hours_end": None,
             "last_seen_announcement_version": None,
             "change_log": [],
         }
@@ -172,6 +180,13 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
                 else:
                     val = data[key]
                     data[key] = (val if isinstance(val, str) and val.strip() else None) or defaults[key]
+            # Per-user quiet hours: enabled is bool|None (None = inherit the global thinking
+            # config); start/end are "HH:MM" strings or None. Older files heal to None on read.
+            if not isinstance(data.get("quiet_hours_enabled"), bool):
+                data["quiet_hours_enabled"] = None
+            for key in ("quiet_hours_start", "quiet_hours_end"):
+                val = data.get(key)
+                data[key] = val if (isinstance(val, str) and val.strip()) else None
             # Backfill so older identity files heal on read (the announcement modal reads/writes this).
             if "last_seen_announcement_version" not in data:
                 data["last_seen_announcement_version"] = defaults["last_seen_announcement_version"]

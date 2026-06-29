@@ -93,6 +93,18 @@ class UpdateUserIdentityTool(BaseTool):
                 "type": "string",
                 "enum": ["24h", "12h"],
                 "description": "Preferred time format: 24h or 12h. Use when user says they want 24-hour or 12-hour (AM/PM) time."
+            },
+            "quiet_hours_enabled": {
+                "type": "boolean",
+                "description": "Turn the user's proactive 'quiet hours' on/off (no background/thinking messages during the window). Use when the user says e.g. 'don't message me at night' or 'you can reach me anytime'."
+            },
+            "quiet_hours_start": {
+                "type": "string",
+                "description": "Start of the quiet window as 24h HH:MM (e.g. '22:00'). Evaluated in the user's timezone."
+            },
+            "quiet_hours_end": {
+                "type": "string",
+                "description": "End of the quiet window as 24h HH:MM (e.g. '07:00'). Evaluated in the user's timezone."
             }
         },
         "required": []
@@ -116,6 +128,18 @@ class UpdateUserIdentityTool(BaseTool):
         date_format = (kwargs.get("date_format") or "").strip() or None
         time_format_raw = (kwargs.get("time_format") or "").strip().lower() or None
         time_format = time_format_raw if time_format_raw in ("24h", "12h") else None
+        qh_enabled = kwargs.get("quiet_hours_enabled")
+        if isinstance(qh_enabled, str):
+            _s = qh_enabled.strip().lower()
+            qh_enabled = (_s in ("true", "1", "yes", "on")) if _s else None
+        elif not isinstance(qh_enabled, bool):
+            qh_enabled = None
+        import re as _re
+        def _norm_hhmm(v):
+            v = (v or "").strip() or None
+            return v if (v and _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", v)) else None
+        quiet_hours_start = _norm_hhmm(kwargs.get("quiet_hours_start"))
+        quiet_hours_end = _norm_hhmm(kwargs.get("quiet_hours_end"))
 
         def _norm_list(val):
             if val is None:
@@ -128,8 +152,8 @@ class UpdateUserIdentityTool(BaseTool):
         add_do = _norm_list(add_do)
         add_dont = _norm_list(add_dont)
 
-        if not any([name, language, city is not None, country is not None, main_messenger is not None, timezone is not None, date_format is not None, time_format is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
-            return "No updates provided. Pass at least one of: name, language, city, country, main_messenger, timezone, date_format, time_format, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
+        if not any([name, language, city is not None, country is not None, main_messenger is not None, timezone is not None, date_format is not None, time_format is not None, qh_enabled is not None, quiet_hours_start is not None, quiet_hours_end is not None, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont]):
+            return "No updates provided. Pass at least one of: name, language, city, country, main_messenger, timezone, date_format, time_format, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, add_preference, remove_preference, add_do, remove_do, add_dont, remove_dont."
 
         try:
             from datetime import datetime
@@ -152,6 +176,12 @@ class UpdateUserIdentityTool(BaseTool):
                 user_identity["date_format"] = date_format
             if time_format is not None:
                 user_identity["time_format"] = time_format
+            if qh_enabled is not None:
+                user_identity["quiet_hours_enabled"] = qh_enabled
+            if quiet_hours_start is not None:
+                user_identity["quiet_hours_start"] = quiet_hours_start
+            if quiet_hours_end is not None:
+                user_identity["quiet_hours_end"] = quiet_hours_end
             for p in add_preference:
                 if p and p not in user_identity["preferences"]:
                     user_identity["preferences"].append(p)
@@ -186,6 +216,8 @@ class UpdateUserIdentityTool(BaseTool):
                 parts.append("date_format")
             if time_format is not None:
                 parts.append("time_format")
+            if qh_enabled is not None or quiet_hours_start is not None or quiet_hours_end is not None:
+                parts.append("quiet_hours")
             if add_preference or remove_preference:
                 parts.append("preference")
             if add_do or remove_do:

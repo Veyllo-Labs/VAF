@@ -130,12 +130,29 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
             if current.get(dt_key) != val:
                 changes.append(dt_key)
                 current[dt_key] = val
+    # Per-user proactive quiet hours (None = inherit the global thinking config).
+    if "quiet_hours_enabled" in full_dict:
+        qv = full_dict["quiet_hours_enabled"]
+        qv = qv if isinstance(qv, bool) else None
+        if current.get("quiet_hours_enabled") != qv:
+            changes.append("quiet_hours_enabled")
+            current["quiet_hours_enabled"] = qv
+    import re as _re_qh
+    for qk in ("quiet_hours_start", "quiet_hours_end"):
+        if qk in full_dict:
+            val = (full_dict[qk] or "").strip() or None
+            if val and not _re_qh.match(r"^([01]\d|2[0-3]):[0-5]\d$", val):
+                val = None
+            if current.get(qk) != val:
+                changes.append(qk)
+                current[qk] = val
     # System field: the announcement version the user acknowledged. Persist it SILENTLY — it is
     # bookkeeping, not a user-facing profile edit, so it must never land in change_log.
     if "last_seen_announcement_version" in full_dict and full_dict["last_seen_announcement_version"] is not None:
         current["last_seen_announcement_version"] = str(full_dict["last_seen_announcement_version"]).strip() or None
     for key, value in update_dict.items():
         if key in ("main_messenger", "city", "country", "timezone", "date_format", "time_format",
+                   "quiet_hours_enabled", "quiet_hours_start", "quiet_hours_end",
                    "last_seen_announcement_version"):
             continue
         if current.get(key) != value:

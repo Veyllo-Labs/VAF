@@ -126,9 +126,13 @@ grep the symbol names to find them.
 | `tool_turn_count` | soft reminder ~50, hard stop ~75 tool steps in one turn |
 | `_plan_gate_blocks` / `_team_await_blocks` | gate bounces before proceeding anyway |
 | `_anti_spin_streak` | consecutive bookkeeping-only calls before tools are disabled for a turn |
+| `_nonprogress_streak` | consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, `read_automation`, …; NOT `web_search`/`memory_search`, which are genuine gathering) before a nudge then a forced text answer — catches a "verify forever" loop where the work is already done; any mutating/producing tool resets it (`nonprogress_max_turns`, default 6) |
 | `redundant_block_count` | repeated identical tool calls before a nudge |
+| wall-clock backstop | a generous per-turn deadline (`chat_step_wall_clock_seconds`, default **3600s = 1h**) checked at each tool-turn boundary; independent of tool count or provider speed, it is the last-resort stop for a true infinite/zombie loop and never aborts legitimate long work (the no-progress guard + per-tool timeouts stop the common case far earlier). The 75-turn cap is a secondary guard. |
 
 The gates above are deliberately **bounded** — each blocks a few times, then lets the turn
-proceed so nothing hard-locks. Their config keys are in
-[CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`, `anti_spin_*`, `result_grounding_*`
-families).
+proceed so nothing hard-locks. The two universal backstops (`_nonprogress_streak` and the wall-clock)
+exist because a *slow* runaway (a reasoning provider grinding many varied tool turns, e.g. an agent that
+kept re-verifying an already-created automation) evades the count- and 5-second-based guards. Their
+config keys are in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`, `anti_spin_*`,
+`nonprogress_*`, `chat_step_wall_clock_seconds`, `result_grounding_*` families).

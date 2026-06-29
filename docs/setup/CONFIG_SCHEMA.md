@@ -134,6 +134,9 @@ These are sent only on the local path; cloud APIs ignore them.
 | `plan_drift_nudge_enabled` | `True` | Soft hint when a later task is marked done before an earlier one. |
 | `anti_spin_enabled` | `True` | Stop repeated bookkeeping-tool churn without real work. |
 | `anti_spin_max_planning_calls` | `4` | Consecutive plan/intent calls before nudging. |
+| `nonprogress_max_turns` | `6` | Consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, …; not `web_search`/`memory_search`) before a nudge then a forced text answer. Catches a "verify forever" loop; any mutating/producing tool resets it. |
+| `chat_step_wall_clock_seconds` | `3600` | Main-loop wall-clock **backstop** (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count or provider speed. Deliberately generous — never aborts legitimate long work; the no-progress guard + per-tool timeouts stop the common case far earlier. The 75-turn cap is a secondary guard. |
+| `workflow_generation_timeout_seconds` | `30` | create_automation: time-bound the inline LLM workflow pre-generation (fast-fail to robust prompt-based execution). |
 | `result_grounding_enabled` | `True` | Bounce a reply that claims a tool outcome the turn's results don't support. |
 | `result_grounding_max_retries` | `2` | Corrections before proceeding anyway. |
 | `team_await_enabled` | `True` | Don't let the agent finish while a sub-agent is genuinely still running. |

@@ -142,8 +142,8 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                 )}
                 onClick={e => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-                    <h3 className="text-lg font-semibold text-gray-900">Discord</h3>
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
+                    <h3 className="text-lg font-semibold text-gray-900 min-w-0 max-md:text-lg truncate">Discord</h3>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
@@ -274,8 +274,8 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                         className="bg-white rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden w-[210mm] min-h-[320mm] h-[95vh] max-w-[96vw] max-md:max-w-none max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:min-h-0"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-                            <h4 className="text-sm font-semibold text-gray-900">@{data.admin_username} – Discord</h4>
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
+                            <h4 className="text-sm font-semibold text-gray-900 min-w-0 truncate">@{data.admin_username} – Discord</h4>
                             <button
                                 type="button"
                                 onClick={() => setHistoryPopoutOpen(false)}

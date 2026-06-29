@@ -178,8 +178,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 )}
                 onClick={e => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-                    <h3 className="text-lg font-semibold text-gray-900">Telegram</h3>
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
+                    <h3 className="text-lg font-semibold text-gray-900 max-md:text-lg truncate">Telegram</h3>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
@@ -187,7 +187,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
 
                 <div className="flex-1 flex min-h-0 max-md:flex-col">
                     {/* Left sidebar: session list (chats for this bot only) */}
-                    <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50 max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b">
+                    <div className="w-56 shrink-0 border-r border-gray-200 flex flex-col bg-gray-50/50 max-md:w-full max-md:max-h-[38vh] max-md:border-r-0 max-md:border-b max-md:shrink-0">
                         <div className="px-3 py-2 border-b border-gray-200">
                             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Sessions</p>
                             <p className="text-xs text-gray-400 mt-0.5">Chats with this bot</p>
@@ -238,7 +238,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     </div>
 
                     {/* Main content */}
-                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0">
+                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0 max-md:shrink-0">
                     {loading ? (
                         <div className="py-8 text-center text-gray-500">Loading…</div>
                     ) : data ? (

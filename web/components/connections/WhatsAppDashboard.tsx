@@ -280,8 +280,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 )}
                 onClick={e => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-                    <h3 className="text-lg font-semibold text-gray-900">WhatsApp</h3>
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0 max-md:px-4 max-md:py-3">
+                    <h3 className="text-lg font-semibold text-gray-900 max-md:text-lg truncate">WhatsApp</h3>
                     <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                         <X className="w-5 h-5 text-gray-500" />
                     </button>
@@ -375,7 +375,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     </div>
 
                     {/* Main content */}
-                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0">
+                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 min-w-0 max-md:min-h-0 max-md:shrink-0">
                     {data && !data.running && !data.linked && (
                         <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
                             <p className="font-medium mb-1">Bridge not started</p>

@@ -4538,30 +4538,59 @@ class Agent:
             # Quick Inference with reasoning (temperature 0.1 for strict logic)
             messages = [{"role": "user", "content": prompt}]
             
+            # Provider-agnostic router inference: the LLM tier is the ONLY tier that
+            # can route SKILLS (and do intent-based workflow routing). It must run the
+            # same way regardless of provider, mirroring the canonical 3-way pattern
+            # used elsewhere in this file (e.g. the false-promise validator):
+            #   local llama.cpp server  -> use_server
+            #   cloud / API provider    -> api_backend   (e.g. veyllo)
+            #   local in-process lib    -> llm
+            # Previously only use_server was handled, so on a cloud provider the router
+            # fell straight to Tier-3 keyword matching, which knows workflows only and
+            # never offers skills.
             content = ""
+            router_llm_ok = False
             if self.use_server:
                 # Full thinking capacity with 120s timeout
                 payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.1}
                 try:
                     res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
                     content = res['choices'][0]['message']['content']
-                except Exception as e:
-                    # ERROR: LLM server request failed
-                    # Return None → Tier 2 (Agent Choice) will handle
-                    self._workflow_selection_tier = 2  # Agent will get workflow list
-                    return None
-            else:
-                # No LLM server available → Use Tier 3 (Pattern Matching) immediately
+                    router_llm_ok = True
+                except Exception:
+                    pass
+            elif self.api_backend:
+                # Cloud / API provider: route through the SAME backend the main agent
+                # uses (no hardcoded localhost). chat_completion yields chunks; collect.
+                try:
+                    chunks = list(self.api_backend.chat_completion(
+                        messages, max_tokens=1024, temperature=0.1, stream=False))
+                    content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+                    router_llm_ok = True
+                except Exception:
+                    pass
+            elif self.llm:
+                # Local in-process library (llama-cpp-python)
+                try:
+                    output = self.llm.create_chat_completion(
+                        messages=messages, max_tokens=1024, temperature=0.1)
+                    content = output['choices'][0]['message']['content']
+                    router_llm_ok = True
+                except Exception:
+                    pass
+
+            if not router_llm_ok:
+                # No LLM router available (no backend, or the call failed) → Tier 3
+                # pattern matching (workflows only), then Tier 2 (agent choice).
                 self._workflow_selection_tier = 3
                 from vaf.workflows.selector import WorkflowSelector
                 selector = WorkflowSelector()
                 result = selector.select(user_input)
                 if result and result.matched and result.confidence >= 0.5:
                     return result.template_id
-                # Even pattern matching found nothing → Tier 2 (Agent Choice)
                 self._workflow_selection_tier = 2
                 return None
-            
+
             low = content.lower()
 
             # 1) SKILL match (skill:<id>). Skills bypass the workflow execution path:

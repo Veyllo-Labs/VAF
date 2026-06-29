@@ -32,7 +32,7 @@ def test_date_time_format_defaults_and_overrides():
     assert ut.user_date_time_format({}, "de") == "%d.%m.%Y %H:%M:%S"
     assert ut.user_date_time_format({}, "en") == "%Y-%m-%d %H:%M:%S"
     assert ut.user_date_time_format({"date_format": "mm/dd/yyyy"}, "de").startswith("%m/%d/%Y")
-    assert ut.user_date_time_format({"time_format": "12h"}, "en").endswith("%I:%M:%S %p")
+    assert ut.user_date_time_format({"time_format": "12h"}, "en").endswith("%I:%M:%S {ampm}")
 
 
 def test_format_user_datetime_fixed():

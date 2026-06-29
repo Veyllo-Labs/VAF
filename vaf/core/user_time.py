@@ -133,7 +133,10 @@ def user_date_time_format(
     else:
         date_fmt = "%Y-%m-%d"
     if time_key == "12h":
-        time_fmt = "%I:%M:%S %p"
+        # NOT "%p": strftime("%p") is locale-dependent and yields an EMPTY string in non-AM/PM
+        # locales (e.g. de_DE) — so any process that imports a lib calling setlocale() would drop
+        # the marker. {ampm} is a literal placeholder filled deterministically in format_user_datetime.
+        time_fmt = "%I:%M:%S {ampm}"
     else:  # "24h", or any unset/default (de & en both default to 24h today)
         time_fmt = "%H:%M:%S"
     return f"{date_fmt} {time_fmt}"
@@ -153,7 +156,10 @@ def format_user_datetime(
     ui = _load_identity(username, identity)
     if dt is None:
         dt = user_now(username, ui)
-    return dt.strftime(user_date_time_format(ui, language))
+    out = dt.strftime(user_date_time_format(ui, language))
+    if "{ampm}" in out:  # locale-independent AM/PM (see user_date_time_format)
+        out = out.replace("{ampm}", "AM" if dt.hour < 12 else "PM")
+    return out
 
 
 def user_weekday_name(dt: datetime, language: Optional[str] = None) -> str:

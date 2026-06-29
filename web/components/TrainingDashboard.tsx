@@ -336,12 +336,12 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="h-14 border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
-                    <div className="flex items-center gap-3">
-                        <Activity size={18} className="text-amber-600" />
-                        <span className="font-semibold text-gray-900">Whare Wananga &mdash; Training</span>
-                        <span className="font-mono text-sm text-gray-500">{toolName}</span>
-                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-100 text-gray-500">
+                <div className="h-14 border-b border-gray-200 flex items-center justify-between px-6 max-md:px-3 shrink-0">
+                    <div className="flex items-center gap-3 min-w-0 max-md:gap-2">
+                        <Activity size={18} className="text-amber-600 shrink-0" />
+                        <span className="font-semibold text-gray-900 truncate max-md:text-sm">Whare Wananga &mdash; Training</span>
+                        <span className="font-mono text-sm text-gray-500 truncate max-md:hidden">{toolName}</span>
+                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-gray-100 text-gray-500 shrink-0">
                             {STATE_LABEL[state] ?? state}
                         </span>
                     </div>
@@ -351,7 +351,7 @@ export default function TrainingDashboard({ toolName, onClose, onStateChange }: 
                 </div>
 
                 {/* Body */}
-                <div className="flex-1 overflow-auto p-6 space-y-6">
+                <div className="flex-1 overflow-auto p-6 space-y-6 max-md:p-4">
                     {job?.state === 'running' ? (
                         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex items-center gap-2">
                             <Loader2 size={16} className="animate-spin shrink-0" />

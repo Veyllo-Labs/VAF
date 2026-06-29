@@ -30,6 +30,18 @@ To update an installed VAF, run `vaf update`.
   now carry `SPDX-License-Identifier: AGPL-3.0-or-later` headers pointing to `LICENSING.md`.
 
 ### Added
+- Vision-as-a-tool for attached images (`vision_mode: "description_tool"`, default):
+  the main model is text-only — an attached image is described once via the vision
+  backend, that description is injected as text, and the new `analyze_image` tool
+  re-inspects the image on demand (exact colours, positions, small text, finding an
+  object). Token-efficient, works even with a non-vision main provider, and the image
+  description survives reloads / the worker pool. `vision_mode: "inline_multimodal"`
+  restores the previous raw-image behaviour. New keys `vision_mode` /
+  `vision_description_max_tokens`; see `docs/llm/API_INTEGRATION.md`. Uploaded images are
+  now stored as **files** in the user-siloed chat folder
+  (`VAF_Projects/<uid8>/<session_id>/attachments/`) with only the path in `session.json`
+  (no more inline base64 bloat); the agent can reference them by path and the Web UI
+  re-displays them after reload via `/api/file`. Legacy base64 sessions keep working.
 - Embeddable library surface: `from vaf import Agent` (`docs/EMBEDDING.md`,
   `docs/ARCHITECTURE.md`); slim base install plus optional extras in `setup.py`.
 - Entry-point tool discovery: third-party tools via the `vaf.tools` group.

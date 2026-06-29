@@ -50,6 +50,9 @@ class UserIdentityUpdate(BaseModel):
     timezone: Optional[str] = None  # IANA e.g. Europe/Berlin
     date_format: Optional[str] = None  # e.g. dd.mm.yyyy
     time_format: Optional[str] = None  # "24h" | "12h"
+    quiet_hours_enabled: Optional[bool] = None  # per-user proactive quiet hours (None = inherit global)
+    quiet_hours_start: Optional[str] = None  # "HH:MM" (24h), evaluated in the user's timezone
+    quiet_hours_end: Optional[str] = None  # "HH:MM" (24h)
     last_seen_announcement_version: Optional[str] = None  # major.minor the user last acknowledged (announcement modal)
 
 class UserIdentityEntryUpdate(BaseModel):
@@ -130,17 +133,19 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
             if current.get(dt_key) != val:
                 changes.append(dt_key)
                 current[dt_key] = val
-    # Per-user proactive quiet hours (None = inherit the global thinking config).
-    if "quiet_hours_enabled" in full_dict:
-        qv = full_dict["quiet_hours_enabled"]
+    # Per-user proactive quiet hours (None = inherit the global thinking config). Gate on
+    # update_dict (explicitly-provided, non-None fields) so a PARTIAL PUT — e.g. the announcement
+    # modal sending only last_seen_announcement_version — never resets the user's quiet hours.
+    if "quiet_hours_enabled" in update_dict:
+        qv = update_dict["quiet_hours_enabled"]
         qv = qv if isinstance(qv, bool) else None
         if current.get("quiet_hours_enabled") != qv:
             changes.append("quiet_hours_enabled")
             current["quiet_hours_enabled"] = qv
     import re as _re_qh
     for qk in ("quiet_hours_start", "quiet_hours_end"):
-        if qk in full_dict:
-            val = (full_dict[qk] or "").strip() or None
+        if qk in update_dict:
+            val = (update_dict[qk] or "").strip() or None
             if val and not _re_qh.match(r"^([01]\d|2[0-3]):[0-5]\d$", val):
                 val = None
             if current.get(qk) != val:

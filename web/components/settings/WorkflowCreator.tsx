@@ -4,7 +4,8 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { X, Plus, Trash2, AlertCircle, Loader2, GitBranch, Upload, Download } from 'lucide-react';
+import { X, Plus, Trash2, AlertCircle, Loader2, GitBranch, Upload, Download, ChevronDown } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,19 @@ export default function WorkflowCreator({
   });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  // Custom tool dropdown: native <select> popups get dismissed by QtWebEngine on every page repaint
+  // (this modal re-renders constantly behind the chat), so the picker is a React-state menu that stays
+  // open across re-renders. Holds the _id of the step whose menu is open, or null.
+  const [openToolMenu, setOpenToolMenu] = useState<string | null>(null);
+  const toolMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!openToolMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (!toolMenuRef.current?.contains(e.target as Node)) setOpenToolMenu(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [openToolMenu]);
 
   // Auto-generate ID from name (create mode only, until user edits ID manually)
   useEffect(() => {
@@ -415,13 +429,30 @@ export default function WorkflowCreator({
                     <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                       <div>
                         <label className="block text-[11px] font-medium text-gray-400 mb-1">Tool</label>
-                        <select
-                          value={step.tool}
-                          onChange={e => updateStep(step._id, 'tool', e.target.value)}
-                          className="w-full h-8 px-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all"
-                        >
-                          {toolNames.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
+                        <div className="relative" ref={openToolMenu === step._id ? toolMenuRef : null}>
+                          <button
+                            type="button"
+                            onClick={() => setOpenToolMenu(openToolMenu === step._id ? null : step._id)}
+                            className="w-full h-8 px-2 border border-gray-200 rounded-lg text-sm bg-white flex items-center justify-between gap-2 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all"
+                          >
+                            <span className="truncate">{step.tool}</span>
+                            <ChevronDown size={14} className={cn('text-gray-400 shrink-0 transition-transform', openToolMenu === step._id && 'rotate-180')} />
+                          </button>
+                          {openToolMenu === step._id && (
+                            <div className="absolute left-0 right-0 top-full mt-1 z-20 max-h-52 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+                              {toolNames.map(t => (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  onClick={() => { updateStep(step._id, 'tool', t); setOpenToolMenu(null); }}
+                                  className={cn('w-full text-left px-2.5 py-1.5 text-sm hover:bg-purple-50', t === step.tool ? 'bg-purple-50 font-medium text-purple-700' : 'text-gray-700')}
+                                >
+                                  {t}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <label className="block text-[11px] font-medium text-gray-400 mb-1">Description <span className="font-normal text-gray-300">(optional)</span></label>

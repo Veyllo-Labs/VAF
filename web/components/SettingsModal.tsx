@@ -5288,22 +5288,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div>
                                                 <label className="flex items-center gap-2 text-gray-500 font-medium text-xs uppercase tracking-wide">
                                                     <input type="checkbox" checked={userIdentityDraft.quiet_hours_enabled}
-                                                        onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_enabled: e.target.checked })}
+                                                        onChange={(e) => setUserIdentityDraft({
+                                                            ...userIdentityDraft,
+                                                            quiet_hours_enabled: e.target.checked,
+                                                            // Pre-fill sensible 24h defaults when enabling with empty fields.
+                                                            quiet_hours_start: e.target.checked && !userIdentityDraft.quiet_hours_start ? '23:00' : userIdentityDraft.quiet_hours_start,
+                                                            quiet_hours_end: e.target.checked && !userIdentityDraft.quiet_hours_end ? '07:00' : userIdentityDraft.quiet_hours_end,
+                                                        })}
                                                         className="rounded border-gray-300 text-amber-500 focus:ring-amber-500" />
                                                     {tModals('userIdentity.quietHours')}
                                                 </label>
                                                 <p className="text-gray-400 font-normal text-xs mt-1">{tModals('userIdentity.quietHoursHint')}</p>
                                                 {userIdentityDraft.quiet_hours_enabled && (
                                                     <div className="flex items-center gap-4 mt-2">
+                                                        {/* 24h HH:MM text fields — native <input type="time"> shows AM/PM per browser
+                                                            locale and ignores our time_format; a text field is deterministically 24h. */}
                                                         <label className="text-xs text-gray-500 flex items-center gap-2">{tModals('userIdentity.quietHoursStart')}
-                                                            <input type="time" value={userIdentityDraft.quiet_hours_start}
+                                                            <input type="text" inputMode="numeric" maxLength={5} placeholder="HH:MM" value={userIdentityDraft.quiet_hours_start}
                                                                 onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_start: e.target.value })}
-                                                                className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                                                                className={`w-20 px-2 py-1 border rounded-lg text-sm font-mono text-center focus:outline-none focus:ring-2 ${userIdentityDraft.quiet_hours_start && !/^([01]\d|2[0-3]):[0-5]\d$/.test(userIdentityDraft.quiet_hours_start) ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-amber-500'}`} />
                                                         </label>
                                                         <label className="text-xs text-gray-500 flex items-center gap-2">{tModals('userIdentity.quietHoursEnd')}
-                                                            <input type="time" value={userIdentityDraft.quiet_hours_end}
+                                                            <input type="text" inputMode="numeric" maxLength={5} placeholder="HH:MM" value={userIdentityDraft.quiet_hours_end}
                                                                 onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, quiet_hours_end: e.target.value })}
-                                                                className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                                                                className={`w-20 px-2 py-1 border rounded-lg text-sm font-mono text-center focus:outline-none focus:ring-2 ${userIdentityDraft.quiet_hours_end && !/^([01]\d|2[0-3]):[0-5]\d$/.test(userIdentityDraft.quiet_hours_end) ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-amber-500'}`} />
                                                         </label>
                                                     </div>
                                                 )}

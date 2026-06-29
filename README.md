@@ -322,6 +322,18 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ---
 
+## Star History
+
+<a href="https://www.star-history.com/#Veyllo-Labs/VAF&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date" />
+ </picture>
+</a>
+
+---
+
 ## License
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)

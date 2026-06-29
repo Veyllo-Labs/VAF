@@ -986,23 +986,43 @@ def should_skip_for_automation(user_scope_id: Optional[str], buffer_minutes: int
     return 0 <= delta < buffer_minutes * 60
 
 
-def is_in_quiet_hours() -> bool:
+def is_in_quiet_hours(user_scope_id: Any = None) -> bool:
     """
-    True if quiet hours are enabled and current local time falls inside the configured window.
+    True if quiet hours are enabled and the user's CURRENT LOCAL time is inside the window.
     Used to avoid starting thinking mode during the user's sleep (e.g. 23:00–07:00).
-    Overnight spans (start > end) are supported; times are in local time.
+
+    The window is evaluated in the USER's timezone (user_identity.timezone — the single source
+    of truth), falling back to server-local when unset. Per-user quiet_hours_enabled/start/end
+    in user_identity override the global thinking_quiet_hours_* config; None = inherit global.
+    Overnight spans (start > end) are supported. Called with no scope -> global/server-local
+    behavior, byte-identical to before.
     """
     from vaf.core.config import Config
-    if not Config.get("thinking_quiet_hours_enabled", False):
+    from vaf.core.user_time import user_now
+
+    username = _resolve_username_for_scope(user_scope_id) if user_scope_id is not None else None
+    ui = {}
+    if username:
+        try:
+            from vaf.auth.user_workspace import get_user_workspace
+            ui = get_user_workspace(username).get_user_identity() or {}
+        except Exception:
+            ui = {}
+
+    # Per-user override falls back to the global config value.
+    enabled = ui.get("quiet_hours_enabled")
+    if enabled is None:
+        enabled = Config.get("thinking_quiet_hours_enabled", False)
+    if not enabled:
         return False
-    start_str = (Config.get("thinking_quiet_hours_start") or "23:00").strip()
-    end_str = (Config.get("thinking_quiet_hours_end") or "07:00").strip()
+    start_str = (ui.get("quiet_hours_start") or Config.get("thinking_quiet_hours_start") or "23:00").strip()
+    end_str = (ui.get("quiet_hours_end") or Config.get("thinking_quiet_hours_end") or "07:00").strip()
     try:
         start_t = datetime.strptime(start_str, "%H:%M").time()
         end_t = datetime.strptime(end_str, "%H:%M").time()
     except (ValueError, TypeError):
         return False
-    now = datetime.now().time()
+    now = user_now(username, ui).time()
     if start_t > end_t:
         return now >= start_t or now < end_t
     return start_t <= now < end_t
@@ -3145,12 +3165,14 @@ def thinking_loop_iteration() -> None:
     from vaf.core.config import Config
     if not Config.get("thinking_enabled", True):
         return
-    if is_in_quiet_hours():
-        logger.debug("Thinking mode skipped: quiet hours")
-        return
     idle_min = float(Config.get("thinking_idle_minutes", 10) or 10)
     idle_users = get_idle_user_scope_ids(idle_min)
     for scope in idle_users:
+        # Quiet hours are evaluated PER USER in the user's own timezone (a Tokyo user and a
+        # Berlin user get correct windows), instead of one global server-local gate.
+        if is_in_quiet_hours(scope):
+            logger.debug("Thinking mode skipped for %s: quiet hours", scope)
+            continue
         if _process_waiting_reply(scope) == "skip":
             continue  # Waiting for reply: nudge at 3 min, allow run after 10 min
         if maybe_start_thinking_for_user(scope):

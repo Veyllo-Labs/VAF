@@ -12,12 +12,10 @@ The SystemPromptManager provides:
 - Dynamic context adjustment per conversation turn
 """
 from typing import Dict, List, Any, Optional, Union
-import re
 import os
 import logging
 from pathlib import Path
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from vaf.core.main_persistence import MainPersistenceManager
 from vaf.core.platform import Platform
 from vaf.core.config import Config
@@ -654,52 +652,23 @@ Then use the results to answer. Do NOT guess from your training data!
         # 
         # 2. CURRENT TIME & DATE (user timezone and format from user_identity if set)
         # 
-        now = datetime.now()
+        # Current time in the USER's timezone + their date/time format — single source of
+        # truth via vaf.core.user_time ("Server default" timezone -> naive server-local).
+        from vaf.core import user_time as _ut
         ui_for_time = {}
         if username:
             try:
                 from vaf.auth.user_workspace import get_user_workspace
-                _ws = get_user_workspace(username)
-                ui_for_time = _ws.get_user_identity()
+                ui_for_time = get_user_workspace(username).get_user_identity() or {}
             except Exception:
                 pass
-        tz_str = (ui_for_time.get("timezone") or "").strip() or None
-        if tz_str:
-            try:
-                now = datetime.now(ZoneInfo(tz_str))
-            except Exception:
-                pass
-        date_fmt_key = (ui_for_time.get("date_format") or "").strip() or None
-        time_fmt_key = (ui_for_time.get("time_format") or "").strip() or None
-        # Preset -> strftime for date
-        date_strftime_map = {
-            "dd.mm.yyyy": "%d.%m.%Y",
-            "yyyy-mm-dd": "%Y-%m-%d",
-            "mm/dd/yyyy": "%m/%d/%Y",
-            "dd.mm.yy": "%d.%m.%y",
-        }
-        if date_fmt_key and date_fmt_key in date_strftime_map:
-            date_fmt = date_strftime_map[date_fmt_key]
-        elif self.user_language == "de":
-            date_fmt = "%d.%m.%Y"
-        else:
-            date_fmt = "%Y-%m-%d"
-        if time_fmt_key == "12h":
-            time_fmt = "%I:%M:%S %p"
-        elif time_fmt_key == "24h":
-            time_fmt = "%H:%M:%S"
-        elif self.user_language == "de":
-            time_fmt = "%H:%M:%S"
-        else:
-            time_fmt = "%H:%M:%S"
-        combined_fmt = f"{date_fmt} {time_fmt}"
-        days_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        days_de = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-        day_name = days_de[now.weekday()] if self.user_language == "de" else days_en[now.weekday()]
+        now = _ut.user_now(identity=ui_for_time)
+        _now_fmt = _ut.format_user_datetime(now, identity=ui_for_time, language=self.user_language)
+        day_name = _ut.user_weekday_name(now, self.user_language)
         if self.user_language == "de":
-            time_str = f"Heute ist {day_name}, der {now.strftime(combined_fmt)}."
+            time_str = f"Heute ist {day_name}, der {_now_fmt}."
         else:
-            time_str = f"Today is {day_name}, {now.strftime(combined_fmt)}."
+            time_str = f"Today is {day_name}, {_now_fmt}."
         # Collect time, env, session into one <context> block
         context_lines = [time_str]
 

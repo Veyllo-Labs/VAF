@@ -94,12 +94,15 @@ class WorkflowResult:
     waiting_for_task: Optional[str] = None  # Task ID we're waiting for
 
 
-def _temporal_builtins() -> Dict[str, str]:
+def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
     """Built-in {date}/{time}/... variables seeded into every workflow run so step templates can
     reference them without the caller declaring them. Filename-safe forms are used for the values
     that commonly land in write_file paths ({date}/{time}/{today}/{timestamp} contain no ':' or '/'
     -> safe on Windows too); {now}/{datetime}/{iso_date} keep human/ISO formatting."""
-    now = datetime.now()
+    # Resolve "now" in the user's timezone (single source of truth) so {date}/{now}/... in
+    # workflow step templates match the user's wall clock, not the server's.
+    from vaf.core.user_time import user_now
+    now = user_now(username)
     return {
         "date": now.strftime("%Y-%m-%d"),
         "today": now.strftime("%Y-%m-%d"),
@@ -214,7 +217,7 @@ class WorkflowEngine:
         # "Missing variable: 'date'". Seed a fixed set of temporal built-ins here so they
         # ALWAYS resolve. setdefault() means a real user-supplied variable of the same name
         # always wins.
-        for _k, _v in _temporal_builtins().items():
+        for _k, _v in _temporal_builtins(self.username).items():
             outputs.setdefault(_k, _v)
 
         final_output = None

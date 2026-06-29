@@ -16,7 +16,7 @@ Docs are grouped into category folders. Full index by category:
 - [LINUX_SETUP.md](setup/LINUX_SETUP.md) — Linux setup and troubleshooting.
 - [WINDOWS_SETUP.md](setup/WINDOWS_SETUP.md) — Windows-specific setup.
 - [MACOS_SETUP.md](setup/MACOS_SETUP.md) — macOS setup (Apple Silicon/Intel, Metal, Homebrew).
-- [FIRST_RUN.md](setup/FIRST_RUN.md) — First-run setup wizard walkthrough (admin, Soul, connections, 2FA).
+- [FIRST_RUN.md](setup/FIRST_RUN.md) — First-run setup wizard walkthrough (language, admin, Soul, Veyllo API, 2FA).
 - [DOCKER_SERVICES.md](setup/DOCKER_SERVICES.md) — TTS/STT/Gotenberg/DB/Redis containers.
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) — Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
 - [GATEWAY.md](setup/GATEWAY.md) — Persistent gateway server, multi-channel access.

@@ -175,7 +175,7 @@ class Config:
                 # Enforced by vaf.core.bounded_run.run_bounded.
                 "tool_timeout_seconds": 120,           # generic in-process tool call
                 "subagent_timeout_seconds": 300,       # research/coding/document sub-agent step
-                "workflow_generation_timeout_seconds": 90,   # create_automation: bound the inline workflow-gen Agent so generation can't hang
+                "workflow_generation_timeout_seconds": 30,   # create_automation: bound the inline workflow-gen Agent (fast-fail to prompt-based; was 90s, too slow on reasoning providers)
                 "automation_run_timeout_seconds": 180,       # prompt-based automation fallback: bound the whole turn (runaway guard)
                 "librarian_timeout_seconds": 60,       # filesystem agent — should be fast
                 "browser_timeout_seconds": 1800,       # worst-case hard cap (30 min); liveness is the real guard
@@ -231,6 +231,8 @@ class Config:
                 # threshold, then disable tools for one turn so the model must act or answer.
                 "anti_spin_enabled": True,                     # global kill-switch
                 "anti_spin_max_planning_calls": 4,             # consecutive plan/intent calls before nudging
+                "nonprogress_max_turns": 6,                    # consecutive read-only/verify-only tool turns before nudging then forcing an answer (catches the "verify forever" loop)
+                "chat_step_wall_clock_seconds": 3600,          # MAIN-loop wall-clock BACKSTOP (1h): a single user turn can never grind past this (checked at each tool-turn boundary), independent of tool count/provider speed. Deliberately generous — the no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true infinite/zombie loop without ever aborting legitimate long work. Configurable.
 
                 # Out-of-order drift nudge: when the agent marks a later task done while an earlier
                 # one is still pending, update_working_memory appends a soft "did you skip it?" hint

@@ -63,6 +63,28 @@ def _extract_action_text(text: str):
 # request_clarification, memory_save) are real actions and must NOT count as spin.
 _BOOKKEEPING_TOOLS = frozenset({"update_working_memory", "update_intent", "add_task"})
 
+# Read-only / verification tools that make NO real progress toward the user's goal. The main-loop
+# no-progress guard counts CONSECUTIVE turns that use ONLY such tools (a "verify forever" loop, e.g.
+# create_automation succeeded but the model keeps calling list_automations/read_automation). Any
+# mutating/producing tool (create_*/update_*/delete_*/write_*/send_*/a sub-agent) resets the streak,
+# so legitimate varied multi-step work is never penalised. Matched by exact name OR a list_/read_/get_
+# prefix. Kept separate from _BOOKKEEPING_TOOLS (that guards plan-spin; this guards read/verify-spin).
+_NONPROGRESS_TOOLS = frozenset({
+    "list_automations", "read_automation", "list_automation_notes", "list_automation_todos",
+    "list_calendar_events", "mail_inbox", "read_mail", "find_mail",
+    "list_timers", "list_email_accounts", "git_status",
+})
+# NOTE: web_search / memory_search are intentionally NOT here — they are genuine information-gathering
+# a direct turn may legitimately repeat. A web_search/search spin is still caught by the 5s-emergency
+# break, the redundant-exact-args block, and the wall-clock backstop; the thinking read-cap covers
+# thinking mode. This set is for pure LIST/READ verification (the create_automation "verify forever" loop).
+
+
+def _is_nonprogress_tool(name: str) -> bool:
+    n = (name or "").strip()
+    return n in _NONPROGRESS_TOOLS or n.startswith(("list_", "read_", "get_"))
+
+
 # Read/gather tools a background thinking run must not call endlessly. The redundant-call block only
 # catches EXACT-arg duplicates, so a weak model can spin memory_search with varied queries (or re-list)
 # forever (observed: 5 memory_search calls drifting off-topic). The thinking read-cap blocks these by
@@ -524,6 +546,51 @@ class Agent:
                 return (
                     "You keep updating working memory instead of acting. Tools are disabled for one turn. "
                     "State your result, or the next concrete step you will take, to the user in plain text now.",
+                    True,
+                )
+            return (None, False)
+        except Exception:
+            return (None, False)
+
+    def _nonprogress_step(self, function_name: str):
+        """No-progress guard (MAIN loop): count CONSECUTIVE turns that use ONLY a read-only/verify tool
+        (see _is_nonprogress_tool) — the 'verify forever' loop that the create_automation runaway hit
+        (the work was already done, but the model kept calling list/read tools). Any mutating/producing
+        tool resets the streak, so legitimate varied work is never affected. Returns
+        ``(nudge_or_None, force_disable_tools)`` like _anti_spin_step. Skipped in thinking mode (it has
+        its own read-cap). Governed by anti_spin_enabled (shared) / nonprogress_max_turns."""
+        try:
+            from vaf.core.config import Config
+            if not Config.get("anti_spin_enabled", True):
+                return (None, False)
+            if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                return (None, False)
+            if not _is_nonprogress_tool(function_name):
+                self._nonprogress_streak = 0
+                return (None, False)
+            self._nonprogress_streak = getattr(self, "_nonprogress_streak", 0) + 1
+            np_max = max(2, int(Config.get("nonprogress_max_turns", 6) or 6))
+            if self._nonprogress_streak == np_max:
+                try:
+                    append_domain_log("backend", f"[NO_PROGRESS] {self._nonprogress_streak} consecutive read/verify calls — nudging to act")
+                except Exception:
+                    pass
+                return (
+                    f"[!] You have called {self._nonprogress_streak} read-only/verify tools in a row without "
+                    "making real progress. If the task is already done, answer the user in plain text NOW. "
+                    "Otherwise take the concrete next ACTION (a create/update/write/send tool or a sub-agent) — "
+                    "do NOT keep listing/reading/searching.",
+                    False,
+                )
+            if self._nonprogress_streak >= np_max + 2:
+                try:
+                    append_domain_log("backend", f"[NO_PROGRESS] {self._nonprogress_streak} read/verify calls — forcing answer (tools off next turn)")
+                except Exception:
+                    pass
+                self._nonprogress_streak = 0
+                return (
+                    "You keep verifying/reading instead of finishing. Tools are disabled for one turn. "
+                    "Tell the user the result (or the one concrete next step) in plain text now.",
                     True,
                 )
             return (None, False)
@@ -6216,6 +6283,13 @@ class Agent:
         self._autocontinue_stuck = 0
         self._thinking_read_counts = {}  # reset the thinking read-tool cap (per-step, thinking mode only)
         _ww_reactive_injected = set()  # tools whose learned know-how was already re-fed on error this turn
+        # Wall-clock BACKSTOP (MAIN loop only): a single user turn can never grind indefinitely regardless of
+        # tool count or provider speed. Checked at the TURN BOUNDARY (before the next LLM call), never mid-tool,
+        # so a legitimately long self-supervised tool is not aborted. Deliberately GENEROUS (default 1h) — the
+        # no-progress guard + per-tool timeouts stop the common case far earlier; this only catches a true
+        # infinite/zombie loop and never aborts legitimate long work. (Thinking mode has its own tighter caps.)
+        _turn_deadline = time.monotonic() + float(Config.get("chat_step_wall_clock_seconds", 3600) or 3600)
+        self._nonprogress_streak = 0  # consecutive turns that used ONLY read-only/verify tools (no real progress)
 
         while empty_retry_count < MAX_EMPTY_RETRIES:
             # Stop check at the top of every loop iteration — catches stop clicks
@@ -7611,6 +7685,15 @@ class Agent:
                     if _spin_force:
                         disable_tools = True  # next generation: no tools -> must act or answer
 
+                    # No-progress guard: same mechanism for a read/verify-only spin (e.g. the
+                    # create_automation "zombie" that kept listing/reading after the work was done).
+                    # Main loop only; any mutating/producing tool resets the streak.
+                    _np_msg, _np_force = self._nonprogress_step(function_name)
+                    if _np_msg:
+                        _post_tc_messages.append({"role": "system", "content": _np_msg})
+                    if _np_force:
+                        disable_tools = True
+
                     # ═══════════════════════════════════════════════════════════════
                     # THINKING DONE PROTECTION: Hardcoded break
                     # ═══════════════════════════════════════════════════════════════
@@ -7698,7 +7781,10 @@ class Agent:
                         else:
                             # Proof line: a silent background run suppressed this live tool bubble (it would
                             # otherwise have broadcast into the active web user's chat). Background runs only.
-                            from vaf.core.log_helper import append_domain_log
+                            # NOTE: append_domain_log is imported at module scope (top of file) — do NOT
+                            # re-import it locally here. A local `from … import append_domain_log` makes the
+                            # name function-local for ALL of chat_step, so the earlier [LOOP_PROTECTION]
+                            # thinking_done call hits UnboundLocalError before this line ever runs.
                             append_domain_log("backend", f"[SILENT-RUN] tool_update 'start' SUPPRESSED (background agent) tool={function_name}")
                     except Exception:
                         pass
@@ -7799,7 +7885,9 @@ class Agent:
                         if not getattr(self, '_background_run', False):
                             get_web_interface().emit_tool_update('error' if is_err else 'end', function_name, tc['id'], data=_r_ui, session_id=_tool_session)
                         else:
-                            from vaf.core.log_helper import append_domain_log
+                            # append_domain_log is module-level imported — no local re-import (see the note
+                            # on the 'start' branch above; a local import makes the name function-local and
+                            # breaks the earlier thinking_done call with UnboundLocalError).
                             append_domain_log("backend", f"[SILENT-RUN] tool_update '{'error' if is_err else 'end'}' SUPPRESSED (background agent) tool={function_name}")
                         _tool_end_emitted = True
                         log_timeline_event('tool_end', tool=function_name, call_id=_tl_call_id,
@@ -8061,6 +8149,19 @@ class Agent:
                 # Hard kill at MAX_TOOL_TURNS_PER_STEP
                 # If tool_loop_unlimited=True in config, skip the hard kill entirely.
                 _unlimited_loop = bool(self.config.get("tool_loop_unlimited", False))
+
+                # Wall-clock backstop — independent of tool count. If THIS user turn has run past its time
+                # budget, stop NOW (at the boundary, after the last tool finished). Catches a slow provider
+                # grinding many turns (the create_automation "zombie") that the turn-count and 5s-emergency
+                # guards miss. Returns immediately with a clear message — no extra (slow) summarizing turn.
+                if not _unlimited_loop and time.monotonic() > _turn_deadline:
+                    _wc_budget = float(Config.get("chat_step_wall_clock_seconds", 3600) or 3600)
+                    _wc_msg = f"⚠️ [LOOP_PROTECTION] Wall-clock stop after ~{_wc_budget:.0f}s in a single turn ({tool_turn_count} tool turns) — task aborted to keep the agent responsive."
+                    UI.event("Emergency", _wc_msg, style="bold red")
+                    append_domain_log("backend", f"[LOOP_PROTECTION] wall-clock stop at {_wc_budget:.0f}s / turn {tool_turn_count}")
+                    self.history.append({"role": "assistant", "content": _wc_msg})
+                    return _wc_msg
+
                 if not _unlimited_loop and tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
                     if _hard_stop_injected:
                         # Agent called another tool after the hard-stop message — true kill now.

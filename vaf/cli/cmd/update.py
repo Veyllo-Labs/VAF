@@ -222,13 +222,34 @@ def _invalidate_web_build(root: Path) -> None:
 
 
 def _run_migrations() -> None:
-    # Config migrations run inside Config.load(); state migrations run on session
-    # load. Loading config here applies any pending config migration once.
+    # Config migrations run inside Config.load(); state migrations run on session load.
     try:
         from vaf.core.config import Config
         Config.load()
     except Exception:
         pass
+
+    # DB schema reconcile (add missing columns / ordered migrations / dimension check). The memory
+    # DB is a SEPARATE service (Docker) that may be down at update time (e.g. tray-only start); if so
+    # we say it is deferred to the next start (get_engine runs the same reconcile) instead of failing
+    # silently. The reconcile is idempotent, so running it here AND at startup is harmless.
+    try:
+        import asyncio
+        from sqlalchemy import text as _text
+        from vaf.memory.database import get_owner_engine, _run_schema_migrations
+
+        async def _reconcile():
+            engine = await get_owner_engine()
+            async with engine.begin() as conn:   # connectivity probe — fails fast if the DB is down
+                await conn.execute(_text("SELECT 1"))
+            await _run_schema_migrations(engine)
+
+        asyncio.run(_reconcile())
+        UI.info("Database schema reconciled.")
+    except Exception as e:
+        UI.warning(
+            f"Memory DB not reachable now — the schema reconcile will run on the next start. ({type(e).__name__})"
+        )
 
 
 def _verify(target_version: str) -> None:

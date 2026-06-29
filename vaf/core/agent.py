@@ -1494,10 +1494,19 @@ class Agent:
                     # Don't call sys.exit() - let process exit naturally
                     return
 
-    def _load_tools(self):
+    def _load_tools(self, builtin_only: bool = False, reload_modules: bool = False):
         """
         Scans vaf/tools/ folder and automatically loads all Tool classes.
         You can drop a new .py file there, and it works!
+
+        builtin_only=True  -> only re-scan the built-in vaf/tools/*.py set (the
+                              live-reload path); skips custom / entry-point / MCP
+                              loading, which have their own reload methods and must
+                              not be re-initialised (would re-connect MCP servers).
+        reload_modules=True -> invalidate the import machinery's directory cache
+                              first so a .py file dropped at runtime is discovered.
+                              (Edits to an EXISTING built-in tool file still need a
+                              restart; reloading modules would break class identity.)
         """
         import pkgutil
         import importlib
@@ -1507,9 +1516,20 @@ class Agent:
 
         # 1. Iterate over all files in vaf/tools/
         package_path = os.path.dirname(vaf.tools.__file__)
+        if reload_modules:
+            # A .py file dropped into vaf/tools/ at runtime is invisible to
+            # pkgutil.iter_modules / import_module until the import machinery's
+            # cached directory listing is invalidated.
+            importlib.invalidate_caches()
         for _, name, _ in pkgutil.iter_modules([package_path]):
             try:
-                # 2. Import the module (e.g. vaf.tools.calendar)
+                # 2. Import the module (e.g. vaf.tools.calendar). A brand-new file
+                #    dropped at runtime is imported fresh here and goes live; an
+                #    already-imported module returns the cached object (so EDITS to
+                #    an existing built-in tool file need a restart). We deliberately
+                #    do NOT importlib.reload() existing modules: reloading
+                #    vaf.tools.base would create a new BaseTool class object and
+                #    break the issubclass() identity check for every other tool.
                 try:
                     module = importlib.import_module(f"vaf.tools.{name}")
                 except Exception as e:
@@ -1616,6 +1636,18 @@ class Agent:
                 print(f"[ERROR] Failed to load tool {name}: {e}")
                 pass # Still ignore for stability, but report error
         
+        # Live-reload path: only the built-in scan above is needed. Custom /
+        # entry-point / MCP tools have their own reload methods and must NOT be
+        # re-initialised here (re-running _load_mcp_tools would re-connect servers).
+        if builtin_only:
+            for tool in self.tools.values():
+                if hasattr(tool, "available_tools"):
+                    try:
+                        tool.available_tools = self.tools
+                    except Exception:
+                        pass
+            return
+
         # ── Custom tools (user-uploaded via WebUI) ────────────────────────────
         # Loaded from Platform.data_dir()/custom_tools/ so they survive package
         # updates without being overwritten.  Each tool is a plain .py file that
@@ -1810,6 +1842,81 @@ class Agent:
                     pass
 
         print(f"[INFO] reload_custom_tools: active custom tools = {list(all_custom_names)}")
+
+    def reload_builtin_tools(self) -> None:
+        """Hot-reload built-in tools (vaf/tools/*.py) without a restart: re-scan the
+        package so a newly-dropped tool file goes live. Custom / entry-point / MCP
+        tools are untouched (they own their reload paths). EDITS to an existing
+        built-in tool file, and DELETIONS, still need a restart to take effect."""
+        self._load_tools(builtin_only=True, reload_modules=True)
+
+    def _tools_fs_signature(self) -> tuple:
+        """Cheap fingerprint of the tool source dirs: built-in vaf/tools/*.py plus
+        the custom-tools dir and its manifest.json. Changes when a tool file is
+        added, edited, or removed (the manifest catches custom add/remove). A few
+        stat() calls; the basis for watcher-free, stdlib-only tool hot-reload."""
+        import os as _os
+        parts = []
+        # Built-in tools
+        try:
+            import vaf.tools as _vt
+            bdir = _os.path.dirname(_vt.__file__)
+            for fn in sorted(_os.listdir(bdir)):
+                if fn.endswith(".py"):
+                    try:
+                        st = _os.stat(_os.path.join(bdir, fn))
+                    except OSError:
+                        continue
+                    parts.append(("b/" + fn, st.st_mtime_ns, st.st_size))
+        except Exception:
+            pass
+        # Custom tools (files + manifest)
+        try:
+            from vaf.core.custom_tools_registry import get_custom_tools_dir
+            cdir = get_custom_tools_dir()
+            for fn in sorted(_os.listdir(cdir)):
+                if fn.endswith(".py") or fn == "manifest.json":
+                    try:
+                        st = _os.stat(_os.path.join(cdir, fn))
+                    except OSError:
+                        continue
+                    parts.append(("c/" + fn, st.st_mtime_ns, st.st_size))
+        except Exception:
+            pass
+        return tuple(parts)
+
+    def _maybe_refresh_dynamic_tools(self) -> None:
+        """Per-turn, stdlib-only freshness check for TOOL files. If the built-in
+        tools dir, the custom-tools dir, or the custom-tools manifest changed on
+        disk since the last check, hot-reload so a newly created tool is live
+        without a restart — including one written by another process (the
+        in-process create_custom_tool already reloads its own process). Throttled
+        to at most once/second; no background thread, no watcher."""
+        try:
+            import time as _t
+            now = _t.monotonic()
+            if now - getattr(self, "_tools_fs_last_check", 0.0) < 1.0:
+                return
+            self._tools_fs_last_check = now
+            sig = self._tools_fs_signature()
+            if not hasattr(self, "_tools_fs_sig"):
+                # First turn: startup already loaded everything, so just record
+                # the baseline; don't reload.
+                self._tools_fs_sig = sig
+                return
+            if sig == self._tools_fs_sig:
+                return
+            self._tools_fs_sig = sig
+            try:
+                self.reload_builtin_tools()
+            except Exception as exc:
+                print(f"[WARN] refresh tools: built-in reload failed: {exc}")
+            try:
+                self.reload_custom_tools()
+            except Exception as exc:
+                print(f"[WARN] refresh tools: custom reload failed: {exc}")
+        except Exception:
+            pass
 
     def _register_tool_state_providers(self):
         """
@@ -4369,7 +4476,10 @@ class Agent:
         self._pending_skill_match = None
 
         try:
-            from vaf.workflows.templates import WORKFLOW_TEMPLATES, list_templates
+            from vaf.workflows.templates import get_workflow_templates, list_templates
+            # Freshness-checked: picks up workflows created since startup (including
+            # by another process) so the router can route to them this same turn.
+            WORKFLOW_TEMPLATES = get_workflow_templates()
 
             # Get available workflows dynamicallly
             available_workflows = list_templates()
@@ -5155,7 +5265,8 @@ class Agent:
         Returns (workflow_id, cleaned_input).
         """
         try:
-            from vaf.workflows.templates import WORKFLOW_TEMPLATES
+            from vaf.workflows.templates import get_workflow_templates
+            WORKFLOW_TEMPLATES = get_workflow_templates()
             if not WORKFLOW_TEMPLATES:
                 return None, user_input
             workflow_ids = list(WORKFLOW_TEMPLATES.keys())
@@ -5726,6 +5837,12 @@ class Agent:
             append_domain_log("backend", "chat_step_start")
         except Exception:
             pass
+
+        # Hot-reload: make newly-created tools live without a restart. Skills and
+        # workflows self-refresh via their registry accessors (used by the router);
+        # tool files need this explicit per-turn check (cheap, throttled, stdlib-only).
+        if not disable_tools:
+            self._maybe_refresh_dynamic_tools()
 
         self.context_manager.decay_state()
 

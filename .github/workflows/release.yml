@@ -54,6 +54,20 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match vaf/version.py ($CODE_VERSION)"; exit 1
           fi
 
+      - name: Verify web/package.json matches vaf/version.py
+        run: |
+          python - <<'PY'
+          import json, sys
+          from packaging.version import parse
+          import vaf
+          pkg = json.load(open("web/package.json")).get("version", "")
+          if not pkg or parse(pkg) != parse(vaf.__version__):
+              print(f"web/package.json version '{pkg}' does not match vaf/version.py '{vaf.__version__}'.")
+              print("Bump web/package.json to the npm spelling of the SSOT (e.g. 0.1.0a0 -> 0.1.0-alpha.0).")
+              sys.exit(1)
+          print(f"web/package.json '{pkg}' matches vaf/version.py '{vaf.__version__}'.")
+          PY
+
       - name: Extract release notes + detect prerelease
         id: notes
         run: |

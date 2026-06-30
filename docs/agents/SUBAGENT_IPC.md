@@ -141,7 +141,7 @@ no bubble (workflow steps). See [Workflow UI Components](../web-ui/WORKFLOW_UI_C
 │                                                                             │
 │   Tool-Response in History:                                                 │
 │   ┌──────────────────────────────────────────────────────────┐              │
-│   │  ⏳ ASYNC TASK STARTED - NO RESULT AVAILABLE YET         │              │
+│   │  ASYNC TASK STARTED - NO RESULT AVAILABLE YET           │              │
 │   │                                                          │              │
 │   │  Task-ID: a1b2c3d4                                       │              │
 │   │  Agent: librarian_agent                                  │              │
@@ -230,7 +230,7 @@ Sub-Agents can now request help instead of failing blindly:
 │   ┌─────────────────────┐               ┌─────────────────────┐             │
 │   │                     │               │                     │             │
 │   │  | Sub-Agent        │               │  VAF Librarian      │             │
-│   │  | 🚀 librarian     │   ──────►     │  Agent [a1b2c3d4]   │             │
+│   │  | librarian        │   ──────►     │  Agent [a1b2c3d4]   │             │
 │   │  | [Task: a1b2]     │               │                     │             │
 │   │  | running in       │               │  | Analyzing...     │             │
 │   │  | background       │               │  | Listing files... │             │
@@ -265,8 +265,8 @@ Sub-Agents can now request help instead of failing blindly:
 │   Main Agent Terminal                                                       │
 │   ┌─────────────────────────────────────────────────────────────┐           │
 │   │                                                             │           │
-│   │  ╭──────────── 🚀 Active Sub-Agents ───────────╮            │           │
-│   │  │   🔄 librarian_agent [a1b2c3d4] running     │            │           │
+│   │  ╭──────────── Active Sub-Agents ──────────────╮            │           │
+│   │  │   librarian_agent [a1b2c3d4] running        │            │           │
 │   │  │      for 25s                                │            │           │
 │   │  ╰─────────────────────────────────────────────╯            │           │
 │   │                                                             │           │
@@ -278,7 +278,7 @@ Sub-Agents can now request help instead of failing blindly:
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────┐           │
 │   │                                                             │           │
-│   │  ╭──────────── 🎉 Sub-Agent Complete ──────────╮            │           │
+│   │  ╭──────────── Sub-Agent Complete ─────────────╮            │           │
 │   │  │   ✓ Sub-Agent result received!              │            │           │
 │   │  │                                             │            │           │
 │   │  │   Task: a1b2c3d4                            │            │           │
@@ -292,7 +292,7 @@ Sub-Agents can now request help instead of failing blindly:
 │   │  │   ...                                       │            │           │
 │   │  ╰─────────────────────────────────────────────╯            │           │
 │   │                                                             │           │
-│   │  💡 Sub-Agent results shown above.                          │           │
+│   │  Sub-Agent results shown above.                             │           │
 │   │     Tell me what you'd like to do with them!                │           │
 │   │                                                             │           │
 │   │  Message: _                                                 │           │
@@ -567,12 +567,12 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 │   │  Workflow Step 2    │   ──────►     │  Research Agent     │             │
 │   │  → Sub-Agent        │   opens       │  [Task: abc123]     │             │
 │   │                     │               │                     │             │
-│   │⏸️  Workflow paused  │               │  | Searching...     │             │
+│   │  Workflow paused    │               │  | Searching...     │             │
 │   │  You can continue   │               │  | Analyzing...     │             │
 │   │  using VAF!         │               │  | Writing...       │             │
 │   │                     │               │                     │             │
-│   │ ╭── 🚀 Background ─╮│               │                     │             │
-│   │ │ ⏸️  deep_research││               │                     │             │
+│   │ ╭── Background ────╮│               │                     │             │
+│   │ │ deep_research    ││               │                     │             │
 │   │ │ waiting abc123   ││               │                     │             │
 │   │ ╰──────────────────╯│               │                     │             │
 │   │                     │               │                     │             │
@@ -581,7 +581,7 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 │   │                     │◄─── IPC ──────│                     │             │
 │   │  (next user input)  │               └─────────────────────┘             │
 │   │                     │                                                   │
-│   │  ╭── ▶️ Resuming ───╮                                                   │
+│   │  ╭── Resuming ──────╮                                                   │
 │   │  │ ✓ Got result!    │                                                   │
 │   │  ╰──────────────────╯                                                   │
 │   │                     │                                                   │
@@ -591,7 +591,7 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 │   │  Workflow Step 4    │                                                   │
 │   │  ✓ Done             │                                                   │
 │   │                     │                                                   │
-│   │  ╭── ✅ Complete ───╮                                                   │
+│   │  ╭── Complete ──────╮                                                   │
 │   │  │ Workflow done!   │                                                   │
 │   │  ╰──────────────────╯                                                   │
 │   │                     │                                                   │
@@ -609,10 +609,10 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 
 | Feature | Chat Mode | Workflow Mode |
 |---------|-----------|---------------|
-| **Blocking** | ❌ No (non-blocking) | ❌ No (pause/resume) |
-| **User Interaction** | ✅ Immediately possible | ✅ Immediately possible |
+| **Blocking** | No (non-blocking) | No (pause/resume) |
+| **User Interaction** | Immediately possible | Immediately possible |
 | **Result Display** | On next input | Auto-resumes workflow |
-| **Status Banner** | ✅ Yes (active tasks) | ✅ Yes (paused workflows) |
+| **Status Banner** | Yes (active tasks) | Yes (paused workflows) |
 | **On Complete** | Shows result panel | Auto-continues workflow |
 
 ---
@@ -726,11 +726,11 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
 │   │                                                         │               │
 │   │  ✓ Result sent to Main Agent [Task: a1b2c3d4]           │               │
 │   │                                                         │               │
-│   │  ⏱️  Terminal closing in 5 seconds...                   │               │
-│   │  ⏱️  Terminal closing in 4 seconds...                   │               │
-│   │  ⏱️  Terminal closing in 3 seconds...                   │               │
-│   │  ⏱️  Terminal closing in 2 seconds...                   │               │
-│   │  ⏱️  Terminal closing in 1 second...                    │               │
+│   │  Terminal closing in 5 seconds...                       │               │
+│   │  Terminal closing in 4 seconds...                       │               │
+│   │  Terminal closing in 3 seconds...                       │               │
+│   │  Terminal closing in 2 seconds...                       │               │
+│   │  Terminal closing in 1 second...                        │               │
 │   │  ✓ Terminal closing.                                    │               │
 │   │                                                         │               │
 │   └─────────────────────────────────────────────────────────┘               │
@@ -787,7 +787,7 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
      │                     │─────────────────────►│                     │
      │                     │                      │                     │
      │  ╭─────────────╮    │  [Task a1b2 result]  │                     │
-     │  │ 🎉 Result   │    │◄─────────────────────│                     │
+     │  │ Result      │    │◄─────────────────────│                     │
      │  │ displayed!  │◄───│                      │                     │
      │  ╰─────────────╯    │                      │                     │
      │                     │                      │                     │

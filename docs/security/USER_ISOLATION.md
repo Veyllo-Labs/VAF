@@ -420,13 +420,13 @@ When adding new functionality to VAF, follow these rules to maintain user isolat
 Every function that touches user data must accept `user_scope_id` as a parameter:
 
 ```python
-# ✅ Correct
+# Correct
 async def my_new_feature(data: dict, user_scope_id: Optional[UUID] = None):
     results = await db.execute(
         select(MyModel).where(MyModel.user_scope_id == user_scope_id)
     )
 
-# ❌ Wrong — no scope filtering
+# Wrong — no scope filtering
 async def my_new_feature(data: dict):
     results = await db.execute(select(MyModel))
 ```
@@ -453,10 +453,10 @@ The `user_scope_id` must always come from the server-side session (JWT / `reques
 If you add any caching (Redis or in-memory), include `user_scope_id` in the cache key:
 
 ```python
-# ✅ Correct
+# Correct
 cache_key = f"my_feature:{user_scope_id}:{item_id}"
 
-# ❌ Wrong — shared across users
+# Wrong — shared across users
 cache_key = f"my_feature:{item_id}"
 ```
 
@@ -487,10 +487,10 @@ CREATE POLICY user_isolation_my_new_table ON my_new_table
 If your feature writes files, place them under the user's directory:
 
 ```python
-# ✅ Correct
+# Correct
 path = Path.home() / ".vaf" / "users" / username / "my_feature" / filename
 
-# ❌ Wrong — shared location
+# Wrong — shared location
 path = Path.home() / ".vaf" / "my_feature" / filename
 ```
 

@@ -9,9 +9,9 @@ VAF includes a persistent background service managed by a system tray applicatio
     - macOS: WKWebView (Safari engine)
     - Linux: **PyQt6 / Qt WebEngine (Chromium)** — VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
 - **Persistent Tray Icon**: A system tray icon on all platforms indicates the server state.
-    - 🟢 **Green / Active**: Server is running, model is loaded into RAM.
-    - 🟡 **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
-    - 🔵 **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
+    - **Green / Active**: Server is running, model is loaded into RAM.
+    - **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
+    - **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
 - **Window Minimize to Tray**: Closing the window hides it — the app stays running in the system tray. Click "Open VAF" to bring the window back.
 - **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources.
 - **WebUI-Aware Idle**: The local model unloads after 15 seconds with no active WebUI WebSocket connections (unless persistence is enabled).

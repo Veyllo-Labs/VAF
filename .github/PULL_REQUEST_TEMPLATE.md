@@ -18,7 +18,7 @@
 ## Contributor Terms
 
 VAF is dual-licensed (AGPL-3.0-or-later + Commercial). By opening this PR you accept the
-[Contributor Terms](../CONTRIBUTING.md#️-license--contributor-terms). Please confirm:
+[Contributor Terms](../CONTRIBUTING.md#license--contributor-terms). Please confirm:
 
 - [ ] My contribution is provided under the **AGPL-3.0-or-later** (inbound license).
 - [ ] I grant **Veyllo GmbH** the right to **relicense my contribution under commercial/

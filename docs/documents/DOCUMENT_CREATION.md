@@ -6,12 +6,12 @@ VAF includes a **document creation system** that generates structured documents 
 
 ## Key Features
 
-✅ **No Context Overflow** - Section-by-section generation prevents context limits
-✅ **Multiple Formats** - Word (.docx), PDF, Markdown (.md), Text (.txt)
-✅ **Any Size** - Generate 100+ page documents within 8K context
-✅ **Smart Chunking** - Automatic section breakdown and assembly
-✅ **Multi-Language** - German, English, Turkish, and more
-✅ **Professional Output** - Structured, formatted documents ready to use
+- **No Context Overflow** - Section-by-section generation prevents context limits
+- **Multiple Formats** - Word (.docx), PDF, Markdown (.md), Text (.txt)
+- **Any Size** - Generate 100+ page documents within 8K context
+- **Smart Chunking** - Automatic section breakdown and assembly
+- **Multi-Language** - German, English, Turkish, and more
+- **Professional Output** - Structured, formatted documents ready to use
 
 ## Architecture
 
@@ -44,7 +44,7 @@ The `document_agent` uses the **same pattern as research_agent** to prevent cont
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📋 DOCUMENT PLANNER                                │   │
+│  │  DOCUMENT PLANNER                                   │   │
 │  │  └─ Breaks into 10-15 sections                      │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
@@ -54,7 +54,7 @@ The `document_agent` uses the **same pattern as research_agent** to prevent cont
 │  │ SEC 1 │          │ SEC 2 │          │ SEC N │            │
 │  │Title  │          │Parties│          │  ...  │            │
 │  ├───────┤          ├───────┤          ├───────┤            │
-│  │🧠 LLM │         │🧠 LLM │          │🧠 LLM │           │
+│  │ LLM   │         │ LLM   │          │ LLM   │           │
 │  │Call   │          │Call   │          │Call   │            │
 │  │(2K tok)│         │(2K tok)│          │(2K tok)│           │
 │  └───────┘          └───────┘          └───────┘            │
@@ -62,7 +62,7 @@ The `document_agent` uses the **same pattern as research_agent** to prevent cont
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📄 FINAL DOCUMENT (Word/PDF/MD/Text)              │    │
+│  │  FINAL DOCUMENT (Word/PDF/MD/Text)                 │    │
 │  │  └─ All sections assembled                          │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -113,7 +113,7 @@ Total context used: 5K-15K (but only 1K per call!)
 | **Max Output** | ~4K tokens | **Unlimited** |
 | **Context Usage** | 100% at once | 10-20% per section |
 | **Quality** | Degrades with size | Consistent |
-| **Context Overflow** | Frequent ❌ | Never ✅ |
+| **Context Overflow** | Frequent | Never |
 
 ## Usage Examples
 
@@ -266,39 +266,39 @@ The `create_document` workflow currently uses `document_agent` for generation:
 
 ### Business
 
-- ✅ Employment contracts
-- ✅ Service agreements
-- ✅ NDAs (Non-Disclosure Agreements)
-- ✅ Business proposals
-- ✅ Quarterly reports
-- ✅ Meeting minutes
+- Employment contracts
+- Service agreements
+- NDAs (Non-Disclosure Agreements)
+- Business proposals
+- Quarterly reports
+- Meeting minutes
 
 ### Personal
 
-- ✅ Rental agreements
-- ✅ Resignation letters
-- ✅ Cover letters
-- ✅ Personal statements
-- ✅ Invoices
-- ✅ Receipts
+- Rental agreements
+- Resignation letters
+- Cover letters
+- Personal statements
+- Invoices
+- Receipts
 
 ### Technical
 
-- ✅ User manuals
-- ✅ API documentation
-- ✅ Technical specifications
-- ✅ Project documentation
-- ✅ README files
-- ✅ Architecture documents
+- User manuals
+- API documentation
+- Technical specifications
+- Project documentation
+- README files
+- Architecture documents
 
 ### Creative
 
-- ✅ Articles
-- ✅ Essays
-- ✅ Blog posts
-- ✅ Story outlines
-- ✅ Scripts
-- ✅ Templates
+- Articles
+- Essays
+- Blog posts
+- Story outlines
+- Scripts
+- Templates
 
 ## Context Management Comparison
 
@@ -308,13 +308,13 @@ The `create_document` workflow currently uses `document_agent` for generation:
 User: "Create 50-page contract"
 Agent: [Tries to generate all at once]
 Context: 4K system + 10K generation = 14K tokens
-Result: ❌ Context overflow error
+Result: Context overflow error
 
 OR
 
 Agent: [Generates but truncates]
 Context: 4K system + 4K generation = 8K tokens
-Result: ⚠️ Incomplete document (missing sections)
+Result: Incomplete document (missing sections)
 ```
 
 ### After (Section-by-Section):
@@ -323,15 +323,15 @@ Result: ⚠️ Incomplete document (missing sections)
 User: "Create 50-page contract"
 Agent: [Uses document_agent]
 
-Section 1: 500 tokens context + 1K generation = 1.5K tokens ✅
-Section 2: 500 tokens context + 1K generation = 1.5K tokens ✅
-Section 3: 500 tokens context + 1K generation = 1.5K tokens ✅
+Section 1: 500 tokens context + 1K generation = 1.5K tokens
+Section 2: 500 tokens context + 1K generation = 1.5K tokens
+Section 3: 500 tokens context + 1K generation = 1.5K tokens
 ... (15 sections)
-Section 15: 500 tokens context + 1K generation = 1.5K tokens ✅
+Section 15: 500 tokens context + 1K generation = 1.5K tokens
 
 Total output: 15K tokens
 Max context used per call: 1.5K tokens (within 8K limit!)
-Result: ✅ Complete 50-page contract
+Result: Complete 50-page contract
 ```
 
 ## Best Practices

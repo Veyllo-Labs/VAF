@@ -42,7 +42,7 @@ VAF uses a **modular system prompt** that loads only what's needed:
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  🔷 CORE MODULE (Always Active) ~400 tokens         │   │
+│  │  CORE MODULE (Always Active) ~400 tokens            │   │
 │  │  ├─ Identity (Model Name)                           │   │
 │  │  ├─ Time, OS, CWD                                   │   │
 │  │  ├─ Language Settings                               │   │
@@ -52,7 +52,7 @@ VAF uses a **modular system prompt** that loads only what's needed:
 │           ┌──────────────┼──────────────┐                  │
 │           ▼              ▼              ▼                  │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
-│  │ 🔍 RESEARCH │ │ 💻 CODER   │ │📁 LIBRARIAN│           │
+│  │  RESEARCH   │ │  CODER      │ │ LIBRARIAN   │           │
 │  │   MODULE    │ │    MODULE   │ │   MODULE    │            │
 │  │ (~400 tok)  │ │  (~500 tok) │ │ (~300 tok)  │            │
 │  │             │ │             │ │             │            │
@@ -62,7 +62,7 @@ VAF uses a **modular system prompt** that loads only what's needed:
 │                          │                                 │
 │                          ▼                                 │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  ⚡ AUTOMATION MODULE (On-Demand) ~300 tokens       │   │
+│  │  AUTOMATION MODULE (On-Demand) ~300 tokens          │   │
 │  │  └─ Scheduling rules, create_automation tool        │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -117,7 +117,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📊 REAL-TIME TOKEN TRACKING (Self-Calibration)     │    │
+│  │  REAL-TIME TOKEN TRACKING (Self-Calibration)        │    │
 │  │  ├─ Precise API usage: From OpenAI/DeepSeek/Claude  │    │
 │  │  ├─ Dynamic n_ctx: Auto-boosts to 128k for APIs    │    │
 │  │  ├─ Tool Overhead: Precise calculation              │    │
@@ -126,7 +126,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  🎯 INTENT CONTEXT                                  │   │
+│  │  INTENT CONTEXT                                     │   │
 │  │  ├─ Primary Goal                                    │    │
 │  │  ├─ Sub-tasks                                       │    │
 │  │  ├─ Constraints                                     │    │
@@ -135,7 +135,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📁 STATE CONTEXT (RAM / Compression)               │   │
+│  │  STATE CONTEXT (RAM / Compression)                  │   │
 │  │  ├─ Files created/modified/read                     │    │
 │  │  ├─ Errors encountered                              │    │
 │  │  ├─ Tools used                                      │    │
@@ -145,7 +145,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  💾 ARCHIVE                                         │   │
+│  │  ARCHIVE                                            │   │
 │  │  └─ Full history saved to ~/.vaf/context_archive/   │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -350,10 +350,10 @@ The Coder Agent uses **hierarchical contexts** where each task gets its own isol
 ```
 
 **Benefits:**
-- ✅ **No Context Pollution**: Each task starts fresh
-- ✅ **Better Focus**: Task-specific prompts
-- ✅ **Efficient**: Only relevant context per task
-- ✅ **Scalable**: Handle many tasks without overflow
+- **No Context Pollution**: Each task starts fresh
+- **Better Focus**: Task-specific prompts
+- **Efficient**: Only relevant context per task
+- **Scalable**: Handle many tasks without overflow
 
 **Implementation** (`vaf/tools/coder.py`):
 
@@ -393,7 +393,7 @@ The Research Agent processes topics **section-by-section** to avoid context over
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📋 TOPIC SPLITTER                                  │   │
+│  │  TOPIC SPLITTER                                     │   │
 │  │  └─ Splits into 10 sections (Intro, Methods, ...)   │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
@@ -403,17 +403,17 @@ The Research Agent processes topics **section-by-section** to avoid context over
 │  │ SEC 1 │          │ SEC 2 │          │ SEC N │            │
 │  │ Intro │          │Methods│          │  ...  │            │
 │  ├───────┤          ├───────┤          ├───────┤            │
-│  │🔍 Web │         │🔍 Web │          │🔍 Web │           │
+│  │ Web   │          │ Web   │          │ Web   │            │
 │  │ Search│          │ Search│          │ Search│            │
-│  │🧠 LLM │         │🧠 LLM │          │🧠 LLM │           │
-│  │ Call  │          │ Call  │          │ Call   │           │
-│  │📝 Text│         │📝 Text│          │📝 Text│            │
+│  │ LLM   │          │ LLM   │          │ LLM   │            │
+│  │ Call  │          │ Call  │          │ Call  │            │
+│  │ Text  │          │ Text  │          │ Text  │            │
 │  └───────┘          └───────┘          └───────┘            │
 │  ISOLATED           ISOLATED           ISOLATED             │
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📄 FINAL HTML REPORT                               │    │
+│  │  FINAL HTML REPORT                                  │    │
 │  │  └─ All sections assembled                          │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -459,7 +459,7 @@ Each web page is processed in a **separate LLM call** to prevent context polluti
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  🔍 SEARCH ENGINE                                   │   │
+│  │  SEARCH ENGINE                                      │   │
 │  │  └─ Returns 5 URLs                                  │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
@@ -479,7 +479,7 @@ Each web page is processed in a **separate LLM call** to prevent context polluti
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  📝 SUMMARIZED RESULTS                              │    │
+│  │  SUMMARIZED RESULTS                                 │    │
 │  │  └─ Only summaries returned to main context         │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -514,8 +514,8 @@ Based ONLY on this page, answer the question.\"\"\"
 
 | Aspect | Old (Single Context) | New (Isolated Contexts) |
 |--------|---------------------|-------------------------|
-| 10 web pages | 10 × 2,000 = 20,000 tokens ❌ | 10 × 400 = 4,000 tokens ✅ |
-| Deep research | 1 huge prompt ❌ | 10 small prompts ✅ |
+| 10 web pages | 10 × 2,000 = 20,000 tokens | 10 × 400 = 4,000 tokens |
+| Deep research | 1 huge prompt | 10 small prompts |
 | Context overflow | Frequent | Never |
 | Quality | Diluted attention | Focused responses |
 
@@ -543,16 +543,16 @@ BEFORE COMPRESSION (100 messages, 7,500 tokens):
 │ ... (95 more messages)                          │
 └─────────────────────────────────────────────────┘
 
-                ⬇️ COMPRESSION ⬇️
+                COMPRESSION
 
 AFTER COMPRESSION (8 messages, 2,000 tokens):
 ┌─────────────────────────────────────────────────┐
 │ System Prompt (kept)                            │
 │ ─────────────────────────────────────────────   │
 │ [CONTEXT GLUE]                                  │
-│ 🎯 Intent: Create website with contact form     │
-│ 📁 State: Created index.html, style.css         │
-│ 📝 Summary: User requested website creation...  │
+│ Intent: Create website with contact form        │
+│ State: Created index.html, style.css            │
+│ Summary: User requested website creation...     │
 │ ─────────────────────────────────────────────   │
 │ User: "Add a contact form" (recent)             │
 │ Assistant: [Response...] (recent)               │

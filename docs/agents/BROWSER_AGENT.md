@@ -156,11 +156,11 @@ Result:
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `task` | string | ✅ | — | Plain-language description of what the browser should do. Include URLs, credentials, and what data to extract. |
-| `max_steps` | integer | ❌ | 25 | Maximum number of browser actions before stopping. Cap: 100. |
-| `allowed_domains` | string[] | ❌ | unrestricted | Whitelist of domains the browser may visit. Prevents the agent from navigating outside the intended scope. |
-| `persistent` | boolean | ❌ | `false` | If `true`, cookies and login state are saved after the task and restored on the next call with the same `session` name. Use for sites that require login. |
-| `session` | string | ❌ | `"default"` | Named cookie store. Only used when `persistent=true`. Use a descriptive name like `"tipico"`, `"amazon"`, `"banking"`. Each name is independent. |
+| `task` | string | Yes | — | Plain-language description of what the browser should do. Include URLs, credentials, and what data to extract. |
+| `max_steps` | integer | No | 25 | Maximum number of browser actions before stopping. Cap: 100. |
+| `allowed_domains` | string[] | No | unrestricted | Whitelist of domains the browser may visit. Prevents the agent from navigating outside the intended scope. |
+| `persistent` | boolean | No | `false` | If `true`, cookies and login state are saved after the task and restored on the next call with the same `session` name. Use for sites that require login. |
+| `session` | string | No | `"default"` | Named cookie store. Only used when `persistent=true`. Use a descriptive name like `"tipico"`, `"amazon"`, `"banking"`. Each name is independent. |
 
 ### Writing good task descriptions
 
@@ -288,7 +288,7 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 | DeepSeek | `deepseek-v4-flash` |
 | Local (Ollama) | `llama3.1:70b` or `qwen2.5:32b` minimum |
 
-⚠️ **Local models below ~30B parameters** frequently produce malformed JSON for complex browser tasks and will cause step failures. For production use, an API provider or a large local model is strongly recommended.
+**Local models below ~30B parameters** frequently produce malformed JSON for complex browser tasks and will cause step failures. For production use, an API provider or a large local model is strongly recommended.
 
 ---
 
@@ -300,7 +300,7 @@ When `browser_agent` is running, the **SubAgent Window** in the WebUI opens auto
 ┌─────────────────────────────────────┐
 │ Browser Agent  ● Running            │
 │─────────────────────────────────────│
-│ 🌐 https://news.ycombinator.com  ● LIVE │
+│ https://news.ycombinator.com  ● LIVE │
 │ ┌─────────────────────────────────┐ │
 │ │   [Live Screenshot ~1.5 fps]    │ │
 │ └─────────────────────────────────┘ │

@@ -347,7 +347,7 @@ Best practice: Prefer storing under `email_config_by_scope[user_scope_id]`; the 
 
 ## Migration Plan
 
-### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking) — ✅ Done
+### Phase 1: Add `user_scope_id` Alongside `username` (Non-Breaking) — Done
 
 All functions that previously accepted only `username` now also accept `user_scope_id: Optional[str] = None`. Legacy `username` parameter is preserved for backward compatibility.
 
@@ -362,7 +362,7 @@ All functions that previously accepted only `username` now also accept `user_sco
 - `vaf/api/contact_routes.py` — All CRUD endpoints pass `user_scope_id`
 - `vaf/core/oauth_pkce.py` — `get_valid_access_token()` passes scope to credential operations
 
-### Phase 2: Add `email_config_by_scope` Config Key — ✅ Done
+### Phase 2: Add `email_config_by_scope` Config Key — Done
 
 ```json
 {
@@ -380,7 +380,7 @@ Lookup priority (implemented in `email_transport._get_email_config()` and `mail_
 2. `email_config_by_user[username]` — legacy per-user
 3. `email_config` — legacy global/admin fallback
 
-### Phase 3: Migrate Filesystem Paths — ✅ Done
+### Phase 3: Migrate Filesystem Paths — Done
 
 ```
 ~/.vaf/scopes/<user_scope_id>/       # New scope-based paths (preferred)
@@ -398,7 +398,7 @@ Migration script: `scripts/migrate_users_to_scopes.py`
 - Migrates `email_config_by_user` → `email_config_by_scope`
 - Supports `--dry-run` and `--config-only` flags
 
-### Phase 4: Migrate Credential Store Keys — ✅ Done
+### Phase 4: Migrate Credential Store Keys — Done
 
 ```python
 # Legacy key format (still supported as fallback)

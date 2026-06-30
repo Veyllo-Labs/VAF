@@ -2,7 +2,7 @@
 
 This directory contains JSON files defining trusted sources for research and web search operations.
 
-## 📁 Structure
+## Structure
 
 ```
 vaf/sources/
@@ -12,7 +12,7 @@ vaf/sources/
 └── README.md       # This file
 ```
 
-## 📝 JSON Format
+## JSON Format
 
 Each JSON file follows this structure:
 
@@ -46,7 +46,7 @@ Each JSON file follows this structure:
 }
 ```
 
-## 🎯 Trust Score Scale
+## Trust Score Scale
 
 | Score | Meaning | Examples |
 |-------|---------|----------|
@@ -59,7 +59,7 @@ Each JSON file follows this structure:
 | **1-4** | Low trust - Use with caution | Blogs, forums, unknown domains |
 | **0** | Blacklisted - Never use | Pinterest, Quora, Bild.de |
 
-## 🏷️ Tag System
+## Tag System
 
 ### Common Tags
 
@@ -84,7 +84,7 @@ Each JSON file follows this structure:
 - `documentation` - Official documentation
 - `official` - Official source (government, organization)
 
-## 🔧 Usage
+## Usage
 
 ### In Python Code
 
@@ -122,7 +122,7 @@ The SourceManager is automatically used by:
 - **`research_agent`** - Filters sources by trust score
 - **Trust Map** - Uses JSON sources as primary, falls back to legacy hardcoded list
 
-## ➕ Adding New Sources
+## Adding New Sources
 
 ### 1. Choose the Right File
 
@@ -161,7 +161,7 @@ The SourceManager is automatically used by:
 - Be specific but not excessive (3-5 tags ideal)
 - Follow existing tag conventions
 
-## 🔄 Maintenance
+## Maintenance
 
 ### Updating Sources
 
@@ -175,31 +175,32 @@ The SourceManager is automatically used by:
 2. Update `last_updated`
 3. Document reason in commit message
 
-## 📊 Statistics
+## Statistics
 
-Current sources (as of 2026-01-13):
+The source set evolves over time, so query it directly for the current
+numbers rather than relying on a static snapshot:
 
 ```python
 from vaf.core.sources import get_source_manager
 stats = get_source_manager().get_stats()
 print(stats)
 # {
-#   'total_sources': ~90+,
-#   'total_domains': ~150+,
-#   'categories': 14,
-#   'tags': 30+,
-#   'avg_trust_score': ~8.5
+#   'total_sources': ...,
+#   'total_domains': ...,
+#   'categories': ...,
+#   'tags': ...,
+#   'avg_trust_score': ...
 # }
 ```
 
-## 🛡️ Quality Control
+## Quality Control
 
 **Before adding a source:**
-1. ✅ Verify it's a real, active website
-2. ✅ Check reputation and editorial standards
-3. ✅ Confirm it's not paywalled (or note if it is)
-4. ✅ Ensure it provides accurate, factual content
-5. ✅ Check it's not already in BLACKLIST (`trust_map.py`)
+1. Verify it's a real, active website
+2. Check reputation and editorial standards
+3. Confirm it's not paywalled (or note if it is)
+4. Ensure it provides accurate, factual content
+5. Check it's not already in BLACKLIST (`trust_map.py`)
 
 **Blacklisted domains** (never add):
 - Social media (Facebook, Twitter/X, Instagram, TikTok)
@@ -207,7 +208,7 @@ print(stats)
 - User Q&A sites (Quora, Reddit, Gutefrage)
 - Tabloids (Bild.de)
 
-## 📚 Examples
+## Examples
 
 ### News Query
 ```python
@@ -230,7 +231,7 @@ journals = sm.get_by_tag("peer-reviewed")
 # Returns: Nature, Science, PLOS, Cell, etc.
 ```
 
-## 🤝 Contributing
+## Contributing
 
 To contribute new sources:
 

@@ -8,25 +8,25 @@ Connect external apps and services to interact with your VAF agent.
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| **Discord** | ✅ Available | Chat with your agent via Discord DMs or channels |
-| **Telegram** | ✅ Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
-| **Email** | ✅ Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
-| Slack | 🔜 Coming Soon | Integrate VAF into your Slack workspace |
-| Signal | 🔜 Coming Soon | Chat with your agent via Signal |
-| **WhatsApp** | ✅ Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
-| Microsoft Teams | 🔜 Coming Soon | Bot Framework for Teams integration |
-| Matrix (Element) | 🔜 Coming Soon | Open-source chat protocol |
-| IRC | 🔜 Coming Soon | Classic IRC for communities |
-| **Contacts** | ✅ Available | Central contact list with personal file and assistant whitelist |
+| **Discord** | Available | Chat with your agent via Discord DMs or channels |
+| **Telegram** | Available | Use VAF from Telegram; VAF can reach you there (whitelist, per-user) |
+| **Email** | Available | OAuth2 (Google, Microsoft, Apple) or IMAP/SMTP; read and send email via agent |
+| Slack | Coming Soon | Integrate VAF into your Slack workspace |
+| Signal | Coming Soon | Chat with your agent via Signal |
+| **WhatsApp** | Available | Chat with your agent on WhatsApp (QR link, per-user isolation) |
+| Microsoft Teams | Coming Soon | Bot Framework for Teams integration |
+| Matrix (Element) | Coming Soon | Open-source chat protocol |
+| IRC | Coming Soon | Classic IRC for communities |
+| **Contacts** | Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| Google Calendar | ✅ Available | Sync events, create reminders, manage your calendar (uses Gmail OAuth) |
-| Microsoft Outlook | ✅ Available | Connect to Outlook/Microsoft 365 calendar (uses Outlook OAuth) |
-| Apple Calendar | 🔜 Coming Soon | Sync with iCloud Calendar on macOS |
-| CalDAV (Local) | 🔜 Coming Soon | Connect to any CalDAV server (Nextcloud, etc.) |
+| Google Calendar | Available | Sync events, create reminders, manage your calendar (uses Gmail OAuth) |
+| Microsoft Outlook | Available | Connect to Outlook/Microsoft 365 calendar (uses Outlook OAuth) |
+| Apple Calendar | Coming Soon | Sync with iCloud Calendar on macOS |
+| CalDAV (Local) | Coming Soon | Connect to any CalDAV server (Nextcloud, etc.) |
 
 **Setup:** Calendar uses the same OAuth connection as Email. Connect Gmail or Outlook in **Settings → Connections → Email**; the agent can then list, create, update, and delete events via the tools `list_calendar_events`, `create_calendar_event`, `update_calendar_event`, `delete_calendar_event`. In Google Cloud Console, enable the **Google Calendar API** for your project; the redirect URI is the same as for email (`/api/email/oauth/callback`). For Microsoft, the scope `Calendars.ReadWrite` is requested automatically. See [CALENDAR_INTEGRATION.md](CALENDAR_INTEGRATION.md) for details.
 
@@ -34,17 +34,17 @@ Connect external apps and services to interact with your VAF agent.
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| Google Drive | ✅ Available | Browse, read, download, and sync files; OAuth2; full Drive access |
-| Microsoft OneDrive | ✅ Available | Browse and sync files via Microsoft Graph; OAuth2 |
-| Apple iCloud | 🔜 Coming Soon | Access iCloud Drive files on macOS |
-| Dropbox | 🔜 Coming Soon | Sync and access Dropbox files |
-| Nextcloud | 🔜 Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
+| Google Drive | Available | Browse, read, download, and sync files; OAuth2; full Drive access |
+| Microsoft OneDrive | Available | Browse and sync files via Microsoft Graph; OAuth2 |
+| Apple iCloud | Coming Soon | Access iCloud Drive files on macOS |
+| Dropbox | Coming Soon | Sync and access Dropbox files |
+| Nextcloud | Coming Soon | Connect to self-hosted Nextcloud via WebDAV |
 
 ### Developer
 
 | Platform | Status | Description |
 |----------|--------|-------------|
-| **GitHub** | ✅ Available | Link your GitHub account so the agent can read your repos, list issues/PRs, and optionally commit |
+| **GitHub** | Available | Link your GitHub account so the agent can read your repos, list issues/PRs, and optionally commit |
 
 **Setup:** Go to **Settings → Connections → Developer → GitHub** and click **Connect**. 
 
@@ -98,8 +98,8 @@ After linking, the agent can use the tools `github_list_repos`, `github_get_file
 3. Go to **"Bot"** in the sidebar
 4. Click **"Add Bot"**
 5. Enable **Privileged Gateway Intents**:
-   - ✅ Message Content Intent
-   - ✅ Server Members Intent (optional)
+   - Message Content Intent
+   - Server Members Intent (optional)
 6. Click **"Reset Token"** and copy the token
 
 ### Inviting the Bot to Your Server

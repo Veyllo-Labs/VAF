@@ -166,7 +166,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
 *   **Fake Completion:**
     *   Scans text for "I am done", "Finished".
     *   **IF** text says "done" **AND** no `task_done` tool call:
-    *   **ACTION:** Injects `⚠️ You claimed completion but didn't call task_done. Call it now.`
+    *   **ACTION:** Injects `You claimed completion but didn't call task_done. Call it now.`
 
 ### F. Stuck Detection with Goal Verification and Retry Stages
 A task that stays on the same index for more than 15 loops is never blindly marked completed. The flow is:

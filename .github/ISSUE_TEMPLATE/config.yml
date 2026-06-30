@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Veyllo-Labs/VAF/blob/main/SECURITY.md
+    about: Please do NOT open a public issue for security problems. Follow the responsible-disclosure process in our Security Policy and email legal@veyllo.io instead.

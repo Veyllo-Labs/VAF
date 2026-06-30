@@ -16,10 +16,10 @@ jobs:
   gate-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: 'pip'
@@ -44,7 +44,7 @@ jobs:
           vaf --help
 
       - name: Run tests
-        run: pytest tests/ --ignore=tests/test_gpu_inference.py
+        run: pytest tests/
 
       - name: Verify tag matches vaf/version.py
         run: |

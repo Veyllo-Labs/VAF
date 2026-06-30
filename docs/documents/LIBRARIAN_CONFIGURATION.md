@@ -132,16 +132,16 @@ When you try to read a large file that exceeds the configured size limit, the Li
 
 ### Benefits of Auto-Chunking
 
-- ✅ **No context overflow** - Large files don't overwhelm the AI's context window
-- ✅ **Faster processing** - Smaller chunks are processed more quickly
-- ✅ **Better summaries** - Focused reading produces better insights
-- ✅ **Navigation support** - Get previews and then deep-dive into specific sections
+- **No context overflow** - Large files don't overwhelm the AI's context window
+- **Faster processing** - Smaller chunks are processed more quickly
+- **Better summaries** - Focused reading produces better insights
+- **Navigation support** - Get previews and then deep-dive into specific sections
 
 ### Supported Formats for Chunking
 
-- ✅ PDF files (`.pdf`)
-- ✅ Text files (`.txt`, `.md`, `.log`)
-- ✅ Data files (`.json`, `.xml`, `.csv`)
+- PDF files (`.pdf`)
+- Text files (`.txt`, `.md`, `.log`)
+- Data files (`.json`, `.xml`, `.csv`)
 
 ### How to Use Chunking
 
@@ -472,11 +472,11 @@ Agent: You can increase the PDF size limit:
 
 The enhanced Librarian Agent configuration system provides:
 
-✅ **Flexibility** - Adjust limits to your needs
-✅ **Intelligence** - Auto-chunking for large files
-✅ **Clarity** - Detailed error messages with suggestions
-✅ **Performance** - Optimized settings for different use cases
-✅ **Usability** - Easy JSON-based configuration
+**Flexibility** - Adjust limits to your needs
+**Intelligence** - Auto-chunking for large files
+**Clarity** - Detailed error messages with suggestions
+**Performance** - Optimized settings for different use cases
+**Usability** - Easy JSON-based configuration
 
 Configure the Librarian Agent to work exactly how you need it!
 

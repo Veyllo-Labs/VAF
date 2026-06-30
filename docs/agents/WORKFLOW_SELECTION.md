@@ -65,7 +65,7 @@ Before the LLM router runs, `_try_workflow()` checks cheap fast guards. If any m
 │           │                              │                      │
 │           ▼                              ▼                      │
 │  ┌──────────────────────────────────────────────────────┐       │
-│  │  🧠 ROUTER LLM (Intent Analysis)                     │       │
+│  │  ROUTER LLM (Intent Analysis)                       │       │
 │  │  "Does this input match any workflow description?"   │       │
 │  └──────────────────────────┬───────────────────────────┘       │
 │                             │                                   │

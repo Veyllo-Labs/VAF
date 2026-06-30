@@ -25,22 +25,23 @@ There are two ways to supply configuration, and they compose:
 > via `Agent(config={...})`, give the **raw** key (`"sk-..."`) — it is used as-is and never
 > Base64-decoded.
 
-Keys marked ★ are the ones most embedders need; everything else has a sensible default.
+The keys in the "Essential for embedding" section below are the ones most embedders
+need; everything else has a sensible default.
 
 ---
 
-## ★ Essential for embedding
+## Essential for embedding
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `provider` ★ | `"local"` | LLM provider: `local`, `veyllo`, `openai`, `anthropic`, `deepseek`, `google`, `openrouter`. |
-| `model` ★ | `"auto"` | Local GGUF model. `"auto"` = VRAM-adaptive default, or set `"repo/file.gguf"`. Ignored for API providers. |
-| `api_key_<provider>` ★ | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; Base64 on disk. |
-| `api_model_<provider>` ★ | per provider (see below) | Model name for the API provider (e.g. `api_model_openai`). |
-| `n_ctx` ★ | `32768` | Context window in tokens. Values below 32768 are clamped up to it. |
-| `temperature` ★ | `0.7` | Sampling temperature (API + local). |
-| `gpu_layers` ★ | `-1` | Local model GPU offload layers. `-1` = all; `0` = CPU only. |
-| `auto_start_local_server` ★ | `True` | Start the local llama-server automatically. Set `False` when using only an API provider. |
+| `provider` | `"local"` | LLM provider: `local`, `veyllo`, `openai`, `anthropic`, `deepseek`, `google`, `openrouter`. |
+| `model` | `"auto"` | Local GGUF model. `"auto"` = VRAM-adaptive default, or set `"repo/file.gguf"`. Ignored for API providers. |
+| `api_key_<provider>` | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; Base64 on disk. |
+| `api_model_<provider>` | per provider (see below) | Model name for the API provider (e.g. `api_model_openai`). |
+| `n_ctx` | `32768` | Context window in tokens. Values below 32768 are clamped up to it. |
+| `temperature` | `0.7` | Sampling temperature (API + local). |
+| `gpu_layers` | `-1` | Local model GPU offload layers. `-1` = all; `0` = CPU only. |
+| `auto_start_local_server` | `True` | Start the local llama-server automatically. Set `False` when using only an API provider. |
 | `router_max_tools` | `12` | Max tools handed to the model per turn (1–100). Lower = faster inference. |
 
 Default API models (from `Config.PROVIDER_MODELS`):

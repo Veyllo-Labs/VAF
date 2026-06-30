@@ -7,21 +7,21 @@ VAF now fetches available models **dynamically from API providers** instead of u
 ### 1. Automatic Model Discovery
 
 When you configure an API provider, VAF automatically:
-1. ✅ Tests your API key
-2. ✅ Fetches all available models from the provider
-3. ✅ Presents them in an interactive menu
-4. ✅ Allows custom model IDs for new/beta models
+1. Tests your API key
+2. Fetches all available models from the provider
+3. Presents them in an interactive menu
+4. Allows custom model IDs for new/beta models
 
 ### 2. Supported Providers
 
 | Provider | Models Fetched | API Endpoint |
 |----------|---------------|--------------|
-| **Veyllo** | ✅ Dynamic | `GET /v1/models` |
-| **OpenAI** | ✅ Dynamic | `GET /v1/models` |
-| **Anthropic** | ✅ Dynamic (Web UI path) | `GET /v1/models` |
-| **Google** | ✅ Dynamic | `GET /v1beta/models` |
-| **OpenRouter** | ✅ Dynamic | `GET /v1/models` |
-| **DeepSeek** | ✅ Dynamic | `GET /v1/models` |
+| **Veyllo** | Dynamic | `GET /v1/models` |
+| **OpenAI** | Dynamic | `GET /v1/models` |
+| **Anthropic** | Dynamic (Web UI path) | `GET /v1/models` |
+| **Google** | Dynamic | `GET /v1beta/models` |
+| **OpenRouter** | Dynamic | `GET /v1/models` |
+| **DeepSeek** | Dynamic | `GET /v1/models` |
 
 ## Usage
 
@@ -152,9 +152,9 @@ Models are automatically filtered:
 ### Caching Strategy
 
 Models are fetched:
-- ✅ When setting up a new provider
-- ✅ When opening the model selection menu
-- ❌ Not cached between sessions (always fresh)
+- When setting up a new provider
+- When opening the model selection menu
+- Not cached between sessions (always fresh)
 
 ## Examples
 
@@ -269,11 +269,11 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 
 | Provider | Vision support | Recommended model |
 |----------|---------------|-------------------|
-| OpenAI | ✅ | `gpt-4o` |
-| Anthropic | ✅ all Claude 3+ | `claude-sonnet-4-6` |
-| Google | ✅ all Gemini | `gemini-2.5-flash` |
-| OpenRouter | ✅ varies | `openai/gpt-4o` |
-| DeepSeek | ❌ | — |
+| OpenAI | Yes | `gpt-4o` |
+| Anthropic | Yes, all Claude 3+ | `claude-sonnet-4-6` |
+| Google | Yes, all Gemini | `gemini-2.5-flash` |
+| OpenRouter | Yes, varies | `openai/gpt-4o` |
+| DeepSeek | No | — |
 | Local | depends on model | — |
 
 ### Image persistence in chat

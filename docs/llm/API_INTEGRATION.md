@@ -173,22 +173,22 @@ All API providers support **streaming responses** for real-time output.
 
 ### Tool Calling
 
-- ✅ **OpenAI** - Full support (native function calling)
-- ✅ **Anthropic** - Full support (`tool_use`/`tool_result` roundtrip via the native SDK)
-- ✅ **Google** - Full support (`function_call`/`function_response` via the native google-genai SDK)
-- ✅ **OpenRouter** - Provider-dependent
-- ⚠️ **DeepSeek** - `tool_choice` limited to `auto`/`none` (see LLM_BACKEND_FACTS.md)
+- **OpenAI** - Full support (native function calling)
+- **Anthropic** - Full support (`tool_use`/`tool_result` roundtrip via the native SDK)
+- **Google** - Full support (`function_call`/`function_response` via the native google-genai SDK)
+- **OpenRouter** - Provider-dependent
+- **DeepSeek** - `tool_choice` limited to `auto`/`none` (see LLM_BACKEND_FACTS.md)
 
 ### Vision / Image Input
 
 Providers that support multimodal (image) input:
 
-- ✅ **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
-- ✅ **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) — converted to `source.base64` format
-- ✅ **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) — converted to `Part.from_bytes` (inline_data) parts
-- ✅ **OpenRouter** — provider-dependent (model must support vision)
-- ❌ **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
-- ⚠️ **Local (Ollama)** — only if the loaded model supports vision (e.g. `llava`)
+- **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) — `image_url` with data URIs
+- **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) — converted to `source.base64` format
+- **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) — converted to `Part.from_bytes` (inline_data) parts
+- **OpenRouter** — provider-dependent (model must support vision)
+- **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
+- **Local (Ollama)** — only if the loaded model supports vision (e.g. `llava`)
 
 **How it works (default `vision_mode = "description_tool"`):** the main reasoning model is **text-only** — raw image bytes never enter its context. Vision is a separate, on-demand service.
 

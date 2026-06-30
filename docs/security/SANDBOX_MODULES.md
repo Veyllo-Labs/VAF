@@ -148,25 +148,25 @@ textwrap.wrap('Long text...', width=10) # → ['Long', 'text...']
 > **Important distinction:** The sandbox enforces security at the **Docker container level**, not at the Python import level. Standard-library modules like `subprocess`, `socket`, and `os` are importable inside the sandbox — what prevents abuse is the Docker container's process namespace, network policy, and resource limits, not a module blocklist.
 
 **Constrained by Docker isolation:**
-- ⚠️ `subprocess` / `os.system` — spawn processes inside the container only (no host access)
-- ⚠️ `socket` / network — sandbox has network access for pip installs and the Tool Bridge back-channel; direct outbound connections (e.g. to external APIs) are **not** blocked at Python level
-- ⚠️ Host filesystem — inaccessible from inside the container; only `/tmp/vaf_*` (per-execution, auto-cleaned) is visible to running code
-- ⚠️ Container internal services — the sandbox is on its own isolated `vaf-sandbox-network` and **cannot** reach postgres/redis/gotenberg/tts/stt by hostname; outbound internet and the Tool Bridge back-channel (`host.docker.internal`) still work
+- `subprocess` / `os.system` — spawn processes inside the container only (no host access)
+- `socket` / network — sandbox has network access for pip installs and the Tool Bridge back-channel; direct outbound connections (e.g. to external APIs) are **not** blocked at Python level
+- Host filesystem — inaccessible from inside the container; only `/tmp/vaf_*` (per-execution, auto-cleaned) is visible to running code
+- Container internal services — the sandbox is on its own isolated `vaf-sandbox-network` and **cannot** reach postgres/redis/gotenberg/tts/stt by hostname; outbound internet and the Tool Bridge back-channel (`host.docker.internal`) still work
 
 **Hard limits (enforced by Docker):**
-- ✅ Memory: 512 MB max — OOM-killed if exceeded
-- ✅ CPU: 0.5 cores — cannot monopolise the host
-- ✅ Process isolation: cannot access host PID namespace or host filesystem
-- ✅ Installed packages persist in the container between executions (by design, for performance) — user code itself runs in a unique `/tmp/vaf_*` dir that is deleted after each run
+- Memory: 512 MB max — OOM-killed if exceeded
+- CPU: 0.5 cores — cannot monopolise the host
+- Process isolation: cannot access host PID namespace or host filesystem
+- Installed packages persist in the container between executions (by design, for performance) — user code itself runs in a unique `/tmp/vaf_*` dir that is deleted after each run
 
 **Practical allowed usage:**
-- ✅ Pure calculations and data processing
-- ✅ String manipulation and Regex
-- ✅ Hashing and Encoding
-- ✅ Algorithms and Data Structures
-- ✅ Timestamps (read-only, no system modification)
-- ✅ `pip install` packages (persist in container for performance)
-- ✅ VAF tool calls via `import vaf_tools` (when `with_vaf_tools=True`)
+- Pure calculations and data processing
+- String manipulation and Regex
+- Hashing and Encoding
+- Algorithms and Data Structures
+- Timestamps (read-only, no system modification)
+- `pip install` packages (persist in container for performance)
+- VAF tool calls via `import vaf_tools` (when `with_vaf_tools=True`)
 
 For architecture and isolation details, see [`SANDBOXING.md`](SANDBOXING.md).
 

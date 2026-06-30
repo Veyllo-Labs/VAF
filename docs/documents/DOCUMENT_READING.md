@@ -6,14 +6,14 @@ The VAF Librarian Agent supports reading multiple document formats including PDF
 
 ### Key Features
 
-✅ **Multiple Formats** - PDF, Word, Excel, PowerPoint, and text files
-✅ **Cloud Documents** - Read from Google Drive, OneDrive via `cloud_storage` (action `read`, `file_id`); no local copy kept
-✅ **Auto-Chunking** - Automatically handles large files without context overflow
-✅ **Configurable Limits** - Adjust size limits per file type
-✅ **Smart Navigation** - Jump to specific pages or sections
-✅ **Cross-Platform** - Works on Windows, macOS, and Linux
-✅ **Multilingual** - Supports German, English, Turkish, and more
-✅ **Auto-Install** - Dependencies checked and installed automatically on first start
+**Multiple Formats** - PDF, Word, Excel, PowerPoint, and text files
+**Cloud Documents** - Read from Google Drive, OneDrive via `cloud_storage` (action `read`, `file_id`); no local copy kept
+**Auto-Chunking** - Automatically handles large files without context overflow
+**Configurable Limits** - Adjust size limits per file type
+**Smart Navigation** - Jump to specific pages or sections
+**Cross-Platform** - Works on Windows, macOS, and Linux
+**Multilingual** - Supports German, English, Turkish, and more
+**Auto-Install** - Dependencies checked and installed automatically on first start
 
 ### Quick Start
 
@@ -47,11 +47,11 @@ User: "Read pages 10-20 of large_report.pdf"  # Navigate to specific sections
 
 | Format | Extensions | Description | Default Max Size | Configurable |
 |--------|-----------|-------------|------------------|--------------|
-| **PDF** | `.pdf` | Adobe PDF documents | 50 MB | ✅ Yes |
-| **Word** | `.docx` | Microsoft Word documents | 20 MB | ✅ Yes |
-| **Excel** | `.xlsx`, `.xls` | Microsoft Excel spreadsheets | 30 MB | ✅ Yes |
-| **PowerPoint** | `.pptx` | Microsoft PowerPoint presentations | 20 MB | ✅ Yes |
-| **Text** | `.txt`, `.md`, `.json`, `.xml`, `.csv`, etc. | Plain text files | 500 KB | ✅ Yes |
+| **PDF** | `.pdf` | Adobe PDF documents | 50 MB | Yes |
+| **Word** | `.docx` | Microsoft Word documents | 20 MB | Yes |
+| **Excel** | `.xlsx`, `.xls` | Microsoft Excel spreadsheets | 30 MB | Yes |
+| **PowerPoint** | `.pptx` | Microsoft PowerPoint presentations | 20 MB | Yes |
+| **Text** | `.txt`, `.md`, `.json`, `.xml`, `.csv`, etc. | Plain text files | 500 KB | Yes |
 
 **Note:** All size limits are configurable via `~/.vaf/config.json`. See [Configuration](#configuration) section below.
 
@@ -322,15 +322,15 @@ When a file **exceeds the configured size limit**, the Librarian automatically s
 ```
 
 **Benefits:**
-- ✅ **No Context Overflow**: Large files don't overwhelm the AI
-- ✅ **Faster Processing**: Smaller chunks process more quickly
-- ✅ **Better Summaries**: Focused reading produces better insights
-- ✅ **Interactive Navigation**: Get overview first, then dive into details
+- **No Context Overflow**: Large files don't overwhelm the AI
+- **Faster Processing**: Smaller chunks process more quickly
+- **Better Summaries**: Focused reading produces better insights
+- **Interactive Navigation**: Get overview first, then dive into details
 
 **Supported Formats for Auto-Chunking:**
-- ✅ PDF files (`.pdf`) - Page-based chunking
-- ✅ Text files (`.txt`, `.md`, `.log`) - Character-based chunking
-- ✅ Data files (`.json`, `.xml`, `.csv`) - Intelligent chunking
+- PDF files (`.pdf`) - Page-based chunking
+- Text files (`.txt`, `.md`, `.log`) - Character-based chunking
+- Data files (`.json`, `.xml`, `.csv`) - Intelligent chunking
 
 Content is automatically truncated with helpful messages if it exceeds limits.
 
@@ -345,9 +345,9 @@ Error: PDF support not installed. Run: pip install pdfplumber PyPDF2
 ### Cross-Platform Compatibility
 
 All document reading features work consistently across:
-- ✅ Windows
-- ✅ macOS
-- ✅ Linux
+- Windows
+- macOS
+- Linux
 
 The implementation uses `pathlib` and platform-independent file handling.
 
@@ -528,15 +528,15 @@ User: "Summarize pages 1-50 of report.pdf"
 ### Chunking Limitations
 
 **What Chunking Can Do:**
-- ✅ Handle files larger than configured limits
-- ✅ Provide navigable previews
-- ✅ Reduce memory usage
-- ✅ Speed up targeted reading
+- Handle files larger than configured limits
+- Provide navigable previews
+- Reduce memory usage
+- Speed up targeted reading
 
 **What Chunking Cannot Do:**
-- ❌ Provide full document analysis in one pass
-- ❌ Maintain cross-references between distant sections
-- ❌ Process files infinitely large (practical limits still apply)
+- Provide full document analysis in one pass
+- Maintain cross-references between distant sections
+- Process files infinitely large (practical limits still apply)
 
 **Workarounds:**
 - For full analysis: Read in sections, then combine insights
@@ -736,7 +736,7 @@ User: "Search for 'revenue' in large_report.pdf"
 
 ## Related Documentation
 
-- [Librarian Configuration](LIBRARIAN_CONFIGURATION.md) - Configure file size limits and behavior ⭐ **NEW**
+- [Librarian Configuration](LIBRARIAN_CONFIGURATION.md) - Configure file size limits and behavior **NEW**
 - [VAF Sub-Agent IPC System](../agents/SUBAGENT_IPC.md) - How sub-agents communicate
 - [VAF Speech Features](../web-ui/SPEECH_FEATURES.md) - Voice interaction with documents
 - [VAF Context Management](../memory/CONTEXT_MANAGEMENT.md) - Handling large documents

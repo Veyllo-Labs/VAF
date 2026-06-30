@@ -23,7 +23,7 @@ Like a facial expression, but abstract.
 - **Feel:** The agent is present but passive. Quietly alive — the dot softly drifts and breathes.
 - **When:** Most recent completed bot message, no active streaming
 
-> ⚠️ **Performance note (do not regress):** The idle state must NOT animate `border-radius`,
+> **Performance note (do not regress):** The idle state must NOT animate `border-radius`,
 > `filter`/`blur` or `box-shadow`, and the aura stays static. The app runs in QtWebEngine
 > with the GPU in-process, where a continuously *repainting* idle animation leaks GPU memory
 > (renderer RSS once climbed to several GB across the visible avatars). Idle animation is

@@ -4,7 +4,7 @@ This directory contains all tools for the VAF (AI Agent Framework) system. Tools
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 1. [How VAF Tools Work](#how-vaf-tools-work)
 2. [Adding a Custom Tool](#adding-a-custom-tool)
@@ -14,7 +14,7 @@ This directory contains all tools for the VAF (AI Agent Framework) system. Tools
 
 ---
 
-## 🔧 How VAF Tools Work
+## How VAF Tools Work
 
 ### Architecture
 
@@ -77,7 +77,7 @@ Some tools depend on extra packages. VAF handles these gracefully:
 
 ---
 
-## 🛠️ Adding a Custom Tool
+## Adding a Custom Tool
 
 ### Step 1: Create New File
 
@@ -123,7 +123,7 @@ class MyCustomTool(BaseTool):
         return result
 ```
 
-### Step 3: Done! 🎉
+### Step 3: Done!
 
 The tool is **automatically discovered** on the next VAF startup. No manual registration needed!
 
@@ -165,7 +165,7 @@ class CalculatorTool(BaseTool):
 
 ---
 
-## 🔌 Adding an MCP Tool
+## Adding an MCP Tool
 
 MCP (Model Context Protocol) enables integration of tools from other languages and ecosystems.
 
@@ -260,7 +260,7 @@ npm install -g @modelcontextprotocol/server-github
 
 ---
 
-## 📖 Tool Examples
+## Tool Examples
 
 ### Example 1: Web Search Tool
 
@@ -325,7 +325,7 @@ class ReadFileTool(BaseTool):
 
 ---
 
-## ✅ Best Practices
+## Best Practices
 
 ### 1. Tool Names
 
@@ -340,10 +340,10 @@ class ReadFileTool(BaseTool):
 - **Examples**: Provide examples if helpful
 
 ```python
-# ✅ GOOD
+# GOOD
 description = "Searches the internet for current information. Supports deep search for detailed page analysis."
 
-# ❌ BAD
+# BAD
 description = "Searches stuff"
 ```
 
@@ -414,7 +414,7 @@ assert "Result" in result
 
 ---
 
-## 🚀 Advanced Features
+## Advanced Features
 
 ### Sub-Agent Filtering
 
@@ -572,7 +572,7 @@ assert "get_weather" in Agent().core.tools
 
 ---
 
-## 📚 Additional Resources
+## Additional Resources
 
 - **BaseTool Documentation**: `vaf/tools/base.py`
 - **Tool Examples**: See other tools in this directory
@@ -581,7 +581,7 @@ assert "get_weather" in Agent().core.tools
 
 ---
 
-## ❓ FAQ
+## FAQ
 
 **Q: Why isn't my tool being recognized?**
 A: Make sure:

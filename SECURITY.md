@@ -6,7 +6,7 @@ VAF is a powerful AI automation framework designed for **local and private netwo
 
 ---
 
-## 🛑 CRITICAL WARNING: NO PUBLIC WEB HOSTING
+## CRITICAL WARNING: NO PUBLIC WEB HOSTING
 
 **NEVER host the VAF Web UI directly on the public internet.**
 

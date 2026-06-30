@@ -1,31 +1,31 @@
-# Kontext-Kompression – Ablauf Schritt für Schritt
+# Context Compression – Step-by-Step Flow
 
-Dieses Dokument beschreibt **genau**, was bei der Kontext-Kompression in VAF passiert: wo sie ausgelöst wird, was der `ContextManager` macht und wie das mit dem dynamischen System-Prompt zusammenhängt.
+This document describes **exactly** what happens during context compression in VAF: where it is triggered, what the `ContextManager` does, and how this ties in with the dynamic system prompt.
 
 ---
 
-## 1. Wo wird Kompression ausgelöst?
+## 1. Where is compression triggered?
 
-**Datei:** `vaf/core/agent.py`
+**File:** `vaf/core/agent.py`
 
-Die Kompression wird **einmal pro Nutzer-Turn** in `chat_step()` geprüft, **bevor** die neue User-Nachricht an die History angehängt wird.
+Compression is checked **once per user turn** in `chat_step()`, **before** the new user message is appended to the history.
 
-Reihenfolge im `chat_step()`:
+Order within `chat_step()`:
 
-1. `context_manager.decay_state()` – TTL von State-Einträgen (Dateien, etc.) wird dekrementiert.
-2. **Dynamic Context:** Bei `user_input` und `prompt_manager`:
-   - Sprache erkennen, `analyze_context(user_input)` aufrufen, `new_prompt = build_prompt(...)` bauen.
-   - `new_prompt` wird **nur in diesem Block** gesetzt, **nicht** in die History geschrieben.
+1. `context_manager.decay_state()` – the TTL of state entries (files, etc.) is decremented.
+2. **Dynamic Context:** when `user_input` and `prompt_manager` are present:
+   - Detect the language, call `analyze_context(user_input)`, and build `new_prompt = build_prompt(...)`.
+   - `new_prompt` is set **only within this block**; it is **not** written into the history.
 3. **Context Compression:**
-   - **Bedingung:** `context_manager.should_compress(self.history)` muss `True` sein.
-   - Wenn **ja:** `compress()` aufrufen, dann Context Glue an `new_prompt` hängen, System-Prompt in `history[0]` mit diesem `new_prompt` überschreiben (inkl. Glue + ggf. PROJECT CONTEXT).
-   - Wenn **nein:** Es passiert nichts mit der History; ein zuvor gebauter `new_prompt` wird **nicht** in `history[0]` geschrieben (bekannter Bug).
+   - **Condition:** `context_manager.should_compress(self.history)` must be `True`.
+   - If **yes:** call `compress()`, then append the context glue to `new_prompt` and overwrite the system prompt in `history[0]` with this `new_prompt` (including the glue and, if present, PROJECT CONTEXT).
+   - If **no:** nothing happens to the history; a `new_prompt` built earlier is **not** written into `history[0]` (known bug).
 
 ---
 
-## 2. Wann gilt „soll komprimiert werden“?
+## 2. When does "should be compressed" apply?
 
-**Datei:** `vaf/core/context.py`
+**File:** `vaf/core/context.py`
 
 ```python
 def should_compress(self, history: List[Dict]) -> bool:
@@ -33,140 +33,140 @@ def should_compress(self, history: List[Dict]) -> bool:
     return usage >= self.trigger_threshold
 ```
 
-- **`trigger_threshold`:** Dynamisch nach `max_tokens` (z. B. 0.70 bei kleinen Fenstern, 0.85 bei großen Fenstern bis 128k, 0.90 bei sehr großen Fenstern).
+- **`trigger_threshold`:** Dynamic, based on `max_tokens` (e.g. 0.70 for small windows, 0.85 for large windows up to 128k, 0.90 for very large windows).
 - **`get_usage_percent(history)`:**  
   `estimate_tokens(history) / max_tokens`  
-  – also geschätzte Token der aktuellen History geteilt durch das konfigurierte Kontext-Limit (z. B. 8192 oder 128000).
+  – i.e. the estimated tokens of the current history divided by the configured context limit (e.g. 8192 or 128000).
 
-**Kurz:** Kompression wird ausgelöst, sobald die geschätzte Nutzung der History den dynamischen Schwellenwert des aktuellen Kontextfensters erreicht.
-
----
-
-## 3. Token-Schätzung (`estimate_tokens`)
-
-**Datei:** `vaf/core/context.py`
-
-- Pro Nachricht:
-  - Die Schätzung nutzt dynamische Ratios abhängig von `max_tokens`.
-  - Kleine Kontexte (`<= 16384`) nutzen konservativere Ratios (mehr geschätzte Tokens pro Zeichen) als große Kontexte.
-  - Rollenfelder werden ebenfalls mit dem aktiven Text-Ratio mitgerechnet.
-- Danach: **+10 %** Sicherheitsmargin auf die Gesamtsumme (Spezial-Tokens, Formatierung).
-
-Es wird **kein** echtes Tokenisieren (z. B. tiktoken) verwendet, nur Zeichen-basierte Schätzung.
+**In short:** compression is triggered as soon as the estimated usage of the history reaches the dynamic threshold of the current context window.
 
 ---
 
-## 4. Ablauf von `compress(history)` – Schritt für Schritt
+## 3. Token estimation (`estimate_tokens`)
 
-**Datei:** `vaf/core/context.py`, Methode `compress()`.
+**File:** `vaf/core/context.py`
 
-### 4.1 Voraussetzung
+- Per message:
+  - The estimate uses dynamic ratios depending on `max_tokens`.
+  - Small contexts (`<= 16384`) use more conservative ratios (more estimated tokens per character) than large contexts.
+  - Role fields are also counted using the active text ratio.
+- Then: a **+10 %** safety margin is added to the total (special tokens, formatting).
 
-- Wenn `len(history) < 3`: **keine** Kompression, `history` wird unverändert zurückgegeben.
+No real tokenization (e.g. tiktoken) is used, only a character-based estimate.
 
-### 4.2 Schritt 1: Archivieren
+---
 
-- `_archive_history(history)` wird aufgerufen.
-- **In-Memory:** Ein `ContextSnapshot` (Timestamp, History-Kopie, Intent, State, Token-Count) wird an `self.archive` angehängt; maximal 3 Snapshots, ältester wird entfernt.
-- **Auf Disk:** Eine JSON-Datei unter `~/.vaf/context_archive/` wird geschrieben (`context_YYYYMMDD_HHMMSS_<hash>.json`) mit History, Intent, State und Token-Count. Optional, Fehler werden still ignoriert.
+## 4. Flow of `compress(history)` – step by step
 
-### 4.3 Schritt 2: Intent und State aus **aller** History aktualisieren
+**File:** `vaf/core/context.py`, method `compress()`.
 
-- Über **alle** Nachrichten in `history` wird iteriert:
-  - Bei `role == "user"`: `update_intent(msg["content"])` – Extraktion von Zielen, Keywords, Constraints (Regex-Muster).
-  - Für **jede** Nachricht: `update_state(msg)` – Extraktion von:
-    - Dateien (created/read/modified),
-    - Fehlern (error/failed/fehler),
-    - Tools (aus `role=="tool"`),
-    - „Key decisions“ aus Assistant-Text (ohne `<think>`),
-    - Code-Snippets aus Code-Blöcken.
+### 4.1 Precondition
 
-Damit sind Intent und State **vor** dem Verwerfen der alten Nachrichten auf dem neuesten Stand.
+- If `len(history) < 3`: **no** compression; `history` is returned unchanged.
 
-### 4.4 Schritt 3: Kritische Tool-Ergebnisse aus dem „Mittelteil“
+### 4.2 Step 1: Archive
 
-- **Mittelteil:** `history[1 : -recent_memory_size]` (alles außer erstem Eintrag und den letzten `recent_memory_size` Nachrichten).
-- Darin werden Nachrichten mit `role == "tool"` und `name` in `preserve_tools` gesucht (inkl. Kern-Tools wie `set_todos`, `write_file`, `read_file` sowie weiterer sicherheitsrelevanter Tools je nach aktueller Implementierung).
-- Pro Treffer: Inhalt auf 300 Zeichen gekürzt, als Nachricht mit `role`, `name`, `content`, `tool_call_id` in `critical_tools` gesammelt.
-- Später werden maximal die **letzten 5** dieser kritischen Tool-Nachrichten in die neue History übernommen.
+- `_archive_history(history)` is called.
+- **In-memory:** a `ContextSnapshot` (timestamp, history copy, intent, state, token count) is appended to `self.archive`; at most 3 snapshots are kept, the oldest is removed.
+- **On disk:** a JSON file is written under `~/.vaf/context_archive/` (`context_YYYYMMDD_HHMMSS_<hash>.json`) containing the history, intent, state, and token count. Optional; errors are silently ignored.
 
-### 4.5 Schritt 4: Bausteine der neuen History
+### 4.3 Step 2: Update intent and state from **all** of the history
 
-- **System-Prompt:** `system_prompt = history[0]` (wird **immer** übernommen; der Inhalt kann im Agent danach noch durch `new_prompt` ersetzt werden).
-- **Recent:** `recent_messages = history[-recent_memory_size:]` (dynamisch, je nach `max_tokens`) – bleiben **unverändert** („raw“).
+- **All** messages in `history` are iterated over:
+  - For `role == "user"`: `update_intent(msg["content"])` – extracts goals, keywords, and constraints (regex patterns).
+  - For **every** message: `update_state(msg)` – extracts:
+    - files (created/read/modified),
+    - errors (error/failed/fehler),
+    - tools (from `role=="tool"`),
+    - "Key decisions" from assistant text (without `<think>`),
+    - code snippets from code blocks.
 
-### 4.6 Schritt 5: Context Summary („Glue“) bauen
+This keeps intent and state up to date **before** the old messages are discarded.
 
-- `_build_context_summary()` erzeugt einen Textblock aus:
-  - **Narrative Summary** (falls vom State gesetzt),
-  - **Projekt-State:** Created/Modified/Read Dateien,
-  - **Errors,** Key Decisions,
-  - **Primary Goal** aus Intent.
-- Format: Markdown mit Überschriften wie `### 📝 RECENT SUMMARY`, `### 📁 PROJECT STATE`, etc.
+### 4.4 Step 3: Critical tool results from the "middle part"
 
-### 4.7 Schritt 6: Neue History zusammensetzen
+- **Middle part:** `history[1 : -recent_memory_size]` (everything except the first entry and the last `recent_memory_size` messages).
+- Within it, messages with `role == "tool"` and a `name` in `preserve_tools` are searched for (including core tools such as `set_todos`, `write_file`, `read_file`, plus further safety-relevant tools depending on the current implementation).
+- Per match: the content is truncated to 300 characters and collected in `critical_tools` as a message with `role`, `name`, `content`, and `tool_call_id`.
+- Later, at most the **last 5** of these critical tool messages are carried over into the new history.
+
+### 4.5 Step 4: Building blocks of the new history
+
+- **System prompt:** `system_prompt = history[0]` (**always** carried over; its content can still be replaced by `new_prompt` in the agent afterwards).
+- **Recent:** `recent_messages = history[-recent_memory_size:]` (dynamic, depending on `max_tokens`) – kept **unchanged** ("raw").
+
+### 4.6 Step 5: Build the context summary ("glue")
+
+- `_build_context_summary()` produces a text block consisting of:
+  - **Narrative summary** (if set by the state),
+  - **Project state:** created/modified/read files,
+  - **Errors,** key decisions,
+  - **Primary goal** from the intent.
+- Format: Markdown with headings such as `### 📝 RECENT SUMMARY`, `### 📁 PROJECT STATE`, etc.
+
+### 4.7 Step 6: Assemble the new history
 
 - `new_history = [system_prompt]`
-- Falls `context_summary` nicht leer: Eine **zweite System-Nachricht** mit Inhalt `context_summary` wird angehängt.
-- Dann: bis zu 5 kritische Tool-Nachrichten (siehe 4.4).
-- Dann: `recent_messages` (die letzten 10 Nachrichten).
+- If `context_summary` is not empty: a **second system message** with content `context_summary` is appended.
+- Then: up to 5 critical tool messages (see 4.4).
+- Then: `recent_messages` (the last 10 messages).
 
-Ergebnis: Deutlich weniger Nachrichten, stark reduzierte Token-Zahl bei erhaltener „Stabilität“ (Intent, State, letzte N Nachrichten).
+Result: significantly fewer messages and a sharply reduced token count, while preserving "stability" (intent, state, last N messages).
 
 ### 4.8 Logging
 
-- UI-Meldungen z. B. „Compressing (X/Y tokens, Z%)…“, „Compressed: N → M msgs, X → Y tokens“, „Preserved K critical tool results“, „Full history archived. Use /restore to recover.“
+- UI messages such as "Compressing (X/Y tokens, Z%)…", "Compressed: N → M msgs, X → Y tokens", "Preserved K critical tool results", "Full history archived. Use /restore to recover."
 
 ---
 
-## 5. Was passiert im Agent **nach** `compress()`?
+## 5. What happens in the agent **after** `compress()`?
 
-**Datei:** `vaf/core/agent.py` (direkt nach `self.history = self.context_manager.compress(self.history)`):
+**File:** `vaf/core/agent.py` (directly after `self.history = self.context_manager.compress(self.history)`):
 
-1. **Context Glue einbauen:**  
-   `context_glue = self.context_manager._build_context_summary()` wird **nochmal** gebaut und an **`new_prompt`** angehängt (`new_prompt += ...`).  
-   Achtung: `new_prompt` existiert nur, wenn in **diesem** Turn der Block „Dynamic Context“ lief (also `user_input` und `prompt_manager`). Sonst wäre `new_prompt` hier undefiniert (potenzieller Bug).
+1. **Add the context glue:**
+   `context_glue = self.context_manager._build_context_summary()` is built **again** and appended to **`new_prompt`** (`new_prompt += ...`).
+   Note: `new_prompt` only exists if the "Dynamic Context" block ran during **this** turn (i.e. `user_input` and `prompt_manager` were present). Otherwise `new_prompt` would be undefined here (potential bug).
 
-2. **PROJECT CONTEXT erhalten:**  
-   Wenn in `self.history[0]["content"]` der Abschnitt `## PROJECT CONTEXT` vorkommt, wird dieser Teil extrahiert und an `new_prompt` angehängt.
+2. **Preserve PROJECT CONTEXT:**
+   If `self.history[0]["content"]` contains the `## PROJECT CONTEXT` section, that part is extracted and appended to `new_prompt`.
 
-3. **System-Prompt ersetzen:**  
-   `self.history[0]["content"] = new_prompt`  
-   – damit landet der dynamische System-Prompt (inkl. Glue und PROJECT CONTEXT) **nur bei Kompression** in der History.
+3. **Replace the system prompt:**
+   `self.history[0]["content"] = new_prompt`
+   – so the dynamic system prompt (including the glue and PROJECT CONTEXT) ends up in the history **only on compression**.
 
 ---
 
-## 6. Kurzüberblick: Wann wird was gemacht?
+## 6. Quick overview: when is what done?
 
-| Schritt                    | Wo / Wann |
+| Step                    | Where / When |
 |---------------------------|-----------|
-| Prüfung „soll komprimiert werden?“ | Jeder Turn in `chat_step()`, wenn `usage >= trigger_threshold` (dynamisch) |
-| `compress(history)`       | Nur wenn `should_compress(history)` True |
-| Archiv (Memory + Disk)    | Immer zu Beginn von `compress()` |
-| Intent/State aus History   | In `compress()` über alle Nachrichten |
-| Behalten: System + letzte N + Glue + kritische Tools | In `compress()` |
-| Glue + PROJECT CONTEXT in System-Prompt | Im Agent nur **wenn** in diesem Turn komprimiert wurde **und** `new_prompt` gesetzt wurde |
+| Check "should it be compressed?" | Every turn in `chat_step()`, when `usage >= trigger_threshold` (dynamic) |
+| `compress(history)`       | Only when `should_compress(history)` is True |
+| Archive (memory + disk)    | Always at the start of `compress()` |
+| Intent/state from the history   | In `compress()`, across all messages |
+| Keep: system + last N + glue + critical tools | In `compress()` |
+| Glue + PROJECT CONTEXT in the system prompt | In the agent only **if** compression happened this turn **and** `new_prompt` was set |
 
 ---
 
-## 7. Konfiguration (ContextManager)
+## 7. Configuration (ContextManager)
 
-- **`max_tokens`:** Wird beim Anlegen des `ContextManager` gesetzt (z. B. aus Agent-Config/`n_ctx`), Standard 8192 (kann z. B. auf 128000 erhöht werden).
-- **`trigger_threshold`:** Dynamisch je nach `max_tokens` (small/medium/large windows).
-- **`recent_memory_size`:** Dynamisch je nach `max_tokens` (von kleinen Fenstern bis zu 200 bei sehr großen Fenstern).
-- **`preserve_tools`:** Tool-Liste ist erweitert; Kern-Tools bleiben erhalten, zusätzliche Tool-Typen werden ebenfalls berücksichtigt.
+- **`max_tokens`:** Set when the `ContextManager` is created (e.g. from the agent config / `n_ctx`); default 8192 (can be raised to e.g. 128000).
+- **`trigger_threshold`:** Dynamic, depending on `max_tokens` (small/medium/large windows).
+- **`recent_memory_size`:** Dynamic, depending on `max_tokens` (from small windows up to 200 for very large windows).
+- **`preserve_tools`:** The tool list is extended; core tools are retained, and additional tool types are taken into account as well.
 
 ---
 
-## 8. Bekannte Probleme
+## 8. Known issues
 
-Historische Hinweise auf einen `new_prompt`-`NameError` bei Kompression ohne User-Input sind in aktuellen Builds nicht mehr der relevante Hauptfehlerpfad. Falls hier neue Bugs auftreten, bitte anhand aktueller `agent.py`-Logs/Code prüfen statt ältere Bugbeschreibungen zu übernehmen.
+Historical references to a `new_prompt` `NameError` during compression without user input are no longer the relevant main failure path in current builds. If new bugs appear here, please check against the current `agent.py` logs/code instead of carrying over older bug descriptions.
 
-### Dangling `tool_calls` nach Kompression
+### Dangling `tool_calls` after compression
 
-`compress()` behält die letzten N Nachrichten als `recent_messages` und verwirft die mittlere Section. Liegt in dieser mittleren Section ein `{role: "tool", tool_call_id: "X"}` Response, während die zugehörige `{role: "assistant", tool_calls: [{id: "X"}]}` Nachricht in den `recent_messages` landet, entsteht ein "dangling tool_call" — das API (z. B. DeepSeek) lehnt diesen Stand mit HTTP 400 ab.
+`compress()` keeps the last N messages as `recent_messages` and discards the middle section. If this middle section contains a `{role: "tool", tool_call_id: "X"}` response while the corresponding `{role: "assistant", tool_calls: [{id: "X"}]}` message ends up in `recent_messages`, a "dangling tool_call" is created — the API (e.g. DeepSeek) rejects this state with HTTP 400.
 
-**Fix (seit 2026-05-14):** `_prepare_messages()` in `agent.py` führt vor jedem API-Call einen Cleanup-Pass durch: alle `tool_call_id`s in `{role: "tool"}` Nachrichten werden gesammelt; `tool_calls`-Einträge in `assistant`-Nachrichten ohne passende Antwort werden entfernt. Falls alle Calls einer Nachricht dangling sind, wird `tool_calls` vollständig entfernt.
+**Fix (since 2026-05-14):** `_prepare_messages()` in `agent.py` runs a cleanup pass before every API call: all `tool_call_id`s in `{role: "tool"}` messages are collected; `tool_calls` entries in `assistant` messages without a matching response are removed. If all calls in a message are dangling, `tool_calls` is removed entirely.
 
 ---
 

@@ -1,90 +1,90 @@
-# Analyse: "Queued input" + Lazy Load funktioniert nicht → RAM voll
+# Analysis: "Queued input" + Lazy Load not working → RAM fills up
 
-## Kurzfassung
+## Summary
 
-Wenn die WebUI **"Queued input for session …"** anzeigt und der **Lazy Load** das Modell nicht (rechtzeitig) wieder in den VRAM lädt, kann der RAM stark steigen. Ursache ist ein **blockierter Headless-Worker** plus **Idle-Unload** während einer laufenden oder hängenden Chat-Anfrage.
+When the Web UI shows **"Queued input for session …"** and **Lazy Load** fails to (re-)load the model into VRAM in time, RAM usage can climb sharply. The cause is a **blocked headless worker** combined with an **idle unload** during an in-flight or stuck chat request.
 
 ---
 
-## Was die Logs zeigen
+## What the logs show
 
-### Timeline (aus queue.log, tray_debug.log, backend.log)
+### Timeline (from queue.log, tray_debug.log, backend.log)
 
-1. **15:00:19** – Erste Nachricht **"wie ist dien name ?"** wird verarbeitet:
+1. **15:00:19** – The first message **"wie ist dien name ?"** is processed:
    - `QUEUE_GET` → `QUEUE_CHAT_START` → RAG → `CHAT_STEP_CALL` (15:00:27).
 
-2. **Bis 15:08:22** – Es erscheint **kein** `QUEUE_CHAT_END` für diese Session.
-   - Der Headless-Worker ist also die ganze Zeit **noch in** `chat_step()` für die erste Nachricht (entweder sehr langer Stream oder hängt).
+2. **Up to 15:08:22** – **No** `QUEUE_CHAT_END` appears for this session.
+   - So the headless worker is still **inside** `chat_step()` for the first message the entire time (either a very long stream or it's hung).
 
-3. **15:08:22** – Du schickst **"das ist cool und wer bin ich ?"**:
-   - `QUEUE_ADD` für Session `cyan538960`.
-   - WebUI zeigt: **"Queued input for session cyan538960: das ist cool und wer bin ich ? …"**
-   - Es gibt **kein** `QUEUE_GET` für diese zweite Nachricht – der Worker holt sie nie ab.
+3. **15:08:22** – You send **"das ist cool und wer bin ich ?"**:
+   - `QUEUE_ADD` for session `cyan538960`.
+   - The Web UI shows: **"Queued input for session cyan538960: das ist cool und wer bin ich ? …"**
+   - There is **no** `QUEUE_GET` for this second message – the worker never picks it up.
 
 4. **15:08:48** – Tray: **"Idle timeout reached. Unloading model (loaded=True)."**
-   - llama-server wird beendet (`stop_server`).
-   - Kurz danach: **"Model unloaded."**
+   - llama-server is stopped (`stop_server`).
+   - Shortly after: **"Model unloaded."**
 
-5. **Danach** – Viele **"WebSocket handshake failed"** (UI versucht, sich neu zu verbinden).
+5. **After that** – Many **"WebSocket handshake failed"** entries (the UI keeps trying to reconnect).
 
-### Wichtige Erkenntnis
+### Key takeaway
 
-- **Nur ein Headless-Worker:** Es gibt genau einen Consumer, der `tq.get()` macht und dann einen kompletten Chat-Step (RAG, Kontext, `chat_step`, Compaction) durchzieht.
-- **Erster Step nie beendet:** Zwischen `CHAT_STEP_CALL` (15:00:27) und `QUEUE_ADD` (15:08:22) steht **kein** `QUEUE_CHAT_END`. Der erste `chat_step()` war also ~8 Minuten lang aktiv (oder hing).
-- **Zweite Nachricht bleibt in der Queue:** Weil der Worker noch im ersten Step steckt, macht er kein zweites `tq.get()` → die zweite Nachricht bleibt "Queued" und wird nie verarbeitet.
-- **Lazy Load "funktioniert nicht" aus Sicht der UI:** Zum Zeitpunkt des zweiten Prompts (15:08:22) war das Modell **noch** geladen (`loaded=True` bis 15:08:48). Das Problem ist nicht, dass der Lazy Load nicht getriggert wurde, sondern dass der **Worker blockiert** ist und die zweite Nachricht nie abholt. Später (nach Idle-Unload) wäre Lazy Load erst beim **nächsten** `tq.get()` im Headless dran – der aber erst kommt, wenn der erste Step endlich fertig ist oder abbricht.
-
----
-
-## Warum der RAM stark steigt
-
-Während der Worker in `chat_step()` steckt (oder endlos retried), bleibt im **Python-Prozess** (VAF Backend) u.a.:
-
-1. **Voller Chat-Verlauf** (`agent.history`) für die Session.
-2. **Aktueller Turn:** gebauter Prompt, System/Soul, RAG-Kontext, ggf. Tool-Calls.
-3. **`response_parts`:** alle gestreamten Chunks der laufenden Antwort (wenn der erste Step lange streamt oder mehrfach retried und weiter anhängt).
-4. **RAG:** Memory-Suche, Snippets, ggf. Embedding-Modell (Xenova/all-MiniLM-L6-v2) bleibt geladen (memory.log).
-5. **Server-Retry-Loop:** Bei `ConnectionError` (z.B. weil Tray den Server um 15:08:48 killt) macht der Agent `start_server`, `sleep(2)`, und **retry**. Dabei bleibt der bisherige Kontext (History, Prompt, `response_parts`) im Prozess – es kommt kein sauberer Neustart des Steps.
-
-Zusätzlich:
-
-- **llama-server (server.log):** Prompt-Cache bis ~283 MiB. Wenn der Prozess beendet wird, gibt der OS den Speicher frei; wenn der Headless danach `start_server` aufruft, kann ein **neuer** llama-Prozess wieder viel RAM/VRAM belegen.
-- Wenn der erste Step **sehr lange** streamt oder hängt, wachsen `response_parts` und ggf. History/Kontext über Minuten → **RAM-Anstieg im Python-Prozess**.
-
-Kurz: Der RAM steigt, weil **ein einziger Chat-Step sehr lange läuft oder hängt**, der Worker **keine weiteren Tasks** aus der Queue holt, und trotzdem **weiter Kontext und Stream-Daten** im Prozess gehalten werden – und ggf. zusätzlich Server-Neustarts oder -Retries dazu kommen.
+- **Only one headless worker:** There is exactly one consumer that calls `tq.get()` and then runs a full chat step (RAG, context, `chat_step`, compaction) end to end.
+- **First step never finishes:** Between `CHAT_STEP_CALL` (15:00:27) and `QUEUE_ADD` (15:08:22) there is **no** `QUEUE_CHAT_END`. So the first `chat_step()` was active (or hung) for about 8 minutes.
+- **Second message stays in the queue:** Because the worker is still inside the first step, it never issues a second `tq.get()` → the second message stays "Queued" and is never processed.
+- **Lazy Load "not working" from the UI's perspective:** At the time of the second prompt (15:08:22) the model was **still** loaded (`loaded=True` until 15:08:48). The problem isn't that Lazy Load failed to trigger, but that the **worker is blocked** and never picks up the second message. Later (after the idle unload), Lazy Load would only kick in on the **next** `tq.get()` in the headless runner – which only happens once the first step finally completes or aborts.
 
 ---
 
-## Warum "Lazy Load" hier nicht greift
+## Why RAM climbs sharply
 
-- **Zum Zeitpunkt des zweiten Prompts (15:08:22):** Modell war noch geladen; "Activity" würde hier kein erneutes Load auslösen.
-- **Lazy Load im Headless** (headless_runner.py) läuft erst, wenn der Worker einen **neuen** Chat-Task mit `tq.get()` holt und dann `agent.load_model(...)` aufruft.
-- Da der Worker aber **nicht** zum nächsten `tq.get()` kommt (weil er im ersten `chat_step()` blockiert), wird für die zweite Nachricht **nie** Lazy Load ausgeführt.
-- **Nach dem Idle-Unload (15:08:48):** Wenn der erste Step irgendwann mit ConnectionError rauskommt und der Worker den Step beendet, würde er beim **nächsten** `tq.get()` die zweite Nachricht holen und **dann** Lazy Load versuchen. Bis dahin bleibt die UI bei "Queued" und der RAM hoch, weil der erste Step noch Ressourcen hält.
+While the worker is stuck in `chat_step()` (or retrying endlessly), the **Python process** (VAF backend) keeps holding, among other things:
+
+1. **The full chat history** (`agent.history`) for the session.
+2. **The current turn:** the assembled prompt, system/Soul, RAG context, and possibly tool calls.
+3. **`response_parts`:** every streamed chunk of the in-flight response (if the first step streams for a long time, or retries repeatedly and keeps appending).
+4. **RAG:** memory search, snippets, and possibly the embedding model (Xenova/all-MiniLM-L6-v2) staying loaded (memory.log).
+5. **Server retry loop:** On a `ConnectionError` (e.g. because the Tray kills the server at 15:08:48), the agent calls `start_server`, `sleep(2)`, and **retries**. The existing context (history, prompt, `response_parts`) stays in the process – there is no clean restart of the step.
+
+Additionally:
+
+- **llama-server (server.log):** Prompt cache up to ~283 MiB. When the process is killed, the OS reclaims the memory; if the headless runner then calls `start_server`, a **new** llama process can again take up a lot of RAM/VRAM.
+- If the first step streams or hangs **for a very long time**, `response_parts` and possibly the history/context grow over the course of minutes → **RAM growth in the Python process**.
+
+In short: RAM climbs because **a single chat step runs for a very long time or hangs**, the worker **pulls no further tasks** from the queue, yet **keeps holding context and stream data** in the process – with server restarts or retries potentially adding to it.
 
 ---
 
-## Mögliche Verbesserungen (ohne Code zu ändern)
+## Why "Lazy Load" doesn't help here
 
-1. **Idle-Timeout erhöhen** (z.B. `server_idle_timeout` in der Config), damit das Modell nicht mitten in einer langen Antwort entladen wird.
-2. **Persistent-Modus** erwägen, wenn du oft nach längerer Pause weiterchattest – dann wird das Modell nicht nach Idle entladen.
-3. Nach so einem Vorfall: **VAF/Tray neu starten**, damit der blockierte Worker und der große Prozess-Speicher weg sind.
+- **At the time of the second prompt (15:08:22):** the model was still loaded; "Activity" wouldn't trigger another load here.
+- **Lazy Load in the headless runner** (headless_runner.py) only runs once the worker pulls a **new** chat task via `tq.get()` and then calls `agent.load_model(...)`.
+- But since the worker **never** reaches the next `tq.get()` (because it's blocked in the first `chat_step()`), Lazy Load is **never** executed for the second message.
+- **After the idle unload (15:08:48):** if the first step eventually exits with a ConnectionError and the worker finishes the step, it would pick up the second message on the **next** `tq.get()` and **then** attempt Lazy Load. Until then the UI stays at "Queued" and RAM stays high, because the first step is still holding resources.
 
 ---
 
-## Mögliche Code-Fixes (für Maintainer)
+## Possible improvements (without changing code)
 
-1. **Nicht entladen, wenn Request läuft**  
-   Tray sollte wissen, ob gerade ein Chat-Request in der Queue oder im Headless läuft, und bei `loaded=True` + "request in flight" den Idle-Unload **nicht** ausführen (oder erst nach Ende des Requests + zusätzlichem Idle-Timeout).
+1. **Raise the idle timeout** (e.g. `server_idle_timeout` in the config) so the model isn't unloaded in the middle of a long response.
+2. **Consider persistent mode** if you often resume chatting after a longer pause – the model then isn't unloaded after going idle.
+3. After an incident like this: **restart VAF/Tray** so the blocked worker and the bloated process memory are gone.
 
-2. **Timeout für `chat_step()`**  
-   Damit ein hängender Step die Queue nicht dauerhaft blockiert: z.B. Timeout für den HTTP-Request/Stream zum Backend (8080) oder für die gesamte `chat_step()`-Dauer, danach Step abbrechen, Fehler loggen, `QUEUE_CHAT_END`/`QUEUE_CHAT_FAIL` schreiben und zum nächsten `tq.get()` gehen.  
+---
+
+## Possible code fixes (for maintainers)
+
+1. **Don't unload while a request is in flight**  
+   The Tray should know whether a chat request is currently in the queue or running in the headless runner, and with `loaded=True` + "request in flight" it should **not** perform the idle unload (or only after the request finishes plus an additional idle timeout).
+
+2. **Timeout for `chat_step()`**  
+   So a hung step doesn't block the queue indefinitely: e.g. a timeout on the HTTP request/stream to the backend (8080) or on the overall `chat_step()` duration, then abort the step, log the error, write `QUEUE_CHAT_END`/`QUEUE_CHAT_FAIL`, and move on to the next `tq.get()`.  
    **Status:** Implemented for the local server (8080): connect 60 s, read 5 min per chunk; on read timeout the step ends and the queue continues. See **Local Server: Request Timeouts** in `docs/llm/API_INTEGRATION.md`.
 
-3. **Laden bei eingehender Chat-Nachricht**  
-   Wenn eine Nutzer-Nachricht in die Queue gestellt wird und das Modell aktuell nicht geladen ist, sofort "Activity / Loading model" auslösen (nicht nur auf Heartbeat), damit der Server schon startet, bevor der Worker den Task holt.
+3. **Load on incoming chat message**  
+   When a user message is enqueued and the model isn't currently loaded, immediately trigger "Activity / Loading model" (not just on the heartbeat), so the server starts up before the worker picks up the task.
 
-4. **Retry-Bremse**  
-   Bei ConnectionError nicht unbegrenzt `start_server` + Retry; z.B. maximale Anzahl Retries oder Abbruch nach Zeit, dann `QUEUE_CHAT_FAIL` und nächster Task.
+4. **Retry throttle**  
+   On a ConnectionError, don't `start_server` + retry indefinitely; e.g. a maximum number of retries or a time-based abort, then `QUEUE_CHAT_FAIL` and the next task.
 
-Wenn du willst, können wir einen davon (z.B. "Nicht entladen bei Request in flight" oder "Timeout für chat_step") konkret im Code ausarbeiten.
+If you'd like, we can flesh out one of these (e.g. "Don't unload while a request is in flight" or "Timeout for chat_step") concretely in the code.

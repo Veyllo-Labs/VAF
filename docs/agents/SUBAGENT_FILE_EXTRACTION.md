@@ -2,38 +2,38 @@
 
 ## Overview
 
-Automatische Extraktion von Dateipfaden aus Sub-Agent Results, damit der Main Agent sofort auf generierte Dateien zugreifen kann.
+Automatically extract file paths from sub-agent results so the main agent can immediately access generated files.
 
 ## Problem
 
-**Vorher:**
+**Before:**
 ```
 Sub-Agent Result:
-📄 Saved to: C:\Users\...\research_report.html
+Saved to: C:\Users\...\research_report.html
 
-User: "Kannst du die Datei ansehen?"
+User: "Can you take a look at the file?"
 
-Agent: ❌ Verwirrt → fragt nach Dateipfad (obwohl er schon da ist!)
+Agent: Confused → asks for the file path (even though it is already there!)
 ```
 
-**Jetzt:**
+**Now:**
 ```
 Sub-Agent Result:
-📄 Saved to: C:\Users\...\research_report.html
+Saved to: C:\Users\...\research_report.html
 
 🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**
 - C:\Users\...\research_report.html
 
 💡 TIP: Use read_file('...') or librarian_agent(file='...')
 
-User: "Kannst du die Datei ansehen?"
+User: "Can you take a look at the file?"
 
-Agent: ✅ read_file("C:\Users\...\research_report.html")
+Agent: read_file("C:\Users\...\research_report.html")
 ```
 
 ## Implementation
 
-### 1. Automatische Extraktion (`vaf/core/agent.py`)
+### 1. Automatic extraction (`vaf/core/agent.py`)
 
 ```python
 def _process_subagent_result(self, task):
@@ -58,11 +58,11 @@ def _process_subagent_result(self, task):
 ### 2. System Prompt Guidelines (`vaf/core/system_prompt.py`)
 
 ```markdown
-### 🔍 Extracting File Paths from Context
+### Extracting File Paths from Context
 **CRITICAL:** When sub-agent results mention file paths, EXTRACT and USE them directly!
 
 **Common patterns:**
-- "📄 Saved to: [path]"
+- "Saved to: [path]"
 - "Output: [path]"
 - "Ausgabe: [path]"
 
@@ -84,11 +84,11 @@ the path is already in the conversation context!
 
 ## Supported Patterns
 
-### Erkannte Schlüsselwörter:
+### Recognized keywords:
 - **English:** "Saved to", "Output", "File", "Path"
 - **German:** "Ausgabe", "Datei"
 
-### Unterstützte Dateitypen:
+### Supported file types:
 - `.html`, `.htm` (Research Reports)
 - `.pdf` (Documents)
 - `.docx`, `.doc` (Word Documents)
@@ -96,36 +96,36 @@ the path is already in the conversation context!
 - `.json`, `.csv` (Data)
 - `.xlsx`, `.xls` (Excel)
 
-### Unterstützte Pfade:
-- ✅ Windows: `C:\Users\...\file.html`
-- ✅ Linux: `/home/user/file.html`
-- ✅ macOS: `/Users/user/file.html`
+### Supported paths:
+- Windows: `C:\Users\...\file.html`
+- Linux: `/home/user/file.html`
+- macOS: `/Users/user/file.html`
 
 ## Use Cases
 
-### Use Case 1: Coding Sub-Agent → Datei direkt lesen
+### Use Case 1: Coding sub-agent → read the file directly
 
 ```
-1. User: "Erstelle eine JSON-Datei mit Beispielwerten"
-2. coding_agent erstellt Datei → output_data.json
+1. User: "Create a JSON file with sample values"
+2. coding_agent creates the file → output_data.json
 3. System Message:
    🔗 **EXTRACTED FILE PATHS (from Sub-Agent output):**
    - C:\Users\...\output_data.json
    💡 TIP: read_file('C:\Users\...\output_data.json')
-4. User: "Zeig mir den Inhalt"
-5. Agent: ✅ read_file("C:\Users\...\output_data.json")
+4. User: "Show me the contents"
+5. Agent: read_file("C:\Users\...\output_data.json")
 ```
 
-### Use Case 2: Hinweis für Research/Document Sub-Agents
+### Use Case 2: Hints for Research/Document sub-agents
 
 ```
-1. User startet `research_agent` oder `document_agent`
-2. Ergebnis wird als dokument-orientierter Follow-up-Hinweis verarbeitet (Editor/Viewer-Flow)
-3. Es gibt dabei nicht zwingend den normalen "EXTRACTED FILE PATHS"-Block
-4. Für diese Agent-Typen sollte der Main-Agent die dokument-spezifischen Hinweise beachten
+1. User starts `research_agent` or `document_agent`
+2. The result is processed as a document-oriented follow-up hint (editor/viewer flow)
+3. The usual "EXTRACTED FILE PATHS" block is not necessarily present
+4. For these agent types, the main agent should follow the document-specific hints
 ```
 
-### Use Case 3: Mehrere Dateien
+### Use Case 3: Multiple files
 
 ```
 Sub-Agent Result:
@@ -148,24 +148,24 @@ System Message:
 Run the project test suite for sub-agent result handling (no standalone `test_file_path_extraction.py` in this repository).
 
 **Test Coverage:**
-- ✅ Generic sub-agent result parsing
-- ✅ Multiple Files
-- ✅ Linux/macOS Paths
-- ✅ Windows Paths
-- ✅ No File Path (negative test)
-- ✅ System Message Generation
+- Generic sub-agent result parsing
+- Multiple Files
+- Linux/macOS Paths
+- Windows Paths
+- No File Path (negative test)
+- System Message Generation
 
 ## Benefits
 
 ### Before:
-- ❌ Agent fragt nach Dateipfad (obwohl er schon da ist)
-- ❌ User muss manuell Pfad kopieren
-- ❌ Mehrere Interaktionen nötig
+- Agent asks for the file path (even though it is already there)
+- User has to copy the path manually
+- Multiple interactions needed
 
 ### After:
-- ✅ Agent erkennt Pfad automatisch
-- ✅ Direkte Nutzung von `read_file` oder `librarian_agent`
-- ✅ Eine Interaktion reicht
+- Agent detects the path automatically
+- Direct use of `read_file` or `librarian_agent`
+- A single interaction is enough
 
 ## Implementation Details
 
@@ -174,20 +174,20 @@ Run the project test suite for sub-agent result handling (no standalone `test_fi
 r'(?:Saved to|Output|File|Path|Ausgabe|Datei):\s*([^\n]+\.(?:html?|pdf|docx?|txt|md|json|csv|xlsx?))'
 ```
 
-**Funktionsweise:**
-1. `(?:Saved to|Output|...)` - Sucht nach Schlüsselwörtern (non-capturing group)
-2. `:\s*` - Match `:` gefolgt von optionalem Whitespace
-3. `([^\n]+` - Capture alles bis zum Zeilenende
-4. `\.(?:html?|pdf|...)` - Match nur bekannte Dateitypen
+**How it works:**
+1. `(?:Saved to|Output|...)` - Looks for keywords (non-capturing group)
+2. `:\s*` - Match `:` followed by optional whitespace
+3. `([^\n]+` - Capture everything up to the end of the line
+4. `\.(?:html?|pdf|...)` - Match only known file types
 5. `re.IGNORECASE` - Case-insensitive matching
 
 ### Cleaning
 ```python
 cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
 ```
-- Entfernt ANSI color codes
-- Trimmt Whitespace
-- Limitiert auf erste 3 Dateien
+- Strips ANSI color codes
+- Trims whitespace
+- Limits to the first 3 files
 
 ## Related Features
 
@@ -198,7 +198,7 @@ cleaned_paths = [re.sub(r'\x1b\[[0-9;]*m', '', fp).strip() for fp in file_paths]
 
 ## Notes
 
-- Paths werden **nicht validiert** (Existenz-Check erfolgt beim Lesen)
-- Limit auf **3 Dateien** im System Message (um Context zu schonen)
-- Hauptsächlich für Sub-Agent-Typen mit klassischer Text-Result-Ausgabe (z. B. coding/librarian-style outputs)
-- Unterstützt **Windows, Linux, macOS** Pfade
+- Paths are **not validated** (an existence check happens at read time)
+- Limited to **3 files** in the system message (to conserve context)
+- Mainly for sub-agent types with classic text-result output (e.g. coding/librarian-style outputs)
+- Supports **Windows, Linux, macOS** paths

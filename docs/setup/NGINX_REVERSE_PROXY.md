@@ -1,42 +1,42 @@
-# Nginx Reverse Proxy für HTTPS (Netzwerkmodus)
+# Nginx Reverse Proxy for HTTPS (Network Mode)
 
 **Note:** VAF includes an **integrated HTTPS proxy**. If you enable **Local Network** and **SSL/TLS** in settings and set certificate/key paths, VAF starts the proxy on port 443 (or `local_network_https_port`, e.g. 8443 on Windows). **Nginx is not required**—the integrated proxy is the single HTTPS entry point (localhost and LAN). It forwards `/api` and `/ws` to the internal backend channel and allows all HTTP methods (so login and API calls work). See [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
 
-Wenn du stattdessen **Nginx** verwenden willst (z.B. für erweiterte Konfiguration), gilt das Folgende.
+If you would rather use **Nginx** instead (e.g. for advanced configuration), the following applies.
 
-Wenn du VAF im Netzwerkmodus mit **HTTPS** nutzen willst (z.B. von anderen Geräten unter `https://192.168.2.114`), kannst du **Nginx** als Reverse Proxy verwenden. Nginx übernimmt TLS; VAF läuft weiter mit HTTP (localhost).
+If you want to run VAF in network mode with **HTTPS** (e.g. accessing it from other devices at `https://192.168.2.114`), you can use **Nginx** as a reverse proxy. Nginx handles TLS; VAF keeps running over HTTP (localhost).
 
-**Ergebnis (mit Nginx):**
-- **Am gleichen PC:** `http://localhost:3000` wie gewohnt (ohne Nginx).
-- **Andere Geräte im Netz:** `https://<DEINE-IP>` (z.B. `https://192.168.2.114`) – Nginx terminiert SSL und leitet an VAF weiter.
-
----
-
-## Voraussetzungen
-
-- Nginx installiert (Windows: [nginx für Windows](https://nginx.org/en/docs/windows.html), Linux/macOS: `apt install nginx` / `brew install nginx`).
-- SSL-Zertifikat und Schlüssel (z.B. aus den VAF-Einstellungen oder selbst signiert).
+**Result (with Nginx):**
+- **On the same PC:** `http://localhost:3000` as usual (without Nginx).
+- **Other devices on the network:** `https://<YOUR-IP>` (e.g. `https://192.168.2.114`) – Nginx terminates SSL and forwards to VAF.
 
 ---
 
-## VAF-Einstellung
+## Prerequisites
 
-- **Lokales Netzwerk:** aktiviert. Dann bindet VAF nur an 127.0.0.1 – Zugriff **nur** über Nginx (https://deine-IP).
-- **SSL/TLS in VAF:** **aus** (Nginx macht TLS). Backend und Frontend laufen mit HTTP.
+- Nginx installed (Windows: [nginx for Windows](https://nginx.org/en/docs/windows.html), Linux/macOS: `apt install nginx` / `brew install nginx`).
+- An SSL certificate and key (e.g. from the VAF settings or self-signed).
 
 ---
 
-## Nginx-Konfiguration
+## VAF Settings
 
-Erstelle eine Datei (z.B. `vaf-https.conf`) und binde sie in deiner Nginx-Installation ein.
+- **Local Network:** enabled. VAF then binds only to 127.0.0.1 – access **only** via Nginx (https://your-IP).
+- **SSL/TLS in VAF:** **off** (Nginx handles TLS). Backend and frontend run over HTTP.
 
-**Pfade anpassen:**
-- `ssl_certificate` / `ssl_certificate_key`: Pfad zu deinem Zertifikat und Schlüssel (z.B. die aus VAF verwendeten).
-- Optional: `listen 8443` statt `443`, wenn 443 schon belegt ist.
+---
+
+## Nginx Configuration
+
+Create a file (e.g. `vaf-https.conf`) and include it in your Nginx installation.
+
+**Adjust the paths:**
+- `ssl_certificate` / `ssl_certificate_key`: path to your certificate and key (e.g. the ones used by VAF).
+- Optional: `listen 8443` instead of `443` if 443 is already in use.
 
 ```nginx
-# VAF hinter Nginx mit HTTPS
-# Einbindung z.B. in nginx.conf: include /path/to/vaf-https.conf;
+# VAF behind Nginx with HTTPS
+# Include it e.g. in nginx.conf: include /path/to/vaf-https.conf;
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -45,12 +45,12 @@ map $http_upgrade $connection_upgrade {
 
 server {
     listen 443 ssl;
-    server_name _;   # oder deine IP / Hostname
+    server_name _;   # or your IP / hostname
 
     ssl_certificate     /pfad/zu/deinem/cert.pem;
     ssl_certificate_key /pfad/zu/deinem/key.pem;
 
-    # Optional: nur lokales Netzwerk
+    # Optional: local network only
     # allow 192.168.0.0/16;
     # allow 10.0.0.0/8;
     # allow 172.16.0.0/12;
@@ -92,13 +92,13 @@ server {
 
 ---
 
-## Nginx starten / neu laden
+## Starting / Reloading Nginx
 
-- **Windows:** Nginx-Ordner z.B. `C:\nginx`, Konfiguration anpassen, dann:
+- **Windows:** Nginx folder e.g. `C:\nginx`, adjust the configuration, then:
   ```text
   nginx.exe
   ```
-  Nach Änderungen: `nginx.exe -s reload`
+  After changes: `nginx.exe -s reload`
 - **Linux/macOS:**
   ```bash
   sudo nginx -t && sudo systemctl reload nginx
@@ -106,19 +106,19 @@ server {
 
 ---
 
-## Nutzung
+## Usage
 
-| Wo              | URL                          |
+| Where           | URL                          |
 |-----------------|------------------------------|
-| Gleicher PC     | `http://localhost:3000`      |
-| Andere Geräte   | `https://192.168.2.114` (oder deine IP, Port 443) |
+| Same PC         | `http://localhost:3000`      |
+| Other devices   | `https://192.168.2.114` (or your IP, port 443) |
 
-Das Frontend erkennt den Zugriff über Port 443 und verwendet für API und WebSocket dieselbe Origin (`/api/`, `/ws`), sodass Nginx alles korrekt weiterleitet.
+The frontend detects access over port 443 and uses the same origin for the API and WebSocket (`/api/`, `/ws`), so Nginx forwards everything correctly.
 
 ---
 
-## Fehlerbehebung
+## Troubleshooting
 
-- **502 Bad Gateway:** VAF (Tray) muss laufen; Frontend auf 3000, Backend auf 8001.
-- **WebSocket schließt sofort:** Stelle sicher, dass der Block `location /ws` mit `Upgrade` und `Connection` vorhanden ist.
-- **Zertifikatswarnung:** Bei selbst signierten Zertifikaten im Browser einmal „Erweitert“ → „Trotzdem fortfahren“ wählen.
+- **502 Bad Gateway:** VAF (Tray) must be running; frontend on 3000, backend on 8001.
+- **WebSocket closes immediately:** Make sure the `location /ws` block with `Upgrade` and `Connection` is present.
+- **Certificate warning:** For self-signed certificates, choose “Advanced” → “Proceed anyway” once in the browser.

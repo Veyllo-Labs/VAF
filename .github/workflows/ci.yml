@@ -14,3 +14,28 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       matrix: '{"include":[{"os":"ubuntu-latest","python-version":"3.10"},{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.12"}]}'
+
+  lock-sync:
+    # Supply-chain gate: requirements.lock is the hash-pinned (pip-compile --generate-hashes)
+    # resolution of requirements.txt. This job regenerates it and fails if it differs from the
+    # committed lock — so a dependency bump that changes requirements.txt without refreshing the
+    # lock (e.g. a Dependabot PR) is caught instead of letting the hash pins silently drift.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"   # the lock is generated on 3.13 — see the requirements.lock header
+      - name: Install system build deps (for sdist metadata resolution, e.g. pyaudio)
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev python3-dev
+      - name: Install pip-tools (pinned for deterministic output)
+        run: python -m pip install --upgrade pip "pip-tools==7.5.3"
+      - name: Verify requirements.lock is in sync with requirements.txt
+        run: |
+          pip-compile --allow-unsafe --generate-hashes --output-file=requirements.lock requirements.txt
+          if ! git diff --exit-code requirements.lock; then
+            echo "::error::requirements.lock is out of sync with requirements.txt."
+            echo "Fix locally, then commit requirements.lock:"
+            echo "  pip-compile --allow-unsafe --generate-hashes --output-file=requirements.lock requirements.txt"
+            exit 1
+          fi

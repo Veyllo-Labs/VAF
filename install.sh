@@ -516,11 +516,38 @@ if [[ "$NODE_INSTALLED" == "false" ]]; then
         fi
     fi
     if [[ "$NODE_INSTALLED" == "false" ]]; then
-        print_warning "Portable Node download failed  the Web UI needs Node $MIN_NODE_VERSION+."
+        print_info "Portable Node unavailable - installing Node via the package manager..."
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            brew install node 2>/dev/null || true
+        else
+            case "$PKG_MANAGER" in
+                apt)     sudo apt-get install -y nodejs npm 2>/dev/null || true ;;
+                dnf|yum) $INSTALL_CMD nodejs npm 2>/dev/null || true ;;
+                pacman)  sudo pacman -S --noconfirm nodejs npm 2>/dev/null || true ;;
+                zypper)  $INSTALL_CMD nodejs npm 2>/dev/null || $INSTALL_CMD nodejs-default npm-default 2>/dev/null || true ;;
+            esac
+            # If the distro Node is too old (e.g. Ubuntu 22.04 ships Node 12) get a current LTS from NodeSource (apt).
+            _nv=$(node --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+            if { [[ -z "$_nv" ]] || [[ "$_nv" -lt "$MIN_NODE_VERSION" ]]; } && [[ "$PKG_MANAGER" == "apt" ]]; then
+                print_info "Distro Node too old/absent - installing current LTS via NodeSource..."
+                curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>/dev/null \
+                    && sudo apt-get install -y nodejs 2>/dev/null || true
+            fi
+        fi
+        if command -v node &> /dev/null; then
+            NODE_VERSION=$(node --version | grep -oE '[0-9]+' | head -1)
+            if [[ "$NODE_VERSION" -ge "$MIN_NODE_VERSION" ]]; then
+                NODE_INSTALLED=true
+                print_success "Node.js v$NODE_VERSION installed (package manager)"
+            fi
+        fi
+    fi
+    if [[ "$NODE_INSTALLED" == "false" ]]; then
+        print_warning "Could not install Node $MIN_NODE_VERSION+ automatically - the Web UI needs it."
         if [[ "$OS_TYPE" == "macos" ]]; then
             echo -e "  Install with: ${CYAN}brew install node${NC}"
         else
-            echo -e "  Install Node $MIN_NODE_VERSION+ via your package manager."
+            echo -e "  Install manually, e.g. ${CYAN}sudo apt install nodejs npm${NC}"
         fi
     fi
 fi
@@ -558,8 +585,13 @@ print_info "Python: $(python3 --version)"
 # gobject-introspection + cairo dev headers from the system-deps step. Done AFTER the venv
 # exists  fixes the old ordering bug where it ran before venv creation and was silently skipped.
 if [[ "$OS_TYPE" == "linux" ]]; then
-    print_info "Installing PyGObject into venv (desktop window)..."
-    pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed  desktop window may not work"
+    # PyGObject powers the AppIndicator TRAY ICON on Linux; the window itself uses Qt/QtWebEngine, so
+    # this is non-fatal. Pin < 3.52 because 3.52+ needs girepository-2.0, which Ubuntu 24.04 and older
+    # distros do not ship (they have libgirepository-1.0-dev). Best-effort with a fallback to latest.
+    print_info "Installing PyGObject into venv (tray icon)..."
+    pip install "PyGObject<3.52" 2>/dev/null \
+        || pip install PyGObject 2>/dev/null \
+        || print_warning "PyGObject not installed - tray icon may be missing (the app window still works via Qt)."
 fi
 
 # ============================================================================

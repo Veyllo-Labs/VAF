@@ -44,7 +44,10 @@ waiting for a stable `X.Y.Z`.
 ## Cutting a release
 
 1. Make sure `main` is green in CI and everything intended for the release is merged.
-2. Bump `vaf/version.py` to the new version.
+2. Bump `vaf/version.py` (the single source of truth) to the new version, and bump
+   `web/package.json` to the npm/semver spelling of the same version
+   (e.g. `0.1.0a0` -> `0.1.0-alpha.0`, `0.1.0` -> `0.1.0`). The release workflow fails
+   the build if the two disagree, so they must stay in lockstep.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

@@ -33,7 +33,7 @@ app = typer.Typer(help="Check for and apply VAF updates")
 
 GITHUB_REPO = "Veyllo-Labs/VAF"
 # The LIST endpoint (newest first) — unlike /releases/latest it INCLUDES prereleases, so an alpha
-# build (e.g. 2.6.0aN, published as a GitHub prerelease) is visible to the updater. Eligibility is
+# build (e.g. 0.1.0aN, published as a GitHub prerelease) is visible to the updater. Eligibility is
 # then decided in code (_eligible_prereleases) rather than by the endpoint.
 _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
@@ -49,7 +49,7 @@ def _eligible_prereleases(include_prereleases: "bool | None" = None) -> bool:
 
     `include_prereleases` wins if given (CLI --pre/--stable). Else the `update_include_prereleases`
     config key wins if set (True/False). Else AUTO: track prereleases only when the INSTALLED build
-    is itself a prerelease — so an alpha (2.6.0aN) follows alpha releases, while a stable build
+    is itself a prerelease — so an alpha (0.1.0aN) follows alpha releases, while a stable build
     follows stable releases only.
     """
     if include_prereleases is not None:
@@ -79,7 +79,10 @@ def _resolve_latest_release(include_prereleases: "bool | None" = None):
     incl = _eligible_prereleases(include_prereleases)
     try:
         from packaging.version import parse as _parse
-        resp = requests.get(_RELEASES_URL, timeout=5, headers={"Accept": "application/vnd.github+json"})
+        # per_page=100 (the max) instead of GitHub's default 30, so eligibility is computed over the
+        # full release set, not just the 30 most-recently-created tags.
+        resp = requests.get(_RELEASES_URL, timeout=5, params={"per_page": 100},
+                            headers={"Accept": "application/vnd.github+json"})
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -305,13 +308,38 @@ def _run_migrations() -> None:
 def _verify(target_version: str) -> None:
     r = subprocess.run([sys.executable, "-m", "vaf.main", "--version"], capture_output=True, text=True)
     out = ((r.stdout or "") + (r.stderr or "")).strip()
-    if target_version not in out:
+    # Match the EXACT reported version, not a substring: '0.1.0' is contained in 'Version: 0.1.0a1',
+    # so `target_version in out` would false-pass on an alpha->stable update or any tag/version.py
+    # mismatch, silently masking a bad checkout instead of triggering rollback. Parse each token and
+    # require an exact (PEP 440-normalized) version equality.
+    matched = False
+    try:
+        from packaging.version import parse as _parse
+        tv = _parse(target_version)
+        for tok in out.replace("Version:", " ").split():
+            try:
+                if _parse(tok) == tv:
+                    matched = True
+                    break
+            except Exception:
+                continue
+    except Exception:
+        matched = target_version in out.split()  # packaging unavailable: word-boundary exact match
+    if not matched:
         raise _UpdateError(f"post-update version check failed (expected {target_version}, got: {out[:80]})")
 
 
-def _rollback(root: Path, anchor: str) -> None:
+def _rollback(root: Path, anchor: str) -> bool:
+    """Best-effort restore to `anchor`. Returns True only when the checkout actually succeeded; a
+    failed rollback checkout is surfaced loudly (not reported as success) so the caller can keep the
+    breadcrumb and the user knows the tree may be in a mixed state."""
     UI.info("Rolling back to the previous version...")
-    _git(root, "checkout", anchor)
+    code, _, err = _git(root, "checkout", anchor)
+    if code != 0:
+        UI.error(f"Rollback checkout to {str(anchor)[:12]} failed: {err or 'unknown error'}")
+        UI.error("Your checkout may be in a mixed state. Resolve it manually (inspect `git status` in "
+                 "the VAF directory, remove any colliding files) and re-run `vaf update --recover`.")
+        return False
     try:
         _install_python_deps(root)
     except Exception:
@@ -321,7 +349,9 @@ def _rollback(root: Path, anchor: str) -> None:
     try:
         _start_service()
     except Exception:
-        pass
+        UI.warning("VAF service did not restart after rollback; run `vaf start` "
+                   "(or check `systemctl --user status vaf` in server mode).")
+    return True
 
 
 # ── apply ─────────────────────────────────────────────────────────────────────
@@ -338,6 +368,16 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         target = target_tag if target_tag.startswith("v") else f"v{target_tag}"
         target_version = target[1:]
         notes_url = ""
+        # The manual --tag escape-hatch bypasses release resolution, so validate it here: reject a
+        # typo'd / non-version tag up front, and make an explicit downgrade loud rather than silent.
+        try:
+            from packaging.version import parse as _parse
+            _parse(target_version)
+        except Exception:
+            UI.error(f"--tag '{target_tag}' is not a valid version tag (expected like v0.1.0a1).")
+            raise typer.Exit(1)
+        if _compare_versions(__version__, target_version) > 0:
+            UI.warning(f"--tag {target} is OLDER than the installed {__version__} — this is a DOWNGRADE.")
     else:
         rel = _resolve_latest_release(include_prereleases)
         if not rel or not rel.get("tag"):
@@ -412,6 +452,11 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             raise _UpdateError(f"git fetch failed: {err}")
         code, _, err = _git(root, "checkout", target)
         if code != 0:
+            if "untracked working tree files would be overwritten" in (err or "").lower():
+                raise _UpdateError(
+                    f"checkout of {target} was blocked by local files that the new version now tracks:\n"
+                    f"{err}\nMove or remove the listed file(s), then re-run `vaf update`."
+                )
             raise _UpdateError(f"git checkout {target} failed: {err}")
 
         _install_python_deps(root)
@@ -429,8 +474,11 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             UI.print(f"Release notes: {notes_url}")
     except Exception as e:
         UI.error(f"Update failed: {e}")
-        _rollback(root, cur_sha or cur_branch or "HEAD")
-        _clear_breadcrumb()
+        if _rollback(root, cur_sha or cur_branch or "HEAD"):
+            _clear_breadcrumb()
+        else:
+            UI.error("Automatic rollback did not complete — the update breadcrumb is kept. "
+                     "Resolve the issue, then run `vaf update --recover`.")
         raise typer.Exit(1)
 
 
@@ -447,7 +495,11 @@ def _recover() -> None:
     root = _repo_root()
     anchor = data.get("recorded_head") or data.get("branch") or "main"
     UI.info(f"Recovering an interrupted update — restoring {str(anchor)[:12]}...")
-    _rollback(root, anchor)
+    if not _rollback(root, anchor):
+        # Keep the breadcrumb so `--recover` can be retried after the user resolves the conflict.
+        UI.error("Recovery did not complete; the update breadcrumb is kept. "
+                 "Resolve the issue and re-run `vaf update --recover`.")
+        raise typer.Exit(1)
     _clear_breadcrumb()
     UI.success("Recovered to the previous version.")
 

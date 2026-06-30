@@ -26,7 +26,8 @@ def _rel(tag, prerelease=False, draft=False):
 
 
 def _mock_list(monkeypatch, releases):
-    monkeypatch.setattr(upd.requests, "get", lambda url, timeout=5, headers=None: _Resp(200, releases))
+    monkeypatch.setattr(upd.requests, "get",
+                        lambda url, timeout=5, params=None, headers=None: _Resp(200, releases))
 
 
 # --- release resolution from the LIST endpoint ----------------------------------------------------
@@ -57,7 +58,8 @@ def test_resolve_skips_drafts(monkeypatch):
 
 
 def test_resolve_non_200_returns_none(monkeypatch):
-    monkeypatch.setattr(upd.requests, "get", lambda url, timeout=5, headers=None: _Resp(404, []))
+    monkeypatch.setattr(upd.requests, "get",
+                        lambda url, timeout=5, params=None, headers=None: _Resp(404, []))
     assert upd._resolve_latest_release(False) is None
 
 

@@ -35,7 +35,7 @@ playwright>=1.49.0; python_version >= "3.11"
 
 # Automation
 schedule>=1.2.0
-inquirer>=3.1.0
+inquirer>=3.4.1
 
 # Timezones
 tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); used by vaf/core/user_time.py

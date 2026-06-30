@@ -13,6 +13,7 @@ Docs are grouped into category folders. Full index by category:
 - [TOOLS_CATALOG.md](agents/TOOLS_CATALOG.md) — Catalog of the built-in tools the agent loads, grouped by area.
 
 ### setup/ — install, services, deployment
+- [INSTALLATION_GUIDE.md](setup/INSTALLATION_GUIDE.md) — Beginner-friendly, step-by-step install walkthrough (prerequisites, folder placement, running the installer, first-run, troubleshooting).
 - [LINUX_SETUP.md](setup/LINUX_SETUP.md) — Linux setup and troubleshooting.
 - [WINDOWS_SETUP.md](setup/WINDOWS_SETUP.md) — Windows-specific setup.
 - [MACOS_SETUP.md](setup/MACOS_SETUP.md) — macOS setup (Apple Silicon/Intel, Metal, Homebrew).

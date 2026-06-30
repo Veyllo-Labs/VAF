@@ -37,6 +37,9 @@ playwright>=1.49.0; python_version >= "3.11"
 schedule>=1.2.0
 inquirer>=3.1.0
 
+# Timezones
+tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); used by vaf/core/user_time.py
+
 # Speech Processing (Optional - Offline STT)
 # pyttsx3 removed — RAM explosion on Windows (SAPI/comtypes); Docker TTS (Piper) is the primary engine
 SpeechRecognition>=3.10.0

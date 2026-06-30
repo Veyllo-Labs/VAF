@@ -82,9 +82,13 @@ def _resolve_folder_alias(path_str: str) -> str:
     # LLMs often hallucinate /home/user/ as the home directory.
     # Remap it to the actual home so writes don't silently fail.
     import re as _re
+    # Use a function replacement so the home path is inserted literally. On
+    # Windows str(home) is e.g. "C:\\Users\\me"; passing it as a plain
+    # replacement string makes re.sub parse "\U" as a regex escape and raise
+    # "bad escape \U" (and would also mangle "\g"/backslashes elsewhere).
     path_str = _re.sub(
         r'^/home/user(?=/|$)',
-        str(home),
+        lambda _m: str(home),
         path_str,
     )
 

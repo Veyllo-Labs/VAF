@@ -8,10 +8,20 @@ group: a silently-dead frontend's PID gets recycled (or shares our group), and k
 itself. These tests pin the two safety rules: reap-if-dead (never killpg a possibly-recycled PID), and
 never killpg our own group.
 """
+import os
 import types
+
+import pytest
 
 import vaf.core.frontend_manager as fmmod
 from vaf.core.frontend_manager import FrontendManager
+
+# os.killpg / os.getpgid are POSIX-only; on Windows stop_frontend takes the
+# taskkill branch and never reaches them. These process-group safety tests
+# patch os.killpg directly, so skip them where the attribute does not exist.
+_posix_only = pytest.mark.skipif(
+    not hasattr(os, "killpg"), reason="os.killpg is POSIX-only"
+)
 
 
 class _FakeProc:
@@ -45,6 +55,7 @@ def _fm(proc, monkeypatch):
     return fm
 
 
+@_posix_only
 def test_dead_frontend_is_reaped_never_killpg(monkeypatch):
     calls = []
     monkeypatch.setattr(fmmod.os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
@@ -54,6 +65,7 @@ def test_dead_frontend_is_reaped_never_killpg(monkeypatch):
     assert calls == []  # dead → reap only
 
 
+@_posix_only
 def test_never_killpg_when_frontend_shares_our_group(monkeypatch):
     calls = []
     monkeypatch.setattr(fmmod.os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
@@ -65,6 +77,7 @@ def test_never_killpg_when_frontend_shares_our_group(monkeypatch):
     assert proc.terminated      # only its own PID was signalled
 
 
+@_posix_only
 def test_killpg_only_when_frontend_is_isolated(monkeypatch):
     proc = _FakeProc(alive=True, pid=777)
     calls = []

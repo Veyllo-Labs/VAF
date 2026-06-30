@@ -79,6 +79,8 @@ BASE_REQUIRES = [
     "openai>=1.12.0", "anthropic>=0.18.0", "google-genai>=1.0.0",
     # Automation / scheduling
     "schedule>=1.2.0", "inquirer>=3.1.0",
+    # IANA tz database for zoneinfo on Windows (no system tz db); used by vaf/core/user_time.py
+    "tzdata>=2024.1",
     # Linting (used by the built-in linter tool)
     "ruff>=0.1.0",
     # Auth + encrypted credential store (core infra)

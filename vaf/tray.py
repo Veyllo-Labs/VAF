@@ -1298,11 +1298,15 @@ def _config_file_poll_loop():
 # Skip pystray import in headless mode (VAF_NATIVE_WRAPPER=1) — no display needed
 pystray = None
 if os.environ.get("VAF_NATIVE_WRAPPER") != "1":
+    # NOTE: pystray probes the platform display backend AT IMPORT (e.g. the X11
+    # _xorg backend opens an Xlib.display.Display()). On a headless machine
+    # (no $DISPLAY, e.g. CI) that raises a non-ImportError (Xlib.error.DisplayNameError),
+    # which would otherwise crash module import. Catch broadly so importing vaf.tray
+    # stays safe headless; the tray is simply disabled when no display is available.
     try:
         import pystray
-        from PIL import Image, ImageDraw
         logger.info("[Tray] Using pystray for tray icon")
-    except ImportError as e:
+    except Exception as e:
         logger.warning("[Tray] pystray not available (%s) — tray icon disabled", e)
 
 def create_image(color_name):

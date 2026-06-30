@@ -74,7 +74,7 @@ openpyxl>=3.1.0  # Excel file reading
 python-pptx>=0.6.21  # PowerPoint reading
 
 # Auth (Local Network: JWT, 2FA, Argon2) + Email credential storage
-argon2-cffi>=23.1.0         # Password hashing
+argon2-cffi>=25.1.0         # Password hashing
 keyring>=24.0.0             # OS keyring for email OAuth/IMAP credentials (Windows/macOS/Linux)
 filelock>=3.12.0           # Cross-process lock for the encrypted credential fallback (vaf.core.secure_store)
 PyJWT>=2.8.0               # JWT tokens

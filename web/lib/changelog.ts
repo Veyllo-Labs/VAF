@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-// The product changelog, shown in the announcement modal's "Was ist neu" variant.
+// The product changelog, shown in the announcement modal's "What's new" variant.
 // Item text is DATA (edited here per release); the section labels + the intro disclaimer
 // are i18n (messages/*.json -> modals.announcement). To ship a new "what's new": bump the
 // backend version (vaf/version.py) AND prepend an entry here whose `version` matches.
@@ -17,32 +17,18 @@ export interface ChangelogSection {
 }
 
 export interface ChangelogEntry {
-  /** major.minor, e.g. "2.7" — tracks the app version shipped with this entry. */
+  /** major.minor, e.g. "0.2" — tracks the app version shipped with this entry. */
   version: string;
   /** ISO date, e.g. "2026-06-26". */
   date: string;
   sections: ChangelogSection[];
 }
 
-// Newest first.
-export const CHANGELOG: ChangelogEntry[] = [
-  {
-    version: '2.7',
-    date: '2026-06-26',
-    sections: [
-      {
-        kind: 'new',
-        items: [
-          'Eigene Skills direkt im Chat anlegen und bearbeiten.',
-          'Automatisierungen laufen still im Hintergrund.',
-        ],
-      },
-      { kind: 'improved', items: ['Schnellere Antworten bei mehreren Nutzern gleichzeitig.'] },
-      { kind: 'fixed', items: ['Hintergrund-Agenten leaken keine Tool-Aktivität mehr in fremde Chats.'] },
-      { kind: 'removed', items: ['Alter Experiment-Schalter „X“ (wird nicht weiterentwickelt).'] },
-    ],
-  },
-];
+// Newest first. Empty for the 0.1 Open Alpha: there is no prior public release to diff against,
+// so first-run users get the 'intro' welcome (decideAnnouncement), not a "what's new" list. At the
+// next release with user-visible changes, prepend an entry here — in English, per the docs language
+// policy — whose `version` is the new major.minor (e.g. '0.2').
+export const CHANGELOG: ChangelogEntry[] = [];
 
 export function latestEntry(): ChangelogEntry | null {
   return CHANGELOG.length ? CHANGELOG[0] : null;

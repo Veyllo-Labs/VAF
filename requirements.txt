@@ -3,7 +3,7 @@
 
 # CLI & UI
 typer>=0.9.0
-rich>=13.0.0
+rich>=15.0.0
 prompt_toolkit>=3.0.0
 colorama>=0.4.0
 shellingham>=1.5.0

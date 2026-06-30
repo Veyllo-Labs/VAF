@@ -7,81 +7,10 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-
-    - name: Install system dependencies (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y portaudio19-dev python3-dev
-
-    - name: Install system dependencies (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew install portaudio
-        echo "LDFLAGS=-L$(brew --prefix portaudio)/lib" >> $GITHUB_ENV
-        echo "CFLAGS=-I$(brew --prefix portaudio)/include" >> $GITHUB_ENV
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install ruff pytest
-        # Install VAF in editable mode (checks requirements.txt and setup.py).
-        # pywebview/PyQt6/browser-use are lazily imported — headless CI is fine.
-        pip install -e .
-
-    - name: Lint with Ruff
-      run: |
-        # Stop the build if there are Python syntax errors or undefined names
-        # Exclude templates directory as it contains non-Python placeholder syntax
-        ruff check . --select=E9,F63,F7,F82 --exclude vaf/tools/coder_templates
-        # Exit-zero treats all other errors as warnings
-        ruff check . --exit-zero --exclude vaf/tools/coder_templates
-
-    - name: Lint install scripts (bash)
-      if: runner.os != 'Windows'
-      run: bash -n install.sh packaging/install/bootstrap.sh run_vaf.sh start_vaf.sh
-
-    - name: Parse install scripts (PowerShell)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        foreach ($f in 'install.ps1','packaging/install/bootstrap.ps1') {
-          $e = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$e)
-          if ($e) { $e; exit 1 }
-        }
-
-    - name: Check doc links
-      # Fail the build if any relative Markdown link points at a missing file.
-      run: python scripts/check_doc_links.py
-
-    - name: Check license headers
-      # Fail the build if any first-party source file is missing the AGPL SPDX header
-      # (VAF is dual-licensed; see LICENSING.md). Vendored code and templates are excluded.
-      run: python scripts/check_license_headers.py
-
-    - name: Verify CLI Entry Point (Smoke Test)
-      run: |
-        # This checks if all imports work and requirements are met
-        vaf --version
-        vaf --help
-
-    - name: Run Tool Logic Tests
-      # Test the tool logic, templates, and scaffolding
-      run: |
-        pytest tests/
+  test:
+    # Lean per-commit matrix for fast feedback: the full Python matrix on Linux
+    # (1x minutes) plus a single-version smoke on macOS and Windows. The exhaustive
+    # 3-OS x 4-Python matrix runs nightly and on demand via ci-nightly.yml.
+    uses: ./.github/workflows/_test.yml
+    with:
+      matrix: '{"include":[{"os":"ubuntu-latest","python-version":"3.10"},{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.12"}]}'

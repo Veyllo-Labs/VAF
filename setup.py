@@ -73,7 +73,7 @@ BASE_REQUIRES = [
     "shellingham>=1.5.0", "psutil>=5.9.0",
     # API & networking (core)
     "requests>=2.31.0", "httpx>=0.27.0", "PyGithub>=2.1.1",
-    "beautifulsoup4>=4.12.0", "html2text>=2024.2.26",
+    "beautifulsoup4>=4.12.0", "markdownify>=1.0.0",
     # LLM providers + model download
     "huggingface_hub[hf_xet]>=0.20.0", "tqdm>=4.65.0",
     "openai>=1.12.0", "anthropic>=0.18.0", "google-genai>=1.0.0",

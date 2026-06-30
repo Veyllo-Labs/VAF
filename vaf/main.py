@@ -43,7 +43,7 @@ def bootstrap():
         # Networking & Web
         "requests": "requests",
         "beautifulsoup4": "bs4",           # pip name != import name
-        "html2text": "html2text",
+        "markdownify": "markdownify",
         "fastapi": "fastapi",
         "uvicorn": "uvicorn",
         "websockets": "websockets",

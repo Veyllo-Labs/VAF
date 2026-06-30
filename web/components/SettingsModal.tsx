@@ -124,6 +124,7 @@ import {
 import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
+import { useCursorStore } from '@/lib/cursorStore';
 import { languages } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
@@ -559,6 +560,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const tModals = useTranslations('modals');
     const uiLocale = useLocaleStore((s) => s.locale);
     const setUiLocale = useLocaleStore((s) => s.setLocale);
+    const customCursorOn = useCursorStore((s) => s.enabled);
+    const setCustomCursorOn = useCursorStore((s) => s.setEnabled);
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [appVersion, setAppVersion] = useState<string>('');
     const [activeTab, setActiveTab] = useState('general');
@@ -2725,6 +2728,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <option key={lang.code} value={lang.code}>{lang.flag} {lang.name}</option>
                                         ))}
                                     </select>
+                                </Section>
+                                <Section title={tInterface('appearance')}>
+                                    <Switch
+                                        label={tInterface('customCursor')}
+                                        description={tInterface('customCursorDesc')}
+                                        checked={customCursorOn}
+                                        onChange={(v: boolean) => setCustomCursorOn(v)}
+                                    />
                                 </Section>
                                 <Section title={tInterface('dateTime')}>
                                     <p className="text-xs text-gray-500 mb-4">{tInterface('dateTimeDesc')}</p>

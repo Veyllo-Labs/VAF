@@ -66,11 +66,13 @@
   background: #cbd5e1;
 }
 
-/* Custom Cursor — hide default on desktop */
+/* Custom Cursor — hide the system pointer on desktop ONLY when the custom cursor is enabled
+   (CustomCursor toggles body.cursor-custom from the cursorStore preference). Opt-in via the class
+   so disabling the custom cursor cleanly restores the normal system mouse. */
 @media (pointer: fine) {
-  *,
-  *::before,
-  *::after {
+  body.cursor-custom *,
+  body.cursor-custom *::before,
+  body.cursor-custom *::after {
     cursor: none !important;
   }
 }

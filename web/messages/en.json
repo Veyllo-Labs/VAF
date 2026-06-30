@@ -330,6 +330,9 @@
     "interface": {
       "language": "Language",
       "preferredLanguage": "Preferred language",
+      "appearance": "Appearance",
+      "customCursor": "Custom cursor",
+      "customCursorDesc": "Use VAF's custom cursor on desktop instead of the system mouse pointer.",
       "dateTime": "Date & time",
       "dateTimeDesc": "Timezone and display format for dates and times in the UI and in agent responses.",
       "timezone": "Timezone",

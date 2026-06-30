@@ -40,7 +40,7 @@ export const thirdPartyLicenses = [
   { name: 'python-pptx', license: 'MIT', url: 'https://github.com/scanny/python-pptx' },
   { name: 'openpyxl', license: 'MIT', url: 'https://github.com/theorchard/openpyxl' },
   { name: 'mammoth', license: 'BSD-2-Clause', url: 'https://github.com/mwilliamson/mammoth.js' },
-  { name: 'html2text', license: 'GPL-3.0', url: 'https://github.com/Alir3z4/html2text' },
+  { name: 'markdownify', license: 'MIT', url: 'https://github.com/matthewwithanm/python-markdownify' },
   { name: 'html2pdf.js', license: 'MIT', url: 'https://github.com/eKoopmans/html2pdf.js' },
   // Frontend rendering
   { name: 'react-markdown', license: 'MIT', url: 'https://github.com/remarkjs/react-markdown' },
@@ -50,6 +50,8 @@ export const thirdPartyLicenses = [
   { name: 'Hugging Face Hub', license: 'Apache-2.0', url: 'https://github.com/huggingface/huggingface_hub' },
   { name: 'ONNX Runtime', license: 'MIT', url: 'https://github.com/microsoft/onnxruntime' },
   { name: 'NumPy', license: 'BSD-3-Clause', url: 'https://github.com/numpy/numpy' },
+  // Vendored source (in-tree, not a package dependency)
+  { name: 'langid.py (Copyright 2011 Marco Lui)', license: 'BSD-2-Clause', url: 'https://github.com/saffsd/langid.py' },
   // Browser automation
   { name: 'browser-use', license: 'MIT', url: 'https://github.com/browser-use/browser-use' },
   { name: 'Playwright (Python)', license: 'Apache-2.0', url: 'https://github.com/microsoft/playwright-python' },

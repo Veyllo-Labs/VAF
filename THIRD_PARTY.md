@@ -233,6 +233,19 @@ Standalone Baileys-based bridge invoked over stdin/stdout JSON IPC.
 
 ---
 
+## Vendored / in-tree third-party source
+
+Unlike the packages above (installed from PyPI/npm), this is third-party source
+copied directly into the VAF tree and shipped as part of the package. Its original
+copyright notice and license are retained verbatim in the source file itself, as
+the license requires.
+
+| Component | Location | License | Copyright |
+|---|---|---|---|
+| langid.py | `vaf/vendor/langid/langid.py` | BSD-2-Clause | Copyright 2011 Marco Lui — https://github.com/saffsd/langid.py |
+
+---
+
 ## Notes and caveats
 
 - **Qt binding in `requirements.lock`:** the lockfile pins **PySide6 (LGPL-3.0)**

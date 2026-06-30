@@ -8,9 +8,11 @@ Supported distributions: **OpenSUSE**, **Fedora**, **Ubuntu/Debian**, **Arch Lin
 
 The automated installer ([install.sh](../../install.sh)) is the recommended path. It installs the
 build/audio/desktop system packages (step 1), provisions Python via [uv](https://docs.astral.sh/uv/)
-(no system Python required), downloads a portable Node into `~/.vaf/node` if Node is missing, and
-**detects** an existing Docker runtime — it does not install Docker. Step 1's package lists are for
-the manual path (step 4), or if you prefer to install them ahead of time.
+(no system Python required), provisions **Node** (portable download, falling back to your package
+manager / NodeSource), and **auto-installs and starts Docker** (distro package + `systemctl enable
+--now docker` + adds you to the `docker` group) when it is missing — parity with the macOS and
+Windows installers. The package lists below are for the manual path, or if you prefer to install
+things ahead of time.
 
 ### 1. System Packages
 
@@ -25,14 +27,14 @@ sudo zypper install typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0
 ```bash
 sudo dnf install portaudio-devel alsa-devel python3-devel gcc git nodejs npm docker docker-compose
 # Desktop window (pywebview):
-sudo dnf install python3-gobject3 webkit2gtk4.0
+sudo dnf install python3-gobject3 webkit2gtk4.1
 ```
 
 **Ubuntu / Debian (apt):**
 ```bash
 sudo apt-get install portaudio19-dev python3-dev python3-venv build-essential git nodejs npm ffmpeg
 # Desktop window (pywebview):
-sudo apt-get install python3-gi gir1.2-webkit2-4.0
+sudo apt-get install python3-gi gir1.2-webkit2-4.1   # Ubuntu 22.04: gir1.2-webkit2-4.0
 ```
 
 **Arch:**
@@ -44,10 +46,12 @@ sudo pacman -S python-gobject webkit2gtk
 
 > **Note:** The WebKitGTK packages are only needed for the native desktop window. If they are missing, VAF falls back to opening the Web UI in your default browser instead.
 
-### 2. Set up a container runtime *(required)*
+### 2. Container runtime *(handled automatically)*
 
 VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so a runtime is required
-to finish setup and sign in. The installer detects an existing one but does not install it for you:
+to finish setup and sign in. **The installer now installs and starts Docker for you** (distro
+package + systemd + `docker` group). The manual steps below are only needed if you'd rather set it
+up yourself, or to enable an already-installed Docker:
 
 ```bash
 sudo systemctl enable --now docker

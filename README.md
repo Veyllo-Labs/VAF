@@ -16,7 +16,7 @@ An autonomous agent framework built on top of local and cloud LLMs. VAF runs as 
 
 **Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft — `legal@veyllo.io`.
 
-**Requires:** Git to clone, and a container runtime — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. The Windows installer sets up the free Rancher Desktop for you, and macOS auto-installs the free Colima (or uses Docker Desktop if present); on Linux install your distro's Docker package. The installer provisions Python and Node itself (via uv / a portable Node).
+**Requires:** Git to clone, and a container runtime — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. All three installers set the engine up for you: Windows installs the free Rancher Desktop, macOS auto-installs the free Colima (or uses Docker Desktop if present), and Linux auto-installs your distro's Docker (systemd + `docker` group). The installer also provisions Python and Node itself.
 
 ---
 

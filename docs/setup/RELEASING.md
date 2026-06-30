@@ -9,8 +9,8 @@ a release is therefore the act that makes a new version available to all clients
 - Single source of truth: `vaf/version.py` (`__version__`).
 - Everything that shows or reports a version derives from it: the CLI (`vaf --version`), the About screen, the backend APIs (`GET /api/version` and the FastAPI app versions), and the MCP handshake. Never hardcode a version string; the web UI fetches `/api/version`.
 - Semantic Versioning `MAJOR.MINOR.PATCH`; prereleases use PEP 440 suffixes
-  (`a0`, `b1`, `rc1`). Example: `2.6.0a0`.
-- The git tag is the version with a `v` prefix: `__version__ = "2.6.0"` → tag `v2.6.0`.
+  (`a0`, `b1`, `rc1`). Example: `0.1.0a0`.
+- The git tag is the version with a `v` prefix: `__version__ = "0.1.0"` → tag `v0.1.0`.
 - A tag whose version is exactly `X.Y.Z` is published as a normal release; a tag
   with a prerelease suffix is published as a GitHub *prerelease*.
 
@@ -18,11 +18,25 @@ a release is therefore the act that makes a new version available to all clients
 
 `vaf update` reads the releases **list** (not `/releases/latest`, which excludes prereleases) and
 picks the newest **eligible** release. Eligibility defaults to **auto**: a build that is itself a
-prerelease (e.g. `2.6.0a0`) tracks prereleases, while a stable build tracks stable releases only.
+prerelease (e.g. `0.1.0a0`) tracks prereleases, while a stable build tracks stable releases only.
 Override per install with the `update_include_prereleases` config key (`null` = auto, `true` =
 always, `false` = stable-only) or per command with `vaf update --pre` / `--stable`. So during the
-alpha, clients running `2.6.0aN` see and install newer `aN` releases automatically — without
+alpha, clients running `0.1.0aN` see and install newer `aN` releases automatically — without
 waiting for a stable `X.Y.Z`.
+
+### Recovering or pinning a version
+
+- **Resume an interrupted update.** Each update writes a breadcrumb before it
+  mutates anything; if it is interrupted (power loss, killed mid-checkout),
+  `vaf update --recover` restores the previous version. If the recovery checkout
+  is itself blocked (e.g. by colliding local files), it stops and keeps the
+  breadcrumb so you can resolve the conflict and re-run it — it never reports
+  success while the tree is in a mixed state.
+- **Pin to a specific release.** `vaf update --tag v<version>` updates to that tag
+  instead of the latest. Pinning to an older release is a downgrade — the updater
+  warns before proceeding.
+- **Preview only.** `vaf update --dry-run` prints the planned steps and the
+  rollback anchor without changing anything.
 
 ## Backward-compatibility rules
 
@@ -65,5 +79,5 @@ waiting for a stable `X.Y.Z`.
 - The release appears at `https://github.com/Veyllo-Labs/VAF/releases`.
 - `gh api repos/Veyllo-Labs/VAF/releases` lists it (the first entry is the newest). Note
   `releases/latest` only returns **stable** releases, so during the alpha it stays empty.
-- On any installed checkout, `vaf update check` reports the new version (a `2.6.0aN` build sees
+- On any installed checkout, `vaf update check` reports the new version (a `0.1.0aN` build sees
   newer prereleases automatically; see *Prereleases and `vaf update`*).

@@ -321,9 +321,9 @@ If you want durable long-term memory from current attachments, use `learn_attach
 
 When the provider is `local`, the tray process only loads the model on real activity (prompt/CLI heartbeat). If there are no active WebUI WebSocket connections for 15 seconds, the model is unloaded from VRAM unless persistence is enabled.
 
-## Wechsel zwischen lokalem Modell und API
+## Switching between the local model and an API
 
-Beim Wechsel des Providers (Local ↔ API) in den Einstellungen erscheint ein zentrales Overlay **„Changing model“** für etwa 5 Sekunden; danach lädt die Seite neu. Gleichzeitig entlädt der Tray bei Wechsel von Local zu API das Modell aus dem VRAM (llama-Server wird beendet) bzw. lädt bei Wechsel von API zu Local das Modell in den VRAM. Details: [MODEL_AND_PROVIDER_SWITCHING.md](../llm/MODEL_AND_PROVIDER_SWITCHING.md).
+When you switch the provider (Local ↔ API) in Settings, a centered **“Changing model”** overlay appears for about 5 seconds, after which the page reloads. At the same time, switching from Local to API makes the tray unload the model from VRAM (the `llama-server` is stopped), while switching from API to Local loads the model into VRAM. Details: [MODEL_AND_PROVIDER_SWITCHING.md](../llm/MODEL_AND_PROVIDER_SWITCHING.md).
 
 ## Local HTTP Backend Reuse
 
@@ -577,7 +577,7 @@ The Web UI runs alongside the CLI interface:
 
 ### Input Box
 
-- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the document panel is open with attachments (Anhänge), **quote chips** appear above the input: any text selected in the panel is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
+- **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the document panel is open with attachments, **quote chips** appear above the input: any text selected in the panel is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
 - **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation.
 - **States**: Disabled during loading, focus ring on interaction.
 - **Submit**: Enter key or click send button.

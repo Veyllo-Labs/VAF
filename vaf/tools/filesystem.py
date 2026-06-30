@@ -197,8 +197,20 @@ def is_safe_path(path):
         except (ValueError, OSError):
             pass
 
+        # Block system locations by PATH COMPONENT / PREFIX, not raw substring. A
+        # substring match wrongly rejected legitimate paths that merely *contain* a
+        # blocked token: the macOS temp dir "/private/var/folders/..." contains "/var",
+        # "~/.environment" contains ".env", "C:\\Users\\Windows10Fan" contains "Windows".
+        # Absolute roots (/etc, /var, ...) now match the dir itself or anything strictly
+        # under it; name-based tokens (.ssh, node_modules, Windows, ...) match only when
+        # they are a whole path component.
+        norm = abs_path.replace("\\", "/")
+        components = norm.split("/")
         for blocked in BLOCKED_DIRS:
-            if blocked in abs_path:
+            if blocked.startswith("/"):
+                if norm == blocked or norm.startswith(blocked + "/"):
+                    return False, f"Access denied: {blocked}"
+            elif blocked in components:
                 return False, f"Access denied: {blocked}"
         # Librarian per-user jail (no-op unless a librarian run set the scope contextvar).
         if not _librarian_jail_ok(abs_path):

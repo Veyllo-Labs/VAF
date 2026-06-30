@@ -259,15 +259,29 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
     case "$PKG_MANAGER" in
         apt)
             print_info "Updating package lists..."
-            sudo apt-get update -qq
-            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg python3-gi gir1.2-webkit2-4.0 gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
+            sudo apt-get update -qq || print_warning "apt update failed - continuing with cached lists"
+            # Core build deps in ONE call. Keep the WebKitGTK typelib SEPARATE: Ubuntu 24.04 dropped
+            # gir1.2-webkit2-4.0 (only 4.1 exists), and a single unknown package name aborts the whole
+            # apt-get transaction - which would otherwise silently skip build-essential/portaudio/etc.
+            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg python3-gi gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
+            # WebKitGTK typelib (used by the AppIndicator tray icon; the app window uses Qt, so this is
+            # non-fatal): try 4.1 (Ubuntu 24.04+), fall back to 4.0 (22.04), best-effort.
+            $INSTALL_CMD gir1.2-webkit2-4.1 2>/dev/null \
+                || $INSTALL_CMD gir1.2-webkit2-4.0 2>/dev/null \
+                || print_warning "WebKitGTK typelib unavailable (tray icon may not load; app window unaffected)"
             ;;
         dnf|yum)
-            DEPS="portaudio-devel python3-devel gcc git ffmpeg python3-gobject3 webkit2gtk4.0 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
+            # WebKitGTK kept separate (Fedora 39+ ships webkit2gtk4.1, not 4.0) so one bad name can't
+            # abort the whole transaction.
+            DEPS="portaudio-devel python3-devel gcc git ffmpeg python3-gobject3 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
             print_info "Installing: $DEPS"
             $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
+            $INSTALL_CMD webkit2gtk4.1 2>/dev/null \
+                || $INSTALL_CMD webkit2gtk4.0 2>/dev/null \
+                || $INSTALL_CMD webkit2gtk3 2>/dev/null \
+                || print_warning "WebKitGTK unavailable (tray icon may not load; app window unaffected)"
             ;;
         pacman)
             DEPS="portaudio python git ffmpeg base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
@@ -845,12 +859,12 @@ verify_module() {
     fi
 }
 
-verify_module "vaf" "VAF Module"
-verify_module "fastapi" "FastAPI"
+verify_module "vaf" "VAF Module" || true
+verify_module "fastapi" "FastAPI" || true
 # pyttsx3 removed  caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
 # TTS is now handled by Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
 # verify_module "pyttsx3" "TTS Engine"
-verify_module "speech_recognition" "Speech Recognition"
+verify_module "speech_recognition" "Speech Recognition" || true
 
 # ============================================================================
 # SUMMARY

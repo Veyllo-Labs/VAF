@@ -17,7 +17,8 @@ For anything beyond a small fix, please open an issue first to discuss the chang
     ```bash
     git clone https://github.com/YOUR-USERNAME/VAF.git
     cd VAF
-    pip install -e .   # enough for working on the Python code (this is what CI uses)
+    pip install -r requirements.txt   # Python runtime deps (this is what CI installs)
+    pip install -e .                  # install the vaf package + the `vaf` CLI entry point
     ```
     For the **full runtime** (Docker memory stack + Web UI + tray), run `./install.sh` instead — it
     provisions Python, Node, Docker and the Web UI for you.

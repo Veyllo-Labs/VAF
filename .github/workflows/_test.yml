@@ -44,9 +44,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ruff pytest
-        # Install VAF in editable mode (checks requirements.txt and setup.py).
-        # pywebview/PySide6/browser-use are lazily imported — headless CI is fine.
+        # Full runtime deps: the `vaf` CLI smoke test imports the whole app (web
+        # server, tools, ...), so installing only the slim editable base is not
+        # enough (fastapi/uvicorn/... live in requirements.txt, not setup.py's
+        # base). requirements.txt also provides ruff + pytest.
+        pip install -r requirements.txt
         pip install -e .
 
     - name: Lint with Ruff

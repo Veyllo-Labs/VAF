@@ -352,6 +352,7 @@ DOCKER_INSTALLED=false
 DOCKER_RUNNING=false
 DOCKER_COMPOSE=false
 DOCKER_BIN=""
+DOCKER_SUDO=""   # set to "sudo" on Linux right after auto-install, before the docker group is active in this shell
 
 # Resolve the real docker binary via PATH. NEVER hardcode /usr/bin/docker: on macOS
 # (Homebrew/Colima) docker lives in /opt/homebrew/bin or /usr/local/bin, so a hardcoded
@@ -365,7 +366,7 @@ wait_for_docker() {
     local tries=${1:-60} i=0
     resolve_docker_bin
     while [ "$i" -lt "$tries" ]; do
-        if [ -n "$DOCKER_BIN" ] && "$DOCKER_BIN" info &>/dev/null; then return 0; fi
+        if [ -n "$DOCKER_BIN" ] && $DOCKER_SUDO "$DOCKER_BIN" info &>/dev/null; then return 0; fi
         sleep 2; i=$((i+1))
         resolve_docker_bin
     done
@@ -398,6 +399,37 @@ start_macos_engine() {
     resolve_docker_bin
 }
 
+# Linux: auto-install + start Docker via the distro package + systemd + the 'docker' group - parity
+# with macOS (Colima) and Windows (Rancher) so the installer "just runs through". The group change
+# only takes effect on next login, so DOCKER_SUDO lets the rest of THIS run still reach the daemon.
+start_linux_engine() {
+    if ! command -v docker &>/dev/null; then
+        print_info "Installing Docker (distro package) - VAF needs a container engine..."
+        case "$PKG_MANAGER" in
+            apt)     $INSTALL_CMD docker.io docker-compose-v2 2>/dev/null || $INSTALL_CMD docker.io docker-compose 2>/dev/null || print_warning "Docker install via apt failed" ;;
+            dnf|yum) $INSTALL_CMD moby-engine docker-compose 2>/dev/null || $INSTALL_CMD docker docker-compose 2>/dev/null || print_warning "Docker install via dnf/yum failed" ;;
+            pacman)  $INSTALL_CMD docker docker-compose 2>/dev/null || print_warning "Docker install via pacman failed" ;;
+            zypper)  $INSTALL_CMD docker docker-compose 2>/dev/null || print_warning "Docker install via zypper failed" ;;
+            *)       print_warning "Unknown package manager - please install Docker manually." ;;
+        esac
+    fi
+    # Enable + start the daemon (systemd; service fallback).
+    sudo systemctl enable --now docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+    # Add the user to the 'docker' group so future sessions don't need sudo (active on next login).
+    local _u="${USER:-$(id -un)}"
+    if ! id -nG "$_u" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        if sudo usermod -aG docker "$_u" 2>/dev/null; then
+            print_info "Added '$_u' to the 'docker' group - log out and back in once to use docker/vaf without sudo."
+        fi
+    fi
+    resolve_docker_bin
+    # The group change isn't active in this shell yet: if the daemon is up but our session can't
+    # reach the socket, use sudo for the remaining docker calls in this run (the stack still comes up).
+    if [ -n "$DOCKER_BIN" ] && ! "$DOCKER_BIN" info &>/dev/null && sudo "$DOCKER_BIN" info &>/dev/null; then
+        DOCKER_SUDO="sudo"
+    fi
+}
+
 if [[ "$SKIP_DOCKER" == "false" ]]; then
     resolve_docker_bin
     if [ -n "$DOCKER_BIN" ] && "$DOCKER_BIN" info &>/dev/null; then
@@ -417,19 +449,21 @@ if [[ "$SKIP_DOCKER" == "false" ]]; then
             [ -n "$DOCKER_BIN" ] && DOCKER_INSTALLED=true
             print_warning "Container engine not ready yet - VAF will retry on launch (or run: colima start)."
         fi
-    elif [ -n "$DOCKER_BIN" ]; then
-        # Linux: docker present but the daemon is down (engine install needs sudo/distro-specific).
-        DOCKER_INSTALLED=true
-        print_warning "Docker is installed but not running. Start it: ${CYAN}sudo systemctl enable --now docker${NC}"
-    else
-        # Linux: no runtime at all.
-        print_warning "No container runtime found - VAF REQUIRES one (users, auth, setup and memory live in a PostgreSQL/pgvector container)."
-        print_info "Install Docker Engine (free), e.g. your distro's ${CYAN}docker${NC} package, then ${CYAN}sudo systemctl enable --now docker${NC}"
-        print_info "Then run: ${CYAN}docker compose -f docker-compose.memory.yml up -d${NC} and re-launch VAF."
+    elif [[ "$OS_TYPE" == "linux" ]]; then
+        print_warning "No running container engine - VAF requires one (users, auth, setup and memory live in a PostgreSQL/pgvector container)."
+        start_linux_engine
+        if wait_for_docker 30; then
+            DOCKER_INSTALLED=true
+            DOCKER_RUNNING=true
+            print_success "Container engine is up"
+        else
+            [ -n "$DOCKER_BIN" ] && DOCKER_INSTALLED=true
+            print_warning "Container engine not ready yet - VAF will retry on launch (or: sudo systemctl enable --now docker)."
+        fi
     fi
 
     if [[ "$DOCKER_RUNNING" == "true" ]]; then
-        if "$DOCKER_BIN" compose version &>/dev/null || command -v docker-compose &>/dev/null; then
+        if $DOCKER_SUDO "$DOCKER_BIN" compose version &>/dev/null || command -v docker-compose &>/dev/null; then
             DOCKER_COMPOSE=true
             print_success "Docker Compose available"
         fi
@@ -584,7 +618,7 @@ COMPOSE_CHANGED=false
 if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "$COMPOSE_FILE"; then
     COMPOSE_CHANGED=true
     print_info "docker-compose.memory.yml changed  will update Docker stack"
-elif ! "${DOCKER_BIN:-docker}" ps 2>/dev/null | grep -q "vaf-memory-db"; then
+elif ! $DOCKER_SUDO "${DOCKER_BIN:-docker}" ps 2>/dev/null | grep -q "vaf-memory-db"; then
     # Stack not running at all  treat as needing startup
     COMPOSE_CHANGED=true
 fi
@@ -598,7 +632,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
         if [[ "$OS_TYPE" == "macos" ]]; then
             start_macos_engine
         elif [[ "$OS_TYPE" == "linux" ]]; then
-            sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+            start_linux_engine
         fi
 
         if wait_for_docker 30; then
@@ -622,22 +656,22 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             # Pulls resume from cached layers, so a retry usually completes. Never abort on this.
             core_up=false
             for _attempt in 1 2 3; do
-                if "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg; then
+                if $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg; then
                     core_up=true; break
                 fi
                 print_warning "Core image pull/start failed (attempt $_attempt/3) - often a transient registry/TLS timeout; retrying in 10s..."
                 sleep 10
             done
             if [ "$core_up" != "true" ]; then
-                docker-compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg \
+                $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg \
                     || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or re-run: ${DOCKER_BIN:-docker} compose -f $COMPOSE_FILE up -d"
             fi
             print_info "Starting optional services (TTS, browser) - these build locally and may take a while..."
-            "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null \
-                || docker-compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null || true
+            $DOCKER_SUDO "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null \
+                || $DOCKER_SUDO docker-compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null || true
 
             sleep 2
-            if "$DOCKER_BIN" ps | grep -q "vaf-memory-db"; then
+            if $DOCKER_SUDO "$DOCKER_BIN" ps | grep -q "vaf-memory-db"; then
                 print_success "Docker stack is running"
                 print_info "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
             else

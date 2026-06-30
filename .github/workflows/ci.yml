@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"   # the lock is generated on 3.13 — see the requirements.lock header
       - name: Install system build deps (for sdist metadata resolution, e.g. pyaudio)

@@ -1,0 +1,4 @@
+# Windows batch files MUST use CRLF: cmd.exe mis-parses multi-line parenthesized
+# blocks (IF/FOR) when the file is LF-only. Force CRLF so a checkout on any OS is safe.
+*.bat text eol=crlf
+*.cmd text eol=crlf

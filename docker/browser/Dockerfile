@@ -19,7 +19,9 @@ FROM debian:bookworm-slim
 # Install Chromium + Xvfb (virtual display for headed mode) + a fuller font set.
 # A realistic font list matters for fingerprinting, so we ship more than the bare
 # minimum (liberation/dejavu/noto) without pulling the whole desktop.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Acquire::Check-Date=false: tolerate a skewed build-host clock (common in VMs/WSL2/CI),
+# otherwise apt rejects freshly-signed repo metadata as "not valid yet". GPG sig still verified.
+RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-sandbox \
     xvfb \

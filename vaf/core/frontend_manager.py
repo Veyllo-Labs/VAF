@@ -207,6 +207,19 @@ class FrontendManager:
         # Not running, need to start
         try:
             npm_path = shutil.which("npm")
+            if not npm_path and platform.system() == "Windows":
+                # On a fresh install the portable Node the installer fetched is only on the
+                # *registry* PATH; a shortcut launched before re-login won't see it. Fall back
+                # to the known location install.ps1 writes: %LOCALAPPDATA%\Veyllo\node\<ver>\npm.cmd
+                node_root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Veyllo", "node")
+                if os.path.isdir(node_root):
+                    for sub in sorted(os.listdir(node_root)):
+                        cand = os.path.join(node_root, sub, "npm.cmd")
+                        if os.path.exists(cand):
+                            npm_path = cand
+                            # Prepend so the spawned npm finds its sibling node.exe.
+                            os.environ["PATH"] = os.path.join(node_root, sub) + os.pathsep + os.environ.get("PATH", "")
+                            break
             if not npm_path:
                 raise FileNotFoundError("npm not found in PATH")
 
@@ -267,7 +280,23 @@ class FrontendManager:
                     build_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run([npm_path, "run", "build"], **build_kwargs, capture_output=not use_debug_log)
                 if result.returncode != 0:
-                    self._log("Frontend build failed. Run 'cd web && npm run build' and check errors.", "error", log_callback)
+                    # When Debug Logs are off the output was captured (not streamed) - persist it
+                    # and surface a tail, otherwise the real next/webpack error is lost.
+                    if not use_debug_log and (result.stdout or result.stderr):
+                        try:
+                            with open(log_file, "a", encoding="utf-8", errors="replace") as bf:
+                                for chunk in (result.stdout, result.stderr):
+                                    if not chunk:
+                                        continue
+                                    bf.write(chunk.decode(errors="replace") if isinstance(chunk, bytes) else chunk)
+                        except Exception:
+                            pass
+                        tail = result.stderr or result.stdout or ""
+                        tail = tail.decode(errors="replace") if isinstance(tail, bytes) else tail
+                        tail = "\n".join(tail.strip().splitlines()[-15:])
+                        if tail:
+                            self._log(f"Build error (tail):\n{tail}", "error", log_callback)
+                    self._log(f"Frontend build failed. See {log_file} or run 'cd web && npm run build' for details.", "error", log_callback)
                     return None
                 self._log("Build finished.", "dim", log_callback)
 

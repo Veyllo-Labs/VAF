@@ -800,6 +800,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                 # Lazy-load local model only when we have a real chat task (not for LOAD_SESSION etc.)
                 try:
+                    # Self-heal: if the live config now points at a cloud provider + key but this
+                    # agent is still on a stale local/other backend, apply it BEFORE the download
+                    # gate so we never pull a local GGUF when the user configured a cloud provider.
+                    try:
+                        _live = Config.load()
+                        _lp = (_live.get("provider", "local") or "local").strip()
+                        if _lp != "local" and Config.get_api_key(_lp):
+                            if agent.provider != _lp or not agent.api_backend:
+                                agent.reload_api_backend()
+                    except Exception as _heal_e:
+                        print(f"[Headless] provider self-heal failed: {_heal_e}")
                     if agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
                         from vaf.core.model_download_state import MODEL_DOWNLOAD
                         # On first use the load below downloads the model (blocking, filelock-serialized so it

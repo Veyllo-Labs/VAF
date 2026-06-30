@@ -860,12 +860,23 @@ def start(icon_path: str = None) -> None:
         _start_mem_logger()
 
     _log.info("[DesktopWindow] Starting GUI loop (main thread), storage=%s", _storage)
-    _webview.start(
+    # pywebview's cross-platform window/taskbar icon. The Qt _apply_icon above only runs
+    # on the Qt backend (Linux); on Windows pywebview uses the EdgeChromium backend, where
+    # the window icon must come from start(icon=...). Fall back gracefully if the installed
+    # pywebview is too old to accept the kwarg.
+    _start_kwargs = dict(
         func=_apply_icon if icon_path else None,
         debug=False,
         private_mode=False,   # persist cookies / localStorage across restarts
         storage_path=_storage,
     )
+    if icon_path:
+        try:
+            _webview.start(icon=icon_path, **_start_kwargs)
+            return
+        except TypeError:
+            _log.debug("[DesktopWindow] pywebview start() has no 'icon' kwarg; using fallback")
+    _webview.start(**_start_kwargs)
 
 
 def show() -> None:

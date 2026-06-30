@@ -28,12 +28,49 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# Disable console QuickEdit mode. With QuickEdit on (the Windows default) a stray mouse
+# click puts the console into "select" mode and PAUSES the whole installer until a key is
+# pressed -- which repeatedly looked like a hang. Turn it off so a click can never freeze it.
+try {
+    if (-not ("Win32.VafConsole" -as [type])) {
+        Add-Type -Namespace Win32 -Name VafConsole -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError=true)] public static extern System.IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetConsoleMode(System.IntPtr h, out uint mode);
+[DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleMode(System.IntPtr h, uint mode);
+'@
+    }
+    $_qeh = [Win32.VafConsole]::GetStdHandle(-10)  # STD_INPUT_HANDLE
+    [uint32]$_qem = 0
+    if ([Win32.VafConsole]::GetConsoleMode($_qeh, [ref]$_qem)) {
+        # clear ENABLE_QUICK_EDIT_MODE (0x40), set ENABLE_EXTENDED_FLAGS (0x80)
+        $_qem = ($_qem -band (-bnot [uint32]0x40)) -bor [uint32]0x80
+        [void][Win32.VafConsole]::SetConsoleMode($_qeh, $_qem)
+    }
+} catch { }
+
+# ============================================================================
+# INSTALL LOG (written OUTSIDE the project folder so it survives re-extracting /
+# deleting the VAF folder, and is easy to find + share when something goes wrong)
+# ============================================================================
+$VAF_INSTALL_LOG = $null
+try {
+    $logDir = Join-Path $env:LOCALAPPDATA "Veyllo\logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $VAF_INSTALL_LOG = Join-Path $logDir ("install-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+    Start-Transcript -Path $VAF_INSTALL_LOG -Force | Out-Null
+    Write-Host "  [i] Full install log: $VAF_INSTALL_LOG" -ForegroundColor DarkGray
+} catch { $VAF_INSTALL_LOG = $null }
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 $MIN_PYTHON_VERSION = [version]"3.10"
 $PROJECT_ROOT = $PSScriptRoot
 if (-not $PROJECT_ROOT) { $PROJECT_ROOT = Get-Location }
+
+# Shared spinner charset (used by several wait loops below). Defined at script scope so
+# every spinner site resolves it - the Docker-start wait referenced it before it existed.
+$spinChars = @('|', '/', '-', '\')
 
 # Colors - ASCII-safe output functions
 function Write-Step { 
@@ -173,6 +210,53 @@ if ($uvCmd) {
 }
 
 # ============================================================================
+# 1b. VISUAL C++ RUNTIME (required by native wheels such as greenlet)
+# ============================================================================
+# uv's standalone Python does not ship vcruntime140_1.dll, which some compiled
+# wheels link against - notably greenlet, used by SQLAlchemy's async engine. On a
+# bare machine that DLL is missing and the import fails at runtime ("DLL load
+# failed while importing _greenlet"), which breaks the database / auth / setup
+# layer. Ensure the Microsoft VC++ runtime is present.
+Write-Step "Checking Visual C++ Runtime (required by the database layer)..."
+
+$vcRuntimePresent = $false
+foreach ($vcDir in @("$env:SystemRoot\System32", "$env:SystemRoot\SysWOW64")) {
+    if (Test-Path (Join-Path $vcDir "vcruntime140_1.dll")) { $vcRuntimePresent = $true; break }
+}
+
+if ($vcRuntimePresent) {
+    Write-Success "Visual C++ runtime present"
+} else {
+    Write-Warn "Visual C++ runtime (vcruntime140_1.dll) missing - installing Microsoft VC++ Redistributable..."
+    Write-Info "A Windows UAC prompt will appear - approve it to install the VC++ runtime."
+    try {
+        $vcExe = Join-Path $env:TEMP "vc_redist.x64.exe"
+        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcExe -TimeoutSec 300
+        # /install needs elevation; -Verb RunAs raises the UAC prompt for this step only.
+        $vcProc = Start-Process -FilePath $vcExe -ArgumentList "/install","/passive","/norestart" -Verb RunAs -Wait -PassThru
+        # Re-probe the DLL: a /passive install can no-op or report a non-fatal code while the
+        # runtime is still absent. Gate success on the file actually being present now.
+        $vcNowPresent = $false
+        foreach ($vcDir in @("$env:SystemRoot\System32", "$env:SystemRoot\SysWOW64")) {
+            if (Test-Path (Join-Path $vcDir "vcruntime140_1.dll")) { $vcNowPresent = $true; break }
+        }
+        if ($vcNowPresent) {
+            Write-Success "Visual C++ runtime installed"
+        } else {
+            Write-Err "VC++ installer finished (exit $($vcProc.ExitCode)) but vcruntime140_1.dll is still missing."
+            Write-Host "  greenlet/SQLAlchemy (database/auth/setup) cannot load without it. Install it manually, then re-run:" -ForegroundColor Yellow
+            Write-Host "  https://aka.ms/vs/17/release/vc_redist.x64.exe" -ForegroundColor Yellow
+            exit 1
+        }
+    } catch {
+        Write-Err "Could not install the VC++ runtime automatically: $_"
+        Write-Host "  Install it manually from: https://aka.ms/vs/17/release/vc_redist.x64.exe" -ForegroundColor Yellow
+        Write-Host "  (Required - greenlet/SQLAlchemy will not load without it.) Then re-run the installer." -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# ============================================================================
 # 2. GPU DETECTION
 # ============================================================================
 Write-Step "Detecting GPU for LLM Acceleration..."
@@ -230,6 +314,28 @@ if ($gpuInfo.HasNvidia -and $gpuInfo.CudaAvailable) {
 # ============================================================================
 Write-Step "Checking Docker Installation (for Memory System)..."
 
+function Install-RancherDesktop {
+    # Rancher Desktop is open-source (Apache-2.0) and free for ANY use - unlike
+    # Docker Desktop, which requires a paid license for larger orgs - so we may
+    # auto-install it. It provides a Windows `docker`/`docker compose` CLI backed
+    # by a WSL2 engine, which is exactly what VAF drives.
+    try {
+        Write-Info "Resolving latest Rancher Desktop release..."
+        $rel = Invoke-RestMethod "https://api.github.com/repos/rancher-sandbox/rancher-desktop/releases/latest" -Headers @{ "User-Agent" = "vaf-installer" }
+        $asset = $rel.assets | Where-Object { $_.name -match '\.msi$' } | Select-Object -First 1
+        if (-not $asset) { Write-Warn "No Rancher Desktop .msi in the latest release."; return $false }
+        $msi = Join-Path $env:TEMP $asset.name
+        Write-Info "Downloading $($asset.name) (large, ~600 MB)..."
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msi
+        Write-Info "Installing Rancher Desktop (approve the UAC prompt)..."
+        $p = Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qb","/norestart" -Verb RunAs -Wait -PassThru
+        return ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010)
+    } catch {
+        Write-Warn "Rancher Desktop install failed: $_"
+        return $false
+    }
+}
+
 $dockerInfo = @{
     Installed = $false
     Running = $false
@@ -276,15 +382,41 @@ if (-not $SkipDocker) {
 
     if (-not $dockerInfo.Installed) {
         Write-Host ""
-        Write-Warn "Docker not found - the Memory System (pgvector) needs a container runtime."
-        Write-Info "VAF runs fine without Docker; long-term memory just stays off (enable it later)."
-        Write-Info "To enable memory WITHOUT Docker Desktop (no license, no heavy GUI, no reboot):"
-        Write-Info "  - Docker Engine inside WSL2, or Podman, or Rancher Desktop"
-        Write-Info "Then run:  docker compose -f docker-compose.memory.yml up -d"
+        Write-Warn "No container runtime found - VAF needs one (PostgreSQL/pgvector runs in a container)."
+        Write-Info "Installing Rancher Desktop - free & open-source, no Docker Desktop license required..."
+        if (Install-RancherDesktop) {
+            Write-Success "Rancher Desktop installed."
+            # Start Rancher's GUI NOW (right after install) so its first-run WSL2 provisioning runs
+            # in the BACKGROUND while we install Python deps + build the Web UI (several minutes).
+            # By the time we reach the container step at the END, Rancher is already up - the wait
+            # there is then short or zero. The welcome modal appears regardless, so we embrace it
+            # early (in parallel) instead of fighting it.
+            $rdExeEarly = @(
+                (Join-Path ${env:ProgramFiles} "Rancher Desktop\Rancher Desktop.exe"),
+                (Join-Path ${env:LOCALAPPDATA} "Programs\Rancher Desktop\Rancher Desktop.exe")
+            ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+            if ($rdExeEarly) {
+                Write-Host ""
+                Write-Warn "ACTION NEEDED: Rancher Desktop is opening. In its welcome screen:"
+                Write-Info  "  1) set the Container Engine to 'dockerd (moby)',"
+                Write-Info  "  2) click OK (Kubernetes can stay on or off - VAF only needs moby)."
+                Write-Info  "Then just LEAVE IT RUNNING - it sets up in the background while this"
+                Write-Info  "installer keeps going. We use it at the very end to start the containers."
+                Write-Host ""
+                try { Start-Process $rdExeEarly } catch { Write-Warn "Could not launch Rancher Desktop: $_" }
+            } else {
+                Write-Warn "Rancher Desktop exe not found yet - it will be started at the container step."
+            }
+        } else {
+            Write-Warn "Automatic install did not complete - install a free runtime manually, then start VAF:"
+            Write-Info "  - Rancher Desktop: https://rancherdesktop.io  (set engine to 'dockerd (moby)')"
+            Write-Info "  - or Docker Engine in WSL2, or Podman"
+        }
         Write-Host ""
-        # No automatic Docker Desktop install on purpose: it is licensed for larger orgs,
-        # heavyweight, and needs a reboot. If the user already has ANY Docker (Desktop,
-        # Engine, Podman, Colima) the detection above picks it up and we just use it.
+        # We auto-install Rancher Desktop (not Docker Desktop) because Rancher is
+        # Apache-2.0 / free for any use. If the user already has ANY docker CLI
+        # (Docker Desktop, Engine, Rancher, Podman-with-alias) the detection above
+        # picks it up and we just use it.
     } elseif (-not $dockerInfo.Running) {
         Write-Warn "Docker is installed but NOT running!"
         Write-Host "  Starting Docker Desktop..." -ForegroundColor Yellow
@@ -374,13 +506,13 @@ if (-not $nodeInstalled) {
     Write-Info "Node.js not found - downloading a portable Node (user-scoped, no admin)..."
     try {
         $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
-        # Resolve the latest v22 LTS filename from the official dist index (not bundled — fetched).
-        $shasums = Invoke-RestMethod "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
+        # Resolve the latest v22 LTS filename from the official dist index (not bundled - fetched).
+        $shasums = Invoke-RestMethod "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt" -TimeoutSec 30
         $zipName = ([regex]::Matches($shasums, "node-v[\d.]+-win-$arch\.zip") | Select-Object -First 1).Value
         if (-not $zipName) { throw "could not resolve Node win-$arch zip name" }
         $nodeDir = Join-Path $env:LOCALAPPDATA "Veyllo\node"
         $zip = Join-Path $env:TEMP $zipName
-        Invoke-WebRequest -Uri "https://nodejs.org/dist/latest-v22.x/$zipName" -OutFile $zip
+        Invoke-WebRequest -Uri "https://nodejs.org/dist/latest-v22.x/$zipName" -OutFile $zip -TimeoutSec 300
         if (Test-Path $nodeDir) { Remove-Item -Recurse -Force $nodeDir }
         Expand-Archive -Path $zip -DestinationPath $nodeDir -Force
         $nodeBin = (Get-ChildItem $nodeDir -Directory | Select-Object -First 1).FullName
@@ -401,6 +533,19 @@ Write-Step "Setting up Python Virtual Environment..."
 
 $venvPath = Join-Path $PROJECT_ROOT "venv"
 
+# Verifies a venv interpreter actually exists; aborts loudly if creation failed silently
+# (a native non-zero exit from uv/python is NOT a terminating PowerShell error, so without
+# this a broken venv is reported as success and pip then fails confusingly).
+function Assert-Venv {
+    param($exitCode, $what)
+    if ($exitCode -ne 0 -or -not (Test-Path "$venvPath\Scripts\python.exe")) {
+        Write-Err "$what failed (exit $exitCode) - usually a network/disk/AV issue while provisioning Python."
+        Write-Info "Fix it, then re-run install.ps1 (uv can pre-provision: uv python install 3.12)."
+        if (Test-Path $venvPath) { Remove-Item -Recurse -Force $venvPath }
+        exit 1
+    }
+}
+
 if ($useUv) {
     # uv creates the venv (and downloads Python 3.12 if needed). --seed adds pip so the
     # existing `python -m pip install` steps below keep working inside a uv venv.
@@ -409,6 +554,7 @@ if ($useUv) {
         Write-Success "Virtual environment already exists"
     } else {
         & uv venv $venvPath --python 3.12 --seed
+        Assert-Venv $LASTEXITCODE "uv venv (download CPython 3.12 + create venv)"
         Write-Success "Virtual environment created (uv, Python 3.12)"
     }
 } elseif ((Test-Path $venvPath) -and -not $Force) {
@@ -417,11 +563,13 @@ if ($useUv) {
     if ($response -eq "y" -or $response -eq "Y") {
         Remove-Item -Recurse -Force $venvPath
         & $pythonCmd -m venv $venvPath
+        Assert-Venv $LASTEXITCODE "python -m venv (recreate)"
         Write-Success "Virtual environment recreated"
     }
 } else {
     if (Test-Path $venvPath) { Remove-Item -Recurse -Force $venvPath }
     & $pythonCmd -m venv $venvPath
+    Assert-Venv $LASTEXITCODE "python -m venv (create)"
     Write-Success "Virtual environment created"
 }
 
@@ -442,14 +590,20 @@ $env:VAF_SKIP_POSTINSTALL = "1"
 # Upgrade pip
 Write-Info "Upgrading pip..."
 $pipStart = Get-Date
-& python -m pip install --upgrade pip --quiet 2>$null
+& python -m pip install --upgrade pip --no-cache-dir --quiet 2>&1 | Out-Null
 $pipTime = [math]::Round(((Get-Date) - $pipStart).TotalSeconds, 1)
-Write-Success "pip upgraded (${pipTime}s)"
+if ($LASTEXITCODE -eq 0) { Write-Success "pip upgraded (${pipTime}s)" }
+else { Write-Warn "pip self-upgrade failed (exit $LASTEXITCODE) - continuing with the bundled pip" }
 
-# Install pywin32 first (Windows-specific)
+# Install pywin32 first (Windows-specific). Required for the tray/COM + shortcut creation.
 Write-Info "Installing Windows-specific packages..."
-& python -m pip install pywin32 --quiet 2>$null
-Write-Success "Windows packages installed"
+$pywinOut = & python -m pip install pywin32 --no-cache-dir --quiet 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Write-Success "Windows packages installed"
+} else {
+    Write-Warn "pywin32 install failed (exit $LASTEXITCODE) - tray/COM + shortcuts may not work; fix_venv.py will try to repair it."
+    $pywinOut | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+}
 
 # Install core dependencies with progress
 Write-Host -NoNewline "  [" -ForegroundColor Gray
@@ -458,9 +612,9 @@ $job = Start-Job -ScriptBlock {
     Set-Location $using:PROJECT_ROOT
     $env:VIRTUAL_ENV = $using:venvPath
     $env:Path = "$using:venvPath\Scripts;$env:Path"
-    & "$using:venvPath\Scripts\python.exe" -m pip install -e . --quiet 2>&1
+    & "$using:venvPath\Scripts\python.exe" -m pip install -e . --no-cache-dir --quiet 2>&1
+    "VAF_PIP_EXIT=$LASTEXITCODE"
 }
-$spinChars = @('|', '/', '-', '\')
 $spinIndex = 0
 while ($job.State -eq 'Running') {
     Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
@@ -470,7 +624,27 @@ while ($job.State -eq 'Running') {
 $coreResult = Receive-Job -Job $job
 Remove-Job -Job $job -Force
 $coreTime = [math]::Round(((Get-Date) - $coreStart).TotalSeconds, 1)
-Write-Host "`b] Core dependencies installed (${coreTime}s)" -ForegroundColor Green
+
+# A finished Start-Job reports 'Completed' even when pip exited non-zero - check pip's OWN
+# exit code. The editable 'vaf' package is mandatory; a failed install must abort, not be
+# reported as success (it would only surface much later as import errors at launch).
+$coreExit = -1
+foreach ($line in $coreResult) {
+    if ("$line" -match '^VAF_PIP_EXIT=(\d+)$') { $coreExit = [int]$Matches[1] }
+}
+if ($coreExit -eq 0) {
+    Write-Host "`b] Core dependencies installed (${coreTime}s)" -ForegroundColor Green
+} else {
+    Write-Host "`b] Core install FAILED (pip exit $coreExit, ${coreTime}s)" -ForegroundColor Red
+    Write-Warn "pip could not install the editable 'vaf' package - VAF cannot import or run without it."
+    Write-Info "Last lines of pip output:"
+    $coreResult | Where-Object { "$_" -notmatch '^VAF_PIP_EXIT=' } | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Write-Host ""
+    Write-Warn "Usually a transient network hiccup or a missing build tool. Fix it, then re-run:"
+    Write-Info "  cd `"$PROJECT_ROOT`""
+    Write-Info "  .\venv\Scripts\python.exe -m pip install -e ."
+    exit 1
+}
 
 # Install all requirements with progress
 Write-Host ""
@@ -482,7 +656,8 @@ $job = Start-Job -ScriptBlock {
     Set-Location $using:PROJECT_ROOT
     $env:VIRTUAL_ENV = $using:venvPath
     $env:Path = "$using:venvPath\Scripts;$env:Path"
-    & "$using:venvPath\Scripts\python.exe" -m pip install -r requirements.txt --quiet 2>&1
+    & "$using:venvPath\Scripts\python.exe" -m pip install -r requirements.txt --no-cache-dir --quiet 2>&1
+    "VAF_PIP_EXIT=$LASTEXITCODE"
 }
 $spinIndex = 0
 $lastUpdate = Get-Date
@@ -499,22 +674,46 @@ while ($job.State -eq 'Running') {
     Start-Sleep -Milliseconds 200
 }
 $reqResult = Receive-Job -Job $job
-$jobSuccess = $job.State -eq 'Completed'
 Remove-Job -Job $job -Force
 $reqTime = [math]::Round(((Get-Date) - $reqStart).TotalSeconds, 1)
 
-if ($jobSuccess) {
-    Write-Host "`b] All dependencies installed (${reqTime}s)" -ForegroundColor Green
-} else {
-    Write-Host "`b] Some dependencies may have failed (${reqTime}s)" -ForegroundColor Yellow
-    Write-Warn "Core functionality should still work"
+# A finished Start-Job reports 'Completed' even when pip exited non-zero (a native
+# non-zero exit is NOT a PowerShell error), so we must check pip's OWN exit code -
+# otherwise a failed or interrupted install is silently reported as success.
+$pipExit = -1
+foreach ($line in $reqResult) {
+    if ("$line" -match '^VAF_PIP_EXIT=(\d+)$') { $pipExit = [int]$Matches[1] }
 }
 
-# Fix pywin32 COM registration
+if ($pipExit -eq 0) {
+    Write-Host "`b] All dependencies installed (${reqTime}s)" -ForegroundColor Green
+} else {
+    Write-Host "`b] Dependency installation FAILED (pip exit $pipExit, ${reqTime}s)" -ForegroundColor Red
+    Write-Warn "pip could not install the requirements - VAF cannot run without them (fastapi/uvicorn/...)."
+    Write-Info "Last lines of pip output:"
+    $reqResult | Where-Object { "$_" -notmatch '^VAF_PIP_EXIT=' } | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Write-Host ""
+    Write-Warn "This is usually a transient network hiccup. Fix connectivity, then re-run:"
+    Write-Info "  cd `"$PROJECT_ROOT`""
+    Write-Info "  .\venv\Scripts\python.exe -m pip install -r requirements.txt"
+    exit 1
+}
+
+# Fix pywin32 COM registration. fix_venv.py prints failures to stdout (and now exits
+# non-zero on failure), so capture + inspect instead of swallowing with 2>$null.
 Write-Info "Registering Windows COM components..."
 try {
-    & python scripts\fix_venv.py 2>$null
-} catch { }
+    $comOut = & python scripts\fix_venv.py 2>&1
+    $comFailed = ($LASTEXITCODE -ne 0) -or ($comOut | Where-Object { "$_" -match 'Failed to patch pywin32|FAILED|CRASHED' })
+    if ($comFailed) {
+        Write-Warn "pywin32 COM registration may have failed - the tray uses pythoncom (CoInitialize). Last lines:"
+        $comOut | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    } else {
+        Write-Success "Windows COM components registered"
+    }
+} catch {
+    Write-Warn "COM registration step errored: $($_.Exception.Message)"
+}
 
 # ============================================================================
 # 8. WEB UI SETUP (Node.js)
@@ -524,29 +723,49 @@ if ($nodeInstalled) {
     
     $webPath = Join-Path $PROJECT_ROOT "web"
     if (Test-Path $webPath) {
-        Write-Info "Installing/updating npm packages (Web UI dependencies from web/package.json)..."
-        Write-Host -NoNewline "  [" -ForegroundColor Gray
+        Write-Info "Installing npm packages (Web UI) - live npm output below, can take a few minutes:"
+        Write-Host ""
         $npmStart = Get-Date
-        $job = Start-Job -ScriptBlock {
-            Set-Location $using:webPath
-            & npm install --silent 2>&1
-        }
-        $spinChars = @('|', '/', '-', '\')
-        $spinIndex = 0
-        while ($job.State -eq 'Running') {
-            Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
-            $spinIndex = ($spinIndex + 1) % 4
-            Start-Sleep -Milliseconds 200
-        }
-        $npmResult = Receive-Job -Job $job
-        Remove-Job -Job $job -Force
+        Push-Location $webPath
+        # Run npm in the FOREGROUND (no hidden Start-Job, no --silent) so its real
+        # progress is visible in the terminal instead of a confusing silent spinner.
+        # EAP=Continue so npm's stderr (progress/warnings) does not throw under Stop.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & npm install --no-fund --no-audit
+        $npmExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
         $npmTime = [math]::Round(((Get-Date) - $npmStart).TotalSeconds, 1)
-        Write-Host "`b] Web UI dependencies installed (${npmTime}s)" -ForegroundColor Green
+        if ($npmExit -eq 0) {
+            Write-Success "Web UI dependencies installed (${npmTime}s)"
+            # Build the production UI NOW so first launch only runs `next start`. Otherwise the
+            # first launch does a multi-minute cold `next build` and the window opens to a
+            # connection-refused/blank page on a slow machine.
+            Write-Info "Building the Web UI (production) - avoids a slow build on first launch:"
+            Write-Host ""
+            $buildStart = Get-Date
+            Push-Location $webPath
+            $prevEAP2 = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & npm run build
+            $buildExit = $LASTEXITCODE
+            $ErrorActionPreference = $prevEAP2
+            Pop-Location
+            $buildTime = [math]::Round(((Get-Date) - $buildStart).TotalSeconds, 1)
+            if ($buildExit -eq 0) {
+                Write-Success "Web UI built (${buildTime}s)"
+            } else {
+                Write-Warn "Web UI production build returned exit $buildExit (${buildTime}s) - VAF will retry the build on first launch (slower)."
+            }
+        } else {
+            Write-Warn "Web UI dependency install returned exit $npmExit (${npmTime}s) - skipping the build; the UI may rebuild on first launch."
+        }
     }
 }
 
 # ============================================================================
-# 9. DOCKER SETUP (Memory System) – Smart Update
+# 9. DOCKER SETUP (Memory System) - Smart Update
 # ============================================================================
 $composeFile = Join-Path $PROJECT_ROOT "docker-compose.memory.yml"
 $composeChanged = $false
@@ -556,7 +775,7 @@ try {
     $changedFiles = & git diff --name-only HEAD~1 HEAD 2>$null
     if ($changedFiles -match "docker-compose\.memory\.yml") {
         $composeChanged = $true
-        Write-Info "docker-compose.memory.yml changed – will update Docker stack"
+        Write-Info "docker-compose.memory.yml changed - will update Docker stack"
     }
 } catch { }
 
@@ -568,88 +787,185 @@ if (-not $composeChanged) {
     } catch { $composeChanged = $true }
 }
 
-if ($dockerInfo.Installed) {
-    Write-Step "Setting up Memory System Docker Stack..."
+if (-not $SkipDocker) {
+    Write-Step "Bringing up the container stack (database + services)..."
 
-    # Auto-start Docker Desktop if compose changed but daemon is not running
-    if (-not $dockerInfo.Running -and $composeChanged) {
-        Write-Warn "Docker not running – attempting to start Docker Desktop..."
-        $dockerExe = "${env:ProgramFiles}\Docker\Docker\Docker Desktop.exe"
-        if (Test-Path $dockerExe) {
-            Start-Process $dockerExe
-        } else {
-            # Try alternate location
-            $dockerExeAlt = "${env:LocalAppData}\Docker\Docker Desktop.exe"
-            if (Test-Path $dockerExeAlt) { Start-Process $dockerExeAlt }
-        }
+    # Run this whole section with EAP=Continue: docker/rdctl write harmless warnings to stderr
+    # (e.g. "daemon is not using the default seccomp profile") which would otherwise raise a
+    # terminating NativeCommandError under the script's EAP=Stop and abort the installer.
+    $eapDocker = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
 
-        # Wait up to 60 seconds for Docker daemon to become ready
-        $spinChars = @('|', '/', '-', '\')
-        $spinIndex = 0
-        Write-Host -NoNewline "  [" -ForegroundColor Gray
-        for ($i = 1; $i -le 12; $i++) {
-            Start-Sleep -Seconds 5
-            try {
-                $null = & docker info 2>$null
-                $dockerInfo.Running = $true
-                $dockerInfo.ComposeAvailable = $true
-                Write-Host "`b] Docker daemon is now running!" -ForegroundColor Green
-                break
-            } catch { }
-            Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
-            $spinIndex = ($spinIndex + 1) % 4
-            Write-Info "Waiting for Docker... $($i*5)s/60s"
-        }
+    # Refresh PATH from the registry so a freshly-installed Rancher/Docker CLI (rdctl/docker)
+    # is found even though THIS installer process started before that CLI existed on PATH.
+    try {
+        # Re-prepend the venv Scripts dir: the registry refresh below otherwise REPLACES the
+        # in-process PATH, dropping the venv we activated, so later `& python` calls (shortcut,
+        # verification) would miss the venv interpreter.
+        $env:Path = "$venvPath\Scripts;" + [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    } catch { }
 
-        if (-not $dockerInfo.Running) {
-            Write-Host "`b] Docker did not start in time." -ForegroundColor Yellow
-            Write-Warn "Please start Docker Desktop manually, then run:"
-            Write-Info "docker compose -f docker-compose.memory.yml up -d"
-        }
-    }
-
-    if ($dockerInfo.Running -and $dockerInfo.ComposeAvailable -and (Test-Path $composeFile)) {
-        Write-Info "Running: docker compose up -d (adds new services, updates existing ones)..."
-        Write-Host -NoNewline "  [" -ForegroundColor Gray
-        $dockerStart = Get-Date
-
+    # Resolve docker.exe ROBUSTLY each call: Rancher creates ~/.rd/bin/docker.exe and adds it to
+    # PATH only during first-run, AFTER this installer started - so a one-time PATH refresh is not
+    # enough. Re-read the registry PATH every call, then fall back to Rancher's known locations.
+    # (This is why a fully-started Rancher used to keep printing "...still waiting" forever.)
+    function Resolve-DockerExe {
         try {
-            $job = Start-Job -ScriptBlock {
-                param($cf)
-                & docker compose -f $cf up -d 2>&1
-            } -ArgumentList $composeFile
-
-            $spinChars = @('|', '/', '-', '\')
-            $spinIndex = 0
-            while ($job.State -eq 'Running') {
-                Write-Host -NoNewline "`b$($spinChars[$spinIndex])" -ForegroundColor Yellow
-                $spinIndex = ($spinIndex + 1) % 4
-                Start-Sleep -Milliseconds 200
-            }
-            $null = Receive-Job -Job $job
-            Remove-Job -Job $job -Force
-            $dockerTime = [math]::Round(((Get-Date) - $dockerStart).TotalSeconds, 1)
-
-            Start-Sleep -Seconds 2
-            $containerStatus = & docker ps --filter "name=vaf-memory-db" --format "{{.Status}}" 2>$null
-            if ($containerStatus -match "Up") {
-                Write-Host "`b] Docker stack updated (${dockerTime}s)" -ForegroundColor Green
-                Write-Success "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
-            } else {
-                Write-Host "`b] Stack starting... (${dockerTime}s)" -ForegroundColor Yellow
-                Write-Info "Check status with: docker ps"
-            }
-        } catch {
-            Write-Host "`b] Failed" -ForegroundColor Red
-            Write-Warn "Could not update Docker stack: $_"
-            Write-Info "Run manually: docker compose -f docker-compose.memory.yml up -d"
+            $env:Path = "$venvPath\Scripts;" + [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        } catch { }
+        $cmd = Get-Command docker -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+        # docker.exe sits in the SAME dir as rdctl (Rancher bundles its CLIs together); rdctl is
+        # reliably present, so derive docker.exe from it before trying the hard-coded paths.
+        $rd = Get-Command rdctl -ErrorAction SilentlyContinue
+        if ($rd) {
+            $cand = Join-Path (Split-Path $rd.Source) "docker.exe"
+            if (Test-Path $cand) { return $cand }
         }
-    } elseif ($composeChanged -and -not $dockerInfo.Running) {
-        Write-Warn "Docker stack has changes but Docker is offline."
-        Write-Info "Start Docker Desktop, then run: docker compose -f docker-compose.memory.yml up -d"
+        $known = @(
+            (Join-Path ${env:USERPROFILE} ".rd\bin\docker.exe"),
+            (Join-Path ${env:LOCALAPPDATA} "Programs\Rancher Desktop\resources\resources\win32\bin\docker.exe"),
+            (Join-Path ${env:ProgramFiles} "Rancher Desktop\resources\resources\win32\bin\docker.exe")
+        )
+        foreach ($d in $known) { if ($d -and (Test-Path $d)) { return $d } }
+        return $null
     }
-} else {
-    Write-Info "Docker not installed – skipping stack setup"
+
+    function Test-DockerUp {
+        $dk = Resolve-DockerExe
+        if (-not $dk) { return $false }
+        # EAP=Continue locally: docker emits a harmless stderr WARNING ("daemon is not using the
+        # default seccomp profile") which, under the script's EAP=Stop + 2>&1, would raise a
+        # terminating NativeCommandError and make this ALWAYS return false (engine never detected).
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try { & $dk info 2>&1 | Out-Null; $ok = ($LASTEXITCODE -eq 0) }
+        catch { $ok = $false }
+        finally { $ErrorActionPreference = $prev }
+        return $ok
+    }
+
+    $haveDocker = $null -ne (Resolve-DockerExe)
+    $haveRdctl  = $null -ne (Get-Command rdctl -ErrorAction SilentlyContinue)
+
+    if (-not $haveDocker -and -not $haveRdctl) {
+        Write-Warn "No container CLI found yet - VAF will bring the containers up on first launch"
+        Write-Info "(it auto-starts the runtime and downloads the images then; one-time, a few minutes)."
+    } else {
+        # Bring the engine up WITHOUT restarting an already-running Rancher. Three cases:
+        #   (a) docker already reachable -> build now (no start, no wait)
+        #   (b) Rancher process running  -> engine still spinning up; ONLY wait (no reconfigure!)
+        #   (c) Rancher not running      -> start it once (rdctl headless, or the GUI)
+        # Case (c)'s rdctl start triggers a Rancher RECONFIGURE+RESTART; doing that on a running
+        # engine (the old bug) knocked it offline and caused an endless "...still waiting".
+        if (Test-DockerUp) {
+            Write-Success "Container engine already running - building containers now."
+        } else {
+            $rancherRunning = $null -ne (Get-Process "Rancher Desktop" -ErrorAction SilentlyContinue)
+            if ($rancherRunning) {
+                Write-Info "Rancher Desktop is already running - waiting for its engine to finish (no restart)..."
+            } else {
+                # Rancher is NOT running -> start it once. (Normally it was already launched early in
+                # step 3; this path only hits if it was closed or a pre-existing runtime is down.)
+                if ($haveRdctl) {
+                    Write-Info "Starting the container engine via rdctl (dockerd/moby, Kubernetes off)..."
+                    try { & rdctl start --container-engine.name moby --kubernetes.enabled=false 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } } catch { Write-Warn "rdctl start: $_" }
+                } else {
+                    $rdExe = @(
+                        (Join-Path ${env:ProgramFiles} "Rancher Desktop\Rancher Desktop.exe"),
+                        (Join-Path ${env:LOCALAPPDATA} "Programs\Rancher Desktop\Rancher Desktop.exe")
+                    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+                    if ($rdExe) {
+                        Write-Info "Launching Rancher Desktop ($rdExe)..."
+                        try { Start-Process $rdExe } catch { Write-Warn "Could not launch Rancher Desktop: $_" }
+                    } else {
+                        Write-Warn "Rancher Desktop executable not found to launch."
+                    }
+                }
+            }
+
+            # Without WSL2 / Virtual Machine Platform the engine can NEVER come up - detect that
+            # so we don't burn ~10 minutes silently and then mislabel it 'not ready in time'.
+            $wslOk = $true
+            try {
+                $vmp  = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop
+                $wslf = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop
+                if ($vmp.State -ne 'Enabled' -or $wslf.State -ne 'Enabled') { $wslOk = $false }
+            } catch { $wslOk = $true }  # can't query (e.g. non-admin) -> fall through to the timed wait
+            if (-not $wslOk) {
+                Write-Warn "WSL2 / Virtual Machine Platform is NOT enabled - the container engine cannot start."
+                Write-Info "Enable it (admin PowerShell), REBOOT, then re-run this installer:"
+                Write-Info "    wsl --install"
+                Write-Info "  (or: dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart"
+                Write-Info "       dism /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart, then reboot)"
+            } else {
+                Write-Info "Waiting for the container engine (first run sets up WSL2 - can take a few minutes)..."
+                for ($i = 1; $i -le 120; $i++) {
+                    if (Test-DockerUp) { break }
+                    # Diagnostic: show WHY we are still waiting (docker path + last info line),
+                    # so a real failure is visible instead of a silent mystery.
+                    if ($i % 6 -eq 0) {
+                        $dk = Resolve-DockerExe
+                        if ($dk) {
+                            $prevD = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+                            try { $infoLine = (& $dk info 2>&1 | Select-Object -Last 1) } catch { $infoLine = "$_" }
+                            $ErrorActionPreference = $prevD
+                            Write-Info "  ...still waiting ($($i * 5)s) [docker=$([System.IO.Path]::GetFileName($dk)); $infoLine]"
+                        } else {
+                            Write-Info "  ...still waiting ($($i * 5)s) [docker.exe not found yet]"
+                        }
+                    }
+                    Start-Sleep -Seconds 5
+                }
+            }
+        }
+
+        if ((Test-DockerUp) -and (Test-Path $composeFile)) {
+            $dockerExe = Resolve-DockerExe
+            Write-Step "Building + starting containers (first run sets up the database + services)..."
+            Write-Info "Bringing up the core stack first (database + services), then the optional"
+            Write-Info "build images (TTS, browser). A failed optional build will NOT block the database."
+            Write-Host ""
+            Push-Location $PROJECT_ROOT
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            # Two-phase so a failed OPTIONAL build (tts/vaf-browser - e.g. a VM clock skew breaking
+            # apt-get) can never abort the whole 'up' and leave us with ZERO containers (the old bug:
+            # 'docker compose up' builds every image first and starts nothing if one build fails).
+            # Phase 1 = registry-image services (no build); phase 2 = the build services, best-effort.
+            # --quiet-pull hides the noisy per-layer pull progress.
+            & $dockerExe compose version 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull postgres redis sandbox stt gotenberg
+                $dcExit = $LASTEXITCODE
+                Write-Info "Building optional services (TTS, browser); if this fails the core stack still runs..."
+                & $dockerExe compose -f docker-compose.memory.yml up -d --quiet-pull tts vaf-browser
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warn "Optional TTS/browser did not build - the core stack is up; VAF will retry them later."
+                    Write-Info "(Usually a VM CLOCK SKEW breaking apt in the build: fix the Windows time, then 'wsl --shutdown'.)"
+                }
+            } else {
+                Write-Info "docker compose plugin not found - using standalone docker-compose."
+                & docker-compose -f docker-compose.memory.yml up -d postgres redis sandbox stt gotenberg
+                $dcExit = $LASTEXITCODE
+                & docker-compose -f docker-compose.memory.yml up -d tts vaf-browser 2>&1 | Out-Null
+            }
+            $ErrorActionPreference = $prevEAP
+            Pop-Location
+            if ($dcExit -eq 0) {
+                Write-Success "Core container stack is up - PostgreSQL + services running."
+                Write-Info "Verify anytime with: docker ps"
+                $dockerInfo.Running = $true
+            } else {
+                Write-Warn "Core container start returned $dcExit - VAF will retry on first launch."
+            }
+        } else {
+            Write-Warn "Container engine not ready in time - VAF will bring the containers up on first launch"
+            Write-Info "(it auto-starts the runtime and downloads the images then)."
+        }
+    }
+
+    $ErrorActionPreference = $eapDocker
 }
 
 # ============================================================================
@@ -658,11 +974,12 @@ if ($dockerInfo.Installed) {
 if (-not $SkipShortcuts) {
     Write-Step "Creating Desktop Shortcuts..."
     
-    try {
-        & python scripts\create_app_shortcut.py 2>$null
+    $shortcutOutput = & python scripts\create_app_shortcut.py 2>&1
+    if ($LASTEXITCODE -eq 0) {
         Write-Success "Shortcuts created"
-    } catch {
-        Write-Warn "Could not create shortcuts"
+    } else {
+        Write-Warn "Could not create shortcuts (details below):"
+        $shortcutOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     }
 }
 
@@ -671,21 +988,36 @@ if (-not $SkipShortcuts) {
 # ============================================================================
 Write-Step "Verifying Installation..."
 
+# Merge stderr into the success stream and discard it (2>&1 | Out-Null) so a failed
+# import does NOT raise a NativeCommandError that aborts the whole installer under
+# $ErrorActionPreference = "Stop". We only care about python's exit code.
 $checks = @(
-    @{ Name = "VAF Module"; Test = { python -c "import vaf" 2>$null; $LASTEXITCODE -eq 0 } },
-    @{ Name = "FastAPI"; Test = { python -c "import fastapi" 2>$null; $LASTEXITCODE -eq 0 } },
-    # pyttsx3 removed — caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
+    @{ Name = "VAF Module"; Required = $true;  Test = { & python -c "import vaf" 2>&1 | Out-Null; $LASTEXITCODE -eq 0 } },
+    @{ Name = "FastAPI"; Required = $true;  Test = { & python -c "import fastapi" 2>&1 | Out-Null; $LASTEXITCODE -eq 0 } },
+    # pyttsx3 removed - caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
     # TTS is now handled by Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
-    # @{ Name = "TTS Engine"; Test = { python -c "import pyttsx3" 2>$null; $LASTEXITCODE -eq 0 } },
-    @{ Name = "Speech Recognition"; Test = { python -c "import speech_recognition" 2>$null; $LASTEXITCODE -eq 0 } }
+    # @{ Name = "TTS Engine"; Test = { & python -c "import pyttsx3" 2>&1 | Out-Null; $LASTEXITCODE -eq 0 } },
+    @{ Name = "Speech Recognition"; Required = $false; Test = { & python -c "import speech_recognition" 2>&1 | Out-Null; $LASTEXITCODE -eq 0 } }
 )
 
+$requiredFailed = $false
 foreach ($check in $checks) {
     if (& $check.Test) {
         Write-Success "$($check.Name)"
+    } elseif ($check.Required) {
+        Write-Err "$($check.Name) - FAILED to import (a required dependency is missing)"
+        $requiredFailed = $true
     } else {
         Write-Warn "$($check.Name) - not available"
     }
+}
+
+if ($requiredFailed) {
+    Write-Host ""
+    Write-Err "Core imports failed - the install is INCOMPLETE. Fix the dependency errors above and re-run install.ps1:"
+    Write-Info "  cd `"$PROJECT_ROOT`""
+    Write-Info "  .\venv\Scripts\python.exe -m pip install -e . -r requirements.txt"
+    exit 1
 }
 
 # ============================================================================
@@ -707,9 +1039,27 @@ if ($dockerInfo.Running) {
     Write-Host "    - Database: postgresql://localhost:5432/vaf_memory" -ForegroundColor White
     Write-Host "    - Stop: docker compose -f docker-compose.memory.yml down" -ForegroundColor White
     Write-Host ""
+} elseif (-not $SkipDocker) {
+    Write-Host "  Memory system pending:" -ForegroundColor Yellow
+    Write-Host "    - The container engine was not ready yet; VAF will finish bringing up PostgreSQL/pgvector on first launch." -ForegroundColor Yellow
+    Write-Host "    - If WSL2 / Virtual Machine Platform was just enabled, REBOOT before the engine can start." -ForegroundColor Yellow
+    Write-Host ""
+}
+
+if (-not $nodeInstalled) {
+    Write-Host "  Web UI: NOT installed - Node.js could not be set up." -ForegroundColor Yellow
+    Write-Host "    Install Node.js 18+ (winget install OpenJS.NodeJS.LTS), then re-run install.ps1." -ForegroundColor White
+    Write-Host ""
 }
 
 Write-Host "  GPU Acceleration: $($gpuInfo.Recommendation)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Documentation: https://github.com/Veyllo-Labs/VAF" -ForegroundColor Gray
 Write-Host ""
+
+if ($VAF_INSTALL_LOG) {
+    Write-Host "  Full install log saved to (share this if something went wrong):" -ForegroundColor Cyan
+    Write-Host "    $VAF_INSTALL_LOG" -ForegroundColor White
+    Write-Host ""
+}
+try { Stop-Transcript | Out-Null } catch { }

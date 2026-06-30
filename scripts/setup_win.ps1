@@ -26,7 +26,7 @@ if ($env:VAF_SKIP_PIP_INSTALL -eq "1") {
     $env:Path = "$ProjectRoot\venv\Scripts;$env:Path"
 
     python -m pip install --upgrade pip
-    # pyttsx3 removed — caused 1-4GB RAM explosion via Windows SAPI/comtypes. TTS is via Docker (Piper).
+    # pyttsx3 removed - caused 1-4GB RAM explosion via Windows SAPI/comtypes. TTS is via Docker (Piper).
     python -m pip install pywin32 requests beautifulsoup4 rich typer prompt_toolkit SpeechRecognition pyaudio
     python -m pip install -e .
 

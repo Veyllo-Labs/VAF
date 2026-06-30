@@ -8,8 +8,10 @@
 
 FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies.
+# Acquire::Check-Date=false: tolerate a skewed build-host clock (common in VMs/WSL2/CI),
+# otherwise apt rejects freshly-signed repo metadata as "not valid yet". GPG sig still verified.
+RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     ffmpeg \

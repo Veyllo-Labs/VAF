@@ -266,7 +266,7 @@ def run_format(
     language = config.get("language", "unknown")
     
     format_commands = {
-        "python": "black . --check" if check else "black .",
+        "python": "ruff format . --check" if check else "ruff format .",
         "javascript": "prettier --check ." if check else "prettier --write .",
         "typescript": "prettier --check ." if check else "prettier --write .",
         "rust": "cargo fmt --check" if check else "cargo fmt",

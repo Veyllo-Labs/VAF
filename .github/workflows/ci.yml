@@ -15,10 +15,10 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
@@ -82,9 +82,6 @@ jobs:
         vaf --help
 
     - name: Run Tool Logic Tests
-      # We skip full agent tests because we can't load a 4GB model in CI
-      # But we can test the tool logic, templates, and scaffolding
+      # Test the tool logic, templates, and scaffolding
       run: |
-        # Create a dummy test if none exist yet to prevent CI failure
-        # (See next step logic in agent thought process)
-        pytest tests/ --ignore=tests/test_gpu_inference.py
+        pytest tests/

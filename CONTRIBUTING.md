@@ -10,6 +10,8 @@ We love your input! We want to make contributing to VAF as easy and transparent 
 
 ## How to Contribute
 
+For anything beyond a small fix, please open an issue first to discuss the change.
+
 1.  **Fork and Clone**
     Fork the repo and clone it to your local machine:
     ```bash

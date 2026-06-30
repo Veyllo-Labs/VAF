@@ -230,6 +230,12 @@ def test_final_commit_identity_fallback(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     _git("init", cwd=project)
+    # Force git to use ONLY a configured identity: some runners (e.g. macOS) auto-
+    # synthesise "User <user@host>" from the OS account when none is configured,
+    # which would mask VAF's own fallback. With useConfigOnly, a commit without a
+    # configured identity fails -> VAF retries with its one-off "VAF Coder"
+    # identity, which is exactly what this test verifies.
+    _git("config", "user.useConfigOnly", "true", cwd=project)
     # No identity anywhere: helper must fall back to the one-off VAF identity
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)

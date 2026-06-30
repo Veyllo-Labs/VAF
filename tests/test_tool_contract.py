@@ -79,20 +79,35 @@ def test_resolve_tool_contract_reads_metadata_from_workflow_and_mcp_tools():
     assert thinking_contract.side_effect_class == "reversible"
 
 
+def _restrict_channels():
+    """Force `channel_tools_unrestricted` to False so the channel-restriction block
+    path is exercised. Its default is True (channel sessions get full tool access),
+    and CI runs with no config.json, so without this the block never triggers."""
+    real_get = Config.get
+
+    def fake_get(key, default=None):
+        if key == "channel_tools_unrestricted":
+            return False
+        return real_get(key, default)
+
+    return patch.object(Config, "get", side_effect=fake_get)
+
+
 def test_evaluate_tool_policy_blocks_channel_restricted_tools():
-    decision = evaluate_tool_policy(
-        tool_name="channel_blocked_dummy",
-        tool=ChannelBlockedDummyTool(),
-        current_source="telegram",
-        is_channel_session=True,
-    )
+    with _restrict_channels():
+        decision = evaluate_tool_policy(
+            tool_name="channel_blocked_dummy",
+            tool=ChannelBlockedDummyTool(),
+            current_source="telegram",
+            is_channel_session=True,
+        )
 
     assert decision.blocked is True
     assert "blocked for telegram sessions" in decision.reason
 
 
 def test_evaluate_tool_policy_logs_divergence_when_contract_changes_decision(caplog):
-    with caplog.at_level("INFO", logger="vaf.policy"):
+    with caplog.at_level("INFO", logger="vaf.policy"), _restrict_channels():
         decision = evaluate_tool_policy(
             tool_name="channel_blocked_dummy",
             tool=ChannelBlockedDummyTool(),

@@ -260,7 +260,7 @@ sets up a free one for you — no Docker Desktop licence needed:
 
 - **Windows**: auto-installs **Rancher Desktop** (engine `moby`).
 - **macOS**: uses **Docker Desktop** if installed, otherwise **auto-installs and starts Colima** via Homebrew.
-- **Linux**: uses an existing Docker Engine; if none is present it points you at your distro's `docker` package.
+- **Linux**: auto-installs the distro Docker package, enables it via systemd, and adds you to the `docker` group (uses an existing Docker if already present).
 
 When a runtime is present (or has just been set up), the installer manages the stack:
 

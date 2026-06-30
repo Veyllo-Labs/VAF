@@ -39,9 +39,24 @@ This file is intentionally brief. The specific risks, mitigations, and isolation
 - **Connected accounts & credentials** — OS keyring / encrypted fallback, OAuth, and the email IMAP/SMTP SSRF / private-host guard: [docs/integrations/CONNECTIONS.md](docs/integrations/CONNECTIONS.md), [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md)
 
 
+## Supported Versions
+
+VAF is in **early alpha**. Security fixes are applied only to the **latest release** and the **`main` branch** — older alpha builds are not patched. Always update to the most recent version before reporting a vulnerability.
+
+| Version | Supported |
+| --- | --- |
+| Latest release / `main` | Yes |
+| Older alpha builds | No |
+
+
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please **do not** open a public issue. Instead, report it privately via the contact methods specified in the repository owner's profile or via a private security advisory on GitHub.
+If you discover a security vulnerability, please **do not** open a public issue. Report it privately through either channel:
+
+- **Email:** **legal@veyllo.io**
+- **GitHub:** use the **"Report a vulnerability"** button (Security tab) to open a private security advisory.
+
+Please include enough detail to reproduce the issue (affected version, steps, and impact). We aim to acknowledge reports within **48-72 hours** and will keep you informed as we work on a fix.
 
 
 

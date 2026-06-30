@@ -81,10 +81,21 @@ build/
 node_modules/
 .npm
 
+# Certificates / keys (SECURITY: Never commit!)
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+web/certificates/
+
+# Editor scratch files
+*.tmp
+
 # Next.js
 .next/
 out/
 *.tsbuildinfo
 
 memory_report_20231015.txt
-.gitignore

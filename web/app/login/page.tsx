@@ -603,7 +603,17 @@ export default function LoginPage() {
                                         <button
                                             key={lang.code}
                                             type="button"
-                                            onClick={() => { setLocale(lang.code); setStep('phone_notice'); }}
+                                            onClick={() => {
+                                                // Apply the locale first, then advance on the next frame so the
+                                                // locale re-render + <html lang> change finish BEFORE the screen
+                                                // transition starts instead of mid-flight. On WebKit/WKWebView
+                                                // (macOS desktop window) a re-render/reflow during the in-flight
+                                                // AnimatePresence transition restarted it, double-playing the
+                                                // animation. Chromium (Windows/Linux) is unaffected by the 1-frame
+                                                // difference.
+                                                setLocale(lang.code);
+                                                requestAnimationFrame(() => setStep('phone_notice'));
+                                            }}
                                             className={cn(
                                                 'w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all',
                                                 currentLocale === lang.code ? 'border-gray-900 bg-gray-50' : 'border-gray-200 hover:bg-gray-50'

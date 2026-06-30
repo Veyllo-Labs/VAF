@@ -15,10 +15,10 @@ The installer provisions what it can, so a bare machine works:
   [uv](https://docs.astral.sh/uv/) and provisions Python itself. A system `python@3.12` is used if present.
 - **Node.js** — not required up front: if missing, the installer downloads a portable Node into
   `~/.vaf/node` for the web UI. A system `brew install node` is used if present.
-- **Docker** *(optional)* — only for the memory/RAG system and the code sandbox. The installer
-  **detects** an existing runtime (Docker Desktop, Engine, Colima, Podman) and uses it; it does not
-  install one. To add it without Docker Desktop: `brew install colima docker && colima start`.
-  See [DOCKER_SERVICES.md](DOCKER_SERVICES.md).
+- **Container runtime** *(required)* — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector
+  container, so one is needed to finish setup and sign in. The installer uses **Docker Desktop** if it is
+  already installed; otherwise it **auto-installs and starts Colima** (a free engine, no Docker Desktop
+  licence) via Homebrew — no manual step required. See [DOCKER_SERVICES.md](DOCKER_SERVICES.md).
 
 ## Install
 
@@ -33,7 +33,7 @@ The installer asks once whether to set up **Desktop** (personal, local, system t
 - installs the system dependencies via Homebrew: `portaudio`, `git`, `ffmpeg`;
 - creates a Python virtual environment (via uv when used) and installs the Python dependencies;
 - installs the web UI dependencies (the production build runs on first launch);
-- detects an existing Docker runtime and, if present, starts the memory stack;
+- uses Docker Desktop if present, otherwise auto-installs and starts Colima, then brings up the memory stack;
 - adds the `vaf` command to your shell.
 
 ## GPU acceleration (Metal)
@@ -66,9 +66,9 @@ First launch opens the setup wizard in your browser — see [FIRST_RUN.md](FIRST
   manually from <https://brew.sh> and re-run `./install.sh`.
 - **Python too old / missing** — the installer provisions Python via uv automatically; or run
   `brew install python@3.12` and re-run.
-- **Docker features unavailable** — start your Docker runtime so the daemon is reachable
-  (Docker Desktop, or `colima start`); the installer and `vaf` print a reminder when Docker is
-  installed but not running.
+- **Docker features unavailable** — the installer auto-installs and starts Colima (or uses Docker
+  Desktop if it is installed). If the engine is still down, start it with `colima start` (or open
+  Docker Desktop); `vaf` brings the memory stack up automatically once the daemon is reachable.
 - **Desktop window doesn't open** — make sure you ran the installer in Desktop mode; the
   tray/window uses native macOS APIs (no extra GTK packages are needed as on Linux).
 

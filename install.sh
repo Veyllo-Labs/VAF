@@ -11,7 +11,7 @@
 # Requirements:
 #   - Python 3.10+
 #   - Internet connection
-#   - Docker (optional, for Memory System)
+#   - A container runtime (REQUIRED: database for users/auth/setup + memory)
 #
 
 set -e
@@ -37,11 +37,11 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Functions
-print_step() { echo -e "\n${CYAN}ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â¶ $1${NC}"; }
-print_success() { echo -e "  ${GREEN}ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ $1${NC}"; }
-print_warning() { echo -e "  ${YELLOW}ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â  $1${NC}"; }
-print_error() { echo -e "  ${RED}ÃƒÂ¢Ã‚ÂÃ…â€™ $1${NC}"; }
-print_info() { echo -e "  ${NC}ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¹ÃƒÂ¯Ã‚Â¸Ã‚Â  $1${NC}"; }
+print_step()    { echo -e "\n${CYAN}>> $1${NC}"; }
+print_success() { echo -e "  ${GREEN}[OK] $1${NC}"; }
+print_warning() { echo -e "  ${YELLOW}[!] $1${NC}"; }
+print_error()   { echo -e "  ${RED}[X] $1${NC}"; }
+print_info()    { echo -e "  ${NC}[i] $1${NC}"; }
 
 # ============================================================================
 # ARGUMENT PARSING
@@ -81,18 +81,10 @@ done
 echo -e "${MAGENTA}"
 cat << 'EOF'
 
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ                                                                   ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€    ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€    ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â    ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€  ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â    ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€      ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ       ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â      ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬â€ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ       ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ    ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ  ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ         ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬â€œÃ‹â€ ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ       ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ     ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â  ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â  ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â         ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â  ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â   ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â       ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ                                                                   ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   Veyllo Agentic Framework - Cross-Platform Installer             ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ   Python + FastAPI + Next.js + pgvector + Local LLM              ÃƒÂ¢Ã¢â‚¬Â¢Ã¢â‚¬Ëœ
-ÃƒÂ¢Ã¢â‚¬Â¢Ã…Â¡ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
+   ===============================================================
+      VAF - Veyllo Agentic Framework  (Cross-Platform Installer)
+      Python + FastAPI + Next.js + pgvector + Local LLM
+   ===============================================================
 
 EOF
 echo -e "${NC}"
@@ -130,9 +122,23 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         echo ""
         echo -e "  Run: ${CYAN}/bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"${NC}"
         echo ""
-        read -p "  Install Homebrew now? (Y/n) " response
+        if [[ -t 0 ]]; then
+            read -p "  Install Homebrew now? (Y/n) " response
+        else
+            response="Y"  # non-interactive (piped/CI): auto-install so the installer just runs through
+        fi
         if [[ "$response" != "n" && "$response" != "N" ]]; then
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            # The Homebrew installer only writes a shellenv line to ~/.zprofile; it does NOT touch
+            # the CURRENT process PATH. Source it now so brew/colima/docker resolve in this same run
+            # (otherwise every later `brew install` here is command-not-found and silently no-ops).
+            for _bp in /opt/homebrew/bin /usr/local/bin; do
+                if [ -x "$_bp/brew" ]; then eval "$("$_bp/brew" shellenv)"; break; fi
+            done
+            if ! command -v brew &> /dev/null; then
+                print_error "Homebrew installed but not on PATH - open a new terminal and re-run ./install.sh"
+                exit 1
+            fi
             PKG_MANAGER="brew"
             INSTALL_CMD="brew install"
         else
@@ -202,7 +208,11 @@ USE_UV=false
 for cmd in python3 python; do
     if command -v $cmd &> /dev/null; then
         version=$($cmd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        if [[ $(echo "$version >= $MIN_PYTHON_VERSION" | bc -l 2>/dev/null || python3 -c "print(1 if $version >= $MIN_PYTHON_VERSION else 0)") == 1 ]]; then
+        # Compare as VERSION numbers, not floats: bc/float treats "3.10" as 3.1, so "3.9 >= 3.10"
+        # is wrongly true and would accept the old macOS system Python 3.9. Compare major.minor ints.
+        v_maj=${version%%.*}; v_min=${version#*.}; v_min=${v_min%%.*}
+        r_maj=${MIN_PYTHON_VERSION%%.*}; r_min=${MIN_PYTHON_VERSION#*.}; r_min=${r_min%%.*}
+        if [ -n "$v_maj" ] && [ -n "$v_min" ] && { [ "$v_maj" -gt "$r_maj" ] || { [ "$v_maj" -eq "$r_maj" ] && [ "$v_min" -ge "$r_min" ]; }; }; then
             PYTHON_CMD=$cmd
             PYTHON_VERSION=$version
             break
@@ -274,7 +284,7 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
             ;;
     esac
 
-    # (PyGObject is installed into the venv AFTER it is created — see the venv step.
+    # (PyGObject is installed into the venv AFTER it is created  see the venv step.
     #  It used to run here, but the venv does not exist yet on a first install, so the
     #  guard silently skipped it and the GTK desktop window never worked.)
 fi
@@ -327,44 +337,88 @@ print_step "Checking Docker Installation (for Memory System)..."
 DOCKER_INSTALLED=false
 DOCKER_RUNNING=false
 DOCKER_COMPOSE=false
+DOCKER_BIN=""
+
+# Resolve the real docker binary via PATH. NEVER hardcode /usr/bin/docker: on macOS
+# (Homebrew/Colima) docker lives in /opt/homebrew/bin or /usr/local/bin, so a hardcoded
+# /usr/bin/docker check fails even when the engine is perfectly fine.
+resolve_docker_bin() {
+    DOCKER_BIN="$(command -v docker 2>/dev/null || true)"
+}
+
+# Poll until the daemon answers (or give up). Used after starting an engine that boots a VM.
+wait_for_docker() {
+    local tries=${1:-60} i=0
+    resolve_docker_bin
+    while [ "$i" -lt "$tries" ]; do
+        if [ -n "$DOCKER_BIN" ] && "$DOCKER_BIN" info &>/dev/null; then return 0; fi
+        sleep 2; i=$((i+1))
+        resolve_docker_bin
+    done
+    return 1
+}
+
+# macOS: bring a container engine up. Use whatever the user actually has - Docker Desktop
+# if its app is installed; otherwise Colima (the free engine, auto-installed via Homebrew).
+# Mirrors the Windows installer auto-installing Rancher: the installer must "just run through".
+start_macos_engine() {
+    if [ -d "/Applications/Docker.app" ] || [ -d "$HOME/Applications/Docker.app" ]; then
+        print_info "Docker Desktop detected - starting it..."
+        open -a Docker 2>/dev/null || true
+    else
+        if ! command -v colima &>/dev/null; then
+            print_info "Installing Colima - free container engine, no Docker Desktop license needed..."
+            brew install colima docker docker-compose 2>/dev/null \
+                || brew install colima docker docker-compose \
+                || print_warning "Colima install hit an issue - try: brew install colima docker docker-compose"
+        fi
+        # Size the VM to the machine: >=16GB RAM -> 8GB guest, else 4GB (DB + core are light).
+        local mem=4
+        local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 8589934592) / 1073741824 ))
+        [ "$ram_gb" -ge 16 ] && mem=8
+        print_info "Starting Colima (provisions a small Linux VM; first start ~30-60s, ${mem}GB RAM)..."
+        colima start --cpu 4 --memory "$mem" 2>/dev/null \
+            || colima start 2>/dev/null \
+            || print_warning "colima start failed - run it manually: colima start"
+    fi
+    resolve_docker_bin
+}
 
 if [[ "$SKIP_DOCKER" == "false" ]]; then
-    if command -v docker &> /dev/null; then
+    resolve_docker_bin
+    if [ -n "$DOCKER_BIN" ] && "$DOCKER_BIN" info &>/dev/null; then
         DOCKER_INSTALLED=true
-        DOCKER_VERSION=$(docker --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        print_success "Docker $DOCKER_VERSION installed"
-        
-        # Check if Docker daemon is running
-        if /usr/bin/docker info &> /dev/null; then
+        DOCKER_RUNNING=true
+        DOCKER_VERSION=$("$DOCKER_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        print_success "Container engine running (docker ${DOCKER_VERSION:-?})"
+    elif [[ "$OS_TYPE" == "macos" ]]; then
+        print_warning "No running container engine - VAF requires one (users, auth, setup and memory live in a PostgreSQL/pgvector container)."
+        start_macos_engine
+        if wait_for_docker 60; then
+            DOCKER_INSTALLED=true
             DOCKER_RUNNING=true
-            print_success "Docker daemon is running"
+            print_success "Container engine is up"
         else
-            print_warning "Docker is installed but not running"
-            if [[ "$OS_TYPE" == "macos" ]]; then
-                print_info "Please start Docker Desktop"
-            else
-                print_info "Start with: sudo systemctl start docker"
-            fi
+            # Binaries are installed even if the VM is still booting; section 9 / the tray will retry.
+            [ -n "$DOCKER_BIN" ] && DOCKER_INSTALLED=true
+            print_warning "Container engine not ready yet - VAF will retry on launch (or run: colima start)."
         fi
-        
-        # Check Docker Compose
-        if /usr/bin/docker compose version &> /dev/null || docker-compose --version &> /dev/null; then
+    elif [ -n "$DOCKER_BIN" ]; then
+        # Linux: docker present but the daemon is down (engine install needs sudo/distro-specific).
+        DOCKER_INSTALLED=true
+        print_warning "Docker is installed but not running. Start it: ${CYAN}sudo systemctl enable --now docker${NC}"
+    else
+        # Linux: no runtime at all.
+        print_warning "No container runtime found - VAF REQUIRES one (users, auth, setup and memory live in a PostgreSQL/pgvector container)."
+        print_info "Install Docker Engine (free), e.g. your distro's ${CYAN}docker${NC} package, then ${CYAN}sudo systemctl enable --now docker${NC}"
+        print_info "Then run: ${CYAN}docker compose -f docker-compose.memory.yml up -d${NC} and re-launch VAF."
+    fi
+
+    if [[ "$DOCKER_RUNNING" == "true" ]]; then
+        if "$DOCKER_BIN" compose version &>/dev/null || command -v docker-compose &>/dev/null; then
             DOCKER_COMPOSE=true
             print_success "Docker Compose available"
         fi
-    else
-        print_warning "Docker not found - the Memory System (pgvector) needs a container runtime."
-        print_info "VAF runs fine without Docker; long-term memory just stays off (enable it later)."
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            print_info "To enable memory WITHOUT Docker Desktop (no license): ${CYAN}brew install colima docker && colima start${NC}"
-        else
-            print_info "To enable memory: install Docker Engine (free), e.g. your distro's ${CYAN}docker${NC} package, then ${CYAN}sudo systemctl enable --now docker${NC}"
-        fi
-        print_info "Then run: ${CYAN}docker compose -f docker-compose.memory.yml up -d${NC}"
-        echo ""
-        # No automatic Docker install on purpose: Docker Desktop is licensed for larger orgs
-        # and heavy; Engine/Colima are the free path and a deliberate opt-in. If the user
-        # already has ANY Docker the detection above uses it. Default install works without it.
     fi
 else
     print_info "Docker check skipped (--skip-docker flag)"
@@ -414,7 +468,7 @@ if [[ "$NODE_INSTALLED" == "false" ]]; then
         fi
     fi
     if [[ "$NODE_INSTALLED" == "false" ]]; then
-        print_warning "Portable Node download failed — the Web UI needs Node $MIN_NODE_VERSION+."
+        print_warning "Portable Node download failed  the Web UI needs Node $MIN_NODE_VERSION+."
         if [[ "$OS_TYPE" == "macos" ]]; then
             echo -e "  Install with: ${CYAN}brew install node${NC}"
         else
@@ -432,7 +486,7 @@ cd "$PROJECT_ROOT"
 
 # Drop a Windows-style venv (Scripts/ instead of bin/) so it gets recreated for this OS.
 if [[ -d "venv" && ! -f "venv/bin/activate" && -f "venv/Scripts/activate" ]]; then
-    print_warning "Windows virtual environment detected – recreating for this OS..."
+    print_warning "Windows virtual environment detected  recreating for this OS..."
     rm -rf venv
 fi
 
@@ -454,10 +508,10 @@ print_info "Python: $(python3 --version)"
 
 # PyGObject into the venv (Linux desktop window / pywebview GTK backend). Needs the
 # gobject-introspection + cairo dev headers from the system-deps step. Done AFTER the venv
-# exists — fixes the old ordering bug where it ran before venv creation and was silently skipped.
+# exists  fixes the old ordering bug where it ran before venv creation and was silently skipped.
 if [[ "$OS_TYPE" == "linux" ]]; then
     print_info "Installing PyGObject into venv (desktop window)..."
-    pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed — desktop window may not work"
+    pip install PyGObject 2>/dev/null || print_warning "PyGObject install failed  desktop window may not work"
 fi
 
 # ============================================================================
@@ -507,7 +561,7 @@ if [[ "$NODE_INSTALLED" == "true" ]]; then
 fi
 
 # ============================================================================
-# 9. DOCKER SETUP (Memory System) – Smart Update
+# 9. DOCKER SETUP (Memory System)  Smart Update
 # ============================================================================
 COMPOSE_FILE="docker-compose.memory.yml"
 COMPOSE_CHANGED=false
@@ -515,9 +569,9 @@ COMPOSE_CHANGED=false
 # Check if docker-compose.memory.yml changed in the latest commit
 if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -q "$COMPOSE_FILE"; then
     COMPOSE_CHANGED=true
-    print_info "docker-compose.memory.yml changed – will update Docker stack"
-elif ! docker ps 2>/dev/null | grep -q "vaf-memory-db"; then
-    # Stack not running at all – treat as needing startup
+    print_info "docker-compose.memory.yml changed  will update Docker stack"
+elif ! "${DOCKER_BIN:-docker}" ps 2>/dev/null | grep -q "vaf-memory-db"; then
+    # Stack not running at all  treat as needing startup
     COMPOSE_CHANGED=true
 fi
 
@@ -526,42 +580,54 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
 
     # Auto-start Docker if compose changed but daemon is not running
     if [[ "$DOCKER_RUNNING" != "true" && "$COMPOSE_CHANGED" == "true" ]]; then
-        print_warning "Docker not running – attempting to start automatically..."
+        print_warning "Container engine not running - attempting to start it automatically..."
         if [[ "$OS_TYPE" == "macos" ]]; then
-            open -a Docker 2>/dev/null || true
+            start_macos_engine
         elif [[ "$OS_TYPE" == "linux" ]]; then
             sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || true
         fi
 
-        # Wait up to 60 seconds for Docker daemon to become ready
-        for i in $(seq 1 12); do
-            sleep 5
-            if /usr/bin/docker info &>/dev/null; then
-                DOCKER_RUNNING=true
-                DOCKER_COMPOSE=true
-                print_success "Docker daemon is now running"
-                break
-            fi
-            printf "  ⏳ Waiting for Docker daemon... %ds/60s\n" $((i*5))
-        done
-
-        if [[ "$DOCKER_RUNNING" != "true" ]]; then
-            print_warning "Docker did not start in time. Please start Docker manually."
-            print_info "Then run: docker compose -f docker-compose.memory.yml up -d"
+        if wait_for_docker 30; then
+            DOCKER_RUNNING=true
+            DOCKER_COMPOSE=true
+            print_success "Container engine is now running"
+        else
+            print_warning "Container engine did not start in time. Please start it manually."
+            print_info "Then run: ${DOCKER_BIN:-docker} compose -f docker-compose.memory.yml up -d"
         fi
     fi
 
-    if [[ "$DOCKER_RUNNING" == "true" && "$DOCKER_COMPOSE" == "true" ]]; then
+    if [[ "$DOCKER_RUNNING" == "true" ]]; then
         if [[ -f "$COMPOSE_FILE" ]]; then
-            print_info "Running: docker compose up -d (adds new services, updates existing ones)..."
-            /usr/bin/docker compose -f "$COMPOSE_FILE" up -d 2>/dev/null || docker-compose -f "$COMPOSE_FILE" up -d
+            resolve_docker_bin
+            # Two-phase like the Windows installer: bring up the core (registry images) first so a
+            # slow local build of tts/vaf-browser can never block the database the app needs to boot.
+            print_info "Starting core services (database, cache, sandbox, STT, document engine)..."
+            # Retry the core pull/up a few times: the first pull of the registry images over a
+            # flaky connection often hits a transient "TLS handshake timeout" from Docker's CDN.
+            # Pulls resume from cached layers, so a retry usually completes. Never abort on this.
+            core_up=false
+            for _attempt in 1 2 3; do
+                if "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg; then
+                    core_up=true; break
+                fi
+                print_warning "Core image pull/start failed (attempt $_attempt/3) - often a transient registry/TLS timeout; retrying in 10s..."
+                sleep 10
+            done
+            if [ "$core_up" != "true" ]; then
+                docker-compose -f "$COMPOSE_FILE" up -d postgres redis sandbox stt gotenberg \
+                    || print_warning "Core stack not up yet (network/registry). VAF retries on launch; or re-run: ${DOCKER_BIN:-docker} compose -f $COMPOSE_FILE up -d"
+            fi
+            print_info "Starting optional services (TTS, browser) - these build locally and may take a while..."
+            "$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null \
+                || docker-compose -f "$COMPOSE_FILE" up -d tts vaf-browser 2>/dev/null || true
 
             sleep 2
-            if /usr/bin/docker ps | grep -q "vaf-memory-db"; then
+            if "$DOCKER_BIN" ps | grep -q "vaf-memory-db"; then
                 print_success "Docker stack is running"
                 print_info "Database: postgresql://vaf:vaf_dev_secret@localhost:5432/vaf_memory"
             else
-                print_warning "Containers may still be starting – check with: docker ps"
+                print_warning "Containers may still be starting - check with: ${DOCKER_BIN:-docker} ps"
             fi
         fi
     elif [[ "$COMPOSE_CHANGED" == "true" && "$DOCKER_RUNNING" != "true" ]]; then
@@ -569,7 +635,7 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
         print_info "Start Docker, then run: docker compose -f docker-compose.memory.yml up -d"
     fi
 elif [[ "$DOCKER_INSTALLED" != "true" ]]; then
-    print_info "Docker not installed – skipping stack setup"
+    print_info "Container engine not available - skipping stack setup (VAF will retry on launch)"
 fi
 
 # ============================================================================
@@ -607,7 +673,7 @@ if [[ "$OS_TYPE" == "macos" ]]; then
     python3 scripts/create_app_shortcut.py 2>/dev/null || print_warning "Could not create app bundle"
 fi
 
-# Create desktop entry (Linux) — works the same on Arch/Debian/Fedora (freedesktop std)
+# Create desktop entry (Linux)  works the same on Arch/Debian/Fedora (freedesktop std)
 if [[ "$OS_TYPE" == "linux" ]]; then
     DESKTOP_FILE="$HOME/.local/share/applications/vaf.desktop"
     mkdir -p "$(dirname "$DESKTOP_FILE")"
@@ -655,8 +721,8 @@ if [[ "$OS_TYPE" == "linux" ]] && [[ -t 0 ]]; then
     echo ""
     print_step "Installation Mode..."
     echo ""
-    echo -e "  ${CYAN}[1] Desktop${NC}  — personal use, local only, system tray (default)"
-    echo -e "  ${CYAN}[2] Server${NC}   — always-on service, LAN accessible via HTTPS, starts at boot"
+    echo -e "  ${CYAN}[1] Desktop${NC}   personal use, local only, system tray (default)"
+    echo -e "  ${CYAN}[2] Server${NC}    always-on service, LAN accessible via HTTPS, starts at boot"
     echo ""
     read -p "  Choose [1/2, default 1]: " _mode_response
     if [[ "$_mode_response" == "2" ]]; then
@@ -690,7 +756,7 @@ PYEOF
     print_success "Server mode enabled in config"
     print_success "LAN access enabled (HTTPS, port 8443)"
     print_info "A self-signed TLS certificate is auto-generated on first start."
-    print_warning "Browsers will show a certificate warning — expected for local networks."
+    print_warning "Browsers will show a certificate warning  expected for local networks."
 fi
 
 # --- Autostart: install systemd user service ---
@@ -756,7 +822,7 @@ EOF
         print_info "Logs:   journalctl --user -u vaf -f"
 
     else
-        print_warning "systemd user session not available — skipping autostart"
+        print_warning "systemd user session not available  skipping autostart"
         print_info "Manual start: ./vaf.sh start"
     fi
 fi
@@ -781,7 +847,7 @@ verify_module() {
 
 verify_module "vaf" "VAF Module"
 verify_module "fastapi" "FastAPI"
-# pyttsx3 removed — caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
+# pyttsx3 removed  caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
 # TTS is now handled by Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
 # verify_module "pyttsx3" "TTS Engine"
 verify_module "speech_recognition" "Speech Recognition"
@@ -790,15 +856,15 @@ verify_module "speech_recognition" "Speech Recognition"
 # SUMMARY
 # ============================================================================
 echo ""
-echo -e "${GREEN}ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â${NC}"
-echo -e "${GREEN}                    ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ INSTALLATION COMPLETE!                      ${NC}"
-echo -e "${GREEN}ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â${NC}"
+echo -e "${GREEN}=====================================================================${NC}"
+echo -e "${GREEN}                 [OK] INSTALLATION COMPLETE!${NC}"
+echo -e "${GREEN}=====================================================================${NC}"
 echo ""
 
 echo -e "  ${CYAN}Quick Start:${NC}"
-echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Restart your terminal (or run: source $SHELL_CONFIG)"
-echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Then just type: ${CYAN}vaf${NC}"
-echo -e "    ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Or run: ${CYAN}./run_vaf.sh${NC}"
+echo -e "    - Restart your terminal (or run: source $SHELL_CONFIG)"
+echo -e "    - Then just type: ${CYAN}vaf${NC}"
+echo -e "    - Or run: ${CYAN}./run_vaf.sh${NC}"
 echo ""
 
 if [[ "$SETUP_AUTOSTART" == "true" ]]; then

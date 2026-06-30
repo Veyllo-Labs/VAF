@@ -392,7 +392,7 @@
       "thinkerModelDesc": "Leave empty for the provider default.",
       "thinkerModelPlaceholder": "e.g. deepseek-chat or model ID",
       "channelTools": "Same tools on messaging channels",
-      "channelToolsDesc": "Let the Telegram, WhatsApp and Discord agent use the same tools as the main agent, without per-call confirmation. Protected by your channel whitelist and per-user admin rights. Only enable if your whitelist is tight.",
+      "channelToolsDesc": "Let the Telegram, WhatsApp and Discord agent use the same tools as the main agent, without per-call confirmation. On by default; protected by your channel whitelist and per-user admin rights. Turn it off to restrict channel agents to non-channel tools.",
       "system": "System",
       "webUiDashboard": "Web UI as dashboard",
       "webUiDashboardDesc": "Show Web UI first on startup instead of chat window.",

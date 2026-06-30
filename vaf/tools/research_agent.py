@@ -1596,21 +1596,16 @@ class ResearchAgentTool(BaseTool):
                 "Return ONLY the JSON list of strings, e.g. [\"Section 1\", \"Section 2\"]."
             )
             
-            import requests
-            from vaf.core.config import Config
-            res = requests.post(
-                "http://127.0.0.1:8080/v1/chat/completions",
-                json={
-                    "model": Config.get("model", ""),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 500,
-                    "temperature": 0.3,
-                },
-                timeout=30
+            # Provider-aware: query_llm uses the configured cloud provider (api_model_{provider}) or
+            # the local server, instead of a hardcoded 127.0.0.1:8080 that only exists in local mode
+            # (which made research planning silently fall back to the static plan on DeepSeek/cloud).
+            content = self.query_llm(
+                [{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.3,
             )
-            
-            if res.status_code == 200:
-                content = res.json()["choices"][0]["message"]["content"]
+
+            if content:
                 # Extract JSON list
                 import json
                 try:
@@ -1623,7 +1618,7 @@ class ResearchAgentTool(BaseTool):
                         if isinstance(titles, list) and all(isinstance(t, str) for t in titles):
                             # Convert to specs
                             return [SectionSpec(t, t.lower()) for t in titles]
-                except:
+                except Exception:
                     pass
         except Exception:
             pass

@@ -203,11 +203,26 @@ def check_singleton():
         return None
 
 
+def _ensure_macos_brew_path():
+    """On macOS the tray is launched from a .app/launchd (PATH=/usr/bin:/bin:/usr/sbin:/sbin) or
+    login bash (which sources ~/.bash_profile, NOT the ~/.zprofile where Homebrew writes its
+    shellenv), so Homebrew's bin - where the installer puts colima/docker - is missing from PATH
+    and the engine looks absent. Prepend the standard Homebrew bin dirs so colima/docker resolve."""
+    if platform.system() != "Darwin":
+        return
+    for d in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if os.path.isdir(d) and d not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+
+
 def _resolve_docker_exe():
     """Resolve a usable docker executable. On Windows Rancher's docker.exe lives in ~/.rd/bin
     and is added to PATH only during first-run, so a process started earlier won't see it -
-    fall back to Rancher's known locations so we don't wait forever on a daemon that IS up."""
+    fall back to Rancher's known locations so we don't wait forever on a daemon that IS up.
+    On macOS a Homebrew-installed docker/colima may be off the GUI/launchd PATH (see
+    _ensure_macos_brew_path)."""
     import shutil
+    _ensure_macos_brew_path()
     found = shutil.which("docker")
     if found:
         return found
@@ -265,11 +280,39 @@ def _attempt_docker_daemon_start():
     Returns True if a runtime was actually launched, False if none was found.
     """
     import shutil
+    _ensure_macos_brew_path()  # make a Homebrew-installed colima/docker visible before we probe
     try:
         if platform.system() == "Darwin":
-            log("Tray", "Starting Docker Desktop (macOS)...")
-            subprocess.run(["open", "-a", "Docker"], check=True)
-            return True
+            # We don't know which engine the user has, so detect instead of assuming.
+            # Prefer Docker Desktop if its app is actually installed; otherwise use Colima
+            # (the free engine VAF recommends + auto-installs). Never assume one is present.
+            docker_desktop = (
+                os.path.exists("/Applications/Docker.app")
+                or os.path.exists(os.path.expanduser("~/Applications/Docker.app"))
+            )
+            colima = shutil.which("colima")
+            if docker_desktop:
+                try:
+                    log("Tray", "Starting Docker Desktop (macOS)...")
+                    subprocess.run(["open", "-a", "Docker"], check=True)
+                    return True
+                except Exception as _e:
+                    log("Tray", f"Docker Desktop start failed: {_e}")
+                    # fall through to Colima if that is also available
+            if colima:
+                log("Tray", "Starting the container engine via Colima (macOS)...")
+                try:
+                    subprocess.run([colima, "start"], check=True, timeout=300)
+                    return True
+                except subprocess.TimeoutExpired:
+                    # A first-ever provision can exceed 5 min; the lima VM keeps booting in the
+                    # background, so report success and let the readiness poll catch the daemon.
+                    log("Tray", "Colima is still provisioning the VM (will keep polling for the daemon)...")
+                    return True
+                except Exception as _e:
+                    log("Tray", f"colima start failed: {_e}")
+            log("Tray", "No container engine (Docker Desktop / Colima) found to start on macOS.")
+            return False
         elif platform.system() == "Windows":
             _cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             # If Rancher Desktop is already running, do NOT rdctl-reconfigure or relaunch it: a
@@ -321,21 +364,31 @@ def _attempt_docker_daemon_start():
 def ensure_memory_stack_up():
     """Start Docker memory stack (Postgres, Redis, Sandbox, TTS, STT). If Docker daemon is not running, try to start Docker Desktop and wait for it."""
     try:
-        # If Docker is not running, try to start Docker Desktop and wait for daemon (RAG needs DB)
+        _ensure_macos_brew_path()  # make a Homebrew-installed colima/docker visible to this process
+        # If the engine is not running, start it and wait - retrying across a few rounds. The tray
+        # spawns this once, and a first-ever Colima/WSL2 provision can exceed a single wait window;
+        # without a retry a slow first boot leaves the DB down -> the user stranded on the login page.
         if not _is_docker_daemon_running():
-            launched = _attempt_docker_daemon_start()
-            if not launched:
-                log("Tray", "No container runtime found; memory stack (RAG DB) unavailable. Install Rancher Desktop to enable long-term memory/RAG.")
-                return
-            log("Tray", "Waiting for the container engine (Rancher/Docker) to be ready (max 300s; first WSL2 run is slow)...")
-            deadline = time.time() + 300
-            while time.time() < deadline:
-                if _is_docker_daemon_running():
+            engine_ready = False
+            for attempt in range(1, 4):
+                launched = _attempt_docker_daemon_start()
+                if not launched:
+                    log("Tray", f"No container runtime found yet (attempt {attempt}/3); retrying in 30s...")
+                    time.sleep(30)
+                    continue
+                log("Tray", f"Waiting for the container engine to be ready (attempt {attempt}/3, max 300s; first run is slow)...")
+                deadline = time.time() + 300
+                while time.time() < deadline:
+                    if _is_docker_daemon_running():
+                        engine_ready = True
+                        break
+                    time.sleep(2)
+                if engine_ready:
                     log("Tray", "Docker daemon is ready")
                     break
-                time.sleep(2)
-            else:
-                log("Tray", "Docker daemon did not become ready; memory stack (RAG DB) may be unavailable")
+                log("Tray", f"Engine not ready after attempt {attempt}/3; retrying...")
+            if not engine_ready:
+                log("Tray", "Container engine did not come up; memory stack (RAG DB) unavailable. Start it (colima start / Docker Desktop / Rancher) and restart VAF.")
                 return
 
         # Repo root: compose file in cwd or next to vaf/ (parents[1] from vaf/tray.py)

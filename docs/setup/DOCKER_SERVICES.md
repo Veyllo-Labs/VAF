@@ -239,7 +239,7 @@ docker compose -f docker-compose.memory.yml stop tts stt
 ### Start Only Database and Redis
 
 ```bash
-docker compose -f docker-compose.memory.yml up -d db redis
+docker compose -f docker-compose.memory.yml up -d postgres redis
 ```
 
 ### Restart TTS After Configuration Change
@@ -254,18 +254,25 @@ docker compose -f docker-compose.memory.yml restart tts
 
 ### During Installation (`install.sh` / `install.ps1`)
 
-The installer **detects** an existing Docker runtime (Docker Desktop, Engine, Colima, Podman) and
-uses it — it does **not** install Docker. Docker is optional: without it, long-term memory/RAG and
-the code sandbox are off and the rest of VAF still runs. When a runtime is present, the installer
-manages the stack:
+A runtime is **required**: VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so it
+is needed to finish setup and sign in. The installer uses whatever engine you already have and otherwise
+sets up a free one for you — no Docker Desktop licence needed:
+
+- **Windows**: auto-installs **Rancher Desktop** (engine `moby`).
+- **macOS**: uses **Docker Desktop** if installed, otherwise **auto-installs and starts Colima** via Homebrew.
+- **Linux**: uses an existing Docker Engine; if none is present it points you at your distro's `docker` package.
+
+When a runtime is present (or has just been set up), the installer manages the stack:
 
 1. **Change Detection**: After a `git pull`, the installer checks whether `docker-compose.memory.yml` has changed (via `git diff HEAD~1 HEAD`).
-2. **Auto-Start Docker Daemon**: If Docker is installed but not running, the installer attempts to start it automatically:
-   - **macOS**: `open -a Docker` (launches Docker Desktop)
+2. **Auto-Start the Engine**: If the engine is installed but not running, the installer starts it automatically:
+   - **macOS**: starts Docker Desktop if present, otherwise `colima start`
    - **Linux**: `sudo systemctl start docker` (or `sudo service docker start`)
-   - **Windows**: Launches `Docker Desktop.exe` from Program Files
-3. **Wait for Readiness**: The installer waits up to 60 seconds for the Docker daemon to become responsive.
-4. **Apply Changes**: Runs `docker compose -f docker-compose.memory.yml up -d`, which:
+   - **Windows**: starts Rancher Desktop (and does **not** restart it if it is already running)
+3. **Wait for Readiness**: The installer polls until the daemon is responsive (up to ~60–120s on a first Colima boot).
+4. **Apply Changes — two-phase**: it brings up the core registry-image services first
+   (`postgres redis sandbox stt gotenberg`) so a slow local build of `tts`/`vaf-browser` can never block the
+   database the app needs to boot, then starts those optional services best-effort. `up -d`:
    - Starts new services (e.g., Gotenberg after an update that adds it)
    - Recreates services whose configuration changed
    - Leaves unchanged, running services untouched

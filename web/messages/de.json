@@ -392,7 +392,7 @@
       "thinkerModelDesc": "Leer = Standard des gewählten Providers.",
       "thinkerModelPlaceholder": "z. B. deepseek-chat oder Modell-ID",
       "channelTools": "Gleiche Tools in Messaging-Kanälen",
-      "channelToolsDesc": "Erlaubt dem Telegram-, WhatsApp- und Discord-Agenten dieselben Tools wie dem Haupt-Agenten, ohne Pro-Aufruf-Bestätigung. Geschützt durch deine Kanal-Whitelist und die Admin-Rechte pro Nutzer. Nur aktivieren, wenn deine Whitelist eng ist.",
+      "channelToolsDesc": "Erlaubt dem Telegram-, WhatsApp- und Discord-Agenten dieselben Tools wie dem Haupt-Agenten, ohne Pro-Aufruf-Bestätigung. Standardmäßig an; geschützt durch deine Kanal-Whitelist und die Admin-Rechte pro Nutzer. Zum Einschränken auf Nicht-Kanal-Tools ausschalten.",
       "system": "System",
       "webUiDashboard": "Web-UI als Dashboard",
       "webUiDashboardDesc": "Beim Start zuerst die Web-UI anzeigen statt des Chat-Fensters.",

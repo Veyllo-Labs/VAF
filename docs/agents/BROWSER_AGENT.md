@@ -365,7 +365,7 @@ This prevents the browser agent from following redirects or links to unintended 
 
 By default, `browser_agent` is **blocked** on Telegram, WhatsApp, and Discord channels: these channels have no interactive confirmation flow, so channel-restricted tools cannot run there.
 
-An admin can lift this with the `channel_tools_unrestricted` setting (Settings → Advanced, default **off**). When enabled, messaging-channel sessions get the same tools as the main agent — including `browser_agent` — and run **without** the per-call confirmation gate. The channel whitelist and the per-user `admin_only` checks still apply, so only enable it if your channel whitelist is tight.
+This is controlled by the `channel_tools_unrestricted` setting (Settings → Advanced, default **on**). When enabled, messaging-channel sessions get the same tools as the main agent — including `browser_agent` — and run **without** the per-call confirmation gate. The channel whitelist (`paired_only` by default) and the per-user `admin_only` checks still apply; turn it off to restrict channel sessions to non-channel-restricted tools.
 
 ---
 

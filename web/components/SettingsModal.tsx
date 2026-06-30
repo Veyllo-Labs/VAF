@@ -3292,7 +3292,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Switch
                                         label={tAdvanced('hierarchicalIndexing')}
                                         description={tAdvanced('hierarchicalIndexingDesc')}
-                                        checked={localConfig.attachment_rag_hierarchical_enabled ?? false}
+                                        checked={localConfig.attachment_rag_hierarchical_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('attachment_rag_hierarchical_enabled', v)}
                                     />
                                 </Section>
@@ -3324,7 +3324,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <Switch
                                         label={tAdvanced('channelTools')}
                                         description={tAdvanced('channelToolsDesc')}
-                                        checked={localConfig.channel_tools_unrestricted ?? false}
+                                        checked={localConfig.channel_tools_unrestricted ?? true}
                                         onChange={(v: boolean) => handleChange('channel_tools_unrestricted', v)}
                                     />
                                     {/* Memory system + Debug logs toggles are intentionally hidden from the UI.

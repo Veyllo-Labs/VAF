@@ -2587,6 +2587,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         await websocket.close(code=4003, reason="Authentication error")
         return
 
+    # Desktop fallback: a LOCALHOST connection that ended up without a usable user context
+    # (e.g. the token was not passed on the WS handshake, or an auth-module hiccup) IS the local
+    # admin - the same policy the HTTP routes use (get_current_user_or_local_admin). Without this
+    # the desktop gets locked out of its OWN admin-owned sessions ("chat ... not owned by None").
+    if is_localhost_client and not (user_context and (user_context.get("user_scope_id") or user_context.get("user_id"))):
+        try:
+            from vaf.core.config import get_local_admin_scope_id
+            _admin = str(get_local_admin_scope_id())
+            user_context = {
+                "user_id": _admin,
+                "user_scope_id": _admin,
+                "username": (user_context or {}).get("username") or "admin",
+                "role": "admin",
+            }
+            log("API", "WebSocket localhost without user context -> defaulting to local admin (desktop)")
+        except Exception as _e:
+            log("API", f"WebSocket local-admin fallback failed: {_e}")
+
     try:
         await manager.connect(websocket)
         # Store user_scope_id for RAG/task metadata (memory_save, memory search). Fallback to user_id if no scope in token.

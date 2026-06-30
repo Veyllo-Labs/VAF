@@ -149,7 +149,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `task_overwrite_confirm_window_seconds` | `120` | Re-call within this window = confirmed. |
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |
 | `workflow_step_validation_max_retries` | `3` | Retries before accepting the result. |
-| `channel_tools_unrestricted` | `False` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent — `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist still apply. Off by default. |
+| `channel_tools_unrestricted` | `True` | Admin-only. When `True`, messaging-channel sessions (Telegram/WhatsApp/Discord) get the same tools as the main agent — `channel_restrictions` and the per-call confirmation gate are lifted. The `admin_only` check and the channel whitelist (`paired_only` by default) still apply. On by default; set to `False` to restrict channel sessions to non-channel-restricted tools. |
 
 ## Sub-agents & timeouts
 

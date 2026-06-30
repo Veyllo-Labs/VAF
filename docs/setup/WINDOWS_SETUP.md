@@ -20,8 +20,9 @@ without admin rights.
   `%LOCALAPPDATA%\Veyllo\node` for the web UI.
 - **Virtual environment**: creates an isolated `venv` and installs the Python dependencies (editable mode).
 - **System integration**: installs and patches `pywin32` for reliable background operation and COM interaction.
-- **Docker** *(optional)*: **detected, not installed** — used for the memory/RAG system and the code
-  sandbox if a runtime is present (Docker Desktop, or Docker Engine in WSL2). The app runs without it.
+- **Container runtime** *(required)*: the installer **installs and starts Rancher Desktop** (free,
+  Apache-2.0) for you — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so a
+  runtime is needed to finish setup and sign in. An existing Docker Desktop / WSL2 engine is used if present.
 - **Shortcuts & icons**: "VAF Agent" shortcuts on the **Desktop** and in the **Start Menu**, with generated app icons.
 
 ---

@@ -209,14 +209,17 @@ export default function LoginPage() {
                 // model on a weak machine. vision_model stays empty = the provider's default (veyllo-chat).
                 // Placeholder for hosted speech: once Veyllo offers TTS/STT, default them here too —
                 // e.g. speech_tts_engine: 'veyllo', speech_stt_engine: 'veyllo' (+ their docker_url keys).
-                setOnboardingConfig((prev) => ({
-                    ...prev,
+                const veylloCfg = {
                     api_key_veyllo: key,
                     provider: 'veyllo',
                     vision_provider: 'veyllo',
-                }));
+                };
+                setOnboardingConfig((prev) => ({ ...prev, ...veylloCfg }));
                 setStep('setup_2fa');
-                handleStartSetup2FA();
+                // Pass the config explicitly: setOnboardingConfig above is async, so the PATCH inside
+                // handleStartSetup2FA would otherwise read a stale (empty) onboardingConfig this tick
+                // and silently drop the just-entered key + provider.
+                handleStartSetup2FA(veylloCfg);
             } else {
                 setVeylloError(t('veylloInvalidKey'));
             }
@@ -227,7 +230,7 @@ export default function LoginPage() {
     };
 
     // Called from the 2FA step (step 4): bootstrap + setup-2fa + verify, then save pending data.
-    const handleStartSetup2FA = async () => {
+    const handleStartSetup2FA = async (extraConfig?: Record<string, unknown>) => {
         setIsLoading(true);
         setBootstrapError(null);
         try {
@@ -256,12 +259,16 @@ export default function LoginPage() {
                 }).catch(() => {});
             }
 
-            // 3. Save pending connection configs with Bearer token.
-            if (Object.keys(onboardingConfig).length > 0 && accessToken) {
+            // 3. Save pending connection configs with Bearer token. Merge any config passed in
+            //    explicitly (e.g. the Veyllo key from the previous step): React state
+            //    (onboardingConfig) is not yet updated when this runs in the same tick, so relying
+            //    on it alone would silently drop the just-entered key + provider.
+            const cfgToSave = { ...onboardingConfig, ...(extraConfig || {}) };
+            if (Object.keys(cfgToSave).length > 0 && accessToken) {
                 await fetch(`${getApiBase()}/api/config`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-                    body: JSON.stringify(onboardingConfig),
+                    body: JSON.stringify(cfgToSave),
                 }).catch(() => {});
             }
 
@@ -654,7 +661,7 @@ export default function LoginPage() {
 
                 {!checkingSetup && step === 'create_admin' && (
                     <motion.div
-                        key={`create_admin_${createAdminSubStep}`}
+                        key="create_admin"
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
@@ -834,19 +841,21 @@ export default function LoginPage() {
                 )}
 
                 {!checkingSetup && step === 'soul_wizard' && (
-                    <SoulWizard
-                        isOpen={true}
-                        onClose={() => {
-                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
-                            setStep('veyllo_api');
-                        }}
-                        username={username || 'Admin'}
-                        onComplete={(content) => {
-                            setPendingSoul(content);
-                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
-                            setStep('veyllo_api');
-                        }}
-                    />
+                    <motion.div key="soul_wizard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full">
+                        <SoulWizard
+                            isOpen={true}
+                            onClose={() => {
+                                if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
+                                setStep('veyllo_api');
+                            }}
+                            username={username || 'Admin'}
+                            onComplete={(content) => {
+                                setPendingSoul(content);
+                                if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding_step', 'veyllo_api');
+                                setStep('veyllo_api');
+                            }}
+                        />
+                    </motion.div>
                 )}
 
                 {!checkingSetup && step === 'veyllo_api' && (

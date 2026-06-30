@@ -18,6 +18,7 @@
  */
 
 import { useRef, useEffect, useCallback } from "react";
+import { useCursorStore } from "@/lib/cursorStore";
 
 type CursorState = "default" | "pointer" | "text";
 
@@ -75,6 +76,18 @@ function buildSequence(tool: string, args: Record<string, unknown>): SeqStep[] {
 }
 
 export function CustomCursor() {
+  // Custom cursor on/off vs. the system mouse - a per-device preference (Settings -> Interface).
+  // Mirrors the UI-locale store: default ON, read from localStorage on mount, applied live.
+  const cursorEnabled = useCursorStore((s) => s.enabled);
+  const initCursor = useCursorStore((s) => s.init);
+  useEffect(() => { initCursor(); }, [initCursor]);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    // body.cursor-custom drives the `cursor: none` rule in globals.css (desktop only).
+    document.body.classList.toggle("cursor-custom", cursorEnabled);
+    return () => { document.body.classList.remove("cursor-custom"); };
+  }, [cursorEnabled]);
+
   const mainCursorRef  = useRef<HTMLDivElement>(null);
   const trailCursorRef = useRef<HTMLDivElement>(null);
   const lineRef        = useRef<HTMLDivElement>(null);  // connecting gradient line (div, not canvas)
@@ -481,6 +494,7 @@ export function CustomCursor() {
     };
   }, [animateTrail, applyCursorState, cancelSequence, playSequence, wake]);
 
+  if (!cursorEnabled) return null;
   if (typeof window !== "undefined" && !window.matchMedia("(pointer: fine)").matches) return null;
 
   return (

@@ -330,6 +330,9 @@
     "interface": {
       "language": "Sprache",
       "preferredLanguage": "Bevorzugte Sprache",
+      "appearance": "Darstellung",
+      "customCursor": "Eigener Cursor",
+      "customCursorDesc": "VAFs eigenen Cursor am Desktop verwenden statt des System-Mauszeigers.",
       "dateTime": "Datum & Uhrzeit",
       "dateTimeDesc": "Zeitzone und Anzeigeformat für Datum und Uhrzeit in der Oberfläche und in Agenten-Antworten.",
       "timezone": "Zeitzone",

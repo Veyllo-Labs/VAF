@@ -1085,26 +1085,47 @@ class BrowserAgentTool(BaseTool):
         """
         Fetch /json/version and return the full webSocketDebuggerUrl.
         Accepts both http:// and ws:// base URLs.
+
+        Polls with bounded backoff instead of a single probe: a connect that lands inside the
+        container's startup window (compose healthcheck start_period ~20s) or hits a still-booting /
+        just-restarted vaf-browser must not fail on the first try. Deadline is VAF_BROWSER_CDP_WAIT_S
+        (default 30s, > start_period + one healthcheck interval).
         """
         import urllib.request as _urlreq
+        import os as _os
+        import time as _time
 
         http_base = base.replace("ws://", "http://").replace("wss://", "https://")
         url = http_base.rstrip("/") + "/json/version"
         try:
-            with _urlreq.urlopen(url, timeout=5) as resp:
-                data = json.loads(resp.read())
-            ws_url = data["webSocketDebuggerUrl"]
-            # Ensure the hostname matches what the host can reach
-            # (Chromium may report its internal container hostname)
-            import re
-            ws_url = re.sub(r"ws://[^/]+", f"ws://{http_base.split('//')[1].split('/')[0]}", ws_url)
-            return ws_url
-        except Exception as e:
-            raise RuntimeError(
-                f"Cannot reach browser container at {http_base}.\n"
-                f"Is `vaf-browser` running? Check: docker ps | grep vaf-browser\n"
-                f"Details: {e}"
-            ) from e
+            _deadline_s = float(_os.environ.get("VAF_BROWSER_CDP_WAIT_S", "30") or 30)
+        except Exception:
+            _deadline_s = 30.0
+        _deadline = _time.monotonic() + max(0.0, _deadline_s)
+        last_err = None
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with _urlreq.urlopen(url, timeout=3) as resp:
+                    data = json.loads(resp.read())
+                ws_url = data["webSocketDebuggerUrl"]
+                # Ensure the hostname matches what the host can reach
+                # (Chromium may report its internal container hostname)
+                import re
+                ws_url = re.sub(r"ws://[^/]+", f"ws://{http_base.split('//')[1].split('/')[0]}", ws_url)
+                return ws_url
+            except Exception as e:
+                last_err = e
+                if _time.monotonic() >= _deadline:
+                    break
+                _time.sleep(min(1.5, max(0.5, 0.5 * attempt)))
+        raise RuntimeError(
+            f"Browser service not ready: Chrome DevTools at {http_base} did not respond within "
+            f"{int(_deadline_s)}s. Is `vaf-browser` running/healthy? "
+            f"Check: docker ps | grep vaf-browser ; docker logs vaf-browser\n"
+            f"Details: {last_err}"
+        ) from last_err
 
     # ── Result extraction ─────────────────────────────────────────────────────
 

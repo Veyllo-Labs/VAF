@@ -71,5 +71,11 @@ First launch opens the setup wizard in your browser — see [FIRST_RUN.md](FIRST
   Docker Desktop); `vaf` brings the memory stack up automatically once the daemon is reachable.
 - **Desktop window doesn't open** — make sure you ran the installer in Desktop mode; the
   tray/window uses native macOS APIs (no extra GTK packages are needed as on Linux).
+- **Microphone / voice input doesn't work in the desktop window** — known macOS limitation: the
+  window uses WKWebView, which does not grant `getUserMedia` without a native permission hook (only
+  implemented for Linux today). Workarounds: allow the controlling app (Terminal, or `VAF.app`) under
+  **System Settings → Privacy & Security → Microphone**; or open the Web UI in a normal browser at the
+  printed `http://localhost:3000` (a real browser prompts for and grants mic access). A native
+  WKWebView grant (pyobjc WKUIDelegate) is planned.
 
 For services, networking, and integrations see the [documentation index](../README.md).

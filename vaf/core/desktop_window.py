@@ -649,6 +649,12 @@ def _install_clipboard_permissions() -> None:
         from webview.platforms.qt import BrowserView
         from qtpy.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     except Exception as e:                          # pragma: no cover - backend/version differences
+        # macOS limitation: this hook is Qt-only (Linux). On macOS pywebview uses WKWebView, which
+        # default-denies getUserMedia and exposes no permission API at this layer -> WebUI voice
+        # input is currently NOT granted in the desktop window. Proper fix = a Cocoa WKUIDelegate
+        # `requestMediaCapturePermission` grant via pyobjc-framework-WebKit (needs on-device
+        # testing); workaround = allow the controlling app under System Settings -> Privacy ->
+        # Microphone, or open the Web UI in a real browser at http://localhost:3000.
         _log.debug("[DesktopWindow] clipboard/permission hook unavailable: %s", e)
         return
     Attr = QWebEngineSettings.WebAttribute

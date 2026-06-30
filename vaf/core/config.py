@@ -1040,6 +1040,13 @@ class Config:
             "n_ctx",
             "gpu_layers",
             "model",
+            # API keys: a key change (e.g. onboarding) must also re-apply the live provider.
+            "api_key_veyllo",
+            "api_key_openai",
+            "api_key_anthropic",
+            "api_key_deepseek",
+            "api_key_google",
+            "api_key_openrouter",
         ]
         
         for key in critical_keys:

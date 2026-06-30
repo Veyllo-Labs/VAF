@@ -11,6 +11,7 @@ import time
 import requests
 import warnings
 import atexit
+import threading
 from datetime import datetime
 import re
 from typing import List, Dict, Any, Optional, Tuple
@@ -256,6 +257,74 @@ class Agent:
         cfg = self.config if ov else None                        # merged cfg only in embed mode
         return APIBackendManager(provider, config=cfg, api_key=api_key)
 
+    def reload_api_backend(self, *, force: bool = False) -> bool:
+        """Re-apply provider + API key from the LIVE on-disk config to this RUNNING agent.
+
+        Lets a provider switch take effect without restarting VAF -- e.g. finishing
+        onboarding with a Veyllo key, or changing the provider in Settings -- and
+        prevents a stale local agent from downloading a GGUF after the user picked a
+        cloud provider. Returns True when the active backend actually changed.
+        Handles local->cloud, cloud->cloud (key/provider swap) and cloud->local.
+        """
+        # A sub-agent process is pinned to a provider via VAF_PROVIDER; never override it.
+        if os.environ.get("VAF_PROVIDER", "").strip():
+            return False
+        # Embedded library mode is caller-controlled (config_overrides) -- leave it alone.
+        if getattr(self, "_config_overrides", None):
+            return False
+
+        lock = getattr(self, "_backend_swap_lock", None)
+        if lock is None:
+            lock = self._backend_swap_lock = threading.Lock()
+        with lock:
+            fresh = Config.load()
+            new_provider = (fresh.get("provider", "local") or "local").strip()
+            old_provider = getattr(self, "provider", "local")
+
+            # No-op: same provider and backend already matches (unless forced, e.g. key change).
+            if new_provider == old_provider and not force:
+                if new_provider == "local" or getattr(self, "api_backend", None):
+                    return False
+
+            # Pick up the rest of the live config (api_model_*, etc.).
+            self.config = fresh
+
+            if new_provider != "local":
+                try:
+                    new_backend = self._build_api_backend(new_provider)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[Agent] reload_api_backend: cannot build '{new_provider}' backend: {e}")
+                    return False
+                self.provider = new_provider
+                self.api_backend = new_backend
+                # Tear down local backends so generation uses the API, not a GGUF.
+                self.use_server = False
+                self.llm = None
+                if getattr(self, "server", None) is not None:
+                    try:
+                        self.server.stop_server()
+                    except Exception:
+                        pass
+                    self.server = None
+                self._tokenizer_instance = None
+                # Refresh the displayed model name (mirror __init__ logic at agent.py:377-386).
+                api_model = self.config.get(f"api_model_{new_provider}")
+                if not api_model:
+                    api_model = Config.get_default_model(new_provider) or new_provider
+                _tool_model_env = os.environ.get("VAF_TOOL_MODEL", "").strip()
+                if _tool_model_env:
+                    api_model = _tool_model_env
+                self.model_display_name = api_model
+            else:
+                # cloud -> local: drop the API backend; the local model loads lazily
+                # via the download gate / load_model, exactly as on a fresh local start.
+                self.provider = "local"
+                self.api_backend = None
+                self._tokenizer_instance = None
+
+            return True
+
     def __init__(self, verbose=False, register_signals=True, config_overrides=None):
         self.verbose = verbose
         self.config = Config.load()
@@ -306,6 +375,7 @@ class Agent:
         self.server = None        # ServerManager instance
         self.api_backend = None   # API Backend instance
         self.use_server = False   # Flag
+        self._backend_swap_lock = threading.Lock()  # serializes runtime provider/backend swaps
         
         # Initialize API backend immediately if using API provider
         if self.provider != "local":
@@ -804,6 +874,10 @@ class Agent:
         if self._tokenizer_instance:
             return self._tokenizer_instance
         if getattr(self, "use_server", False):
+            return None
+        # Cloud/API backend active: never load a local GGUF just for tokenization
+        # (the API backend provides token counting / context window itself).
+        if getattr(self, "api_backend", None):
             return None
 
         try:

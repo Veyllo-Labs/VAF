@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-  VAF — one-click bootstrap (Windows).
+  VAF - one-click bootstrap (Windows).
 
   Hosted entry point. Once the VAF repo is PUBLIC on GitHub, a user runs:
 
@@ -8,15 +8,15 @@
 
   It provisions a bare machine with NO prerequisites (no admin rights):
     1. ensures `git` (downloads portable MinGit to a user folder if missing),
-    2. clones the repo (so `vaf update` keeps working — it requires a git checkout),
+    2. clones the repo (so `vaf update` keeps working - it requires a git checkout),
     3. hands off to install.ps1, which provisions uv->Python, a portable Node, and
        sets up the venv / deps / shortcut.
 
   The URLs below are already final (owner/repo verified against `git remote`).
-  They resolve the day the repo goes public — nothing to "fill in" later.
+  They resolve the day the repo goes public - nothing to "fill in" later.
   Until then (private alpha) use a local clone + `.\install.bat`.
 
-  NOTE: untested on Windows from the dev box — TEST on a clean Windows VM before shipping.
+  NOTE: untested on Windows from the dev box - TEST on a clean Windows VM before shipping.
 #>
 [CmdletBinding()]
 param(
@@ -43,10 +43,10 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 if (Get-Command uv -ErrorAction SilentlyContinue) { Ok "uv ready" } else { Warn "uv not on PATH yet (install.ps1 will retry)" }
 
-# --- 2. git (portable MinGit if absent — fetched, NOT bundled; git is GPLv2) ---
+# --- 2. git (portable MinGit if absent - fetched, NOT bundled; git is GPLv2) ---
 $gitExe = "git"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Info "git not found — downloading portable MinGit (user-scoped, no admin)..."
+    Info "git not found - downloading portable MinGit (user-scoped, no admin)..."
     try {
         $gitDir = Join-Path $VafHome "git"
         $rel = Invoke-RestMethod "https://api.github.com/repos/git-for-windows/git/releases/latest" -Headers @{ "User-Agent" = "vaf-bootstrap" }
@@ -68,7 +68,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 
 # --- 3. clone (or update) the repo -----------------------------------------
 if (Test-Path (Join-Path $InstallDir ".git")) {
-    Info "Existing checkout at $InstallDir — updating..."
+    Info "Existing checkout at $InstallDir - updating..."
     & $gitExe -C $InstallDir fetch --depth 1 origin $Ref
     & $gitExe -C $InstallDir checkout $Ref
     & $gitExe -C $InstallDir pull --ff-only
@@ -82,5 +82,9 @@ Ok "Repository ready: $InstallDir"
 # --- 4. hand off to the full installer -------------------------------------
 Info "Running install.ps1 ..."
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir "install.ps1")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n== install.ps1 FAILED (exit $LASTEXITCODE). VAF is NOT installed - see the errors above. ==`n" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 Write-Host "`n== Done. Launch with the Desktop shortcut or: $InstallDir\run_vaf.bat ==`n" -ForegroundColor Green

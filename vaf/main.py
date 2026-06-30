@@ -14,6 +14,16 @@ if sys.stderr is None:
 if sys.stdin is None:
     sys.stdin = open(os.devnull, "r")
 
+# Windows consoles default to a legacy code page (cp1252) that raises
+# UnicodeEncodeError in the logging StreamHandler on non-ASCII output (e.g.
+# arrows in log messages). Force UTF-8 on the std streams so logging and print
+# never crash regardless of the active console code page.
+for _vaf_stream in (sys.stdout, sys.stderr):
+    try:
+        _vaf_stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
+
 def bootstrap():
     """Checks for ALL dependencies and auto-installs if confirmed."""
     # Safety hatch for App Bundles / CI

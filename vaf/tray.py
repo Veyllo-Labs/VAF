@@ -203,44 +203,119 @@ def check_singleton():
         return None
 
 
+def _resolve_docker_exe():
+    """Resolve a usable docker executable. On Windows Rancher's docker.exe lives in ~/.rd/bin
+    and is added to PATH only during first-run, so a process started earlier won't see it -
+    fall back to Rancher's known locations so we don't wait forever on a daemon that IS up."""
+    import shutil
+    found = shutil.which("docker")
+    if found:
+        return found
+    if platform.system() == "Windows":
+        # docker.exe sits in the same dir as rdctl (Rancher bundles its CLIs); derive from rdctl.
+        rd = shutil.which("rdctl")
+        if rd:
+            cand = os.path.join(os.path.dirname(rd), "docker.exe")
+            if os.path.exists(cand):
+                return cand
+        for c in (
+            os.path.join(os.environ.get("USERPROFILE", ""), ".rd", "bin", "docker.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Rancher Desktop", "resources", "resources", "win32", "bin", "docker.exe"),
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Rancher Desktop", "resources", "resources", "win32", "bin", "docker.exe"),
+        ):
+            if c and os.path.exists(c):
+                return c
+    return "docker"  # last resort: subprocess will raise FileNotFoundError if truly absent
+
+
 def _is_docker_daemon_running():
     """Return True if Docker daemon is reachable (docker info succeeds)."""
     try:
+        docker = _resolve_docker_exe()
         kwargs = {"check": True, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        subprocess.run(["docker", "info"], **kwargs, timeout=5)
+        subprocess.run([docker, "info"], **kwargs, timeout=5)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
+def _is_container_runtime_running():
+    """True if a container-engine GUI (Rancher Desktop OR Docker Desktop) is already running
+    (Windows only). If one is, we must NOT launch/reconfigure another - that restarts the engine
+    and makes startup take far longer (the exact annoyance this guards against)."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        names = (out.stdout or "").lower()
+        return ("rancher desktop.exe" in names) or ("docker desktop.exe" in names)
+    except Exception:
+        return False
+
+
 def _attempt_docker_daemon_start():
-    """Try to start Docker Desktop (Windows/macOS) so the daemon becomes available. Fails silently."""
+    """Try to start the container engine (Windows/macOS) so the daemon becomes available.
+
+    Returns True if a runtime was actually launched, False if none was found.
+    """
+    import shutil
     try:
         if platform.system() == "Darwin":
             log("Tray", "Starting Docker Desktop (macOS)...")
             subprocess.run(["open", "-a", "Docker"], check=True)
+            return True
         elif platform.system() == "Windows":
-            log("Tray", "Starting Docker Desktop (Windows)...")
-            docker_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
-            if os.path.exists(docker_path):
-                subprocess.Popen(
-                    [docker_path],
-                    start_new_session=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-            else:
-                subprocess.Popen(
-                    ["Docker Desktop.exe"],
-                    shell=True,
-                    start_new_session=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
+            _cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            # If Rancher Desktop is already running, do NOT rdctl-reconfigure or relaunch it: a
+            # reconfigure restarts the engine -> it drops offline -> endless waiting. Just let
+            # ensure_memory_stack_up() keep polling until the engine finishes coming up.
+            if _is_container_runtime_running():
+                log("Tray", "A container runtime (Rancher/Docker Desktop) is already running - waiting for its engine (no restart).")
+                return True
+            _launched = False
+            # First try the headless rdctl path (engine=moby, Kubernetes off) - same as
+            # install.ps1. rdctl alone may not finish a first-ever provision, so we also launch
+            # the GUI exe below, which reliably triggers the first-run WSL2 setup.
+            _rdctl = shutil.which("rdctl")
+            if _rdctl:
+                log("Tray", "Starting Rancher headless via rdctl (dockerd/moby, Kubernetes off)...")
+                try:
+                    _r = subprocess.run(
+                        [_rdctl, "start", "--container-engine.name", "moby", "--kubernetes.enabled=false"],
+                        capture_output=True, text=True, timeout=300, creationflags=_cf,
+                    )
+                    log("Tray", f"rdctl start exited {_r.returncode}: {((_r.stderr or _r.stdout) or '').strip()[:300]}")
+                    _launched = True
+                except Exception as _e:
+                    log("Tray", f"rdctl start failed: {_e}")
+            # Prefer Rancher Desktop (what the installer sets up), fall back to Docker Desktop.
+            _candidates = [
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Rancher Desktop", "Rancher Desktop.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Rancher Desktop", "Rancher Desktop.exe"),
+                os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Docker", "Docker", "Docker Desktop.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Docker", "Docker Desktop.exe"),
+            ]
+            for _exe in _candidates:
+                if _exe and os.path.exists(_exe):
+                    log("Tray", f"Starting container runtime: {os.path.basename(_exe)}...")
+                    subprocess.Popen([_exe], start_new_session=True, creationflags=_cf)
+                    _launched = True
+                    break
+            if not _launched:
+                log("Tray", "No Rancher Desktop / Docker Desktop found to auto-start.")
+            return _launched
         else:
             subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            return True
     except Exception as e:
-        log("Tray", f"Docker Desktop start attempt failed: {e}")
+        log("Tray", f"Container engine start attempt failed: {e}")
+        return False
 
 
 def ensure_memory_stack_up():
@@ -248,9 +323,12 @@ def ensure_memory_stack_up():
     try:
         # If Docker is not running, try to start Docker Desktop and wait for daemon (RAG needs DB)
         if not _is_docker_daemon_running():
-            _attempt_docker_daemon_start()
-            log("Tray", "Waiting for Docker daemon (max 60s)...")
-            deadline = time.time() + 60
+            launched = _attempt_docker_daemon_start()
+            if not launched:
+                log("Tray", "No container runtime found; memory stack (RAG DB) unavailable. Install Rancher Desktop to enable long-term memory/RAG.")
+                return
+            log("Tray", "Waiting for the container engine (Rancher/Docker) to be ready (max 300s; first WSL2 run is slow)...")
+            deadline = time.time() + 300
             while time.time() < deadline:
                 if _is_docker_daemon_running():
                     log("Tray", "Docker daemon is ready")
@@ -270,20 +348,38 @@ def ensure_memory_stack_up():
         else:
             return
         compose_file = project_root / "docker-compose.memory.yml"
-        # TTS and STT are default services in docker-compose.memory.yml (no profile)
-        for cmd in (
-            ["docker", "compose", "-f", "docker-compose.memory.yml", "up", "-d"],
+        # Two-phase, blocking, exit-checked: bring up the CORE registry-image services first so a
+        # failed OPTIONAL build (tts/vaf-browser - e.g. a VM clock skew breaking apt) can never abort
+        # the whole 'up' and leave zero containers (incl. the DB). Optional services are best-effort.
+        docker = _resolve_docker_exe()  # Rancher's docker.exe may not be on this process's PATH
+        core = ["postgres", "redis", "sandbox", "stt", "gotenberg"]
+        optional = ["tts", "vaf-browser"]
+        for base in (
+            [docker, "compose", "-f", "docker-compose.memory.yml", "up", "-d", "--quiet-pull"],
             ["docker-compose", "-f", "docker-compose.memory.yml", "up", "-d"],
         ):
             try:
-                kwargs = {"cwd": str(project_root), "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+                kwargs = {"cwd": str(project_root), "capture_output": True, "text": True}
                 if platform.system() == "Windows" and getattr(subprocess, "CREATE_NO_WINDOW", None) is not None:
                     kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                subprocess.Popen(cmd, **kwargs)
-                log("Tray", "Memory stack (DB/Redis/Sandbox/TTS/STT) start requested via Docker")
+                result = subprocess.run(base + core, timeout=600, **kwargs)  # first-run pulls are slow
+                if result.returncode == 0:
+                    log("Tray", "Core memory stack (DB/Redis/Sandbox/STT/Gotenberg) started")
+                    try:  # optional build services: best-effort, must not block the core stack
+                        opt = subprocess.run(base + optional, timeout=600, **kwargs)
+                        if opt.returncode != 0:
+                            log("Tray", "Optional TTS/browser did not build (often a VM clock skew) - core stack is up")
+                    except Exception:
+                        pass
+                    return
+                log("Tray", f"core compose up failed (code {result.returncode}): {(result.stderr or '').strip()[:500]}")
                 return
             except FileNotFoundError:
-                continue
+                continue  # try the docker-compose fallback
+            except subprocess.TimeoutExpired:
+                log("Tray", "docker compose up timed out (first-run image pull may still be in progress)")
+                return
+        log("Tray", "Warning: memory stack (RAG DB) may not have started; no docker/docker-compose CLI found")
     except Exception as e:
         logger.debug("[Tray] Memory stack auto-start skipped: %s", e)
 
@@ -963,11 +1059,17 @@ def toggle_persistence(icon=None, item=None):
 
 def quit_app(icon=None, item=None):
     """Handle quit action. Pystray passes (icon, item)."""
-    # Immediately disarm signal handlers so that pkill/SIGTERM sent to our own
-    # process during cleanup does not re-enter quit_app() (infinite loop).
+    # Disarm signal handlers so that a SIGTERM we send ourselves during cleanup
+    # (the POSIX pkill below) does not re-enter quit_app(). signal.signal() only
+    # works in the main thread, and pystray invokes quit_app() from a worker
+    # thread (notably on Windows), so guard against that to avoid a ValueError.
     import signal as _signal
-    _signal.signal(_signal.SIGTERM, _signal.SIG_IGN)
-    _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
+    if threading.current_thread() is threading.main_thread():
+        try:
+            _signal.signal(_signal.SIGTERM, _signal.SIG_IGN)
+            _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
 
     # Hard timeout: if cleanup hangs longer than 25s, force exit.
     # 25s gives Docker enough time to stop containers (can take 10-20s).
@@ -1098,6 +1200,22 @@ def on_config_changed(key, value, old_value=None):
     # into a SINGLE serialized restart (no concurrent teardown of the frontend singleton / uvicorn).
     elif key in ["local_network_enabled", "local_network_port", "local_network_port_frontend", "local_network_tls_enabled", "local_network_https_port"]:
         _schedule_network_restart(key, value)
+
+    # Provider or API key changed -> apply to the already-running agent live (no VAF restart),
+    # so finishing onboarding with a cloud key (or switching provider in Settings) takes effect
+    # immediately and no local GGUF is downloaded. The key VALUE is never logged.
+    elif key == "provider" or key.startswith("api_key_"):
+        def _apply_provider():
+            time.sleep(0.5)  # let the config save finish
+            try:
+                from vaf.core.web_interface import get_web_interface
+                ag = getattr(get_web_interface(), "agent_instance", None)
+                if ag is not None and hasattr(ag, "reload_api_backend"):
+                    if ag.reload_api_backend(force=key.startswith("api_key_")):
+                        log("Tray", "Provider/key change applied to the running agent.")
+            except Exception as e:
+                log("Tray", f"Provider apply error: {e}")
+        threading.Thread(target=_apply_provider, daemon=True).start()
 
 # Last known network config (read from file by poll thread) so CLI changes in another process are picked up
 _last_network_config = {}
@@ -1394,8 +1512,16 @@ def run_app():
         _dw.init(_startup_url, title="VAF")
         _tray_startup_log("pywebview window created, starting GUI loop")
         log("Tray", "Starting pywebview GUI loop (main thread)")
-        _app_icon = str(Path(__file__).parent / "media" / "logo_original.png")
-        _dw.start(icon_path=_app_icon if os.path.exists(_app_icon) else None)  # blocks until destroy
+        # Window/taskbar icon: prefer a .ico on Windows (the native window icon wants one),
+        # fall back to the high-res PNG (Linux/macOS). vaf_icon_v6.ico is generated from the
+        # logo at install time; app_icon.ico is the committed fallback.
+        _media = Path(__file__).parent / "media"
+        _icon_candidates = []
+        if platform.system() == "Windows":
+            _icon_candidates = [_media / "vaf_icon_v6.ico", _media / "app_icon.ico"]
+        _icon_candidates.append(_media / "logo_original.png")
+        _app_icon = next((str(p) for p in _icon_candidates if p.exists()), None)
+        _dw.start(icon_path=_app_icon)  # blocks until destroy
     except ImportError:
         # pywebview not installed — keep process alive with a simple wait loop
         _tray_startup_log("pywebview not installed, running in browser-only mode")

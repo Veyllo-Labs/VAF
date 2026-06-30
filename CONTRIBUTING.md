@@ -74,6 +74,7 @@ For anything beyond a small fix, please open an issue first to discuss the chang
 - [ ] Update `CHANGELOG.md` if this is a user-facing change
 - [ ] **Verify CI/CD:** Ensure your local tests pass; GitHub Actions will run the same suite.
 - [ ] Re-read your changes - ensure they are clean and well-thought-out
+- [ ] **Sign off your commits** (`git commit -s`) — see [License & Contributor Terms](#license--contributor-terms) below
 - [ ] **Web UI text:** If you add or change user-visible strings in the Web UI, use translation keys and update the locale files under `web/messages/` (see [docs/platform/I18N.md](docs/platform/I18N.md)).
 
 ### PR Description Template

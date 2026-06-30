@@ -83,6 +83,8 @@ BASE_REQUIRES = [
     "tzdata>=2024.1",
     # Linting (used by the built-in linter tool)
     "ruff>=0.1.0",
+    # Schema validation for tool-input repair (core tool-dispatch path)
+    "jsonschema>=4.18.0",
     # Auth + encrypted credential store (core infra)
     "argon2-cffi>=23.1.0", "keyring>=24.0.0", "filelock>=3.12.0",
     "PyJWT>=2.8.0", "pyotp>=2.9.0", "qrcode[pil]>=7.4.0", "cryptography>=41.0.0",

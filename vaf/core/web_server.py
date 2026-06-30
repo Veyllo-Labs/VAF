@@ -2236,10 +2236,8 @@ async def save_file(request: FileSaveRequest):
     # edited HTML back to Markdown so a .md file never ends up containing HTML.
     if target.suffix.lower() in (".md", ".mdx", ".markdown") and re.search(r"<\s*(?:html|body|div|p|h[1-6]|ul|ol|table)\b", content[:2000], re.IGNORECASE):
         try:
-            import html2text
-            h2t = html2text.HTML2Text()
-            h2t.ignore_links, h2t.body_width, h2t.unicode_snob = False, 0, True
-            content = re.sub(r"\n{3,}", "\n\n", h2t.handle(content)).strip() + "\n"
+            from markdownify import markdownify as md
+            content = re.sub(r"\n{3,}", "\n\n", md(content, heading_style="ATX")).strip() + "\n"
         except Exception:
             pass  # fall back to writing the raw editor content
 

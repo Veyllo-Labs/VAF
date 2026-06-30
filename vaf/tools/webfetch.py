@@ -137,7 +137,7 @@ class WebFetchTool(BaseTool):
 
         try:
             from bs4 import BeautifulSoup
-            import html2text
+            from markdownify import markdownify as md
             soup = BeautifulSoup(full_text, "html.parser")
             
             # Metadata & Iframes
@@ -172,10 +172,8 @@ class WebFetchTool(BaseTool):
             
             html_chunk = str(main_area) if main_area else str(soup.body or soup)
             
-            # Convert to Markdown
-            h2t = html2text.HTML2Text()
-            h2t.ignore_links, h2t.body_width, h2t.unicode_snob = False, 0, True
-            markdown = h2t.handle(html_chunk)
+            # Convert to Markdown (markdownify, MIT; keeps links, no wrapping, unicode)
+            markdown = md(html_chunk, heading_style="ATX")
             markdown = re.sub(r'\n{3,}', '\n\n', markdown).strip()
             
             # 5. Semantic Re-Ordering & Filtering

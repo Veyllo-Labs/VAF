@@ -29,24 +29,20 @@ lockfile versions.
 These are flagged here for visibility. This document is **not a legal opinion**;
 it is engineering documentation to support an informed review.
 
-1. **`html2text` is GPL-3.0 (strong copyleft) and is currently a runtime
-   dependency.** It is listed in `setup.py` `BASE_REQUIRES` and in
-   `requirements.txt`, so it ships with the base library install. GPL-3.0 is
-   strong copyleft and is **incompatible with closed-source / commercial
-   redistribution**. VAF's own license (AGPL-3.0-or-later) is compatible with
-   GPL-3.0 for the open-source distribution, but any closed-source/commercial
-   redistribution path would be affected. **Resolution pending** (e.g. replace
-   with a permissively licensed HTML-to-text converter, or isolate it behind an
-   optional extra). The installed package self-reports `GPL-3.0-or-later`.
+1. **`html2text` (GPL-3.0) replaced by `markdownify` (MIT) — RESOLVED.** The base
+   library previously depended on the GPL-3.0 `html2text` for HTML-to-Markdown
+   conversion (used by `webfetch` and the document editor). GPL-3.0 is strong
+   copyleft and is incompatible with closed-source/commercial redistribution. It
+   has been replaced with `markdownify` (MIT) in `setup.py`, `requirements.txt`,
+   and the code, so the base install no longer ships any strong-copyleft runtime
+   dependency.
 
-2. **`requirements.lock` currently pins PyQt6 (GPL-3.0) instead of the intended
-   PySide6 (LGPL-3.0).** Both `setup.py` (`desktop` extra) and `requirements.txt`
+2. **`requirements.lock` regenerated to pin PySide6 (LGPL-3.0), not PyQt6 (GPL-3.0)
+   — RESOLVED.** Both `setup.py` (`desktop` extra) and `requirements.txt`
    intentionally specify **PySide6** (LGPL-3.0, weak copyleft) for the Linux Qt
-   WebEngine window, precisely to avoid GPL on the Qt binding. The lockfile,
-   however, pins `pyqt6`, `pyqt6-qt6`, `pyqt6-sip`, `pyqt6-webengine`, and
-   `pyqt6-webengine-qt6` (all GPL-3.0). This is a lockfile/regeneration drift and
-   **`requirements.lock` should be regenerated** so the locked binding matches the
-   intended PySide6 (LGPL-3.0).
+   WebEngine window. The lockfile had drifted and still pinned `pyqt6*` (GPL-3.0);
+   it has been regenerated from the current `requirements.txt`, so it now pins
+   `pyside6` (+ `shiboken6`) and contains no `pyqt6*`.
 
 ---
 
@@ -67,7 +63,7 @@ Also present in `requirements.txt`.
 | httpx | >=0.27.0 | BSD-3-Clause |
 | PyGithub | >=2.1.1 | LGPL-3.0 |
 | beautifulsoup4 | >=4.12.0 | MIT |
-| **html2text** | >=2024.2.26 | **GPL-3.0-or-later** (see Known license concerns) |
+| markdownify | >=1.0.0 | MIT |
 | huggingface_hub[hf_xet] | >=0.20.0 | Apache-2.0 |
 | tqdm | >=4.65.0 | MPL-2.0 AND MIT |
 | openai | >=1.12.0 | Apache-2.0 |
@@ -119,7 +115,7 @@ Source: `setup.py` `EXTRAS` and `requirements.txt`. Installed via
 | qtpy (linux) | >=2.0.0 | MIT (well-known; not installed in this venv) |
 
 Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
-(GPL-3.0). See Known license concern (2) regarding the lockfile drift.
+(GPL-3.0); `requirements.lock` matches this (no `pyqt6*`).
 
 ### memory
 | Package | Min version | License |
@@ -239,10 +235,9 @@ Standalone Baileys-based bridge invoked over stdin/stdout JSON IPC.
 
 ## Notes and caveats
 
-- **PyQt6 in `requirements.lock`:** the lockfile pins `pyqt6` and its
-  `pyqt6-qt6` / `pyqt6-sip` / `pyqt6-webengine` / `pyqt6-webengine-qt6`
-  companions (all GPL-3.0). This contradicts the intended **PySide6 (LGPL-3.0)**
-  in `setup.py`/`requirements.txt`. See Known license concern (2).
+- **Qt binding in `requirements.lock`:** the lockfile pins **PySide6 (LGPL-3.0)**
+  and `shiboken6`, matching `setup.py`/`requirements.txt`; it contains no
+  `pyqt6*` (GPL-3.0).
 - **Dual/multi-licensed packages** (e.g. `cryptography`, `PySide6`, `numpy`,
   `pycryptodome`) are used under the most permissive applicable option; the table
   records the upstream-declared expression.

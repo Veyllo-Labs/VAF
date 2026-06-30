@@ -49,7 +49,9 @@ chmod +x install.sh && ./install.sh
 
 The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), sets up a container engine for you (Rancher Desktop on Windows, Colima on macOS, your distro's Docker on Linux — or uses an existing one if present), and adds the `vaf` command to your shell.
 
-**Installation mode** — the installer asks once:
+> New to this, or never used `git`/a terminal? Follow the step-by-step [Installation Guide](docs/setup/INSTALLATION_GUIDE.md) — it covers installing git, where to put the folder, running the installer without admin, and troubleshooting.
+
+**Installation mode** — on **Linux**, the installer asks once (macOS and Windows always install Desktop mode):
 ```
 [1] Desktop  — personal use, local only, system tray (default)
 [2] Server   — always-on service, LAN accessible via HTTPS, starts at boot

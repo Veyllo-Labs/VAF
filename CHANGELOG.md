@@ -10,6 +10,8 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a0] - 2026-06-30
+
 ### Changed
 - **Thinking-mode proactive questions are now delivered to your configured main messenger**
   (Telegram/WhatsApp/Discord) and tracked as a request there, instead of only the Web UI. If a

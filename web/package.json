@@ -1,6 +1,6 @@
 {
   "name": "vaf-web-ui",
-  "version": "2.6 Alpha",
+  "version": "0.1.0-alpha.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "scripts": {

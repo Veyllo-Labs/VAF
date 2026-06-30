@@ -345,22 +345,45 @@ class FrontendManager:
                 self._assign_process_to_job(self.process)
 
             # Wait until the frontend is actually listening (critical after reboot: npm can take 20–60s)
+            # Readiness must require that "/" actually SERVES (HTTP < 500), not just that the TCP port
+            # is open: `next start` can accept the port while "/" still 500s on a cold first request,
+            # which would let the desktop window navigate to a broken page. Gate on an HTTP response
+            # (200/3xx/4xx = serving; 5xx / connection error = not ready yet).
+            import urllib.request as _urlreq
+            _ready_host = host if host != "0.0.0.0" else "127.0.0.1"
             wait_timeout = 90
             wait_interval = 1.5
             elapsed = 0
+            _tcp_ok = False
             while elapsed < wait_timeout:
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         s.settimeout(1)
-                        if s.connect_ex((host if host != "0.0.0.0" else "127.0.0.1", port)) == 0:
-                            self._log(f"Frontend ready on port {port} after {elapsed:.0f}s", "dim", log_callback)
-                            break
+                        if s.connect_ex((_ready_host, port)) == 0:
+                            _tcp_ok = True
+                            try:
+                                _req = _urlreq.Request(f"http://{_ready_host}:{port}/", method="GET")
+                                with _urlreq.urlopen(_req, timeout=3) as _r:
+                                    if getattr(_r, "status", 200) < 500:
+                                        self._log(f"Frontend ready on port {port} after {elapsed:.0f}s", "dim", log_callback)
+                                        break
+                            except _urlreq.HTTPError as _he:
+                                # 4xx means the server is serving (route/redirect) -> ready;
+                                # only 5xx (or a connection error) counts as not-ready.
+                                if _he.code < 500:
+                                    self._log(f"Frontend ready on port {port} after {elapsed:.0f}s", "dim", log_callback)
+                                    break
+                            except Exception:
+                                pass  # connection reset / not serving yet - keep waiting
                 except Exception:
                     pass
                 time.sleep(wait_interval)
                 elapsed += wait_interval
             if elapsed >= wait_timeout:
-                self._log(f"Frontend port {port} not ready after {wait_timeout}s (browser may open to loading page)", "warning", log_callback)
+                if _tcp_ok:
+                    self._log(f"Frontend port {port} open but '/' did not serve cleanly after {wait_timeout}s (window may show a loading/error page)", "warning", log_callback)
+                else:
+                    self._log(f"Frontend port {port} not ready after {wait_timeout}s (browser may open to loading page)", "warning", log_callback)
 
             self.port = port
             return port

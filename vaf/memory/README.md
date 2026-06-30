@@ -16,7 +16,7 @@ A comprehensive memory graph visualization system with RAG (Retrieval-Augmented 
 
 ```bash
 # From the VAF root directory
-docker-compose -f docker-compose.memory.yml up -d
+docker compose -f docker-compose.memory.yml up -d
 ```
 
 This starts PostgreSQL 16 with the pgvector extension.
@@ -58,7 +58,7 @@ Settings are available in:
 |---------|---------|-------------|
 | `memory_enabled` | `true` | Enable/disable memory system |
 | `memory_db_url` | `postgresql://...` | Database connection URL |
-| `memory_embedding_model` | `intfloat/multilingual-e5-small` | Sentence-transformers model (E5: query/passage prefix applied automatically) |
+| `memory_embedding_model` | `all-MiniLM-L6-v2` | Sentence-transformers model (384-dim) |
 | `memory_chunk_size` | `512` | Chunk size in tokens |
 | `memory_chunk_overlap` | `50` | Overlap between chunks |
 | `memory_auto_connect_threshold` | `0.7` | Similarity threshold for auto-connections |
@@ -160,7 +160,7 @@ async with get_db() as db:
 ### Database Connection Failed
 
 1. Ensure Docker is running: `docker ps`
-2. Check if postgres container is up: `docker-compose -f docker-compose.memory.yml ps`
+2. Check if postgres container is up: `docker compose -f docker-compose.memory.yml ps`
 3. Verify connection URL in settings
 
 ### Embedding Model Loading Slow
@@ -178,7 +178,7 @@ The embedding model is downloaded on first use. Subsequent loads are cached.
 ### Running Tests
 
 ```bash
-pytest tests/test_memory.py -v
+pytest tests/test_memory_store_tool.py tests/test_working_memory.py -v
 ```
 
 ### Extending the System

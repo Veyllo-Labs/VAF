@@ -77,9 +77,10 @@ across both models). Controls: play/pause, reshuffle, duration per state. This i
 the **transitions** between the animations.
 
 > **Building it into VAF:** these transitions are documented in the real app code — see
-> `docs/web-ui/AgentAvatar.md`, section *"Universal morph — any state to any state"*. It contains the
-> concrete React integration (collapse-to-neutral -> swap -> bloom) matching
-> `web/components/AgentAvatar.tsx`. The transition player here is the visual reference for it.
+> `docs/web-ui/AgentAvatar.md`, section *"Transitions"* -> *"Transitions between states — keeping the
+> agent in one piece"*. It contains the concrete React integration (settle to neutral -> glide ->
+> arrive, and the same-position in-chat switch) matching `web/components/AgentAvatar.tsx`. The
+> transition player here is the visual reference for it.
 
 ---
 

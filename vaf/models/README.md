@@ -1,17 +1,20 @@
-# VAF Models Cache
+# vaf/models
 
-This directory is used by VAF to store and cache large machine learning models, ensuring they don't need to be re-downloaded across different sessions or project instances.
+This directory is a placeholder package marker, not the runtime model store. VAF does not download, cache, or load any machine learning models here, and no code references this path.
 
-## Structure
+## Where models actually live
 
-Runtime downloads are stored in the user's VAF data directory (for example `~/.vaf/models`). Cache folders (like `.cache/`) are created at runtime as needed.
+Local models are stored in the repo-root `models/` directory (resolved as `base_dir/models`, where `base_dir` is the repository root). Typical contents:
 
-## Usage
+- The local LLM in GGUF format (for example a `*.gguf` file).
+- A `voices/` subfolder holding the Piper TTS voice models (`*.onnx` and matching `*.onnx.json`).
+- A `.cache/` folder created at runtime (for example Hugging Face downloads).
 
-Models stored here are managed by:
-- `vaf/core/backend.py` for local LLMs (GGUF format).
-- Specialized sub-agents that might require dedicated models (e.g., speech or vision models).
+## How models are managed
 
-## Management
+Local-model resolution and provisioning live in `vaf/core/backend.py`:
 
-To clean up disk space, you can safely delete the contents of the `.cache` directory, but note that VAF will re-download required models during their next use.
+- `ensure_model_available(model_name, models_dir)` ensures the requested GGUF model is present, downloading it into `models_dir` when needed.
+- `get_model_path(...)` returns the on-disk path for a model under the repo-root `models/` directory.
+
+The `models_dir` passed to these functions is computed from the repository root (see `vaf/core/agent.py`, where `self.models_dir = base_dir/models`).

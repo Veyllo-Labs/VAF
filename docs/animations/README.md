@@ -17,4 +17,4 @@ New animation systems get their own subfolder here.
 
 **Brand & ownership:** these references depict the VAF agent avatar — a brand asset of
 **Veyllo GmbH**. The code is reusable under the repository license; the agent-avatar and VAF
-logo brand identity is reserved (see `LICENSE`, section "Trademarks and Brand Assets").
+logo brand identity is reserved (see `LICENSING.md`, section "Trademarks and Brand Assets").

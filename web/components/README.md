@@ -4,12 +4,28 @@ This directory contains the reusable React components used throughout the VAF We
 
 ## Structure
 
-- **ActiveToolsPanel.tsx**: Legacy tools panel (kept for compatibility).
-- **SettingsModal.tsx**: Web UI configuration dialog.
-- **SubAgentWindow.tsx**: Large modal showing sub-agent progress.
-- **ToolMessage.tsx**: Inline tool execution cards in chat.
+The directory holds the top-level components plus several feature subfolders. The lists below are representative, not exhaustive.
+
+### Subfolders
+
+- **connections/**: Messaging and integration dashboards (Telegram, WhatsApp, Discord, Mail/Email, GitHub, Cloud, Calendar, Contacts) and their setup wizards.
+- **memory/**: Memory graph, memory detail panel, and RAG query UI, plus the memory store.
+- **settings/**: Editors used by the settings dialog (custom tools, MCP servers, skills, TTS, and workflow creation).
 - **workflows/**: Workflow runtime UI components and store.
 - **ui/**: Low-level UI primitives used by higher-level components.
+- **__tests__/**: Component unit tests.
+
+### Top-level components
+
+Grouped by area (representative examples, not a full list):
+
+- **Chat and tool execution**: `ToolMessage.tsx` (inline tool cards), `ActiveToolsPanel.tsx` (legacy tools panel, kept for compatibility), `TurnActionsTimeline.tsx`, `SubAgentWindow.tsx` (sub-agent progress modal).
+- **Document editing and viewing**: `DocumentEditor.tsx`, `DocumentViewer.tsx`, `NativeDocxEditor.tsx`, `CodeViewer.tsx`, `HtmlViewer.tsx`, `ImageViewer.tsx`, `PdfWithHighlights.tsx`.
+- **Agent presence**: `AgentAvatar.tsx`, `BrowserLiveTile.tsx`.
+- **Notifications and announcements**: `NotificationsModal.tsx`, `AnnouncementModal.tsx`.
+- **Automation**: `CreateAutomationPopup.tsx`, `AutomationCalendarModal.tsx`.
+- **Onboarding and configuration**: `SoulWizard.tsx`, `SettingsModal.tsx` (Web UI configuration dialog), `TrainingDashboard.tsx`.
+- **Utilities and providers**: `CustomCursor.tsx`, `CopyOnRightClick.tsx`, `HostnameNormalizer.tsx`, `IntlProviderWrapper.tsx`.
 
 ## Usage
 

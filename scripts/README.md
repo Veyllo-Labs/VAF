@@ -23,7 +23,59 @@ This directory contains utility scripts for development, maintenance, and deploy
 | `create_app_shortcut.py` | Creates desktop shortcuts for VAF |
 | `fix_venv.py` | Repairs Windows venv COM registration |
 | `update_icons.py` | Regenerates app and tray icons |
-| `init-memory-db.sql` | PostgreSQL initialization for Memory System |
+| `generate_vocab.py` | Dev/build-time tooling that expands the backend Vocabulary Book into many languages via the configured LLM (never called at runtime) |
+
+## CI / Lint Gates
+
+These run in CI and can be run locally before pushing. Each fails (exit 1) on a violation.
+
+| Script | Description |
+|--------|-------------|
+| `ci_check.sh` | Runs the same checks as CI locally (lint gates plus tests) |
+| `check_doc_links.py` | Verifies that every relative link in the project's Markdown resolves |
+| `check_license_headers.py` | Ensures every first-party source file carries the AGPL SPDX header |
+| `check_soul_prompt.py` | Verifies Soul/identity loading and system-prompt building, writing to `logs/` |
+
+## Memory / Database Utilities
+
+| Script | Description |
+|--------|-------------|
+| `init-memory-db.sql` | PostgreSQL initialization for the Memory System |
+| `reembed_memories.py` | Re-embeds all memories and chunks with the current embedding model (run after changing the model) |
+| `migrate_users_to_scopes.py` | One-time migration of user data from `users/<username>/` to `scopes/<user_scope_id>/` |
+
+### Row-Level Security (RLS) SQL
+
+SQL for the per-user Row-Level Security hardening of the Memory database. Run as the `vaf` owner role against the `vaf-memory-db` container.
+
+| File | Description |
+|------|-------------|
+| `rls_app_role.sql` | Creates the non-superuser application role (`vaf_app`) and grants DML |
+| `rls_enforce.sql` | Cutover: enables fail-closed, forced Row-Level Security on `memories` |
+| `rls_disable.sql` | Rollback that removes RLS enforcement at the database level |
+
+## Dev / Diagnostics
+
+Ad-hoc tooling for local development and troubleshooting (not part of normal install/run).
+
+| Script | Description |
+|--------|-------------|
+| `check_users.py` | Lists the local users in the auth database |
+| `clear_user_data.py` | Wipes user and RAG data for a clean slate |
+| `list_mics.py` | Lists available input microphones (voice setup) |
+| `repro_stream.py` | Reproduces/inspects streaming-response parsing |
+| `attachment_rag_stage_test.py` | Memory profiling harness for attachment-RAG indexing/search |
+| `attachment_rag_vector_ramp_test.py` | Memory profiling harness ramping attachment-RAG vector load |
+
+## macOS Tray (`macos/`)
+
+Native macOS menu-bar tray app and its bundler.
+
+| File | Description |
+|------|-------------|
+| `macos/VAFTray.swift` | Swift source for the native macOS status-bar tray |
+| `macos/VAFTray` | Compiled tray binary (built from `VAFTray.swift`) |
+| `macos/build_app.sh` | Builds `VAF.app` around the native tray binary |
 
 ## Installation Guide
 

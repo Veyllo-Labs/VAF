@@ -10,8 +10,10 @@ This directory contains the main pages, layouts, and global styles for the VAF W
 
 ## Development
 
+The current routes are `login/`, `memory/`, `settings/` (an OAuth-callback redirect to the main page), and the `api/[...path]/` catch-all proxy.
+
 When adding new routes:
-- Create a new directory for the route (e.g., `app/settings/`).
+- Create a new directory for the route (e.g., `app/profile/`).
 - Add a `page.tsx` within that directory.
 - Use `layout.tsx` for shared UI elements like sidebars or headers.
 

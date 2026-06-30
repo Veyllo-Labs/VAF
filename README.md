@@ -47,7 +47,7 @@ git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
 chmod +x install.sh && ./install.sh
 ```
 
-The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), detects an existing Docker runtime (it doesn't install one), and adds the `vaf` command to your shell.
+The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), sets up a container engine for you (Rancher Desktop on Windows, Colima on macOS, your distro's Docker on Linux — or uses an existing one if present), and adds the `vaf` command to your shell.
 
 **Installation mode** — the installer asks once:
 ```

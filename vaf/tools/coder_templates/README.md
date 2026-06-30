@@ -29,9 +29,11 @@ A responsive website template with:
 
 ## Adding New Templates
 
-### 1. Create Your Template File
+### 1. Create Your Template Files
 
-Add a new file inside a language folder (or create a new folder) with the appropriate extension:
+Create a folder for your template inside the matching language directory (for example
+`python/flask_app/` or `websites/landing_page/`) and add the source files with the
+appropriate extension:
 - `.html` for HTML templates
 - `.css` for CSS templates
 - `.js` for JavaScript templates
@@ -43,44 +45,50 @@ Add a new file inside a language folder (or create a new folder) with the approp
 Templates support placeholder replacement. Use double curly braces:
 
 ```html
-<title>{{BUSINESS_NAME}}</title>
+<title>{{TITLE}}</title>
 <h1>Welcome to {{BUSINESS_NAME}}</h1>
-<p>{{BUSINESS_DESCRIPTION}}</p>
+<p>{{HEADLINE}}</p>
 ```
 
 Common placeholders:
+- `{{TITLE}}` - Page title
 - `{{BUSINESS_NAME}}` - Company/project name
-- `{{BUSINESS_DESCRIPTION}}` - Short description
-- `{{CONTACT_EMAIL}}` - Contact email
-- `{{PHONE_NUMBER}}` - Phone number
+- `{{HEADLINE}}` - Main headline
 - `{{ADDRESS}}` - Physical address
-- `{{CITY}}` - City name
+- `{{PHONE}}` - Phone number
+- `{{EMAIL}}` - Contact email
 
 ### 3. Register in __init__.py
 
-Add your template to the template loader:
+Add an entry to the `TEMPLATES` dictionary on the `TemplateManager` class in
+`__init__.py`. The dictionary is keyed by *task type*; each value declares a
+`description`, the list of `files` to generate, and the default `placeholders`.
+
+Each entry in `files` maps the output file name to a `template` path relative to
+this directory (nested paths are supported):
 
 ```python
-def get_template(template_name: str) -> str:
-    templates = {
-        'website_html': 'website_html.html',
-        'website_css': 'website_css.css',
-        'website_js': 'website_js.js',
-        'your_template': 'your_template.ext',  # Add this
-    }
-    
-    template_file = templates.get(template_name)
-    if not template_file:
-        return None
-    
-    template_path = Path(__file__).parent / template_file
-    with open(template_path, 'r', encoding='utf-8') as f:
-        return f.read()
+TEMPLATES = {
+    # ... existing task types ...
+    "your_template": {
+        "description": "Short description of what this template scaffolds",
+        "files": [
+            {"name": "main.py", "template": "python/your_template/main.py"},
+        ],
+        "placeholders": {
+            "{{APP_NAME}}": "MyApp",
+            "{{APP_DESCRIPTION}}": "A description",
+        },
+    },
+}
 ```
+
+The task type you choose (the dictionary key) is what `detect_template_type` /
+`detect_template_type_with_llm` will return and what `generate_files` expects.
 
 ### 4. Example: Adding a Python Flask Template
 
-Create `flask_app.py`:
+Create `python/flask_app/app.py`:
 
 ```python
 from flask import Flask, render_template
@@ -101,30 +109,42 @@ if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port={{PORT}})
 ```
 
-Register in `__init__.py`:
+Register it as a new task type in `TEMPLATES`:
 
 ```python
-'flask_app': 'flask_app.py',
+"flask_app": {
+    "description": "Python Flask web application",
+    "files": [
+        {"name": "app.py", "template": "python/flask_app/app.py"},
+    ],
+    "placeholders": {
+        "{{APP_NAME}}": "MyApp",
+        "{{APP_DESCRIPTION}}": "A Flask application",
+        "{{PORT}}": "5000",
+        "{{API_ENDPOINT}}": "data",
+        "{{API_MESSAGE}}": "API endpoint is working",
+    },
+},
 ```
 
-### 5. Template Sets
+### 5. Multi-File Templates
 
-You can create related templates that work together:
-
-```
-my_framework_html.html
-my_framework_css.css
-my_framework_js.js
-my_framework_config.json
-```
-
-Register all of them:
+A single task type can generate several files that work together. List each one in
+the `files` array and the manager will create them all:
 
 ```python
-'my_framework_html': 'my_framework_html.html',
-'my_framework_css': 'my_framework_css.css',
-'my_framework_js': 'my_framework_js.js',
-'my_framework_config': 'my_framework_config.json',
+"my_framework": {
+    "description": "My framework starter project",
+    "files": [
+        {"name": "index.html", "template": "websites/my_framework/index.html"},
+        {"name": "styles.css", "template": "websites/my_framework/styles.css"},
+        {"name": "script.js", "template": "websites/my_framework/script.js"},
+        {"name": "config.json", "template": "websites/my_framework/config.json"},
+    ],
+    "placeholders": {
+        "{{TITLE}}": "My Framework App",
+    },
+},
 ```
 
 ## Using Templates in Code
@@ -226,8 +246,8 @@ The Coding Agent intelligently selects and customizes based on context.
 
 ## Testing Your Template
 
-1. Add template file to this directory
-2. Register in `__init__.py`
+1. Add the template files to the matching language folder
+2. Register the task type in the `TEMPLATES` dictionary in `__init__.py`
 3. Restart VAF
 4. Ask the Coding Agent to create a project using your template type
 5. Verify placeholders are replaced correctly
@@ -236,8 +256,8 @@ The Coding Agent intelligently selects and customizes based on context.
 ## Need Help?
 
 If your template isn't working:
-1. Check file is in this directory
-2. Verify registration in `__init__.py`
+1. Check the template files exist at the `template` paths declared in `TEMPLATES`
+2. Verify the task type is registered in the `TEMPLATES` dictionary in `__init__.py`
 3. Ensure placeholders use `{{CORRECT_FORMAT}}`
 4. Test with a simple project request
 5. Check Coding Agent debug output

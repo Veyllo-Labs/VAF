@@ -1,20 +1,26 @@
 # VAF State Providers
 
-This directory contains specialized modules that provide real-time state information to the VAF agent and the Web Dashboard. State providers are responsible for gathering, formatting, and presenting the "environmental context" of the framework.
+This directory contains `StateProvider` implementations used for VAF session-state persistence. Each provider captures the runtime state of a particular subsystem so that it can be restored when a session is resumed.
 
 ## Key Modules
 
-- **context_state.py**: Monitors and reports on token usage, active context modules, and history compression status.
-- **sandbox_state.py**: Tracks the status of isolated code execution environments (Docker/Python Sandboxes).
-- **tool_activity_state.py**: Provides live updates on which tools are currently running, their progress, and results.
+- **context_state.py**: Persists and restores the `ContextManager`'s intent (goals, constraints, keywords) and state tracking (files, errors, decisions), along with its token limits and trigger threshold.
+- **sandbox_state.py**: Persists the Python sandbox state, including serializable global variables, import statements, execution history, and the working directory.
+- **tool_activity_state.py**: Tracks active and recent tool executions (currently running tools, recent history, and usage statistics) for session resumption.
 
 ## Usage
 
-State providers are typically used by the `ContextManager` or the `Gateway` to enrich the agent's system prompt or to broadcast live updates to connected clients (like the Web UI).
+State providers are registered into the agent's own `StateRegistry` (created once in `Agent.__init__`), for example:
+
+```python
+self.state_registry.register('context', ContextStateProvider(self.context_manager))
+```
+
+The `StateRegistry` is wired into the `SessionManager`, which captures a snapshot of every registered provider when a session is saved and restores it when the session is resumed.
 
 ## Development
 
-When adding a new global state tracking feature:
+When adding a new state-persistence provider:
 1. Create a new provider file in this directory.
-2. Implement a standard interface for state retrieval.
-3. Register the provider in the core system's state registry.
+2. Implement the `StateProvider` interface (`get_state`, `restore_state`, `state_version`).
+3. Register the provider into the agent's `StateRegistry`.

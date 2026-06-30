@@ -1,9 +1,9 @@
 # UI Primitives
 
-This directory contains low-level, reusable UI components such as cards and layout primitives.
+This directory contains low-level, reusable UI components. It currently provides the `Card` component family (`Card`, `CardHeader`, `CardTitle`, `CardContent`).
 
 ## Source
-Most components here are based on **Shadcn UI** and **Radix UI**. They provide accessible, unstyled primitives that are then styled with Tailwind CSS.
+Components here follow the **Shadcn UI** approach: unstyled primitives copied into the codebase and then styled with Tailwind CSS.
 
 ## Usage
 These components should be used to build more complex features in the parent `components/` directory.

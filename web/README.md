@@ -14,7 +14,13 @@ This directory contains the source code for the VAF Web UI, a modern dashboard b
 - **app/**: Next.js App Router pages and layouts.
 - **components/**: Reusable React components.
 - **components/ui/**: Low-level UI primitives (buttons, inputs, etc.).
+- **hooks/**: Reusable React hooks (e.g. `useIsMobile`).
 - **lib/**: Utility functions and helper modules.
+- **messages/**: `next-intl` translation catalogs (`en.json`, `de.json`).
+- **scripts/**: Build and locale-generation helpers (e.g. `generate-locales.js`).
+- **public/**: Static assets (logo, PDF worker, notification sounds).
+- **certificates/**: Local TLS certificates for HTTPS development.
+- **proxy.ts**: Next.js middleware for auth guards and the optional HTTPS entry-point redirect.
 
 ## Getting Started
 

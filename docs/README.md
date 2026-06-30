@@ -55,6 +55,7 @@ Docs are grouped into category folders. Full index by category:
 - [SUBAGENT_IPC.md](agents/SUBAGENT_IPC.md) — Inter-process communication between agents.
 - [SUBAGENT_FILE_EXTRACTION.md](agents/SUBAGENT_FILE_EXTRACTION.md) — File handling in sub-agents.
 - [BROWSER_AGENT.md](agents/BROWSER_AGENT.md) — Browser automation agent.
+- [RESEARCH_AGENT.md](agents/RESEARCH_AGENT.md) — Research sub-agent: multi-section reports from web research.
 - [RESEARCH_AND_DOCUMENT_WORKFLOWS.md](agents/RESEARCH_AND_DOCUMENT_WORKFLOWS.md) — Research and document workflows.
 - [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md) — Workflow matching/selection.
 - [SKILLS.md](agents/SKILLS.md) — Agent Skills (SKILL.md): the second routing tier, `use_skill` progressive disclosure, and the security scanner.
@@ -79,6 +80,7 @@ Docs are grouped into category folders. Full index by category:
 ### web-ui/ — frontend, design, voice
 - [WEB_UI.md](web-ui/WEB_UI.md) — Browser dashboard and WebSocket API.
 - [WEBUI_WEBSOCKET_FLOW.md](web-ui/WEBUI_WEBSOCKET_FLOW.md) — WebSocket flow, session scoping, debugging.
+- [MOBILE_UI.md](web-ui/MOBILE_UI.md) — Mobile UI conventions and patterns; desktop stays unchanged, mobile is additive.
 - [WORKFLOW_UI_COMPONENTS.md](web-ui/WORKFLOW_UI_COMPONENTS.md) — Workflow UI components.
 - [AgentAvatar.md](web-ui/AgentAvatar.md) — Agent avatar.
 - [WelcomeGreeting.md](web-ui/WelcomeGreeting.md) — Welcome greeting.
@@ -86,6 +88,10 @@ Docs are grouped into category folders. Full index by category:
 - [DESIGN.md](web-ui/DESIGN.md) — UI design tokens and component styles.
 - [SPEECH_FEATURES.md](web-ui/SPEECH_FEATURES.md) — TTS/STT integration.
 - [NETWORK_TAB.md](web-ui/NETWORK_TAB.md) — Network tab UI.
+
+### animations/ — avatar & animation showcase
+- [README.md](animations/README.md) — Build-free HTML design references for the animation systems (not part of the built product).
+- [agent_avatar/README.md](animations/agent_avatar/README.md) — Living-dot agent avatar showcase: base states, emotions, away-scenes, and activity states (standalone HTML).
 
 ### security/ — sandboxing & isolation
 - [SANDBOXING.md](security/SANDBOXING.md) — Secure code execution via Docker.

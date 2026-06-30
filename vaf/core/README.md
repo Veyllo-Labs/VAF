@@ -31,4 +31,5 @@ VAF follows a modular architecture where the `CoreAgent` in `agent.py` interacts
 
 - **FastAPI/Uvicorn**: For the gateway server.
 - **Pydantic**: For data validation and the communication protocol.
-- **GPUtil**: For hardware acceleration detection.
+
+Hardware acceleration is detected by `gpu_detection.py`, which probes the system via subprocess (e.g. `nvidia-smi` for NVIDIA, `rocm-smi` or Windows PowerShell/WMI for AMD) without requiring an extra Python package. The result is consumed by `backend.py` to choose a default model.

@@ -10,12 +10,14 @@ Each `.py` file here defines a `WORKFLOW` dictionary that includes:
 
 ## Key Workflows
 - **create_website.py**: Scaffolds a full web project.
+- **analyze_website.py**: Analyzes a website's content and structure.
 - **deep_research.py**: Performs multi-query topic investigation.
 - **research_and_code.py**: Research + code generation pipeline.
 - **research_and_document.py**: Research + document creation pipeline.
 - **code_review.py**: Analyzes and suggests improvements for code.
 - **generate_docs.py**: Creates project documentation.
 - **create_document.py**: Creates a document from user intent.
+- **create_file.py**: Generates and creates a new file.
 - **create_scheduled_task.py**: Creates a scheduled automation workflow.
 - **legal_contract_research.py**: Legal research workflow.
 - **technical_doc_research.py**: Technical research workflow.

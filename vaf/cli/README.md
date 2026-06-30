@@ -4,8 +4,8 @@ The `vaf.cli` module implements the user-facing terminal interface, including th
 
 ## Key Components
 
-- **tui.py**: The primary interactive chat interface using `prompt_toolkit`.
-- **ui.py**: Reusable Rich-based UI components (tables, panels, status indicators).
+- **tui.py**: The primary interactive chat interface using `prompt_toolkit`, and the home of the Rich-based UI components (tables, panels, status indicators).
+- **ui.py**: A thin backward-compatibility shim that re-exports the UI components from `tui.py`.
 - **themes.py**: Definition of the color themes (Dracula, Nord, etc.).
 - **autosuggest.py**: Logic for smart inline completions.
 - **cmd/**: Directory containing individual CLI command implementations.
@@ -16,8 +16,9 @@ The CLI is the main entry point for most users. Commands are structured using Ty
 
 ### Key CLI Actions:
 - `vaf run`: Starts the interactive TUI.
-- `vaf settings`: Opens the configuration menu.
 - `vaf session list`: Manages saved conversations.
+
+The configuration menu is not a top-level subcommand; it is reached by typing `settings` (or `s`) inside the interactive TUI started by `vaf run`.
 
 ## Extending the CLI
 
@@ -30,4 +31,3 @@ To add a new command:
 
 - **prompt_toolkit**: For the interactive TUI and autosuggestions.
 - **rich**: For beautiful terminal output and formatting.
-- **pygments**: For syntax highlighting in code blocks.

@@ -565,7 +565,7 @@ async def _replace_session_vector_once_async(
             deleted_old = await db.execute(delete(Memory).where(and_(*delete_filters)))
             indexed = 0
 
-            hierarchical_enabled = bool(Config.get("attachment_rag_hierarchical_enabled", False))
+            hierarchical_enabled = bool(Config.get("attachment_rag_hierarchical_enabled", True))
             hierarchical_min_chars = max(500, int(Config.get("attachment_rag_hierarchical_min_chars", 4000) or 4000))
 
             for i, doc in enumerate(documents):

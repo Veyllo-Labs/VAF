@@ -65,10 +65,22 @@ Provide a detailed analysis:
 def call_local_llm(prompt: str, temperature: float = 0.3) -> str:
     """Call the local LLM via VAF server."""
     try:
+        from vaf.core.config import Config
+        provider = Config.get("provider", "local")
+        messages = [{"role": "user", "content": prompt}]
+        if provider != "local":
+            # Cloud provider: route via APIBackendManager (model=None -> api_model_{provider}),
+            # instead of the local :8080 server (which only exists in local mode).
+            from vaf.core.api_backend import APIBackendManager
+            return "".join(
+                c for c in APIBackendManager(provider).chat_completion(
+                    messages=messages, temperature=temperature, max_tokens=2048, stream=True, model=None
+                ) if isinstance(c, str)
+            )
         response = requests.post(
             "http://127.0.0.1:8080/v1/chat/completions",
             json={
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "temperature": temperature,
                 "max_tokens": 2048,
                 "stream": False

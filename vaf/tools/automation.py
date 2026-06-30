@@ -764,166 +764,39 @@ Return ONLY valid JSON array, no explanations, no markdown code blocks."""
             # Call LLM to generate workflow
             messages = [{"role": "user", "content": prompt}]
             
-            # Try to use existing server (silent - no agent initialization)
-            # The server should already be running if VAF is active in the main window
-            try:
-                import requests
-                
-                # First check if server is running
-                try:
-                    health_check = requests.get("http://127.0.0.1:8080/health", timeout=2)
-                    if health_check.status_code != 200:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: Server not ready, initializing Agent...", style="dim")
-                        # Fallback: Initialize Agent if server not ready
-                        from vaf.core.agent import Agent
-                        agent = Agent(verbose=False)
-                        agent.load_model()
-                        agent.init_chat()
-                        
-                        # Use agent's chat_step to get response (time-bounded; shutdown guaranteed)
-                        response_parts = []
-                        try:
-                            from vaf.core.bounded_run import run_bounded as _run_bounded
-                            from vaf.core.config import Config as _CfgWf
-                            _wf_to = float(_CfgWf.get("workflow_generation_timeout_seconds", 90) or 90)
-                            _run_bounded(
-                                lambda: agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True),
-                                timeout=_wf_to, label="workflow_generation",
-                            )
-                        finally:
-                            try:
-                                agent.shutdown()
-                            except Exception:
-                                pass
-                        content = "".join(response_parts).strip()
-                        
-                        # Robustly extract the first VALID JSON array (tolerates prose / trailing text)
-                        workflow_steps = _extract_first_json_array(content)
-                        if not workflow_steps:
-                            from vaf.cli.ui import UI
-                            UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
-                            return []
-                        
-                        # Validate and return
-                        if isinstance(workflow_steps, list) and len(workflow_steps) > 0:
-                            for step in workflow_steps:
-                                if "tool" not in step:
-                                    step["tool"] = "coding_agent"
-                                if "args" not in step:
-                                    step["args"] = {}
-                                if "description" not in step:
-                                    step["description"] = f"Execute {step['tool']}"
-                            from vaf.cli.ui import UI
-                            UI.event("Debug", f"Generated {len(workflow_steps)} workflow steps", style="dim")
-                            return workflow_steps
-                        else:
-                            from vaf.cli.ui import UI
-                            UI.event("Debug", "Workflow generation: Empty or invalid workflow steps", style="dim")
-                            return []
-                except requests.exceptions.RequestException:
-                    # Server not running - fallback to initializing Agent
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: Server not running, initializing Agent...", style="dim")
-                    from vaf.core.agent import Agent
-                    agent = Agent(verbose=False)
-                    agent.load_model()
-                    agent.init_chat()
-                    
-                    # Use agent's chat_step to get response (time-bounded; shutdown guaranteed)
-                    response_parts = []
-                    try:
-                        from vaf.core.bounded_run import run_bounded as _run_bounded
-                        from vaf.core.config import Config as _CfgWf
-                        _wf_to = float(_CfgWf.get("workflow_generation_timeout_seconds", 90) or 90)
-                        _run_bounded(
-                            lambda: agent.chat_step(prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True),
-                            timeout=_wf_to, label="workflow_generation",
-                        )
-                    finally:
-                        try:
-                            agent.shutdown()
-                        except Exception:
-                            pass
-                    content = "".join(response_parts).strip()
-                    
-                    # Robustly extract the first VALID JSON array (tolerates prose / trailing text)
-                    workflow_steps = _extract_first_json_array(content)
-                    if not workflow_steps:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
-                        return []
-                    
-                    # Validate and return
-                    if isinstance(workflow_steps, list) and len(workflow_steps) > 0:
-                        for step in workflow_steps:
-                            if "tool" not in step:
-                                step["tool"] = "coding_agent"
-                            if "args" not in step:
-                                step["args"] = {}
-                            if "description" not in step:
-                                step["description"] = f"Execute {step['tool']}"
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", f"Generated {len(workflow_steps)} workflow steps", style="dim")
-                        return workflow_steps
-                    else:
-                        from vaf.cli.ui import UI
-                        UI.event("Debug", "Workflow generation: Empty or invalid workflow steps", style="dim")
-                        return []
-                
-                # Server is running - use it directly
-                payload = {"messages": messages, "max_tokens": 1024, "temperature": 0.2}
-                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=30)
-                res.raise_for_status()
-                response_data = res.json()
-                
-                if 'choices' not in response_data or len(response_data['choices']) == 0:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: Empty response from LLM", style="dim")
-                    return []
-                
-                content = response_data['choices'][0]['message']['content'].strip()
-                
-                # Robustly extract the first VALID JSON array (tolerates markdown / prose / trailing text)
-                workflow_steps = _extract_first_json_array(content)
-                if not workflow_steps:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
-                    return []
-                
-                # Validate workflow steps
-                if isinstance(workflow_steps, list) and len(workflow_steps) > 0:
-                    # Ensure all steps have required fields
-                    for step in workflow_steps:
-                        if "tool" not in step:
-                            step["tool"] = "coding_agent"
-                        if "args" not in step:
-                            step["args"] = {}
-                        if "description" not in step:
-                            step["description"] = f"Execute {step['tool']}"
-                    
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", f"Generated {len(workflow_steps)} workflow steps", style="dim")
-                    return workflow_steps
-                else:
-                    from vaf.cli.ui import UI
-                    UI.event("Debug", "Workflow generation: Empty or invalid workflow steps", style="dim")
-                    return []
-            except requests.exceptions.RequestException as e:
-                # Network/server error
+            # Provider-aware: query_llm reaches the configured cloud provider (api_model_{provider})
+            # OR the local server, instead of hardcoding 127.0.0.1:8080 (which only exists in local
+            # mode). Replaces the old health-check + local-Agent()-spinup + :8080 POST.
+            from vaf.core.config import Config as _CfgWf
+            _wf_to = int(_CfgWf.get("workflow_generation_timeout_seconds", 90) or 90)
+            content = self.query_llm(messages, max_tokens=1024, temperature=0.2, timeout=_wf_to)
+            if not content:
                 from vaf.cli.ui import UI
-                UI.event("Debug", f"Workflow generation: Server error ({e}), using prompt-based execution", style="dim")
+                UI.event("Debug", "Workflow generation: empty LLM response, using prompt-based execution", style="dim")
                 return []
-            except json.JSONDecodeError as e:
-                # JSON parsing error
+
+            # Robustly extract the first VALID JSON array (tolerates markdown / prose / trailing text)
+            workflow_steps = _extract_first_json_array(content.strip())
+            if not workflow_steps:
                 from vaf.cli.ui import UI
-                UI.event("Debug", f"Workflow generation: JSON parse error ({e}), using prompt-based execution", style="dim")
+                UI.event("Debug", "Workflow generation: no valid JSON array in response, using prompt-based execution", style="dim")
                 return []
-            except Exception as e:
-                # Other errors
+
+            # Validate workflow steps
+            if isinstance(workflow_steps, list) and len(workflow_steps) > 0:
+                for step in workflow_steps:
+                    if "tool" not in step:
+                        step["tool"] = "coding_agent"
+                    if "args" not in step:
+                        step["args"] = {}
+                    if "description" not in step:
+                        step["description"] = f"Execute {step['tool']}"
                 from vaf.cli.ui import UI
-                UI.event("Debug", f"Workflow generation failed: {e}, using prompt-based execution", style="dim")
-                return []
+                UI.event("Debug", f"Generated {len(workflow_steps)} workflow steps", style="dim")
+                return workflow_steps
+            from vaf.cli.ui import UI
+            UI.event("Debug", "Workflow generation: Empty or invalid workflow steps", style="dim")
+            return []
             
             return []
             
@@ -980,54 +853,16 @@ Return ONLY the name, no explanations, no quotes, no markdown, just the name:"""
 
                 messages = [{"role": "user", "content": llm_prompt}]
                 
-                try:
-                    # Try server first (same as workflow generation)
-                    payload = {
-                        "messages": messages, 
-                        "max_tokens": 50,  # Names are short, 50 is enough
-                        "temperature": 0.2  # Low temperature for consistent, predictable names
-                    }
-                    res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=5)
-                    if res.status_code == 200:
-                        response_data = res.json()
-                        if 'choices' in response_data and len(response_data['choices']) > 0:
-                            name = response_data['choices'][0]['message']['content'].strip()
-                            # Clean up: remove quotes, extra whitespace, markdown code blocks
-                            name = name.strip('"\'` \n\t')
-                            # Remove markdown code blocks if present
-                            if name.startswith('```'):
-                                lines = name.split('\n')
-                                name = '\n'.join(lines[1:-1]) if len(lines) > 2 else name
-                                name = name.strip()
-                            # Validate and sanitize
-                            if name and len(name) <= 50:
-                                # Use safe_name helper to ensure valid filename
-                                def safe_name(text):
-                                    if not text:
-                                        return ""
-                                    sanitized = re.sub(r'[^\w]', '_', str(text))
-                                    return sanitized.strip('_')[:30]
-                                return safe_name(name)
-                except requests.exceptions.RequestException:
-                    # Server not running - fallback to Agent initialization
-                    from vaf.core.agent import Agent
-                    agent = Agent(verbose=False)
-                    agent.load_model()
-                    agent.init_chat()
-                    
-                    # Use agent's chat_step to get response
-                    response_parts = []
-                    agent.chat_step(llm_prompt, stream_callback=lambda x: response_parts.append(x), skip_input=True)
-                    content = "".join(response_parts).strip()
-                    agent.shutdown()
-                    
-                    # Clean up response
-                    name = content.strip('"\'` \n\t')
+                # Provider-aware: query_llm reaches the cloud provider OR the local server,
+                # instead of the hardcoded 127.0.0.1:8080 + local-Agent()-spinup fallback.
+                import re
+                name = self.query_llm(messages, max_tokens=50, temperature=0.2, timeout=10)
+                if name:
+                    name = name.strip('"\'` \n\t')
                     if name.startswith('```'):
-                        lines = name.split('\n')
-                        name = '\n'.join(lines[1:-1]) if len(lines) > 2 else name
+                        _nlines = name.split('\n')
+                        name = '\n'.join(_nlines[1:-1]) if len(_nlines) > 2 else name
                         name = name.strip()
-                    
                     if name and len(name) <= 50:
                         def safe_name(text):
                             if not text:

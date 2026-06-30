@@ -420,7 +420,7 @@ class Config:
         "attachment_rag_snippet_chars": 900,                        # Max chars per retrieved attachment snippet inserted into prompt
         "attachment_rag_max_rss_gb": 4.0,                           # Hard guard: kill attachment lane when process RSS exceeds this limit
         # Hierarchical document indexing (two-tier: section summaries → chunks)
-        "attachment_rag_hierarchical_enabled": False,               # Opt-in: build section index for large structured docs (vector mode only)
+        "attachment_rag_hierarchical_enabled": True,                # On by default: build section index for large structured docs (vector mode only)
         "attachment_rag_hierarchical_min_chars": 4000,              # Min doc length to activate hierarchical indexing (chars)
         "attachment_rag_hierarchical_max_sections": 15,             # Max sections to index per document (2-50)
         "attachment_rag_hierarchical_coarse_k": 3,                  # Top-k sections selected in Tier 1 retrieval (1-10)
@@ -479,8 +479,9 @@ class Config:
         # interactive confirmation path. When True, channel sessions get the SAME tools as the
         # main agent — channel restrictions and per-call confirmations are lifted — gated only by
         # the channel whitelist and the per-user admin check (admin_only tools still need an admin
-        # session). Admin-only setting; default off.
-        "channel_tools_unrestricted": False,
+        # session). Admin-only setting; default ON - channel sessions get the same tools as the main
+        # agent, gated by the channel whitelist (paired_only) + the per-user admin check.
+        "channel_tools_unrestricted": True,
 
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.

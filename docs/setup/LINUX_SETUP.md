@@ -44,10 +44,10 @@ sudo pacman -S python-gobject webkit2gtk
 
 > **Note:** The WebKitGTK packages are only needed for the native desktop window. If they are missing, VAF falls back to opening the Web UI in your default browser instead.
 
-### 2. Enable Docker *(optional — memory/RAG + code sandbox only)*
+### 2. Set up a container runtime *(required)*
 
-VAF runs without Docker (long-term memory is then off). To enable it, set up a runtime — the
-installer detects an existing one and does not install Docker for you:
+VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so a runtime is required
+to finish setup and sign in. The installer detects an existing one but does not install it for you:
 
 ```bash
 sudo systemctl enable --now docker

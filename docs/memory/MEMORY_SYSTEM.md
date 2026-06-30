@@ -164,7 +164,7 @@ Use separate thresholds for vector and lexical scoring in the attachment lane:
 | `attachment_rag_hybrid_enabled` | `true` | In vector mode, combine vector + lexical candidates with RRF fusion. |
 | `attachment_rag_hybrid_lexical_k` | `16` (dynamic default) | Max lexical candidates retained before fusion in attachment hybrid mode. |
 | `attachment_rag_hybrid_lexical_scan_limit` | `96` | Max attachment rows scanned for lexical candidates before filtering/ranking. |
-| `attachment_rag_hierarchical_enabled` | `false` | Enable two-tier hierarchical indexing for large structured documents (vector mode only; see below). |
+| `attachment_rag_hierarchical_enabled` | `true` | On by default. Two-tier hierarchical indexing for large structured documents (vector mode only; see below). |
 | `attachment_rag_hierarchical_min_chars` | `4000` | Minimum document length in characters to activate hierarchical indexing. Shorter docs use flat chunking. |
 | `attachment_rag_hierarchical_max_sections` | `15` | Maximum number of sections indexed per document. |
 | `attachment_rag_hierarchical_coarse_k` | `3` | Number of sections selected in the Tier 1 coarse search before Tier 2 chunk search. |

@@ -1,4 +1,9 @@
 # Windows batch files MUST use CRLF: cmd.exe mis-parses multi-line parenthesized
-# blocks (IF/FOR) when the file is LF-only. Force CRLF so a checkout on any OS is safe.
+# blocks (IF/FOR) when the file is LF-only. Force CRLF regardless of the editing OS.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Shell scripts + macOS .command MUST use LF: a CR (\r) in the shebang breaks the
+# interpreter on macOS/Linux ("bad interpreter: /bin/bash^M"). Force LF.
+*.sh text eol=lf
+*.command text eol=lf

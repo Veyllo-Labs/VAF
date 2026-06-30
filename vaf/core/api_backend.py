@@ -1108,6 +1108,13 @@ class APIBackendManager:
         # Determine model — defaults derive from Config.PROVIDER_MODELS (single source).
         default_models = {p: m["default"] for p, m in Config.PROVIDER_MODELS.items()}
         default_models["local"] = "llama3"
+        # A forwarded local/blank model id must never reach a cloud provider. The local model default
+        # is "auto" (config.py), and some sub-agents/tools forward the local "model" key verbatim; for
+        # non-local providers normalise "auto"/blank to "unset" so it resolves to api_model_{provider}
+        # below (incl. DeepSeek's deepseek-auto routing) instead of shipping "auto" -> HTTP 400
+        # "model does not exist". The GGUF guardrail below only catches local *file* ids, not "auto".
+        if model and self.provider_name != "local" and str(model).strip().lower() in ("", "auto"):
+            model = None
         if not model:
             if getattr(self, "_embedded", False):
                 # Embedded: honour api_model from the programmatic config (no Settings UI here)

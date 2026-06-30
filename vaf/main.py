@@ -72,12 +72,11 @@ def bootstrap():
         "pillow": "PIL",
     }
     
-    # macOS-specific requirements
-    if sys.platform == "darwin":
-        DEPENDENCIES["rumps"] = "rumps"
-        # pystray is excluded on Mac in requirements.txt (uses rumps instead)
-        if "pystray" in DEPENDENCIES:
-            del DEPENDENCIES["pystray"]
+    # NOTE: do NOT special-case macOS to require rumps. rumps was removed (it conflicts with
+    # pywebview for macOS main-thread ownership); the tray uses pystray on every platform, and
+    # pystray + pyobjc-framework-Cocoa are in requirements.txt for darwin. Demanding rumps here
+    # caused an infinite "missing rumps" prompt, since `pip install -r requirements.txt` never
+    # installs it. The platform-agnostic check above already covers pystray.
     
     missing = []
     for pip_name, import_name in DEPENDENCIES.items():

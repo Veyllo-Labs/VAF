@@ -186,7 +186,7 @@ def evaluate_tool_policy(
     if is_channel_session:
         try:
             from vaf.core.config import Config
-            if Config.get("channel_tools_unrestricted", False):
+            if Config.get("channel_tools_unrestricted", True):
                 logger.info(
                     "POLICY_ALLOW tool=%s reason=channel_full_access source=%s",
                     tool_name, source or "channel",

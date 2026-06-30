@@ -879,6 +879,12 @@ class Agent:
         # (the API backend provides token counting / context window itself).
         if getattr(self, "api_backend", None):
             return None
+        # Cloud provider selected but its api_backend is not built yet (e.g. right after first-run
+        # setup, before the live provider-switch was applied): still NEVER download a local GGUF
+        # for tokenization. This is the bug behind "a Veyllo key is set but a model is still
+        # downloaded" - get_token_usage() runs at startup before the provider switch.
+        if (getattr(self, "provider", "local") or "local") != "local":
+            return None
 
         try:
             from llama_cpp import Llama  # type: ignore[import-untyped]
@@ -886,11 +892,15 @@ class Agent:
             # llama-cpp-python not installed - this is OK when using server mode
             # Return None and let caller handle it gracefully
             return None
-            
+
         from vaf.cli.ui import UI
-        
-        # Ensure model file exists before trying to load it for tokenization
-        self.ensure_model_exists()
+
+        # Tokenize ONLY with an already-present model. Do NOT trigger a download here - that is the
+        # job of load_model() (which is provider-gated). Otherwise the very first get_token_usage()
+        # at startup pulls a multi-GB GGUF before the user has even chosen a provider in setup.
+        _mp = getattr(self, "model_path", None)
+        if not _mp or not os.path.exists(_mp):
+            return None
 
         try:
             # Initialize with minimal settings for tokenization only
@@ -3864,6 +3874,15 @@ class Agent:
                     content = res['choices'][0]['message']['content']
                 except Exception:
                     pass
+            elif self.api_backend:
+                # Cloud provider (no local :8080 server) - resolve model via api_model_{provider}.
+                chunks = list(self.api_backend.chat_completion(
+                    messages=temp_history,
+                    max_tokens=200,
+                    temperature=0.3,
+                    stream=False,
+                ))
+                content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
             elif self.llm:
                  output = self.llm.create_chat_completion(
                      messages=temp_history,
@@ -3871,7 +3890,7 @@ class Agent:
                      temperature=0.3
                  )
                  content = output['choices'][0]['message']['content']
-            
+
             return content.strip()
         except Exception as e:
             from vaf.cli.ui import UI
@@ -4497,6 +4516,28 @@ class Agent:
                         append_domain_log("backend", f"intent_llm_error error={str(e)[:50]}")
                     except Exception:
                         pass
+            elif self.api_backend:
+                # Cloud provider (no local :8080 server) - resolve model via api_model_{provider}.
+                try:
+                    chunks = list(self.api_backend.chat_completion(
+                        messages=messages, max_tokens=32, temperature=0.0, stream=False))
+                    content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
+                    try:
+                        append_domain_log("backend", f"intent_llm_response content={content[:30] if content else 'EMPTY'}")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    try:
+                        append_domain_log("backend", f"intent_llm_error error={str(e)[:50]}")
+                    except Exception:
+                        pass
+            elif self.llm:
+                try:
+                    output = self.llm.create_chat_completion(
+                        messages=messages, max_tokens=32, temperature=0.0)
+                    content = (output.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+                except Exception:
+                    pass
 
             # Strip <think> blocks and parse
             clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
@@ -8350,6 +8391,16 @@ class Agent:
                                         response_text = content if content else base_msg
                                     else:
                                         response_text = base_msg
+                                elif self.api_backend:
+                                    # Cloud provider (no local :8080) - resolve model via api_model_{provider}.
+                                    chunks = list(self.api_backend.chat_completion(
+                                        messages=[{"role": "user", "content": translation_prompt}],
+                                        max_tokens=100,
+                                        temperature=0.1,
+                                        stream=False,
+                                    ))
+                                    content = "".join(c if isinstance(c, str) else str(c) for c in chunks if c).strip()
+                                    response_text = content if content else base_msg
                                 else:
                                     # Local Llama translation
                                     res = self.llm.create_chat_completion(

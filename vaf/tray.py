@@ -1575,9 +1575,18 @@ def run_app():
     # Initialise pywebview desktop window and hand main thread to its GUI loop
     _default_port = Config.get("local_network_port_frontend", 3000)
     _startup_url = f"http://127.0.0.1:{_default_port}"
+    # Open on a self-contained SPLASH (loading screen), not the frontend URL:
+    # the frontend may not be listening yet, and if another local app occupies
+    # :3000 the window would briefly show THAT page. start_frontend_bg() above
+    # navigates the window to the real (resolved) frontend port once it's ready.
+    try:
+        _splash_path = Path(__file__).parent / "media" / "splash.html"
+        _splash_html = _splash_path.read_text(encoding="utf-8") if _splash_path.exists() else None
+    except Exception:
+        _splash_html = None
     try:
         from vaf.core import desktop_window as _dw
-        _dw.init(_startup_url, title="VAF")
+        _dw.init(_startup_url, title="VAF", html=_splash_html)
         _tray_startup_log("pywebview window created, starting GUI loop")
         log("Tray", "Starting pywebview GUI loop (main thread)")
         # Window/taskbar icon: prefer a .ico on Windows (the native window icon wants one),

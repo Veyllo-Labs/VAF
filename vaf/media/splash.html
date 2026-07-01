@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- SPDX-FileCopyrightText: 2026 Veyllo GmbH -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Additional permissions and terms under AGPL Section 7: see LICENSING.md -->
+<!--
+  VAF desktop startup splash. Loaded DIRECTLY into the pywebview window as a
+  self-contained HTML string (no server, no external assets) so it shows the
+  instant the window opens — before the Next.js frontend is listening. The tray
+  navigates the window to the real frontend URL once it's ready (see
+  vaf/tray.py start_frontend_bg → desktop_window.navigate). Fixes the brief
+  flash of whatever else occupies :3000 during boot.
+
+  The sleeping agent (dark square body + white eye) + rising "z z z" reuse the
+  canonical nap animation from animations/agent_avatar (bodyNap / awayZzz); the
+  eye stays shut (eyeSleep) instead of reopening each cycle.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VAF</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#05070a}
+  .bg{position:fixed;inset:0;background:#05070a;animation:bgOn 1.1s ease forwards}
+  @keyframes bgOn{0%,22%{background:#05070a}60%{background:#fbfcfe}100%{background:#eef1f5}}
+  .stage{position:fixed;left:0;right:0;top:55%;display:flex;justify-content:center;opacity:0;animation:stageIn 1.1s ease .55s forwards}
+  @keyframes stageIn{0%{opacity:0;transform:translateY(8px) scale(.94)}70%{opacity:1;transform:translateY(0) scale(1.02)}100%{opacity:1;transform:translateY(0) scale(1)}}
+  .agent{position:relative;width:32px;height:32px}
+  .aura{position:absolute;z-index:0;left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:#fff;opacity:.12;filter:blur(3px)}
+  .body{position:absolute;z-index:1;inset:0;background:#111827;border-radius:10px;box-shadow:0 5px 12px rgba(17,24,39,.22);transform-origin:center bottom;animation:bodyNap 4s ease-in-out infinite}
+  .eye{position:absolute;z-index:2;left:50%;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;background:#fff;box-shadow:0 0 6px 2px rgba(255,255,255,.32);transform-origin:center;animation:eyeSleep 4s ease-in-out infinite}
+  .z{position:absolute;z-index:3;left:24px;top:-6px;font-family:Georgia,serif;font-weight:700;color:#2a3142;opacity:0}
+  .z1{font-size:9px;animation:awayZzz 3.3s ease-out infinite}
+  .z2{font-size:12px;animation:awayZzz 3.3s ease-out infinite 1.1s}
+  .z3{font-size:15px;animation:awayZzz 3.3s ease-out infinite 2.2s}
+  @keyframes bodyNap{0%,100%{transform:translateY(2px) scale(1.03,.96)}50%{transform:translateY(0) scale(.99,1.05)}}
+  @keyframes eyeSleep{0%,100%{transform:translateY(1px) scaleY(.13)}50%{transform:translateY(1px) scaleY(.2)}}
+  @keyframes awayZzz{0%{transform:translate(0,0) scale(.6);opacity:0}18%{opacity:.85}100%{transform:translate(14px,-26px) scale(1.2);opacity:0}}
+  @media(prefers-reduced-motion:reduce){.bg,.stage,.body,.eye,.z{animation:none!important}.stage{opacity:1!important;transform:none!important}.bg{background:#eef1f5!important}.eye{transform:scaleY(.14)}.z{display:none}}
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="stage">
+    <div class="agent">
+      <div class="aura"></div>
+      <div class="body"></div>
+      <div class="eye"></div>
+      <span class="z z1">z</span>
+      <span class="z z2">z</span>
+      <span class="z z3">z</span>
+    </div>
+  </div>
+</body>
+</html>

@@ -852,7 +852,7 @@ def get_icon_path(status):
     base_dir = Path(__file__).parent.parent
     logo_path = base_dir / "vaf" / "media" / "logo_original.png"
 
-    if not filename.exists() or True: # Force recreate for now to see changes
+    if not filename.exists():
         try:
             if not logo_path.exists():
                 logger.warning(f"[Tray] Logo not found at {logo_path}, using default icon behavior.")
@@ -894,7 +894,13 @@ def get_icon_path(status):
             draw.ellipse((28, 28, 42, 42), fill=(255, 255, 255, 255)) 
             draw.ellipse((30, 30, 40, 40), fill=color)
             
-            img.save(filename)
+            # Atomic write: never let a concurrent reader (pystray) observe a
+            # half-written PNG. Write to a temp file, then rename into place.
+            # format="PNG" is required because Pillow would otherwise infer the
+            # format from the .tmp extension and fail ("unknown file extension").
+            tmp = filename.with_name(filename.name + ".tmp")
+            img.save(tmp, format="PNG")
+            os.replace(tmp, filename)
         except Exception as e:
             print(f"Failed to create icon: {e}")
             return None
@@ -1313,12 +1319,17 @@ def create_image(color_name):
     """Create PIL Image for pystray icon."""
     path = get_icon_path(color_name)
     if path:
-        img = Image.open(path)
+        # Eagerly decode and detach from the file. pystray resizes this image
+        # lazily from its own setup thread; a bare Image.open() stays bound to the
+        # PNG file, and that deferred cross-thread read can race a concurrent icon
+        # rewrite -> "AssertionError: self.png is None" and no tray icon.
+        # convert("RGBA") forces the decode now and returns an in-memory copy.
+        img = Image.open(path).convert("RGBA")
         # Windows: taskbar expects 16x16 or 32x32 (see docs/platform/SYSTEM_TRAY.md)
         if platform.system() == "Windows" and (img.width > 32 or img.height > 32):
             img = img.resize((32, 32), Image.Resampling.LANCZOS)
         return img
-    return Image.new('RGB', (32, 32), 'red')  # Fallback
+    return Image.new('RGBA', (32, 32), (255, 0, 0, 255))  # Fallback
 
 
 def run_headless():

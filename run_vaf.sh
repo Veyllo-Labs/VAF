@@ -13,45 +13,38 @@ if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     if command -v docker &>/dev/null && [ -f "$PROJECT_ROOT/docker-compose.memory.yml" ]; then
         echo "Starting Docker services..."
         docker compose -f "$PROJECT_ROOT/docker-compose.memory.yml" up -d --quiet-pull 2>/dev/null \
-            && echo "   ✓ Docker services running" \
-            || echo "   ⚠ Docker not available — services skipped"
+            && echo "   Docker services running" \
+            || echo "   Docker not available - services skipped"
     fi
 
-    # Try to find a Framework Python for macOS GUI apps (Rumps tray icon)
-    # This is critical when running from an App Bundle
-    FRAMEWORK_PYTHON=""
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # Check standard Homebrew location for Python 3.11/3.10/etc
-        # Get version from python3
-        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        
-        CANDIDATES=(
-            "/opt/homebrew/opt/python@$PY_VER/Frameworks/Python.framework/Versions/$PY_VER/Resources/Python.app/Contents/MacOS/Python"
-            "/usr/local/opt/python@$PY_VER/Frameworks/Python.framework/Versions/$PY_VER/Resources/Python.app/Contents/MacOS/Python"
-            "/Library/Frameworks/Python.framework/Versions/$PY_VER/Resources/Python.app/Contents/MacOS/Python"
-        )
-        
-        for cand in "${CANDIDATES[@]}"; do
-            if [ -f "$cand" ] && [ -x "$cand" ]; then
-                FRAMEWORK_PYTHON="$cand"
-                break
-            fi
-        done
+    # Run VAF with the venv's own Python. The venv is built from a framework
+    # Python (Homebrew's python@X.Y ships a Python.framework), so venv/bin/python
+    # is GUI-capable (menu-bar tray via pystray + pyobjc) AND sees the venv's
+    # installed packages.
+    #
+    # A previous version exec'd the RAW framework binary
+    # (.../Python.app/Contents/MacOS/Python), which bypassed the venv entirely:
+    # none of the installed deps (typer, fastapi, torch, ...) were importable, so
+    # VAF failed to start. It also read the version from `python3` AFTER
+    # activating the venv, so on a Homebrew Python 3.14 machine it hunted for the
+    # 3.14 framework binary. (rumps was removed; the tray is pystray on every
+    # platform, so no special framework binary is needed.)
+    VENV_PYTHON="$PROJECT_ROOT/venv/bin/python"
+
+    if [ ! -x "$VENV_PYTHON" ]; then
+        echo "venv Python not found at $VENV_PYTHON"
+        echo "Please run: ./scripts/setup_mac.sh"
+        exit 1
     fi
 
-    if [ -n "$FRAMEWORK_PYTHON" ]; then
-        echo "🚀 Starting VAF using Framework Python: $FRAMEWORK_PYTHON"
-        # We must use exec to keep PID
-        exec "$FRAMEWORK_PYTHON" -m vaf.main "$@"
+    echo "Starting VAF using venv Python: $VENV_PYTHON ($("$VENV_PYTHON" --version 2>&1))"
+    # exec to keep the PID (matters for the app bundle / signal handling)
+    if [ -z "$1" ]; then
+        exec "$VENV_PYTHON" -m vaf.main tray
     else
-        echo "🚀 Starting VAF using standard python3..."
-        if [ -z "$1" ]; then
-            exec python3 -m vaf.main tray
-        else
-            exec python3 -m vaf.main "$@"
-        fi
+        exec "$VENV_PYTHON" -m vaf.main "$@"
     fi
 else
-    echo "❌ Virtual environment not found."
+    echo "Virtual environment not found."
     echo "Please run: ./scripts/setup_mac.sh"
 fi

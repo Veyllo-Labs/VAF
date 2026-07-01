@@ -7,7 +7,7 @@ VAF includes a persistent background service managed by a system tray applicatio
 - **Native Desktop Window**: VAF opens in its own dedicated window (no browser tab needed), powered by a `pywebview` WebView.
     - Windows: Edge/WebView2 (Chromium-based)
     - macOS: WKWebView (Safari engine)
-    - Linux: **PyQt6 / Qt WebEngine (Chromium)** — VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
+    - Linux: **PySide6 / Qt WebEngine (Chromium)** — VAF forces `QT_QPA_PLATFORM=xcb` and the Qt backend (not WebKitGTK) and tunes Chromium via `QTWEBENGINE_CHROMIUM_FLAGS` in `vaf/core/desktop_window.py`. See the rendering/memory note below.
 - **Persistent Tray Icon**: A system tray icon on all platforms indicates the server state.
     - **Green / Active**: Server is running, model is loaded into RAM.
     - **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
@@ -84,7 +84,7 @@ The system uses a shared `TrayContext` to manage state between the Uvicorn web s
 
 - **All platforms**: Uses `pystray` for the system tray icon (runs in a background thread via `icon.run_detached()`).
 - **Desktop window**: `pywebview` (`vaf/core/desktop_window.py`) creates a native WebView window that owns the main thread (`webview.start()` blocks). Closing the window hides it; Quit destroys it and exits. Login sessions and localStorage are **persisted** across restarts (`private_mode=False`, storage in `.vaf_webview/`).
-- **Native download/print dialogs** (Qt backend): `_install_download_print_handlers()` wires the embedded QtWebEngine view so WebUI actions get native dialogs — `downloadRequested` opens a save dialog (file downloads and blob exports like Save-as-PDF), `printRequested`/`printRequestedByFrame` open a save-as-PDF dialog and render via `printToPdf()`. The frame variant matters: `window.print()` inside an iframe (Document Editor, research report print) prints the frame's content, not the app shell. pywebview's own download handler is not used — it calls the Qt5-only `download.setPath()`, which does not exist on PyQt6.
+- **Native download/print dialogs** (Qt backend): `_install_download_print_handlers()` wires the embedded QtWebEngine view so WebUI actions get native dialogs — `downloadRequested` opens a save dialog (file downloads and blob exports like Save-as-PDF), `printRequested`/`printRequestedByFrame` open a save-as-PDF dialog and render via `printToPdf()`. The frame variant matters: `window.print()` inside an iframe (Document Editor, research report print) prints the frame's content, not the app shell. pywebview's own download handler is not used — it calls the Qt5-only `download.setPath()`, which does not exist on PySide6/Qt6.
 - **Thread model**:
   - Main thread → `webview.start()` (pywebview GUI loop)
   - Background threads → pystray tray icon, uvicorn backend, Next.js frontend, agent loop
@@ -92,7 +92,7 @@ The system uses a shared `TrayContext` to manage state between the Uvicorn web s
 
 ### Linux system dependencies
 
-The desktop window on Linux uses **Qt WebEngine (Chromium-based)** via `PyQt6-WebEngine` (installed automatically via `requirements.txt`). This gives smooth, Chrome-like rendering with full GPU acceleration.
+The desktop window on Linux uses **Qt WebEngine (Chromium-based)** via **PySide6** (LGPLv3, installed automatically via `requirements.txt` on Linux; PySide6 bundles Qt WebEngine). `vaf/core/desktop_window.py` sets `QT_API=pyside6`. This gives smooth, Chrome-like rendering with GPU acceleration.
 
 System packages required:
 
@@ -115,13 +115,14 @@ VAF sets the following environment variables automatically on startup:
 - `QT_QPA_PLATFORM=xcb` — forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
 - `WEBKIT_DISABLE_DMABUF_RENDERER=1` — avoids GBM buffer errors under XWayland
 
-**GPU acceleration** is enabled automatically via Chromium flags:
-```
---disable-frame-rate-limit --disable-gpu-vsync --enable-gpu-rasterization
---enable-accelerated-2d-canvas --num-raster-threads=4
-```
+**GPU acceleration** is on (Chromium-based Qt WebEngine). The exact
+`QTWEBENGINE_CHROMIUM_FLAGS` live in `vaf/core/desktop_window.py` and are tuned to
+avoid the in-process-GPU memory leak: vsync deliberately stays **on**
+(`--disable-frame-rate-limit` / `--disable-gpu-vsync` are **not** set) and
+`--enable-accelerated-2d-canvas` is avoided. See the Anti-Leak Notes below for the
+rationale and the full flag list.
 
-If PyQt6-WebEngine is not installed, VAF falls back to browser-only mode (tray icon still works).
+If PySide6 is not installed, VAF falls back to browser-only mode (tray icon still works).
 
 ## Platform Implementation Notes
 

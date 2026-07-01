@@ -423,6 +423,22 @@ export default function LoginPage() {
         step === 'create_admin' ? 1 : step === 'soul_wizard' ? 2 : step === 'veyllo_api' ? 3 : step === 'setup_2fa' ? 4 : 0;
     const showOnboardingProgress = onboardingCurrentStep >= 1;
 
+    // WebKit/WKWebView (the macOS desktop window) fix for the "double-play" step
+    // animation. framer-motion v10 runs opacity/transform via the WAAPI
+    // (compositor) path; on WebKit a reflow/re-render mid-transition makes it
+    // re-read the already-committed end value as the new start (the card jumps
+    // up, snaps back, then slides up again). Passing an onUpdate handler makes
+    // framer skip the accelerated path and animate on the main thread (see
+    // framer-motion animation/interfaces/motion-value.mjs:
+    // `!value.owner.getProps().onUpdate`). Fixed upstream in framer-motion
+    // 11.0.11 -> drop this shim once we upgrade.
+    const stepAnim = {
+        initial: { opacity: 0, y: 20 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -20 },
+        onUpdate: () => {},
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
             {step !== 'setup_2fa' && (
@@ -509,9 +525,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'login' && (
                     <motion.div
                         key="login"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -586,9 +600,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'language' && (
                     <motion.div
                         key="language"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -633,9 +645,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'phone_notice' && (
                     <motion.div
                         key="phone_notice"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -672,9 +682,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'create_admin' && (
                     <motion.div
                         key="create_admin"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -798,6 +806,7 @@ export default function LoginPage() {
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 1.05 }}
+                        onUpdate={() => {}}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -871,9 +880,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'veyllo_api' && (
                     <motion.div
                         key="veyllo_api"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-3xl"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
@@ -959,9 +966,7 @@ export default function LoginPage() {
                 {!checkingSetup && step === 'setup_2fa' && (
                     <motion.div
                         key="setup_2fa"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
+                        {...stepAnim}
                         className="w-full max-w-md"
                     >
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">

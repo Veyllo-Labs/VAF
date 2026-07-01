@@ -64,41 +64,51 @@ def create_mac_app():
     vaf_bin = os.path.join(venv_bin, "vaf")
     python_bin = os.path.join(venv_bin, "python3")
 
-    # 3. Launcher Script - Source NVM and call run_vaf.sh
+    # 3. Launcher Script — hand off to Terminal so the macOS menu-bar tray works.
+    #
+    # WHY NOT `exec ./run_vaf.sh tray` here: when VAF runs as an .app *bundle*
+    # (Spotlight/launchd) the pystray menu-bar icon never appears. On macOS the
+    # status item must be created on the MAIN thread, which pywebview (the desktop
+    # window, added in commit d4e8dbd) owns — so pystray runs detached, and a
+    # *bundle*-launched process fails to register the icon. Launched from a
+    # Terminal the exact same code DOES show the icon. So this launcher hands the
+    # run off to Terminal (VAF then lives in the working context: window + tray +
+    # Quit) and the .app itself exits. The Terminal window is minimised.
+    #
+    # First launch shows a one-time macOS prompt: "VAF wants to control Terminal"
+    # (Automation permission) — the user must approve it once.
+    log_file = os.path.join(base_dir, "logs", "app_launch_debug.log")
+    port_file = os.path.join(base_dir, "vaf", "data", "frontend_port.txt")
     script_content = f"""#!/bin/bash
-# VAF Launcher - With NVM environment
-LOG_FILE="{os.path.join(base_dir, "logs", "app_launch_debug.log")}"
+# VAF Launcher — opens the tray via Terminal (so the menu-bar icon registers).
+LOG_FILE="{log_file}"
+echo "--- VAF.app launcher (Terminal handoff) $(date) ---" >> "$LOG_FILE"
 
-cd "{base_dir}"
-
-echo "--- Launching VAF via run_vaf.sh ---" >> "$LOG_FILE"
-echo "Date: $(date)" >> "$LOG_FILE"
-
-# Smart Check - if backend is running, just open browser
-if lsof -i :8001 -sTCP:LISTEN -t >/dev/null ; then
-    echo "Backend active. Opening browser." >> "$LOG_FILE"
-
-    # Read actual frontend port
-    FRONTEND_PORT_FILE="{os.path.join(base_dir, "vaf", "data", "frontend_port.txt")}"
-    if [ -f "$FRONTEND_PORT_FILE" ]; then
-        FRONTEND_PORT=$(cat "$FRONTEND_PORT_FILE")
-        open "http://localhost:$FRONTEND_PORT"
+# Smart check: if VAF is already running, just open the Web UI in the browser.
+if lsof -i :8001 -sTCP:LISTEN -t >/dev/null 2>&1 ; then
+    echo "Backend active — opening browser." >> "$LOG_FILE"
+    if [ -f "{port_file}" ]; then
+        open "http://localhost:$(cat "{port_file}")"
     else
         open "http://localhost:3000"
     fi
     exit 0
 fi
 
-# CRITICAL: Source NVM to make npm available
-export NVM_DIR="$HOME/.nvm"
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-    echo "Sourcing NVM..." >> "$LOG_FILE"
-    source "$NVM_DIR/nvm.sh"
-fi
-
-# Start VAF using the working run_vaf.sh script
-echo "Starting VAF via run_vaf.sh..." >> "$LOG_FILE"
-exec ./run_vaf.sh tray >> "$LOG_FILE" 2>&1
+# Hand off to Terminal so VAF runs in the (working) terminal context, then
+# minimise the Terminal window. VAF's own tray "Quit" fully shuts it down.
+/usr/bin/osascript >> "$LOG_FILE" 2>&1 <<'OSA'
+tell application "Terminal"
+    -- quoted form of shell-quotes the path safely (spaces, parens, apostrophes)
+    set vafDir to "{base_dir}"
+    do script "cd " & quoted form of vafDir & " && ./run_vaf.sh tray"
+    delay 0.6
+    try
+        set miniaturized of front window to true
+    end try
+end tell
+OSA
+exit 0
 """
 
     with open(launcher_path, "w") as f:

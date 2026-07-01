@@ -105,7 +105,7 @@ def _save_state(**fields: int) -> None:
     _save_timer.start()
 
 
-def init(url: str, title: str = "VAF", width: int | None = None, height: int | None = None) -> None:
+def init(url: str, title: str = "VAF", width: int | None = None, height: int | None = None, html: str | None = None) -> None:
     """Create the desktop window. Must be called before start().
 
     Default size is 1920x1080 (overridable via the config keys `desktop_window_width` /
@@ -214,7 +214,12 @@ def init(url: str, title: str = "VAF", width: int | None = None, height: int | N
         _create_kwargs["x"] = saved_x
         _create_kwargs["y"] = saved_y
 
-    _window = _wv.create_window(title, url, **_create_kwargs)
+    # `html` (a self-contained splash string) takes precedence over `url` so the
+    # window can show a loading screen immediately, before the frontend is up.
+    if html is not None:
+        _window = _wv.create_window(title, html=html, **_create_kwargs)
+    else:
+        _window = _wv.create_window(title, url, **_create_kwargs)
     _window.events.closing += _on_closing
     _window.events.loaded += _on_loaded
     _window.events.resized += _on_resized
@@ -231,7 +236,7 @@ def init(url: str, title: str = "VAF", width: int | None = None, height: int | N
         _log.info("[DesktopWindow] native save/print bridges exposed")
     except Exception as e:
         _log.debug("[DesktopWindow] could not expose save bridge: %s", e)
-    _log.info("[DesktopWindow] Window created → %s (size %dx%d)", url, saved_w, saved_h)
+    _log.info("[DesktopWindow] Window created → %s (size %dx%d)", "splash.html" if html is not None else url, saved_w, saved_h)
 
 
 def save_file_as(src_path: str) -> dict:

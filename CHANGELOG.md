@@ -10,6 +10,24 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a1] - 2026-07-01
+
+### Fixed
+- **macOS: VAF now starts.** The launcher (`run_vaf.sh`) exec'd the raw Homebrew
+  framework Python instead of the venv's Python after activating the venv, so every
+  dependency showed up as "missing" and startup failed (worse on a Homebrew Python
+  3.14 machine, where it hunted for the 3.14 framework binary). It now runs
+  `venv/bin/python` directly — a framework build, so the menu-bar tray still works,
+  and it sees the installed packages.
+- **macOS: the menu-bar tray icon no longer crashes** (`AssertionError: self.png
+  is None`, resulting in no tray icon). The icon PNG was opened lazily and read by
+  pystray from its own thread while being rewritten on every call; it is now decoded
+  eagerly and written atomically (temp file + rename).
+- **macOS: the onboarding step animation no longer "double-plays"** (jump up, snap
+  back, then slow slide) in the WebKit/WKWebView desktop window — a framer-motion
+  v10 WAAPI commit-timing re-read triggered by a reflow mid-transition. The steps
+  now animate on the main thread via an `onUpdate` shim.
+
 ## [0.1.0a0] - 2026-06-30
 
 ### Changed

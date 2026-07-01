@@ -99,7 +99,10 @@ Docs are grouped into category folders. Full index by category:
 - [SANDBOX_MODULES.md](security/SANDBOX_MODULES.md) — Sandboxed module system.
 - [USER_ISOLATION.md](security/USER_ISOLATION.md) — Per-user scope isolation.
 
-### platform/ — tray, automations, i18n
+### platform/ — per-OS runtime, tray, automations, i18n
+- [LINUX.md](platform/LINUX.md) — How VAF runs on Linux (Qt/QtWebEngine window, tray, X11/GPU notes).
+- [WINDOWS.md](platform/WINDOWS.md) — How VAF runs on Windows (WebView2, `.lnk` launcher, tray).
+- [MACOS.md](platform/MACOS.md) — How VAF runs on macOS (WKWebView, menu-bar tray, startup splash).
 - [SYSTEM_TRAY.md](platform/SYSTEM_TRAY.md) — Tray architecture and platform notes.
 - [AUTOMATIONS.md](platform/AUTOMATIONS.md) — Automations, timers, planner.
 - [I18N.md](platform/I18N.md) — Internationalization.

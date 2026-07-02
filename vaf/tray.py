@@ -361,6 +361,21 @@ def _attempt_docker_daemon_start():
         return False
 
 
+def _compose_plugin_missing(stderr: str) -> bool:
+    """True when 'docker compose' failed because the docker CLI has no compose PLUGIN (as
+    opposed to compose itself failing). Seen with Homebrew docker + Colima on macOS when
+    ~/.docker/config.json lacks cliPluginsExtraDirs: the CLI parses 'compose -f ...' as its
+    own flags. The standalone docker-compose binary usually exists in that setup (install.sh
+    brews it), so this state must fall through to the legacy binary, not give up."""
+    s = (stderr or "").lower()
+    return (
+        "unknown shorthand flag" in s
+        or "unknown flag" in s
+        or "is not a docker command" in s
+        or "unknown docker command" in s
+    )
+
+
 def ensure_memory_stack_up():
     """Start Docker memory stack (Postgres, Redis, Sandbox, TTS, STT). If Docker daemon is not running, try to start Docker Desktop and wait for it."""
     try:
@@ -425,14 +440,18 @@ def ensure_memory_stack_up():
                     except Exception:
                         pass
                     return
-                log("Tray", f"core compose up failed (code {result.returncode}): {(result.stderr or '').strip()[:500]}")
+                stderr = (result.stderr or "").strip()
+                if _compose_plugin_missing(stderr):
+                    log("Tray", "docker CLI has no compose plugin - trying legacy docker-compose...")
+                    continue  # the legacy binary usually exists in this setup
+                log("Tray", f"core compose up failed (code {result.returncode}): {stderr[:500]}")
                 return
             except FileNotFoundError:
                 continue  # try the docker-compose fallback
             except subprocess.TimeoutExpired:
                 log("Tray", "docker compose up timed out (first-run image pull may still be in progress)")
                 return
-        log("Tray", "Warning: memory stack (RAG DB) may not have started; no docker/docker-compose CLI found")
+        log("Tray", "Warning: memory stack (RAG DB) may not have started; no docker/docker-compose CLI found (macOS/Colima: brew install docker-compose, or add cliPluginsExtraDirs to ~/.docker/config.json)")
     except Exception as e:
         logger.debug("[Tray] Memory stack auto-start skipped: %s", e)
 

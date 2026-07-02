@@ -37,8 +37,9 @@ Pick your path:
 
 **Windows:**
 ```powershell
-git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
-.\install.ps1
+git clone https://github.com/Veyllo-Labs/VAF.git
+cd VAF
+.\install.bat
 ```
 
 **macOS / Linux:**
@@ -309,7 +310,7 @@ Both are auto-discovered at startup — no registration needed.
 | Desktop mode | Tray icon | Menu bar icon | Headless (no icon) |
 | GPU backend | CUDA | Metal | Vulkan |
 | Web UI | `localhost:3000` | `localhost:3000` | `localhost:3000` |
-| Install | `install.ps1` | `install.sh` | `install.sh` |
+| Install | `install.bat` | `install.sh` | `install.sh` |
 
 Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) for details.
 

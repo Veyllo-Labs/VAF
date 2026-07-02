@@ -27,7 +27,8 @@ Install once with [MACOS_SETUP.md](../setup/MACOS_SETUP.md) (Homebrew, `setup_ma
 - **Microphone / voice input in the desktop window** — WKWebView default-denies `getUserMedia` and exposes no permission API at pywebview's layer, so WebUI voice input is not granted inside the native window. Workaround: allow the controlling app under **System Settings → Privacy & Security → Microphone**, or open the Web UI in a real browser at `http://localhost:3000`. A native pyobjc WKUIDelegate grant is planned.
 - **The minimised Terminal window keeps VAF alive** — after an `.app` launch, closing that Terminal window hard-kills VAF. Quit cleanly via the tray **Quit** item, not by closing Terminal.
 - **First `.app` launch requires the Automation prompt** — VAF cannot open its Terminal-hosted tray until you approve *"VAF wants to control Terminal"* once.
-- **Docker engine must be running** — if neither Docker Desktop nor Colima is up, sign-in and the memory stack are unavailable; start it with `colima start` (or open Docker Desktop) and relaunch.
+- **Docker engine must be running** — if neither Docker Desktop nor Colima is up, sign-in and the memory stack are unavailable; start it with `colima start` (or open Docker Desktop) and relaunch. While the database is still booting, the login page shows "Starting the database..." and continues to the first-run setup wizard on its own once it is ready.
+- **`docker compose` vs `docker-compose`** — Homebrew's `docker-compose` is a standalone binary and is not auto-wired as a docker CLI plugin, so `docker compose ...` can fail with `unknown shorthand flag: 'f'` while `docker-compose ...` works (typical after switching from Docker Desktop to Colima). VAF detects this and falls back to the legacy binary automatically; to repair the CLI itself, add `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` to `~/.docker/config.json`.
 
 ## See also
 

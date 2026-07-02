@@ -87,6 +87,8 @@ If the application fails to launch, consult these logs (in order of usefulness):
 - **`logs/tray_startup_YYYY-MM-DD.txt`** – Always written when the tray is started (shortcut or `vaf tray`). Shows whether the shortcut launched, singleton status, and any crashes. One file per day; old files are removed by the garbage collector after gc_max_age_hours.
 - **`logs/startup_trace.txt`** – Detailed trace (only when Debug Logs is enabled — on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`).
 
+**Login form or "Starting the database..." on first run?** The Docker stack starts in parallel with VAF, and on a first Rancher/WSL2 boot PostgreSQL can need several minutes. The login page shows "Starting the database..." until it is ready and then switches to the first-run setup wizard automatically - no restart needed. If it never gets past that message, the database is not coming up at all: verify Rancher Desktop is running and look for `Waiting for the database` / `Auth DB not ready` lines in the startup trace log.
+
 **Tray icon hidden?** On Windows 10/11, the VAF icon may be in the overflow area. Click the `^` arrow in the system tray to see all icons.
 
 ### 2. Network Port Conflicts

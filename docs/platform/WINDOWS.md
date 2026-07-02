@@ -26,7 +26,7 @@ Install via `install.bat` (a wrapper that runs `install.ps1` with `-ExecutionPol
 
 ## Known limitations / gotchas
 
-- **A container runtime is required.** Sign-in and setup live in the pgvector container, so VAF cannot complete first-run without Rancher Desktop / Docker Desktop running. On a first Rancher install its WSL2 provisioning can take a while; WSL2 needs the "Virtual Machine Platform" Windows feature.
+- **A container runtime is required.** Sign-in and setup live in the pgvector container, so VAF cannot complete first-run without Rancher Desktop / Docker Desktop running. On a first Rancher install its WSL2 provisioning can take a while; WSL2 needs the "Virtual Machine Platform" Windows feature. VAF waits for the database and self-heals: the login page shows "Starting the database..." until PostgreSQL accepts connections, then the first-run setup wizard appears automatically - no restart needed.
 - **`pyttsx3` was removed on Windows** because the SAPI/comtypes path caused a 1–4 GB RAM explosion; text-to-speech runs through the Docker (Piper) engine instead.
 - **Tray icon may hide in the overflow area** on Windows 10/11 — click the `^` arrow in the notification area to pin it.
 - **macOS/Linux-only deps are not installed**: `pyobjc-framework-Cocoa` (darwin) and `PySide6`/`qtpy` (linux) are platform-gated in `requirements.txt` / `setup.py`, so the Qt WebEngine anti-leak tuning and the Linux/Qt download-print bridges do not apply here (WebView2 covers those cases natively).

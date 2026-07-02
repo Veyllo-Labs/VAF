@@ -49,6 +49,10 @@ something else was sitting there."
 - It **removes the dependency on `:3000` being VAF.** The window shows local,
   self-owned content until the real frontend URL is known, so no other process
   can leak into VAF's window during boot.
+- The splash covers the **frontend** boot only. On a fresh machine the
+  **database** may still be starting after the UI appears — the login page then
+  shows "Starting the database..." and switches to the first-run setup wizard on
+  its own once PostgreSQL is ready.
 
 ## How it works
 

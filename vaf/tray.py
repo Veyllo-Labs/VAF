@@ -437,6 +437,76 @@ def ensure_memory_stack_up():
         logger.debug("[Tray] Memory stack auto-start skipped: %s", e)
 
 
+def _wait_for_db_ready(max_wait: float = 25.0) -> bool:
+    """Block up to max_wait seconds until PostgreSQL accepts queries; True when it does.
+
+    The memory stack is started in a parallel thread, and on a normal restart Postgres needs
+    a few seconds between "container up" and "accepting queries". A short wait here lets the
+    web server's auth-DB init succeed on its FIRST attempt, so the first page render always
+    shows the correct login/setup state. This is only a head start, not the correctness fix:
+    when the wait times out (e.g. a first Rancher/WSL2 provision taking minutes) the web
+    server's background retry creates the auth tables later. Skips immediately when no
+    container engine is running - nothing is coming up soon and a DB-less install must not
+    pay a startup delay.
+    """
+    try:
+        import asyncpg
+    except ImportError:
+        return False
+    import asyncio as _asyncio
+    from urllib.parse import urlsplit
+
+    # Same normalizer as the app itself (handles the bare user:pass@host/db config form);
+    # strip SQLAlchemy-only query params, which asyncpg.connect would reject.
+    from vaf.memory.database import get_database_url
+    dsn = get_database_url().replace("postgresql+asyncpg://", "postgresql://", 1)
+    dsn = urlsplit(dsn)._replace(query="").geturl()
+
+    async def _probe() -> bool:
+        conn = await asyncpg.connect(dsn, timeout=3)
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
+        return True
+
+    async def _wait() -> bool:
+        deadline = time.monotonic() + max_wait
+        first = True
+        while time.monotonic() < deadline:
+            try:
+                # wait_for bounds the WHOLE probe (a WSL2 port proxy can accept TCP and
+                # then stall mid-query, which the connect timeout alone would not cover).
+                if await _asyncio.wait_for(_probe(), 5.0):
+                    if not first:
+                        log("Tray", "Database is ready - starting web server")
+                    return True
+            except (asyncpg.InvalidPasswordError,
+                    asyncpg.InvalidAuthorizationSpecificationError,
+                    asyncpg.InvalidCatalogNameError):
+                # A PostgreSQL answered but rejects our credentials/database: that is not
+                # VAF's DB still booting, waiting longer cannot fix it.
+                log("Tray", "A PostgreSQL is answering on the configured port but rejects VAF's credentials/database - not waiting (auth init retries in background)")
+                return False
+            except Exception:
+                pass
+            if first:
+                first = False
+                if not _is_docker_daemon_running():
+                    log("Tray", "No container engine running - not waiting for the database (auth init retries in background)")
+                    return False
+                log("Tray", f"Waiting for the database to accept connections (max {int(max_wait)}s)...")
+            await _asyncio.sleep(1.0)
+        log("Tray", f"Database not ready after {int(max_wait)}s - starting web server anyway (auth init retries in background)")
+        return False
+
+    try:
+        return _asyncio.run(_wait())
+    except Exception as e:
+        log("Tray", f"DB readiness pre-check skipped: {e}")
+        return False
+
+
 def stop_memory_stack():
     """Stop Docker memory stack (Postgres, Redis, Sandbox, TTS, STT). Uses 'stop' to preserve containers and data."""
     try:
@@ -515,8 +585,13 @@ def command_listener(lock_socket):
                 log("Tray", f"Command listener error: {e}")
             break
 
-def start_uvicorn():
-    """Start uvicorn server in a separate thread."""
+def start_uvicorn(wait_for_db: bool = True):
+    """Start uvicorn server in a separate thread.
+
+    wait_for_db: boot paths keep the default (short DB head start for a correct first
+    render); the network-settings restart path passes False - the stack is already up
+    there, and a down DB must not add a 25s backend outage per config change.
+    """
     global uvicorn_server, uvicorn_loop
     log("Tray", "start_uvicorn thread started")
     try:
@@ -548,6 +623,13 @@ def start_uvicorn():
                 pythoncom.CoInitialize()
             except ImportError:
                 pass  # pythoncom not available, skip COM init
+
+        # Give PostgreSQL (started in a parallel thread) a short head start so the auth-DB
+        # init in the FastAPI startup event succeeds on the first attempt and the first page
+        # render shows the correct login/setup state. Bounded; must run BEFORE the uvicorn
+        # event loop is created (asyncio.run would unset it otherwise).
+        if wait_for_db:
+            _wait_for_db_ready(max_wait=25.0)
 
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -701,9 +783,10 @@ def restart_backend_server():
             log("Tray", "Waiting for old server thread to finish...")
             server_thread.join(timeout=5)
 
-        # Start new server thread
+        # Start new server thread (no DB gate: the stack is already up on a settings
+        # restart, and a down DB must not add a 25s backend outage per config change)
         log("Tray", "Starting new server thread with updated settings...")
-        server_thread = threading.Thread(target=start_uvicorn, daemon=True)
+        server_thread = threading.Thread(target=start_uvicorn, kwargs={"wait_for_db": False}, daemon=True)
         server_thread.start()
         log("Tray", "Backend server restart completed")
         return True

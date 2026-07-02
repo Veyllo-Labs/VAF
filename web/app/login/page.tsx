@@ -48,6 +48,7 @@ export default function LoginPage() {
     const [rememberMe, setRememberMe] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [checkingSetup, setCheckingSetup] = useState(true);
+    const [dbStarting, setDbStarting] = useState(false);
     const [tempToken, setTempToken] = useState<string | null>(null);
     const [twoFACode, setTwoFACode] = useState('');
     const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
@@ -104,6 +105,64 @@ export default function LoginPage() {
         // Empty string = same-origin /api via Next proxy or HTTPS proxy (e.g. https://localhost:8443).
         const apiPrefix = getApiBase() || '';
         setBackendUnreachable(false);
+        let cancelled = false; // effect cleanup: stops the needs-setup polling below
+
+        // Poll /needs-setup until the backend gives a definitive answer. While the database
+        // is still booting the endpoint returns 503 (a first Docker/WSL2 start can take
+        // minutes); treating that like an error would hide the first-run setup wizard and
+        // render the login form on a fresh install.
+        const checkSetup = (attempt: number) => {
+            if (cancelled) return;
+            const retry = () => {
+                if (attempt < 200) {
+                    window.setTimeout(() => checkSetup(attempt + 1), 3000);
+                } else {
+                    // ~10 min without a definitive answer: show login, but keep polling
+                    // quietly so an unusually slow first provision still lands in the wizard.
+                    setDbStarting(false);
+                    setCheckingSetup(false);
+                    window.setTimeout(() => checkSetup(attempt + 1), 10000);
+                }
+            };
+            fetch(`${apiPrefix}/api/auth/needs-setup`, { credentials: 'include', cache: 'no-store' })
+                .then((res) => {
+                    if (cancelled) return;
+                    // 503 = DB still booting; other 5xx = backend/proxy not fully up yet
+                    // (the backend can bind its port seconds after the frontend serves).
+                    // Both are transient during startup - never settle on the login form here.
+                    if (res.status === 503 || res.status >= 500) {
+                        if (attempt < 200) setDbStarting(res.status === 503);
+                        retry();
+                        return;
+                    }
+                    const done = () => {
+                        setDbStarting(false);
+                        setCheckingSetup(false);
+                    };
+                    if (!res.ok) { done(); return; } // 404 (legacy backend) or client error -> login
+                    res.json()
+                        .then((data) => {
+                            if (!cancelled && data?.needs_setup === true) {
+                                // Clear anything typed into the login form meanwhile: the same
+                                // state fields feed the wizard's admin-creation step.
+                                setUsername('');
+                                setPassword('');
+                                setConfirmPassword('');
+                                setLoginError(null);
+                                sessionStorage.setItem('vaf_onboarding', 'true');
+                                setStep('language');
+                            }
+                            done();
+                        })
+                        .catch(done);
+                })
+                .catch(() => {
+                    // Network error (backend not listening yet): transient during startup,
+                    // retry instead of settling on the login form.
+                    if (cancelled) return;
+                    retry();
+                });
+        };
         const authHeaders: Record<string, string> = {
             'Cache-Control': 'no-cache',
         };
@@ -140,27 +199,13 @@ export default function LoginPage() {
                 if (typeof window !== 'undefined') {
                     localStorage.removeItem('vaf_token');
                 }
-                fetch(`${apiPrefix}/api/auth/needs-setup`, { credentials: 'include' })
-                    .then((res) => {
-                        if (res.status === 404) return null;
-                        if (res.ok) return res.json();
-                        return null;
-                    })
-                    .then((data) => {
-                        if (data?.needs_setup === true) {
-                            if (typeof window !== 'undefined') sessionStorage.setItem('vaf_onboarding', 'true');
-                            setStep('language');
-                        }
-                    })
-                    .catch(() => {
-                        setStep('login');
-                    })
-                    .finally(() => setCheckingSetup(false));
+                checkSetup(0);
             })
             .catch(() => {
                 setCheckingSetup(false);
                 setBackendUnreachable(true);
             });
+        return () => { cancelled = true; };
     }, []);
 
     // During onboarding, onboardingConfig is built up in state (no API call without auth).
@@ -518,7 +563,7 @@ export default function LoginPage() {
                         className="w-full max-w-md flex flex-col items-center justify-center py-12"
                     >
                         <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin mb-4" />
-                        <p className="text-sm text-gray-500">Checking setup…</p>
+                        <p className="text-sm text-gray-500">{dbStarting ? 'Starting the database… the first launch can take a few minutes' : 'Checking setup…'}</p>
                     </motion.div>
                 )}
 

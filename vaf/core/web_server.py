@@ -709,15 +709,38 @@ def _get_trusted_sources_for_ui():
     categories_out = custom_only + predefined
     return {"categories": categories_out}
 
+_auth_db_init_task = None  # module-level ref so the background retry task is not garbage collected
+_auth_db_init_gate = threading.Lock()  # in TLS mode the same app runs on 8001 AND 8005 -> two lifespans
+
+
 @app.on_event("startup")
 async def startup_event():
-    # Initialize auth database tables (creates if not exist)
+    # Initialize auth database tables (creates if not exist). The Docker stack starts in a
+    # thread parallel to this server, so PostgreSQL may still be booting here - a failed
+    # first attempt must self-heal in the background instead of leaving the auth tables
+    # uncreated until the next restart (a fresh install then shows login instead of setup).
     try:
         from vaf.auth.database import init_auth_db
         await init_auth_db()
         log("WebServer", "Auth database tables initialized")
     except Exception as e:
-        log("WebServer", f"Auth database init warning: {e}")
+        log("WebServer", f"Auth database not ready yet ({e}); retrying in background")
+
+        async def _bg_auth_init():
+            from vaf.auth.database import init_auth_db_with_retry
+            await init_auth_db_with_retry()
+            log("WebServer", "Auth database tables initialized (background retry)")
+
+        # This startup event runs once per uvicorn server sharing the app (8001 + the
+        # internal 8005 channel in TLS mode, on different threads/loops) - spawn only ONE
+        # retry lane; a task stranded on a stopped loop (backend restart) counts as stale.
+        global _auth_db_init_task
+        with _auth_db_init_gate:
+            t = _auth_db_init_task
+            if t is None or t.done() or not t.get_loop().is_running():
+                _auth_db_init_task = asyncio.create_task(_bg_auth_init())
+            else:
+                log("WebServer", "Auth DB background retry already running (other server lifespan) - not spawning a duplicate")
     
     # Set the event loop for thread-safe broadcasting
     loop = asyncio.get_running_loop()

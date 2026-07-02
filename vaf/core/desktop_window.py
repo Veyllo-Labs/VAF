@@ -236,7 +236,7 @@ def init(url: str, title: str = "VAF", width: int | None = None, height: int | N
         _log.info("[DesktopWindow] native save/print bridges exposed")
     except Exception as e:
         _log.debug("[DesktopWindow] could not expose save bridge: %s", e)
-    _log.info("[DesktopWindow] Window created → %s (size %dx%d)", "splash.html" if html is not None else url, saved_w, saved_h)
+    _log.info("[DesktopWindow] Window created -> %s (size %dx%d)", "splash.html" if html is not None else url, saved_w, saved_h)
 
 
 def save_file_as(src_path: str) -> dict:
@@ -274,7 +274,7 @@ def save_file_as(src_path: str) -> dict:
         if not dest:
             return {"ok": False, "cancelled": True}
         shutil.copyfile(str(src), str(dest))
-        _log.info("[DesktopWindow] saved %s → %s", src.name, dest)
+        _log.info("[DesktopWindow] saved %s -> %s", src.name, dest)
         return {"ok": True, "path": str(dest)}
     except Exception as e:
         _log.warning("[DesktopWindow] save_file_as failed: %s", e)
@@ -429,7 +429,7 @@ def save_text_as(content: str, suggested_name: str = "document.html") -> dict:
             return {"ok": False, "cancelled": True}
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(content or "")
-        _log.info("[DesktopWindow] saved edited content → %s", dest)
+        _log.info("[DesktopWindow] saved edited content -> %s", dest)
         return {"ok": True, "path": str(dest)}
     except Exception as e:
         _log.warning("[DesktopWindow] save_text_as failed: %s", e)
@@ -578,7 +578,7 @@ def _install_download_print_handlers() -> None:
                 if raw:
                     with open(path, "wb") as fh:
                         fh.write(raw)
-                    _log.info("[DesktopWindow] saved PDF → %s", path)
+                    _log.info("[DesktopWindow] saved PDF -> %s", path)
                 else:
                     _log.warning("[DesktopWindow] PDF render produced no data")
             except Exception as e:
@@ -611,7 +611,7 @@ def _install_download_print_handlers() -> None:
                 download.setDownloadDirectory(os.path.dirname(path) or os.path.expanduser("~"))
                 download.setDownloadFileName(os.path.basename(path))
                 download.accept()
-                _log.info("[DesktopWindow] download accepted → %s", path)
+                _log.info("[DesktopWindow] download accepted -> %s", path)
 
             try:
                 profile.downloadRequested.connect(_on_download)
@@ -716,7 +716,7 @@ def _on_loaded() -> None:
 
 def _on_closing() -> bool:
     """Intercept the close button: hide instead of destroying the window."""
-    _log.info("[DesktopWindow] Close button → hiding window")
+    _log.info("[DesktopWindow] Close button -> hiding window")
     if _window:
         _window.hide()
     return False  # returning False prevents the default destroy
@@ -825,7 +825,7 @@ def _start_mem_logger(interval: float = 2.0) -> None:
 
     import threading as _th
     _th.Thread(target=_loop, daemon=True, name="vaf-memlog").start()
-    _log.info("[MemLog] Diagnostic memory logging → %s", log_path)
+    _log.info("[MemLog] Diagnostic memory logging -> %s", log_path)
 
 
 def start(icon_path: str = None) -> None:
@@ -909,7 +909,7 @@ def hide() -> None:
 def navigate(url: str) -> None:
     """Navigate the window to a new URL (safe to call from any thread after start)."""
     if _window:
-        _log.info("[DesktopWindow] Navigating → %s", url)
+        _log.info("[DesktopWindow] Navigating -> %s", url)
         _window.load_url(url)
 
 

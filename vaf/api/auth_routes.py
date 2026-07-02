@@ -18,6 +18,7 @@ Endpoints:
 import io
 import base64
 import logging
+import socket
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
 
@@ -98,17 +99,44 @@ class TestVeylloKeyRequest(BaseModel):
 
 # --- Endpoints ---
 
+def _is_db_not_ready_error(exc: Exception) -> bool:
+    """True for states expected while the stack is still booting: PostgreSQL not accepting
+    connections yet (refused / "starting up"), transient overload, or the auth tables not
+    created yet (the web server's background init may still be running). These must surface
+    as a retryable 503, never as a hard 500 - the login page treats any needs-setup error as
+    "no setup needed", so a fresh install would render login instead of the setup wizard.
+    Permanent misconfiguration (DNS typo in the DSN, rejected credentials, missing
+    role/database) is deliberately NOT matched: it must fail loudly, not look like a slow
+    boot the frontend then polls against forever."""
+    if isinstance(exc, socket.gaierror):
+        return False  # unresolvable DB host = permanent DSN misconfig
+    if isinstance(exc, OSError):
+        return True
+    s = str(exc).lower()
+    if "pg_hba" in s or "password authentication failed" in s:
+        return False  # the server is up and rejecting us - permanent
+    # Missing auth TABLE = background init still running. Keep this narrower than a bare
+    # "does not exist", which would also match permanent 'role/database ... does not exist'.
+    if "undefinedtable" in s or ('relation "' in s and "does not exist" in s):
+        return True
+    return any(kw in s for kw in (
+        "connect", "connection", "refused", "could not connect", "is the server running",
+        "starting up", "shutting down", "in recovery", "too many clients", "too many connections",
+    ))
+
+
 @router.get("/needs-setup")
 async def needs_setup():
     """
     Returns whether the first admin account must be created.
     Callable without auth. When true, show Create Admin flow instead of login.
-    Retries the DB connection up to 5 times (2s apart) to handle the startup
-    race where the frontend loads before PostgreSQL is ready.
+    While PostgreSQL is still booting or the auth tables are still being created
+    (both happen in parallel to this server on startup), responds 503 so the
+    frontend keeps polling instead of falling back to the login form.
     """
     import asyncio
     last_exc: Exception | None = None
-    for attempt in range(5):
+    for attempt in range(3):
         try:
             async with get_auth_db() as db:
                 result = await db.execute(
@@ -116,11 +144,16 @@ async def needs_setup():
                 )
                 has_admin = result.scalar_one_or_none() is not None
             return {"needs_setup": not has_admin}
-        except OSError as exc:
+        except Exception as exc:
+            if not _is_db_not_ready_error(exc):
+                raise
             last_exc = exc
-            if attempt < 4:
-                await asyncio.sleep(2)
-    raise last_exc  # type: ignore[misc]
+            if attempt < 2:
+                await asyncio.sleep(1.5)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Database is starting up",
+    ) from last_exc
 
 
 @router.post("/bootstrap")

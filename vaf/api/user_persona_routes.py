@@ -53,7 +53,7 @@ class UserIdentityUpdate(BaseModel):
     quiet_hours_enabled: Optional[bool] = None  # per-user proactive quiet hours (None = inherit global)
     quiet_hours_start: Optional[str] = None  # "HH:MM" (24h), evaluated in the user's timezone
     quiet_hours_end: Optional[str] = None  # "HH:MM" (24h)
-    last_seen_announcement_version: Optional[str] = None  # major.minor the user last acknowledged (announcement modal)
+    last_seen_announcement_version: Optional[str] = None  # full version the user last acknowledged (announcement modal); legacy builds stored major.minor
 
 class UserIdentityEntryUpdate(BaseModel):
     """Update or delete a specific entry in a list field."""

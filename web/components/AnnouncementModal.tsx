@@ -69,8 +69,12 @@ export default function AnnouncementModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
+          // Column layout so long release notes scroll INSIDE the card while the
+          // close button and the Got-it footer stay visible (previously the whole
+          // card scrolled and the actions moved out of view).
           position: 'relative', width: '100%', maxWidth: 480, background: C.surface,
-          border: `1px solid ${C.line}`, borderRadius: 26, overflowX: 'hidden', overflowY: 'auto', maxHeight: '88vh',
+          border: `1px solid ${C.line}`, borderRadius: 26, overflow: 'hidden', maxHeight: '88vh',
+          display: 'flex', flexDirection: 'column',
           boxShadow: '0 30px 70px -24px rgba(16,24,40,.22)',
           animation: 'vafAnnPop .24s cubic-bezier(.22,1,.36,1)', fontFamily: 'inherit',
         }}
@@ -87,7 +91,7 @@ export default function AnnouncementModal({
           }}
         >✕</button>
 
-        <div style={{ padding: '30px 32px 8px', textAlign: 'center' }}>
+        <div style={{ padding: '30px 32px 8px', textAlign: 'center', overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
           {badge && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600,
@@ -186,7 +190,7 @@ export default function AnnouncementModal({
           )}
         </div>
 
-        <div style={{ padding: '20px 32px 26px' }}>
+        <div style={{ padding: '20px 32px 26px', flex: '0 0 auto' }}>
           <button
             onClick={onClose}
             disabled={waiting}

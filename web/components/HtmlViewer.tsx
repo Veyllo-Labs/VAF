@@ -154,6 +154,7 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
             title={fileName}
             className="w-full h-full border-0 bg-white"
             sandbox="allow-same-origin allow-scripts allow-forms"
+            allow="microphone 'none'; camera 'none'"
           />
         ) : (
           <MonacoEditor

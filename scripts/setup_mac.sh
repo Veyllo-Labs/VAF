@@ -86,6 +86,12 @@ fi
 echo "📱 Creating Application Bundle..."
 python3 scripts/create_app_shortcut.py
 
+# 8. Microphone for WebUI voice input in the desktop window: WKWebView only exposes
+# navigator.mediaDevices when the host Python.app declares NSMicrophoneUsageDescription.
+# Idempotent; a brew upgrade of python@X.Y reverts it (re-run this setup then).
+echo "Enabling microphone for the desktop window (WKWebView)..."
+bash scripts/macos_mic_plist.sh ./venv/bin/python || true
+
 echo "🎉 Setup Finished!"
 echo "👉 Please RESTART your terminal (or run 'source ~/.zshrc')."
 echo "👉 Then just type:  vaf"

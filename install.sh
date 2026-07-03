@@ -751,6 +751,10 @@ fi
 if [[ "$OS_TYPE" == "macos" ]]; then
     print_info "Creating macOS application bundle..."
     python3 scripts/create_app_shortcut.py 2>/dev/null || print_warning "Could not create app bundle"
+    # Microphone for WebUI voice input in the desktop window (WKWebView needs
+    # NSMicrophoneUsageDescription in the host Python.app) - see the script for details.
+    print_info "Enabling microphone for the desktop window..."
+    bash scripts/macos_mic_plist.sh ./venv/bin/python || true
 fi
 
 # Create desktop entry (Linux)  works the same on Arch/Debian/Fedora (freedesktop std)

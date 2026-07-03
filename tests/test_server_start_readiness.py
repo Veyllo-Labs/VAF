@@ -222,6 +222,11 @@ def test_fa_death_retries_without_vquant_and_memoizes(mgr, monkeypatch):
     # Memoization: a later restart must not re-pay the deterministic crash.
     spawned.clear()
     _wire_http(monkeypatch, lambda _n: FakeResponse(200))  # fresh counter: no reusable server
+    # Remove the pid file from the first run: its FAKE pid may collide with a real
+    # process on the machine, and the pid-reuse path would then skip the spawn
+    # entirely (observed on a CI runner where pid 2222 happened to be alive).
+    if os.path.exists(mgr.pid_file):
+        os.remove(mgr.pid_file)
     assert mgr.start_server(mgr._test["model"], n_ctx=8192) is True
     assert len(spawned) == 1
     assert "-ctv" not in spawned[0]

@@ -50,6 +50,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       {
         kind: 'fixed',
         items: [
+          'Windows: installing on a machine without WSL2 no longer fails at the container-runtime step — the installer enables WSL2 up front (one approval prompt) and pauses cleanly for the required restart.',
           'First-run setup no longer gets stuck on a login form while the database is still starting — the setup wizard now appears on its own.',
           'The local model loads reliably: no more endless restart loops during model loading, plus a compatibility fallback for models without Flash Attention support.',
           'macOS: the service stack starts even when “docker compose” is broken on the machine (automatic fallback to the legacy docker-compose).',

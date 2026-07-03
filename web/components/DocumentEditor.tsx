@@ -1210,6 +1210,7 @@ function LegacyDocumentEditor({
                                                 className="w-full min-h-[297mm] border-0 block bg-[#e5e7eb]"
                                                 title="Document Editor"
                                                 sandbox="allow-same-origin allow-scripts allow-modals"
+                                                allow="microphone 'none'; camera 'none'"
                                             />
                                         </div>
                                     </div>
@@ -1363,6 +1364,7 @@ function LegacyDocumentEditor({
                                             className="w-full min-h-[297mm] border-0 block bg-[#e5e7eb]"
                                             title="Document Editor"
                                             sandbox="allow-same-origin allow-scripts allow-modals"
+                                            allow="microphone 'none'; camera 'none'"
                                         />
                                     </div>
                                 </div>

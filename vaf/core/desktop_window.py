@@ -199,6 +199,11 @@ def init(url: str, title: str = "VAF", width: int | None = None, height: int | N
     import webview as _wv  # ImportError propagates if pywebview not installed
     _webview = _wv
 
+    # macOS: install the WKWebView media-capture grant BEFORE the window/delegate
+    # exists so WebUI voice input (getUserMedia/STT) works in the desktop window.
+    if sys.platform == "darwin":
+        _install_media_permissions_macos()
+
     # Load saved window size + position (falls back to defaults if no saved state yet).
     _ensure_state_path()
     saved_w, saved_h, saved_x, saved_y = _load_state(width, height)
@@ -639,6 +644,89 @@ def _install_download_print_handlers() -> None:
 _clipboard_hooked: set = set()
 
 
+# Media capture (mic/STT) is granted ONLY to the local WebUI. The desktop window's main
+# frame can host non-local pages (in-window GitHub OAuth; links in the HuggingFace
+# model-card preview navigate wherever the publisher points them), and the OS-level TCC
+# prompt fires only ONCE per host app - so an unconditional grant would hand any such
+# page a silent live mic after the user's first legitimate STT use.
+_LOCAL_MEDIA_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_WK_MEDIA_CAPTURE_MICROPHONE = 1  # WKMediaCaptureType: 0=Camera, 1=Microphone, 2=CameraAndMicrophone
+
+
+def _media_capture_decision(hosts, media_type) -> bool:
+    """PURE decision (unit-testable off-macOS): True = grant media capture.
+
+    Grants ONLY microphone capture requested by the local WebUI. `hosts` holds every
+    security-origin host readable for the request (requesting frame AND top page -
+    Apple's docs are ambiguous about which one the delegate's origin parameter
+    carries, so ALL of them must be local). Camera is denied: the host bundle only
+    declares NSMicrophoneUsageDescription, and touching a TCC-protected resource
+    without its usage description gets the process killed by macOS.
+    """
+    return bool(hosts) and set(hosts) <= _LOCAL_MEDIA_HOSTS and media_type == _WK_MEDIA_CAPTURE_MICROPHONE
+
+
+def _install_media_permissions_macos() -> None:
+    """Grant WebKit microphone capture for the local WebUI (macOS) so STT works.
+
+    pywebview (<= 6.2.x) does not implement the WKUIDelegate method
+    webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:,
+    so navigator.mediaDevices.getUserMedia() in the WebUI hung forever ("pending")
+    and voice input was dead in the desktop window. We add the method to pywebview's
+    BrowserDelegate at runtime; the decision itself is _media_capture_decision (local
+    origins + microphone only, deny otherwise). The OS-level TCC prompt ("Python
+    wants to access the microphone") still protects the user on first use - and note
+    that this TCC grant attaches to the SHARED (Homebrew) Python.app, so other
+    scripts run with the same interpreter inherit it.
+
+    WebKit only exposes navigator.mediaDevices at all when the HOST bundle has
+    NSMicrophoneUsageDescription. The host of this window is the framework
+    Python.app, patched by scripts/macos_mic_plist.sh (called from install.sh and
+    setup_mac.sh). A brew upgrade of python@X.Y replaces the bundle and removes the
+    patch until that script runs again (symptom returns: "Microphone access is not
+    supported by this browser") - the startup log below makes that state visible.
+    """
+    try:
+        import objc
+        import WebKit  # noqa: F401 - loads WKUIDelegate protocol metadata (block signatures)
+        from webview.platforms.cocoa import BrowserView
+
+        grant = getattr(WebKit, "WKPermissionDecisionGrant", 1)
+        deny = getattr(WebKit, "WKPermissionDecisionDeny", 2)
+
+        def webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_(
+            self, webview_obj, origin, frame, media_type, decision_handler
+        ):
+            hosts = []
+            try:
+                if origin is not None and origin.host():
+                    hosts.append(str(origin.host()))
+                if frame is not None and frame.securityOrigin() is not None and frame.securityOrigin().host():
+                    hosts.append(str(frame.securityOrigin().host()))
+            except Exception:
+                hosts = []  # unreadable origin -> fail closed
+            decision_handler(grant if _media_capture_decision(hosts, media_type) else deny)
+
+        _m = objc.typedSelector(b"v@:@@@q@?")(
+            webView_requestMediaCapturePermissionForOrigin_initiatedByFrame_type_decisionHandler_
+        )
+        objc.classAddMethods(BrowserView.BrowserDelegate, [_m])
+
+        # Make the plist half of the fix visible: without NSMicrophoneUsageDescription
+        # in the host bundle the mediaDevices API is not exposed at all, and a brew
+        # python upgrade silently reverts the plist patch.
+        try:
+            from Foundation import NSBundle
+            if NSBundle.mainBundle().objectForInfoDictionaryKey_("NSMicrophoneUsageDescription"):
+                _log.info("[DesktopWindow] WKWebView media-capture grant installed (mic/STT, local origins only)")
+            else:
+                _log.warning("[DesktopWindow] media-capture grant installed, but the host bundle lacks NSMicrophoneUsageDescription - run scripts/macos_mic_plist.sh (a brew python upgrade reverts it)")
+        except Exception:
+            _log.info("[DesktopWindow] WKWebView media-capture grant installed (mic/STT, local origins only)")
+    except Exception as e:  # pragma: no cover - pyobjc/pywebview version differences
+        _log.warning("[DesktopWindow] media-capture grant unavailable: %s", e)
+
+
 def _install_clipboard_permissions() -> None:
     """Make the WebUI's copy buttons work AND stop the pywebview feature-permission crash.
 
@@ -654,12 +742,12 @@ def _install_clipboard_permissions() -> None:
         from webview.platforms.qt import BrowserView
         from qtpy.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     except Exception as e:                          # pragma: no cover - backend/version differences
-        # macOS limitation: this hook is Qt-only (Linux). On macOS pywebview uses WKWebView, which
-        # default-denies getUserMedia and exposes no permission API at this layer -> WebUI voice
-        # input is currently NOT granted in the desktop window. Proper fix = a Cocoa WKUIDelegate
-        # `requestMediaCapturePermission` grant via pyobjc-framework-WebKit (needs on-device
-        # testing); workaround = allow the controlling app under System Settings -> Privacy ->
-        # Microphone, or open the Web UI in a real browser at http://localhost:3000.
+        # This hook is Qt-only (Linux). macOS/WKWebView is handled separately:
+        # _install_media_permissions_macos() (called from init()) adds the Cocoa
+        # WKUIDelegate requestMediaCapturePermission handler via pyobjc - tested
+        # on-device 2026-07-03 (getUserMedia returns a live audio track). Also
+        # requires NSMicrophoneUsageDescription in the host Python.app Info.plist
+        # (patched by scripts/macos_mic_plist.sh; a brew python upgrade reverts it).
         _log.debug("[DesktopWindow] clipboard/permission hook unavailable: %s", e)
         return
     Attr = QWebEngineSettings.WebAttribute
@@ -683,7 +771,11 @@ def _install_clipboard_permissions() -> None:
 
         def _on_feature(url, feature, _page=page):
             try:
-                policy = Pol.PermissionGrantedByUser if feature in _media else Pol.PermissionDeniedByUser
+                # Media capture only for the local WebUI: the main frame can host
+                # non-local pages (in-window OAuth, model-card links), which must
+                # never inherit mic/camera. Mirrors the macOS WKUIDelegate policy.
+                _local = str(url.host()) in _LOCAL_MEDIA_HOSTS
+                policy = Pol.PermissionGrantedByUser if (feature in _media and _local) else Pol.PermissionDeniedByUser
                 _page.setFeaturePermission(url, feature, policy)
             except Exception as e:                  # pragma: no cover
                 _log.debug("[DesktopWindow] feature permission handler error: %s", e)

@@ -10,6 +10,47 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a2] - 2026-07-03
+
+### Fixed
+- **First-run setup no longer races the database (all platforms, worst on Windows).**
+  The Docker stack starts in parallel with the web server; when PostgreSQL was not
+  ready in time (a first Rancher/WSL2 boot takes minutes), the auth tables were never
+  created and a fresh install showed a login form with no account to log in to.
+  Startup now gives the database a short head start, the auth-table init retries in
+  the background until the database is ready (never giving up), and the login page
+  shows "Starting the database..." and switches to the setup wizard on its own.
+- **macOS: the memory stack starts even when the docker CLI lacks the compose
+  plugin** (Homebrew docker + Colima: `docker compose` failed with
+  `unknown shorthand flag: 'f'` while the standalone `docker-compose` binary was
+  installed and working). VAF now detects the missing plugin and falls back to the
+  legacy binary; real compose errors still surface unchanged.
+- **Local model loads reliably (llama-server startup).** Server readiness now
+  requires `/health` = 200 — llama-server answers 503 while the model is still
+  loading, and accepting any response green-lit servers that died seconds later,
+  causing an endless relaunch loop with orphaned processes. Slow cold loads get a
+  generous configurable budget (`server_ready_timeout`) instead of being killed
+  mid-load. When the backend has no Flash Attention kernel for the model (e.g.
+  Qwen3.5 on Apple Metal), the quantized V cache made the server die at context
+  init — VAF now retries once with an f16 V cache and remembers the outcome.
+  Server output is always captured to `logs/server_last.log` (crashes left zero
+  diagnostics before).
+- **macOS: `model: "auto"` now scales with the machine.** Apple Silicon reported
+  0 GB GPU memory, so every Mac downloaded the smallest 4B/Q4 model. The GPU
+  budget is now 65% of unified memory (capped at RAM minus 6 GB for the OS and
+  services), so e.g. a 32 GB Mac gets the 9B model while a 16 GB Mac stays on the
+  4B tier that actually fits.
+- **macOS: microphone/STT works in the desktop window.** The installer adds the
+  microphone usage description to the host Python.app (with safe re-signing and
+  rollback), and VAF grants WebKit microphone capture — scoped to the local WebUI
+  origin and microphone-only, so pages loaded in-window (OAuth, model-card links)
+  can never capture audio. Note: a `brew upgrade python@X.Y` reverts the plist
+  patch; re-run `scripts/macos_mic_plist.sh` (the startup log warns about it).
+
+### Changed
+- Windows quickstart in the README works on stock PowerShell 5.1 (no `&&`,
+  `install.bat` instead of calling `install.ps1` directly).
+
 ## [0.1.0a1] - 2026-07-01
 
 ### Fixed

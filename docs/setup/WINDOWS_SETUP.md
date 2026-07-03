@@ -23,6 +23,14 @@ without admin rights.
 - **Container runtime** *(required)*: the installer **installs and starts Rancher Desktop** (free,
   Apache-2.0) for you — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so a
   runtime is needed to finish setup and sign in. An existing Docker Desktop / WSL2 engine is used if present.
+- **WSL2** *(required by Rancher Desktop)*: the installer checks this first. If WSL2 is missing it
+  enables it for you (one UAC prompt; no Linux distribution is installed) and sets version 2 as the
+  default. Enabling the Windows features usually requires a **restart** — the installer then pauses
+  with instructions. After the restart, simply repeat the install commands from the guide: `git clone`
+  will report that the folder already exists (expected and harmless — nothing is overwritten); the
+  remaining commands resume the installer where it left off. If you decline the UAC prompt, run
+  `wsl --install --no-distribution` and `wsl --set-default-version 2` in an administrator PowerShell
+  yourself, restart, and repeat the install commands the same way.
 - **Shortcuts & icons**: "VAF Agent" shortcuts on the **Desktop** and in the **Start Menu**, with generated app icons.
 
 ---

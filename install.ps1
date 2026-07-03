@@ -160,6 +160,93 @@ $osInfo = Get-CimInstance Win32_OperatingSystem
 Write-Info "OS: $($osInfo.Caption) ($($osInfo.OSArchitecture))"
 
 # ============================================================================
+# 0. WSL2 CHECK (before anything heavy)
+# The container runtime (Rancher Desktop) runs on a WSL2 engine. Without WSL2
+# its installer fails late and cryptically - after minutes of Python/Node
+# work - so verify/enable WSL2 up front. Status checks need no admin; only
+# enabling the Windows features does (one targeted UAC prompt, usually
+# followed by a reboot).
+# ============================================================================
+function Test-Wsl2Ready {
+    # Returns 'ready' or 'missing'. Locale-independent: wsl.exe output is
+    # localized (and UTF-16), so we never parse it - only exit codes count.
+    # Setting the default version to 2 needs NO admin, is idempotent, and
+    # doubles as the capability probe: it fails while the WSL2 components
+    # (Virtual Machine Platform / kernel) are absent, and permanently sets
+    # the default for the user when they are present.
+    try {
+        if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return 'missing' }
+        & wsl.exe --status *> $null
+        if ($LASTEXITCODE -ne 0) { return 'missing' }
+        & wsl.exe --set-default-version 2 *> $null
+        if ($LASTEXITCODE -eq 0) { return 'ready' }
+        return 'missing'
+    } catch { return 'missing' }
+}
+
+if (-not $SkipDocker) {
+    Write-Step "Checking WSL2 (required by the container runtime)..."
+    # Skip only when a LINUX container engine is already serving: Docker Desktop's
+    # legacy Hyper-V backend and remote engines (DOCKER_HOST) legitimately run
+    # without WSL - but an engine in WINDOWS-containers mode also answers
+    # 'docker info' and cannot run VAF's Linux images, so the OSType must say so.
+    $engineUp = $false
+    try {
+        $osType = (& docker info --format '{{.OSType}}' 2>$null | Out-String).Trim()
+        $engineUp = ($LASTEXITCODE -eq 0 -and $osType -eq 'linux')
+    } catch { $engineUp = $false }
+    if ($engineUp) {
+        Write-Success "A Linux container engine is already running - skipping the WSL2 check."
+    } elseif ((Test-Wsl2Ready) -eq 'ready') {
+        Write-Success "WSL2 is available (default version set to 2)."
+    } else {
+        Write-Warn "WSL2 is not set up on this machine - Rancher Desktop cannot run without it."
+        Write-Info "Enabling it now (approve the UAC prompt; this installs no Linux distribution)..."
+        # Elevated once: 'wsl --install --no-distribution' on current builds; the dism
+        # feature-enable pair covers older Windows 10 builds without that flag.
+        $wslFix = 'wsl.exe --install --no-distribution; if ($LASTEXITCODE -ne 0) { ' +
+                  'dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart; ' +
+                  'dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart }'
+        $elevated = $false
+        try {
+            Start-Process powershell.exe -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-Command",$wslFix -Verb RunAs -Wait | Out-Null
+            $elevated = $true
+        } catch {
+            Write-Warn "Elevation was declined - WSL2 must be enabled manually."
+        }
+        if ($elevated -and (Test-Wsl2Ready) -eq 'ready') {
+            # Features were already present and only the kernel/default needed fixing -
+            # no reboot required, carry on.
+            Write-Success "WSL2 enabled and set as the default version."
+        } elseif ($elevated) {
+            Write-Host ""
+            Write-Warn "ACTION NEEDED: WSL2 was installed but Windows must RESTART to finish it."
+            Write-Info "1. Restart Windows now."
+            Write-Info "2. After the restart, run the same install commands from the guide again."
+            Write-Info "   'git clone' will say the folder already exists - that is expected;"
+            Write-Info "   keep going with the remaining commands. Finished steps are skipped,"
+            Write-Info "   the installer continues where it stopped."
+            Write-Info "   Shortcut: open PowerShell and run just:"
+            Write-Info "       cd `"$PROJECT_ROOT`""
+            Write-Info "       .\install.bat"
+            if ($VAF_INSTALL_LOG) { try { Stop-Transcript | Out-Null } catch { } }
+            # 3010 = ERROR_SUCCESS_REBOOT_REQUIRED: a planned pause, not a failure -
+            # install.bat prints resume instructions instead of the error message.
+            exit 3010
+        } else {
+            Write-Info "Run these commands in an ADMINISTRATOR PowerShell, then restart Windows:"
+            Write-Info "    wsl --install --no-distribution"
+            Write-Info "    wsl --set-default-version 2"
+            Write-Info "After the restart, run the same install commands from the guide again."
+            Write-Info "'git clone' will say the folder already exists - that is expected;"
+            Write-Info "keep going with the remaining commands."
+            if ($VAF_INSTALL_LOG) { try { Stop-Transcript | Out-Null } catch { } }
+            exit 3010
+        }
+    }
+}
+
+# ============================================================================
 # 1. PYTHON CHECK
 # ============================================================================
 Write-Step "Checking Python Installation..."

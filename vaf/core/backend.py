@@ -149,6 +149,16 @@ def ensure_model_available(model_name, models_dir) -> str:
     return str(models_dir / (filename or auto_file or "model.gguf"))
 
 
+def _server_ready_budget() -> float:
+    """Seconds to wait for llama-server to reach /health == 200 (weights loaded, context
+    allocated). A cold multi-GB GGUF on a slow disk or CPU-only box can need minutes, so
+    the default is generous and configurable (server_ready_timeout); never below 60s."""
+    try:
+        return max(60.0, float(Config.get("server_ready_timeout", 600)))
+    except (TypeError, ValueError):
+        return 600.0
+
+
 class ServerManager:
     """
     Manages the lifecycle of the standalone llama-server executable.
@@ -166,6 +176,10 @@ class ServerManager:
         self.process = None
         self._log_file = None  # Server log file handle
         self._job_handle = None  # Windows Job Object for process group management
+        # Memo: this backend/model combination died on quantized V cache (needs Flash
+        # Attention). Skips the doomed first attempt on later restarts (idle unload /
+        # config change) so each reload does not re-pay a full model load + crash.
+        self._kv_vquant_unsupported = False
         
         # PID file for tracking server process (survives crashes)
         self.pid_file = os.path.join(os.path.expanduser("~"), ".vaf", "server.pid")
@@ -620,10 +634,13 @@ class ServerManager:
                 self.process = None  # Reuse existing external process
                 UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
                 return True
-            # If it's still loading, wait briefly before deciding to restart.
+            # If it's still loading (503), wait for it instead of killing and respawning:
+            # a re-entered start (tray retry) must not restart a server that is making
+            # progress. Same budget as the readiness wait below - a cold multi-GB GGUF
+            # on a slow disk can legitimately need minutes.
             if response.status_code == 503:
                 wait_start = time.time()
-                while time.time() - wait_start < 30:
+                while time.time() - wait_start < _server_ready_budget():
                     try:
                         response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
                         if response.status_code == 200:
@@ -807,6 +824,11 @@ class ServerManager:
             # KV-Cache Quantization: q8_0 keys (precision matters more) + q4_0 values.
             # Values tolerate more compression; this cuts KV-cache VRAM by ~62.5% vs f16
             # with negligible quality loss — the closest llama.cpp analog to TurboQuant.
+            # WARNING: Quantized V cache REQUIRES Flash Attention. llama.cpp silently disables
+            # FA when the backend has no kernel for the model (e.g. qwen35 head size 256
+            # on Metal) → the server dies at context init ("quantized V cache was
+            # requested, but this requires Flash Attention"). The launch loop below
+            # retries once without -ctv (V=f16, K stays q8_0 — K-quant needs no FA).
             "-ctk", "q8_0",
             "-ctv", "q4_0",
             # Enable jinja so the tools/tool_choice API works: llama-server uses the GGUF's embedded
@@ -817,12 +839,14 @@ class ServerManager:
             "--jinja",
         ]
 
-        # Server log verbosity: 2=warning (small logs) or 3=info (detailed logs for debugging)
-        # Only use verbose logging when Debug Logs is enabled in settings
+        # Server log verbosity is a THRESHOLD (higher = more output), not a syslog level.
+        # Debug Logs on: 3 = info incl. request/response details. Off: 0 = the default,
+        # which still prints startup and error lines (the FA-fallback diagnosis needs
+        # those) but no per-request dumps into the rolling server_last.log.
         if is_debug_logging_enabled():
-            cmd.extend(["--log-verbosity", "3"])  # Info level - logs requests/responses
+            cmd.extend(["--log-verbosity", "3"])
         else:
-            cmd.extend(["--log-verbosity", "2"])  # Warning level - minimal output
+            cmd.extend(["--log-verbosity", "0"])
         
         # Prompt cache RAM (MB): configurable to avoid OOM on limited systems
         cache_ram_mb = Config.get("llama_cache_ram", 4096)
@@ -857,17 +881,26 @@ class ServerManager:
              creationflags = subprocess.CREATE_NO_WINDOW
         
         try:
-            if debug_logs:
+            # ALWAYS capture the server's output to a file. With DEVNULL (the old
+            # non-debug path) a dying llama-server left ZERO diagnostics — the
+            # qwen35 "quantized V cache requires Flash Attention" failure on
+            # macOS/Metal was invisible. Debug Logs keeps its dated file; the
+            # non-debug file rolls: the previous start's output survives one
+            # generation as server_last.prev.log (a crashing server is usually
+            # auto-restarted within seconds — truncating would erase the post-mortem).
+            # Logging is best-effort: failing to open a log must never block the start.
+            log_file = None
+            try:
                 log_dir = get_app_log_dir()
                 log_dir.mkdir(parents=True, exist_ok=True)
-                log_file = get_dated_log_path("server", "log")
-                self._log_file = open(log_file, 'w', encoding='utf-8', errors='replace')
-                stdout_err = self._log_file
-                stderr_err = self._log_file
-            else:
-                self._log_file = None
-                stdout_err = subprocess.DEVNULL
-                stderr_err = subprocess.DEVNULL
+                if debug_logs:
+                    log_file = get_dated_log_path("server", "log")
+                else:
+                    log_file = log_dir / "server_last.log"
+                    if log_file.exists():
+                        os.replace(log_file, log_file.with_name("server_last.prev.log"))
+            except Exception:
+                log_file = None
 
             run_env = os.environ.copy()
             run_env["LLAMA_ARG_N_PARALLEL"] = str(final_parallel)
@@ -875,68 +908,175 @@ class ServerManager:
             if self.system == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=stdout_err,
-                stderr=stderr_err,
-                creationflags=creationflags,
-                env=run_env,
-            )
-            
-            # Windows: Add process to job object for automatic cleanup
-            if self.system == "Windows" and self._job_handle:
-                try:
-                    import ctypes
-                    process_handle = int(self.process._handle)
-                    ctypes.windll.kernel32.AssignProcessToJobObject(
-                        self._job_handle,
-                        process_handle
-                    )
-                except Exception:
-                    # Failed to assign to job, but process is still running
-                    # Fall back to manual cleanup
-                    pass
-            
-            # Wait for startup (up to 60s for large models/slow disks)
-            for _ in range(120):
-                if self.process.poll() is not None:
-                    if self._log_file:
-                        self._log_file.flush()
-                        try:
-                            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                                log_content = f.read()[-500:]
-                            UI.error(f"Server failed to start. Check {log_file}\n{log_content}")
-                        except Exception:
-                            UI.error(f"Server failed to start. Check {log_file}")
-                    else:
-                        UI.error("Server failed to start. Enable Debug Logs in Advanced settings for server.log.")
-                    return False
-                
-                # Check if port is live
-                try:
-                    requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
-                    # Save PID for crash recovery
-                    self._save_pid(self.process.pid)
-                    # Verify server actually applied our n_parallel (GET /props returns total_slots)
+            # KV-quant fallback: attempt 1 = cmd as built (K q8_0 + V q4_0);
+            # if the server dies because the backend can't do Flash Attention
+            # for this model (V-quant needs FA), attempt 2 retries without
+            # -ctv (V cache f16). Costs RAM (~2 GiB at 45k ctx on a 4B model)
+            # but starts on every backend/model combination.
+            attempt_cmds = [cmd]
+            if "-ctv" in cmd:
+                no_vquant = list(cmd)
+                _i = no_vquant.index("-ctv")
+                del no_vquant[_i:_i + 2]
+                if self._kv_vquant_unsupported:
+                    # This combination already died on V-quant in this process — do not
+                    # re-pay a full model load + deterministic crash to rediscover it.
+                    attempt_cmds = [no_vquant]
+                else:
+                    attempt_cmds.append(no_vquant)
+
+            for attempt, run_cmd in enumerate(attempt_cmds, start=1):
+                self._log_file = None
+                if log_file is not None:
                     try:
-                        r = requests.get(f"http://127.0.0.1:{port}/props", timeout=2)
-                        if r.status_code == 200:
-                            data = r.json()
-                            slots = data.get("total_slots")
-                            if slots is not None and int(slots) != final_parallel:
-                                UI.event("Server", f"Warn: server reports total_slots={slots} (expected {final_parallel})", style="yellow")
-                            elif slots is not None:
-                                UI.event("System", f"Server confirmed: total_slots={slots}", style="dim")
+                        # Append on retry: attempt 1's output holds the root cause the
+                        # retry is reacting to — truncating would erase it.
+                        self._log_file = open(log_file, 'w' if attempt == 1 else 'a', encoding='utf-8', errors='replace')
+                        if attempt > 1:
+                            self._log_file.write(
+                                "\n===== retry without -ctv (V cache f16) =====\n# "
+                                + " ".join(run_cmd) + "\n"
+                            )
+                            self._log_file.flush()
                     except Exception:
-                        pass  # /props optional; older builds may not have it
-                    return True
+                        self._log_file = None
+                _out = self._log_file if self._log_file is not None else subprocess.DEVNULL
+                self.process = subprocess.Popen(
+                    run_cmd,
+                    stdout=_out,
+                    stderr=_out,
+                    creationflags=creationflags,
+                    env=run_env,
+                )
+                # Save the PID immediately: crash/orphan cleanup and idle-unload must be
+                # able to find the server during the WHOLE load window (minutes on slow
+                # setups), not only once it is ready.
+                self._save_pid(self.process.pid)
+
+                # Windows: Add process to job object for automatic cleanup
+                if self.system == "Windows" and self._job_handle:
+                    try:
+                        import ctypes
+                        process_handle = int(self.process._handle)
+                        ctypes.windll.kernel32.AssignProcessToJobObject(
+                            self._job_handle,
+                            process_handle
+                        )
+                    except Exception:
+                        # Failed to assign to job, but process is still running
+                        # Fall back to manual cleanup
+                        pass
+
+                # Wait until the server is READY: /health == 200 means weights loaded +
+                # context allocated. llama-server binds the port within ~1s and serves
+                # 503 while the model is still loading (and possibly about to die at
+                # context init). Accepting any TCP response here returned True for
+                # servers that crashed 2s later → the agent's call failed → endless
+                # relaunch loop and orphaned processes. Only HTTP 200 counts as started.
+                # A live process answering 503 is PROGRESS and gets the full
+                # configurable budget — a flat ~60s deadline here would turn
+                # legitimately slow cold loads (big GGUF, HDD, CPU-only) into a
+                # kill/reload loop. Only "no HTTP answer at all" (bind phase, hung
+                # server) runs on a short grace that refreshes with every response.
+                ready_deadline = time.monotonic() + _server_ready_budget()
+                no_response_deadline = time.monotonic() + 60.0
+                died = False
+                timed_out = False
+                while True:
+                    if self.process.poll() is not None:
+                        died = True
+                        break
+                    if time.monotonic() >= ready_deadline:
+                        timed_out = True
+                        break
+                    try:
+                        _health = requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
+                        no_response_deadline = time.monotonic() + 60.0
+                        if _health.status_code != 200:
+                            time.sleep(0.5)
+                            continue
+                        # Verify server actually applied our n_parallel (GET /props returns total_slots)
+                        try:
+                            r = requests.get(f"http://127.0.0.1:{port}/props", timeout=2)
+                            if r.status_code == 200:
+                                data = r.json()
+                                slots = data.get("total_slots")
+                                if slots is not None and int(slots) != final_parallel:
+                                    UI.event("Server", f"Warn: server reports total_slots={slots} (expected {final_parallel})", style="yellow")
+                                elif slots is not None:
+                                    UI.event("System", f"Server confirmed: total_slots={slots}", style="dim")
+                        except Exception:
+                            pass  # /props optional; older builds may not have it
+                        return True
+                    except Exception:
+                        if time.monotonic() >= no_response_deadline:
+                            timed_out = True
+                            break
+                        time.sleep(0.5)
+
+                # Startup failed — close/flush the log and read its tail for diagnosis.
+                try:
+                    if self._log_file is not None:
+                        self._log_file.flush()
+                        self._log_file.close()
                 except Exception:
-                    time.sleep(0.5)
-                    
-            UI.error("Server startup timed out.")
+                    pass
+                self._log_file = None
+                log_tail = ""
+                if log_file is not None:
+                    try:
+                        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                            log_tail = f.read()[-800:]
+                    except Exception:
+                        pass
+
+                if timed_out:
+                    # Still alive but not ready within the budget: stop it, so no
+                    # untracked half-loaded llama-server is left behind for the next
+                    # start to blindly kill/respawn.
+                    UI.error(
+                        f"Server not ready after {int(_server_ready_budget())}s - stopping it. "
+                        "For very slow disks/models raise server_ready_timeout in the config."
+                    )
+                    try:
+                        self.process.terminate()
+                        try:
+                            self.process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            self.process.kill()
+                    except Exception:
+                        pass
+                    self._remove_pid()
+                    return False
+
+                if attempt < len(attempt_cmds) and "requires Flash Attention" in log_tail:
+                    self._kv_vquant_unsupported = True
+                    if debug_logs:
+                        try:
+                            with open(get_dated_log_path("server_cmd", "log"), "a", encoding="utf-8") as _f:
+                                _f.write("\n# retry without -ctv (V cache f16)\n" + " ".join(attempt_cmds[attempt]))
+                        except Exception:
+                            pass
+                    UI.event(
+                        "Server",
+                        "V-cache quant needs Flash Attention (no backend support for this model) - retrying with f16 V cache...",
+                        style="yellow",
+                    )
+                    continue
+
+                self._remove_pid()  # process is dead; do not leave a stale pid file
+                UI.error(f"Server failed to start. Check {log_file}\n{log_tail[-500:]}")
+                return False
+
             return False
-            
+
         except Exception as e:
+            try:
+                if self._log_file is not None:
+                    self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None
             UI.error(f"Failed to launch server: {e}")
             return False
 

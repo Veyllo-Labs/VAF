@@ -62,7 +62,8 @@ def info():
                 
                 UI.print(f"[{color}]{icon} {primary.vendor.upper()} GPU:[/{color}] {primary.model}")
                 if primary.vram_mb > 0:
-                    UI.print(f"  VRAM: {primary.vram_mb} MB")
+                    _suffix = " (unified-memory GPU budget, ~65% of RAM)" if primary.vendor == "apple" else ""
+                    UI.print(f"  VRAM: {primary.vram_mb} MB{_suffix}")
                 UI.print(f"  Status: {status}")
                 UI.print(f"  Recommended Backend: [bold]{support_info['recommended_backend']}[/bold]")
                 

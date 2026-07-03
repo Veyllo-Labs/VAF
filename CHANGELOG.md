@@ -10,6 +10,23 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a3] - 2026-07-03
+
+### Added
+- **In-app update notes.** After an update, the Web UI shows a one-time "What's new"
+  window with the changes of the new version (same place as the first-run alpha
+  notice; acknowledged per user). Alpha releases are now compared at full-version
+  granularity so every release can carry notes.
+
+### Fixed
+- **Windows: installing without WSL2 no longer fails at the Rancher Desktop step.**
+  The installer now checks WSL2 first (locale-independent, no admin needed for the
+  check), enables it via a single UAC prompt when missing (no Linux distribution is
+  installed; `dism` fallback for older Windows 10 builds), sets version 2 as the
+  default, and pauses cleanly with resume instructions when Windows needs the
+  restart (exit code 3010 is treated as a planned pause, not an error). An already
+  running Linux container engine (e.g. Docker Desktop on Hyper-V) skips the check.
+
 ## [0.1.0a2] - 2026-07-03
 
 ### Fixed

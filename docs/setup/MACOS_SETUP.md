@@ -71,11 +71,12 @@ First launch opens the setup wizard in your browser — see [FIRST_RUN.md](FIRST
   Docker Desktop); `vaf` brings the memory stack up automatically once the daemon is reachable.
 - **Desktop window doesn't open** — make sure you ran the installer in Desktop mode; the
   tray/window uses native macOS APIs (no extra GTK packages are needed as on Linux).
-- **Microphone / voice input doesn't work in the desktop window** — known macOS limitation: the
-  window uses WKWebView, which does not grant `getUserMedia` without a native permission hook (only
-  implemented for Linux today). Workarounds: allow the controlling app (Terminal, or `VAF.app`) under
-  **System Settings → Privacy & Security → Microphone**; or open the Web UI in a normal browser at the
-  printed `http://localhost:3000` (a real browser prompts for and grants mic access). A native
-  WKWebView grant (pyobjc WKUIDelegate) is planned.
+- **Microphone / voice input doesn't work in the desktop window** — should work out of the box:
+  the installer adds `NSMicrophoneUsageDescription` to the host Python.app and VAF grants mic
+  capture to the local WebUI (approve the one-time macOS prompt "Python wants to access the
+  microphone"). If it stops working after a `brew upgrade python@X.Y` (the upgrade replaces the
+  patched bundle), re-run `bash scripts/macos_mic_plist.sh ./venv/bin/python` from the VAF
+  directory. On non-framework Pythons (e.g. uv standalone builds) there is no Python.app to
+  patch — use the Web UI in a normal browser at `http://localhost:3000` instead.
 
 For services, networking, and integrations see the [documentation index](../README.md).

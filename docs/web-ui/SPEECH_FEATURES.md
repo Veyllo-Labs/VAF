@@ -465,6 +465,11 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 3. **Console errors:** Open browser DevTools → Console for detailed errors.
 
+4. **macOS desktop window:** "Microphone access is not supported by this browser" means the
+   host Python.app lost its `NSMicrophoneUsageDescription` (typically after a
+   `brew upgrade python@X.Y`) — re-run `bash scripts/macos_mic_plist.sh ./venv/bin/python`.
+   The startup log warns about this state.
+
 ### Telegram Voice Not Working
 
 1. **Verify STT container:**

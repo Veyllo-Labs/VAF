@@ -29,7 +29,7 @@ The default config value `model` is **`"auto"`** (`vaf/core/config.py`). At mode
 | 20–23 GB | Qwen3.5-9B | `UD-Q8_K_XL` (8-bit) | 12.97 GB |
 | ≥ 24 GB | Qwen3.5-9B | `BF16` (16-bit) | 17.92 GB |
 
-VRAM is read from the primary GPU (`nvidia-smi` / `rocm-smi`, total memory). The picker is `recommended_default_model(vram_gb=None)` in `vaf/core/gpu_detection.py` (pass an explicit `vram_gb` to override detection).
+VRAM is read from the primary GPU (`nvidia-smi` / `rocm-smi`, total memory). On **Apple Silicon** the GPU shares unified memory, so `detect_apple_silicon()` reports a conservative working-set budget instead: **65% of `hw.memsize`, capped at RAM minus 6 GB** (macOS + the Colima/memory-db VM + the VAF backend + tray live in the same bytes). A 16 GB Mac therefore reports 10.0 GB and stays in the 4B tier, a 32 GB Mac reports 20.8 GB and gets the 9B `UD-Q8_K_XL`. Before this, Macs reported 0 and always got the smallest 4B/Q4 model. The picker is `recommended_default_model(vram_gb=None)` in `vaf/core/gpu_detection.py` (pass an explicit `vram_gb` to override detection).
 
 An explicit `"repo/file.gguf"` (a value with ≥ 2 path segments) pins a specific model; a bare name/`repo` is resolved as before. The picker is `recommended_default_model()` in `vaf/core/gpu_detection.py`.
 
@@ -116,8 +116,11 @@ If the model emits a tool call **inside** `<think>...</think>` (e.g. `<tool_call
 - **`logs/backend.log`**: One line per chat step with the backend in use, e.g. `chat_step backend=library(llama-cpp-python)`, `chat_step backend=server(8080)`, or `chat_step backend=api(openai)`.
 - **`logs/memory.log`**: `[PROFILER]` entries (RAM every 30 s), plus compaction, usage, embedding load, `[WHISPER]` load.
 - **`logs/startup_trace.txt`**: Tray and WebServer startup. "Model loaded" means the tray started the server (8080); the agent may still use the library if `load_model()` did not take the server path.
+- **`logs/server_last.log`** (+ `server_last.prev.log`): llama-server's own output, always captured (never DEVNULL) — a dying server leaves its post-mortem here, and the previous start's output survives one generation. With Debug Logs enabled the dated `server_YYYY-MM-DD.log` is used instead.
 
 Together, **backend.log** and **startup_trace.txt** show whether the tray started the server and whether the agent is using the API, server (8080), or library.
+
+**Server readiness:** `start_server` only reports success once `/health` returns **HTTP 200** — llama-server binds its port immediately and answers 503 while the model is still loading, and accepting any TCP response used to green-light servers that died seconds later (endless relaunch loop, orphaned processes). A live process answering 503 is treated as progress and gets a generous budget (`server_ready_timeout`, default 600 s) so slow cold loads (big GGUF, HDD, CPU-only) are not killed mid-load; on final timeout the stuck process is terminated.
 
 ---
 
@@ -187,7 +190,7 @@ When using the Local Server (llama-server), the context window size (`n_ctx`) is
 
 - **Minimum: 32768** — enforced regardless of the configured value. With 100+ tools, the overhead alone is ~11K tokens (system prompt ~5.5K + tool schemas ~6K), leaving ~20K for conversation. Values below 32K cause the router safety net to trigger on every turn.
 - **Configuration:** Set `n_ctx` in `config.json` (or via Settings → Advanced). A value below 32768 is clamped up to 32768 when the configuration is loaded (`Config.load`), so every reader and the local server see one consistent floor. The default is `32768`.
-- **KV Cache:** VAF uses `q8_0` for keys and `q4_0` for values — ~62.5% less VRAM than f16 with negligible quality loss.
+- **KV Cache:** VAF uses `q8_0` for keys and `q4_0` for values — ~62.5% less VRAM than f16 with negligible quality loss. The quantized **V** cache requires Flash Attention; llama.cpp silently disables FA when the backend has no kernel for the model (e.g. `qwen35` head size 256 on Metal) and the server then dies at context init. `start_server` detects the "requires Flash Attention" death and retries once **without `-ctv`** (V cache f16, K stays `q8_0`); the outcome is memoized for the process so later restarts skip the doomed attempt. Costs RAM only on FA-less setups.
 - **VRAM estimate (RTX 3080, 10GB):** the default gemma-4 E2B (Q8_0) is a small model; together with the quantized KV cache it leaves ample headroom on a 10 GB card. KV-cache use scales with `n_ctx` and becomes the main driver at large windows (e.g. 128K).
 
 ## Native Chat Template and Tool Calling

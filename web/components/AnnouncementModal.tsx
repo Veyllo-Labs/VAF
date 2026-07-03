@@ -127,7 +127,7 @@ export default function AnnouncementModal({
             background: 'linear-gradient(180deg,#111827 30%,#354155)', WebkitBackgroundClip: 'text',
             backgroundClip: 'text', color: 'transparent',
           }}>
-            {variant === 'intro' ? t('intro.title') : t('changelog.title', { version: entry?.version ?? versionDisplay })}
+            {variant === 'intro' ? t('intro.title') : t('changelog.title', { version: entry ? `v${entry.version}` : versionDisplay })}
           </h1>
 
           <p style={{ fontSize: 14.5, color: C.muted, lineHeight: 1.6, margin: '0 auto', maxWidth: '40ch' }}>

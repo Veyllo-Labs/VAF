@@ -31,20 +31,49 @@ export function formatVersion(raw?: string | null): VersionInfo {
   return { display, channel };
 }
 
-/** The comparable + persisted form: "2.6" (major.minor), or null when unparseable. */
-export function parseMajorMinor(raw?: string | null): string | null {
-  const mm = (raw ?? '').match(/(\d+)\.(\d+)/);
-  return mm ? `${mm[1]}.${mm[2]}` : null;
+// --- Full-version comparison (PEP 440-ish) -----------------------------------------------
+// major.minor granularity cannot distinguish the alpha releases (0.1.0a1 vs 0.1.0a2 are both
+// "0.1"), so the announcement/changelog logic uses these. (The former parseMajorMinor /
+// compareMajorMinor helpers were removed with the switch; nothing else consumed them.)
+
+interface ParsedVersion {
+  release: number[];        // e.g. [0, 1, 0]
+  phaseRank: number;        // legacy-bare < a < b < rc < final
+  pre: number;              // the N in a/b/rc N
 }
 
-/** Compare two major.minor versions: >0 if a is newer, <0 if older, 0 if equal/both unknown. */
-export function compareMajorMinor(a?: string | null, b?: string | null): number {
-  const pa = parseMajorMinor(a);
-  const pb = parseMajorMinor(b);
+const PHASE_RANKS: Record<string, number> = { a: 1, alpha: 1, b: 2, beta: 2, rc: 3 };
+
+/** Parse "0.1.0a2" / "v0.2.1rc1" / "1.0" into a comparable structure (null if unparseable).
+ *
+ * A BARE major.minor with no suffix (exactly two components, e.g. "0.1") is treated as the
+ * very beginning of that series - OLDER than any concrete "0.1.x" version. That is the shape
+ * older builds persisted as last_seen_announcement_version, and those users must be shown
+ * the next changelog (not the intro) without bare "0.1" outranking the 0.1.0aX prereleases
+ * (under strict PEP 440 a final 0.1 would be NEWER than 0.1.0a2). */
+export function parseVersion(raw?: string | null): ParsedVersion | null {
+  const s = (raw ?? '').trim().toLowerCase();
+  const m = s.match(/^v?(\d+(?:\.\d+)*)\s*(?:[._-]?\s*(a|alpha|b|beta|rc)\s*[._-]?\s*(\d+)?)?/);
+  if (!m || !m[1]) return null;
+  const release = m[1].split('.').map(Number);
+  const legacyBare = release.length === 2 && !m[2];
+  const phaseRank = legacyBare ? 0 : (m[2] ? PHASE_RANKS[m[2]] : 4);
+  const pre = m[3] !== undefined ? Number(m[3]) : 0;
+  return { release, phaseRank, pre };
+}
+
+/** Compare two full versions: >0 if a is newer, <0 if older, 0 if equal/both unparseable. */
+export function compareVersions(a?: string | null, b?: string | null): number {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
   if (!pa && !pb) return 0;
   if (!pa) return -1;
   if (!pb) return 1;
-  const [a1, a2] = pa.split('.').map(Number);
-  const [b1, b2] = pb.split('.').map(Number);
-  return a1 !== b1 ? a1 - b1 : a2 - b2;
+  const len = Math.max(pa.release.length, pb.release.length);
+  for (let i = 0; i < len; i++) {
+    const d = (pa.release[i] ?? 0) - (pb.release[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  if (pa.phaseRank !== pb.phaseRank) return pa.phaseRank - pb.phaseRank;
+  return pa.pre - pb.pre;
 }

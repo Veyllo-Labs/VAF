@@ -9,7 +9,7 @@
 // FULL version exactly (e.g. '0.1.0a3') — the modal fires when the latest entry is newer
 // than what the user last acknowledged, so version and entry must move together.
 
-import { compareVersions } from './version';
+import { compareVersions, parseVersion } from './version';
 
 export type ChangeKind = 'new' | 'improved' | 'fixed' | 'removed';
 
@@ -76,11 +76,28 @@ export type AnnouncementKind = 'intro' | 'changelog' | null;
 // those users see the next changelog once without the intro re-firing.
 export function decideAnnouncement(
   lastSeen: string | null | undefined,
-  _currentRaw?: string | null,
+  currentRaw?: string | null,
 ): AnnouncementKind {
   if (!lastSeen) return 'intro';
   const latest = latestEntry();
-  if (latest && compareVersions(latest.version, lastSeen) > 0) return 'changelog';
+  if (!latest) return null;
+  // Pre-reset artifact: VAF's internal versions (2.x) were renumbered to 0.1.x for the
+  // public alpha, so early installs persisted acks like "2.7" that outrank every real
+  // version forever and mute the notes. A stored ack whose RELEASE part is newer than the
+  // running app can only be such an artifact (a prerelease-only downgrade like a3 -> a2
+  // differs only in the suffix and does not trigger this) - treat it like "never saw a
+  // changelog": show the latest notes once; acknowledging overwrites the stale value.
+  const seen = parseVersion(lastSeen);
+  const cur = parseVersion(currentRaw);
+  if (seen && cur) {
+    const len = Math.max(seen.release.length, cur.release.length);
+    for (let i = 0; i < len; i++) {
+      const d = (seen.release[i] ?? 0) - (cur.release[i] ?? 0);
+      if (d > 0) return 'changelog';
+      if (d < 0) break;
+    }
+  }
+  if (compareVersions(latest.version, lastSeen) > 0) return 'changelog';
   return null;
 }
 

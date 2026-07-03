@@ -314,11 +314,32 @@ def detect_apple_silicon() -> Optional[GPUInfo]:
         # Check if it's Apple Silicon (ARM64)
         machine = platform.machine().lower()
         if machine in ("arm64", "aarch64"):
-            # Metal is always available on Apple Silicon
+            # Unified memory: the GPU can address most of system RAM. Report a
+            # conservative budget: 65% of hw.memsize (Metal's
+            # recommendedMaxWorkingSetSize is ~65-75% of RAM), capped at RAM
+            # minus 6 GB — macOS + the Colima/memory-db VM + the VAF backend +
+            # the tray need that much to live, and on unified memory their RAM
+            # and the "VRAM" are the SAME bytes. Without the reserve a 16 GB
+            # Mac (the most common config) reported 10.4 GB, crossed the
+            # 4B->9B model threshold by 0.4 GB and over-committed itself into
+            # swap churn; with it, 16 GB reports 10.0 GB -> 4B tier, while
+            # 18 GB and up are unaffected (the 65% cap binds there).
+            # Previously this was hardcoded to 0 → _detect_vram_gb() treated
+            # every Apple Silicon Mac as "no GPU" and `model: "auto"` always
+            # picked the smallest 4B/Q4 model, regardless of 16/32/128 GB.
+            vram_mb = 0
+            try:
+                _memsize = int(subprocess.check_output(
+                    ["sysctl", "-n", "hw.memsize"], timeout=2,
+                ).strip())
+                _budget = min(_memsize * 0.65, _memsize - 6 * 1024**3)
+                vram_mb = max(0, int(_budget / (1024 * 1024)))
+            except Exception:
+                pass  # vram_mb stays 0 → callers fall back to the RAM path
             return GPUInfo(
                 vendor="apple",
                 model="Apple Silicon",
-                vram_mb=0,  # Unified memory, not easily queryable
+                vram_mb=vram_mb,  # unified-memory GPU working-set budget (see above)
                 driver_available=True,
                 compute_available=True  # Metal is built-in
             )
@@ -463,9 +484,14 @@ QWEN_4B_Q8 = "unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-UD-Q8_K_XL.gguf"
 
 
 def _detect_vram_gb() -> float:
-    """Best-effort TOTAL VRAM of the primary GPU in GB (0.0 if no GPU / undetectable)."""
+    """Best-effort GPU memory budget of the primary GPU in GB (0.0 if no GPU / undetectable).
+
+    Includes Apple Silicon: detect_apple_silicon() reports ~65% of unified
+    memory as the GPU working-set budget. Without it every Mac read as 0.0
+    and `model: "auto"` always resolved to the smallest 4B/Q4 model.
+    """
     try:
-        info = detect_nvidia_gpu() or detect_amd_gpu()
+        info = detect_nvidia_gpu() or detect_amd_gpu() or detect_apple_silicon()
         if info and getattr(info, "vram_mb", 0):
             return float(info.vram_mb) / 1024.0
     except Exception:

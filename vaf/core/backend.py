@@ -714,17 +714,21 @@ class ServerManager:
         # really available. KV + per-token compute ≈ 400 MiB per 8k tokens (q8_0 keys + q4_0 values, 8B).
         if gpu and gpu.vram_mb > 0:
             _free_mb = 0
-            try:
-                _r = subprocess.run(
-                    ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if _r.returncode == 0:
-                    _free_mb = int(_r.stdout.strip().splitlines()[0])
-            except Exception:
-                _free_mb = 0
+            if getattr(gpu, "vendor", "") == "nvidia":
+                try:
+                    _r = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if _r.returncode == 0:
+                        _free_mb = int(_r.stdout.strip().splitlines()[0])
+                except Exception:
+                    _free_mb = 0
             if _free_mb <= 0:
-                _free_mb = gpu.vram_mb                              # fall back to total VRAM
+                # Non-NVIDIA (or probe failed): use the reported figure directly. For
+                # Apple Silicon vram_mb is already a conservative unified-memory
+                # working-set BUDGET (not free VRAM) - see detect_apple_silicon().
+                _free_mb = gpu.vram_mb
             _weights_mb = max(0.0, est_model_gb - 1.0) * 1024       # est_model_gb has +1 GB scratch; weights only here
             _budget_mb = _free_mb - _weights_mb - 400               # 400 MiB headroom for desktop fluctuation + safety
             _safe_ctx = max(4096, (int((max(0.0, _budget_mb) / 400.0) * 8192) // 2048) * 2048)
@@ -798,7 +802,8 @@ class ServerManager:
 
         UI.event("System", f"Config: {mode_msg}", style="dim")
         if gpu and gpu.vram_mb > 0:
-            UI.event("System", f"VRAM: {vram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_vram:.1f}GB", style="dim")
+            _vram_label = "GPU budget (unified memory)" if getattr(gpu, "vendor", "") == "apple" else "VRAM"
+            UI.event("System", f"{_vram_label}: {vram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_vram:.1f}GB", style="dim")
         else:
             UI.event("System", f"RAM: {total_ram_gb:.1f}GB | Est. 2-Slot Need: {cost_2_slots_ram:.1f}GB", style="dim")
         

@@ -709,6 +709,8 @@ class GitHubUpdateFileTool(BaseTool):
         path = (kwargs.get("path") or "").strip()
         content = kwargs.get("content")
         message = (kwargs.get("message") or "Update from VAF agent").strip()
+        from vaf.tools.project_git import apply_coauthor_trailer
+        message = apply_coauthor_trailer(message)
         branch = (kwargs.get("branch") or "").strip() or None
         
         try:

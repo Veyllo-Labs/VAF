@@ -363,6 +363,16 @@ def _deterministic_readme(base_dir: str, changed_files: List[str]) -> str:
     return "\n".join(lines)
 
 
+def _extract_xml_tool_call(content: str) -> Optional[Dict[str, Any]]:
+    """Recover a tool call emitted as XML/DSML content (see Format 0d in the stream loop).
+
+    Thin wrapper over the shared parser so the coder and the main agent share one
+    implementation. See vaf.core.tool_call_recovery.extract_xml_tool_call.
+    """
+    from vaf.core.tool_call_recovery import extract_xml_tool_call
+    return extract_xml_tool_call(content)
+
+
 def _cleanup_content_only_dir(base_dir: str) -> None:
     """Remove base_dir ONLY if it is a coder-created CONTENT_ONLY temp directory.
 
@@ -5570,6 +5580,17 @@ Task {task_idx + 1}: {current_task}
                                 tui.append_stream(f"[EXTRACTED] {tool_name} from JSON format")
                             except:
                                 pass
+
+                    # Format 0d: XML invoke/parameter markup (Claude-style) - and DeepSeek's
+                    # ｜｜DSML｜｜-token leak of the same shape, where a real tool call arrives as
+                    # CONTENT instead of structured tool_calls. Recovers + dispatches it so the
+                    # raw markup is never shown to the user. See _extract_xml_tool_call.
+                    if not extracted_tool_call:
+                        _xml_call = _extract_xml_tool_call(content)
+                        if _xml_call:
+                            extracted_tool_call = _xml_call
+                            tui.append_stream(f"[EXTRACTED] {_xml_call['function']['name']} from XML/DSML invoke markup")
+
                     if tool_call_match:
                         try:
                             tasks_str = tool_call_match.group(1)

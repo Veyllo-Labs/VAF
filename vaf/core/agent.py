@@ -7879,6 +7879,16 @@ class Agent:
                             "function": {"name": _q_name, "arguments": json.dumps(_q_args)},
                         })
 
+                # 6. Claude-style XML / DeepSeek ｜｜DSML｜｜ tool call leaked into content
+                # (the same shape the coding agent recovers in its Format 0d). DeepSeek v4
+                # intermittently emits a real call as content instead of structured tool_calls;
+                # filtered to known tools, so it is safe to try once nothing above matched.
+                if not tool_calls_detected:
+                    from vaf.core.tool_call_recovery import extract_xml_tool_call
+                    _xml_tc = extract_xml_tool_call(text_to_search, self.tools)
+                    if _xml_tc:
+                        tool_calls_detected.append(_xml_tc)
+
             try:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
             except Exception:
@@ -7907,6 +7917,11 @@ class Agent:
 
             if tool_calls_detected:
                 content_for_history = full_content if full_content else "Thinking..."
+                # A tool call recovered from the assistant TEXT (a DeepSeek ｜｜DSML｜｜ / Claude
+                # <invoke> leak) leaves its raw markup in the content. Strip it so the tags are
+                # neither shown in the UI nor replayed to the model next turn. No-op otherwise.
+                from vaf.core.tool_call_recovery import strip_tool_call_markup
+                content_for_history = strip_tool_call_markup(content_for_history) or "Thinking..."
                 if self.use_server and not full_content:
                     content_for_history = None
                 

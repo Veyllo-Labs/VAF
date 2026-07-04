@@ -111,6 +111,33 @@ If the model emits a tool call **inside** `<think>...</think>` (e.g. `<tool_call
 
 ---
 
+## Tool calls emitted as text (XML) instead of structured `tool_calls`
+
+Some models occasionally serialize a real tool call as **XML-style text in the assistant
+content** rather than using the API's structured `tool_calls` field. Left as-is, the raw markup
+is shown to the user and the call never runs. VAF recovers these on its "no structured
+tool_calls" fallback path (`vaf/core/tool_call_recovery.py`):
+
+- **`extract_xml_tool_call(content, valid_names=None)`** recovers a call across several dialects:
+  - `<invoke name="X"><parameter name="P">V</parameter></invoke>` (Anthropic-style),
+  - `<tool_use name="X" id="…"><path>V</path>…</tool_use>` with tag-named parameters,
+  - tool-name-as-tag `<write_to_file><path>V</path>…</write_to_file>` — only when a known-tools
+    allowlist is supplied, so ordinary markup in file content is never mistaken for a call,
+  - any of the above wrapped in a model's own special tokens.
+
+  Parameter values are coerced from text (an explicit `string="true"` stays a string, otherwise
+  JSON-parsed with a string fallback).
+- **`strip_tool_call_markup(content)`** removes the leaked markup from the assistant text so the
+  tags are neither shown in the UI nor replayed to the model next turn. No-op when the content
+  has no such markup.
+
+Wiring: the coding agent uses it in its content fallback chain (`write_file`/`read_file`/…), and
+the main agent runs it after the model-specific text parsers, filtered to the loaded tools. This
+sits alongside the existing structured tool-calling path — structured `tool_calls` remain the
+primary route; this is only a recovery net for the occasional text-serialized call.
+
+---
+
 ## Logs for debugging
 
 - **`logs/backend.log`**: One line per chat step with the backend in use, e.g. `chat_step backend=library(llama-cpp-python)`, `chat_step backend=server(8080)`, or `chat_step backend=api(openai)`.

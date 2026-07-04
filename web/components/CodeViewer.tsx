@@ -5,9 +5,47 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // Monaco is heavy — load it only on client side
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
+
+// Dark-theme markdown preview (inline styles so no tailwind-typography dependency).
+function MarkdownPreview({ source }: { source: string }) {
+  return (
+    <div className="h-full overflow-auto px-6 py-5 text-[13.5px] leading-relaxed text-gray-200">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: (p) => <h1 className="text-2xl font-bold text-white mt-5 mb-3 first:mt-0" {...p} />,
+          h2: (p) => <h2 className="text-xl font-semibold text-white mt-5 mb-2.5 border-b border-[#3e3e3e] pb-1" {...p} />,
+          h3: (p) => <h3 className="text-base font-semibold text-gray-100 mt-4 mb-2" {...p} />,
+          p: (p) => <p className="my-2.5" {...p} />,
+          ul: (p) => <ul className="list-disc pl-6 my-2.5 space-y-1" {...p} />,
+          ol: (p) => <ol className="list-decimal pl-6 my-2.5 space-y-1" {...p} />,
+          a: (p) => <a className="text-blue-400 underline hover:text-blue-300" target="_blank" rel="noopener noreferrer" {...p} />,
+          strong: (p) => <strong className="font-semibold text-white" {...p} />,
+          blockquote: (p) => <blockquote className="border-l-4 border-[#4e4e4e] pl-4 my-3 text-gray-400 italic" {...p} />,
+          hr: () => <hr className="my-5 border-[#3e3e3e]" />,
+          code: ({ className, children, ...rest }) => {
+            const inline = !String(className || '').includes('language-');
+            return inline
+              ? <code className="px-1.5 py-0.5 rounded bg-[#3e3e3e] text-emerald-300 font-mono text-[12.5px]" {...rest}>{children}</code>
+              : <code className={`${className || ''} font-mono`} {...rest}>{children}</code>;
+          },
+          pre: (p) => <pre className="my-3 p-3 rounded-lg bg-[#141414] border border-[#3e3e3e] overflow-x-auto text-[12.5px]" {...p} />,
+          table: (p) => <table className="my-3 border-collapse text-[12.5px]" {...p} />,
+          th: (p) => <th className="border border-[#3e3e3e] px-3 py-1.5 bg-[#2d2d2d] text-left font-semibold" {...p} />,
+          td: (p) => <td className="border border-[#3e3e3e] px-3 py-1.5" {...p} />,
+          img: (p) => <img className="max-w-full rounded my-3" {...p} />,
+        }}
+      >
+        {source}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 // ── Language detection ────────────────────────────────────────────────────────
 const EXT_TO_LANG: Record<string, string> = {
@@ -76,11 +114,14 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  // Markdown opens in rendered preview by default (clean to read); toggle to raw source.
+  const [mdPreview, setMdPreview] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const editorRef = useRef<unknown>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const language = detectLanguage(filePath);
+  const isMarkdown = language === 'markdown';
   const fileName = filePath.split('/').pop() ?? filePath;
 
   // ── Fetch file from backend ─────────────────────────────────────────────────
@@ -190,6 +231,22 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
           <span className="text-[10px] text-emerald-400 shrink-0">Saved</span>
         )}
 
+        {/* Markdown preview toggle (Code / Preview) */}
+        {isMarkdown && (
+          <button
+            onClick={() => setMdPreview((v) => !v)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-[#3e3e3e] hover:bg-[#4e4e4e] transition-colors shrink-0"
+            title={mdPreview ? 'Show Markdown source' : 'Show rendered preview'}
+          >
+            {mdPreview ? (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            )}
+            {mdPreview ? 'Source' : 'Preview'}
+          </button>
+        )}
+
         {/* Save button */}
         <button
           onClick={handleSave}
@@ -251,6 +308,8 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
             <p className="text-sm">{loadError}</p>
             <button onClick={() => fetchContent()} className="text-xs px-3 py-1.5 rounded bg-[#3e3e3e] hover:bg-[#4e4e4e] transition-colors">Retry</button>
           </div>
+        ) : isMarkdown && mdPreview ? (
+          <MarkdownPreview source={content} />
         ) : (
           <MonacoEditor
             height="100%"

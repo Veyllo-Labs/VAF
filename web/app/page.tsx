@@ -1861,13 +1861,13 @@ function VAFDashboardContent() {
             setIsWorkspaceModalOpen(false);
             return;
         }
-        // Types the DocumentViewer renders. Checked BEFORE isCodeFile because
-        // .md/.html count as code languages but belong in the document view.
+        // Binary/office documents that need the DocumentViewer's rich rendering.
+        // Text formats (.md/.txt/...) open in the CodeViewer instead (with a
+        // Markdown preview toggle there), so every path opens them consistently.
         const docExts = new Set([
-            'pdf', 'docx', 'xlsx', 'pptx', 'md', 'mdx', 'markdown', 'html', 'htm',
-            'txt', 'rtf', 'csv',
+            'pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'csv',
         ]);
-        if (!docExts.has(ext) && isCodeFile(name)) {
+        if (!docExts.has(ext) && (isCodeFile(name) || isTextFile(name))) {
             setCodeViewerState({ isOpen: true, filePath: full, title: name });
             setShowSubAgentPanel(true);
             setIsWorkspaceModalOpen(false);
@@ -3093,14 +3093,14 @@ function VAFDashboardContent() {
                     const activeSid = currentSessionIdRef.current;
                     const sid = data.sessionId || activeSid;
                     const fp = data.filePath || '';
-                    // Reports and documents (.md/.html/.docx/...) belong in the DocumentEditor.
-                    // isCodeFile() alone would misroute them: Markdown and HTML are also valid
-                    // CodeViewer languages. Only genuine code files open in the CodeViewer.
-                    const docExts = ['md', 'mdx', 'html', 'htm', 'docx', 'xlsx', 'pptx', 'txt', 'rtf'];
+                    // Office/HTML documents open in the DocumentEditor; text formats
+                    // (.md/.txt/...) open in the CodeViewer (with a Markdown preview
+                    // toggle) so every path routes them the same way.
+                    const docExts = ['html', 'htm', 'docx', 'xlsx', 'pptx', 'rtf'];
                     const ext = (fp.split('/').pop() || '').split('.').pop()?.toLowerCase() || '';
                     const isDocumentFile = docExts.includes(ext);
                     if (sid) {
-                        if (!isDocumentFile && isCodeFile(fp)) {
+                        if (!isDocumentFile && (isCodeFile(fp) || isTextFile(fp))) {
                             // Code files → CodeViewer (not DocumentEditor)
                             if (sid === activeSid) {
                                 setCodeViewerState({ isOpen: true, filePath: fp, title: data.title || fp.split('/').pop() || 'Code' });

@@ -29,6 +29,52 @@ VALIDATABLE_TOOLS = frozenset({
 })
 
 
+# Relative NEW-artifact path args per step tool, resolved against the shared
+# workflow project dir. move_file's src usually points at an existing file (handled
+# by the existing-file guard below); dst is the new location.
+_WORKFLOW_REL_PATH_ARGS = {"write_file": ("path",), "move_file": ("src", "dst")}
+# Folder aliases the filesystem tools resolve themselves (Desktop/Documents/...);
+# joining them onto the project dir would defeat that convention.
+_WORKFLOW_FOLDER_ALIASES = {
+    "desktop", "documents", "downloads", "pictures", "videos", "music",
+    "dokumente", "bilder", "musik", "herunterladen",
+}
+
+
+def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_project_path: Optional[str]) -> None:
+    """Route file-producing steps into the shared per-run project directory (in place).
+
+    - coding_agent / document_writer get it as project_path (unless the step set one).
+    - write_file / move_file relative NEW-artifact paths are resolved against it, so a
+      bare filename does not resolve against the backend process cwd (observed live
+      2026-07-03: a workflow draft written to the user's home root, where the file
+      endpoint rightly refuses to serve it).
+
+    Left untouched: absolute / ~-anchored paths (explicit choice); a folder-alias
+    first segment (Desktop/Documents/...) the filesystem tool resolves itself; and a
+    relative path that ALREADY points at an existing file - that is an in-place update
+    of a real user file (e.g. a code_review step that read the same relative path),
+    which must stay cwd-relative so the read and the write agree.
+    """
+    if not workflow_project_path:
+        return
+    if step_tool in ("coding_agent", "document_writer"):
+        if "project_path" not in args:
+            args["project_path"] = workflow_project_path
+        return
+    for _arg in _WORKFLOW_REL_PATH_ARGS.get(step_tool, ()):
+        p = args.get(_arg)
+        if not (isinstance(p, str) and p.strip()):
+            continue
+        if os.path.isabs(os.path.expanduser(p)):
+            continue  # explicit absolute/~ target
+        if p.split("/", 1)[0].split("\\", 1)[0].lower() in _WORKFLOW_FOLDER_ALIASES:
+            continue  # tool resolves the folder alias itself
+        if os.path.exists(p):
+            continue  # in-place update of an existing file (read/write must agree)
+        args[_arg] = os.path.join(workflow_project_path, p)
+
+
 def _strip_rich_links(text: str) -> str:
     """Replace Rich link markup with just the display text.
 
@@ -472,12 +518,6 @@ class WorkflowEngine:
                             )
                             break
 
-                # ── Auto-inject shared project_path for coding_agent / document_writer ──
-                # Prevents each step from creating its own scattered project directory.
-                _PROJ_TOOLS = {"coding_agent", "document_writer"}
-                if step.tool in _PROJ_TOOLS and _workflow_project_path and "project_path" not in args:
-                    args["project_path"] = _workflow_project_path
-
                 # Snapshot outputs before tool execution (for retry on failure)
                 outputs_snapshot = {k: v for k, v in outputs.items()}
                 
@@ -587,6 +627,9 @@ class WorkflowEngine:
 
                 while retry_count < max_retries:
                     _inject_user_scope(step.tool, args)
+                    # Route file-producing steps into the shared project dir. Inside the
+                    # retry loop (idempotent) so a context-error retry keeps the routing.
+                    _inject_workflow_paths(step.tool, args, _workflow_project_path)
                     try:
                         if _spawn_and_wait:
                             # Spawn the sub-agent as a killable child process (returns

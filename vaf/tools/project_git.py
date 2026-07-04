@@ -80,6 +80,35 @@ def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], **kwargs)
 
 
+def apply_coauthor_trailer(message: str) -> str:
+    """Append the configured Co-authored-by trailer to a VAF-authored commit message.
+
+    Applied only where VAF itself authored the committed changes — project
+    versioning commits here, the coder's final commit, and GitHub file commits.
+    Never applied to user-initiated commits (`vaf git commit`) or to the
+    internal `[VAF]` snapshot bookkeeping commits, whose content may be the
+    user's own uncommitted work.
+
+    The trailer block is separated by two blank lines; commit with
+    `--cleanup=verbatim`, the default cleanup collapses consecutive blank
+    lines. Idempotent. Disabled via git_coauthor_enabled=False or an empty
+    git_coauthor_identity (the set_git_coauthor tool flips this from chat).
+    """
+    try:
+        from vaf.core.config import Config
+        if not Config.get("git_coauthor_enabled"):
+            return message
+        identity = (Config.get("git_coauthor_identity") or "").strip()
+    except Exception:
+        return message
+    if not identity:
+        return message
+    trailer = f"Co-authored-by: {identity}"
+    if trailer.lower() in (message or "").lower():
+        return message
+    return f"{(message or '').rstrip()}\n\n\n{trailer}"
+
+
 def _session_project_path() -> str:
     """Project path of the current chat (workspace first, then last project)."""
     try:
@@ -277,13 +306,16 @@ class ProjectRollbackTool(BaseTool):
 
     @staticmethod
     def _commit(path: str, message: str) -> subprocess.CompletedProcess:
-        result = _run_git(["commit", "-m", message], cwd=path)
+        # verbatim keeps the two blank lines before the co-author trailer block;
+        # the message is fully programmatic, so there is nothing to clean up.
+        message = apply_coauthor_trailer(message)
+        result = _run_git(["commit", "--cleanup=verbatim", "-m", message], cwd=path)
         if result.returncode != 0:
             err = (result.stderr or "") + (result.stdout or "")
             if any(s in err for s in ("user.name", "user.email", "identity")):
                 result = _run_git(
                     ["-c", "user.name=VAF Coder", "-c", "user.email=coder@vaf.local",
-                     "commit", "-m", message],
+                     "commit", "--cleanup=verbatim", "-m", message],
                     cwd=path,
                 )
         return result

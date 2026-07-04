@@ -206,6 +206,13 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `api_key_google_search` | `""` | Google Programmable Search key. |
 | `google_search_engine_id` | `""` | Google Programmable Search engine ID. |
 
+## Git attribution
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `git_coauthor_enabled` | `True` | Append a `Co-authored-by` trailer to commits VAF authors itself (project versioning, coder final commit, GitHub file commits). User-initiated commits (`vaf git commit`) are never touched. Toggle from chat via the `set_git_coauthor` tool ("stop adding yourself as co-author"). |
+| `git_coauthor_identity` | `VAF Agent <noreply@veyllo.app>` | Trailer identity in `Name <email>` form; an empty string disables the trailer. |
+
 ## MCP
 
 | Key | Default | Meaning |

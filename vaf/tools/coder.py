@@ -166,13 +166,16 @@ def _final_commit(base_dir: str, message: str) -> str:
     if platform.system() == "Windows":
         run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
+    from vaf.tools.project_git import apply_coauthor_trailer
+    message = apply_coauthor_trailer(message)
+
     try:
         subprocess.run(['git', 'add', '-A'], check=True, **run_kwargs)
         status = subprocess.run(['git', 'status', '--porcelain'], check=True, **run_kwargs)
         if not (status.stdout or "").strip():
             return "Git: nothing new to commit"
 
-        commit = subprocess.run(['git', 'commit', '-m', message], **run_kwargs)
+        commit = subprocess.run(['git', 'commit', '--cleanup=verbatim', '-m', message], **run_kwargs)
         if commit.returncode != 0:
             err = (commit.stderr or "") + (commit.stdout or "")
             if any(s in err for s in ("user.name", "user.email", "identity")):
@@ -180,7 +183,7 @@ def _final_commit(base_dir: str, message: str) -> str:
                 # one-off VAF identity (does not touch the user's git config).
                 commit = subprocess.run(
                     ['git', '-c', 'user.name=VAF Coder', '-c', 'user.email=coder@vaf.local',
-                     'commit', '-m', message],
+                     'commit', '--cleanup=verbatim', '-m', message],
                     **run_kwargs,
                 )
             if commit.returncode != 0:

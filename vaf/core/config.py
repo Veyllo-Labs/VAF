@@ -70,6 +70,8 @@ class Config:
         "update_include_prereleases": None,  # `vaf update` prerelease tracking: None=auto (track prereleases iff the installed build is itself a prerelease), True=always, False=stable-only
         "web_search_cache_enabled": True,        # serve identical web_search queries from a short-lived cache
         "web_search_cache_ttl_seconds": 900,     # 15 minutes
+        "git_coauthor_enabled": True,            # Co-authored-by trailer on commits VAF authors (project versioning, coder final commit, GitHub file commits); toggled from chat via set_git_coauthor
+        "git_coauthor_identity": "VAF Agent <noreply@veyllo.app>",  # trailer identity; empty string disables the trailer like git_coauthor_enabled=False
         "model": "auto",  # "auto" = VRAM-adaptive local default: Qwen3.5-4B (<=10 GB VRAM) or Qwen3.5-9B (>10 GB), unsloth GGUF, quant auto-picked. Or set an explicit "repo/file.gguf".
         "provider": "local",
         "gpu_layers": -1,

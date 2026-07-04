@@ -20,10 +20,28 @@ def _policy(src, is_channel):
     )
 
 
-def test_hard_blocked_on_remote_channels():
+def _force_channel_restricted(monkeypatch):
+    """Force channel_tools_unrestricted OFF so the POLICY-layer channel block is active.
+
+    Its default is ON (channels get the main agent's tools), which lifts
+    channel_restrictions at the policy layer - so this must be pinned or the assertion
+    depends on the machine's stored config (green locally, red on a fresh CI checkout).
+    The default-ON path (where the non-liftable in-tool guard is what protects host_bash)
+    is covered by test_channel_guard_is_non_liftable.
+    """
+    import vaf.core.config as cfg
+    real = cfg.Config.get.__func__
+    monkeypatch.setattr(
+        cfg.Config, "get",
+        classmethod(lambda cls, k, d=None: False if k == "channel_tools_unrestricted" else real(cls, k, d)),
+    )
+
+
+def test_hard_blocked_on_remote_channels(monkeypatch):
+    _force_channel_restricted(monkeypatch)
     for src in ("telegram", "whatsapp", "discord"):
         d = _policy(src, True)
-        assert d.blocked, f"host_bash must be hard-blocked on {src}"
+        assert d.blocked, f"policy must block host_bash on {src} when channel_tools_unrestricted is off"
 
 
 def test_local_requires_confirmation_not_blocked():

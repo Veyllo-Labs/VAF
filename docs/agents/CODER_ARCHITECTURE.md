@@ -155,7 +155,8 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **Hidden:** `write_file`, `task_done`.
     *   **Goal:** Force the agent to plan.
 *   **IF `task_mgr.has_plan() == True`:**
-    *   **Allowed:** `write_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `task_done`, `bash` (kernel-jailed; see 5.x), plus plug-and-play runtime tools.
+    *   **Allowed:** `write_file`, `edit_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `git_log`, `project_history`, `project_rollback`, `task_done`, plus plug-and-play runtime tools. `edit_file` (surgical search/replace) is preferred over `write_file` for changing an existing file; `git_log`/`project_history`/`project_rollback` run against the real project repo (not the `run_tests` sandbox), so a task step can find a known-good version and restore it.
+    *   **Planning/main context only:** `bash` (kernel-jailed workspace shell; see 5.x), `git_init`, `git_add_commit`, `git_status`, `web_fetch`.
     *   **Hidden:** `set_todos` (to prevent re-planning loops).
 
 ### E. LLM Interaction & Safety Nets
@@ -265,7 +266,7 @@ The inactivity auto-complete (idle with files present) runs the same determinist
 
 ### `run_tests` (`vaf.tools.sandbox_test_runner`)
 *   **Purpose:** Give the coder a sanctioned way to actually run its project's tests and get the **real** pass/fail, instead of guessing "tests pass".
-*   **Execution:** Copies the project (tar-pipe) into a fresh `/workspace/testrun_...` dir in the `vaf-sandbox` container, runs `python3 -m pytest -q` under an in-container `timeout -s KILL`, streams the summary back, and cleans up the run dir in a `finally`.
+*   **Execution:** Copies the project (tar-pipe) into a fresh `/workspace/testrun_...` dir in the `vaf-sandbox` container, runs `python3 -m pytest -q` under an in-container `timeout -s KILL`, streams the summary back, and cleans up the run dir in a `finally`. The copy excludes `.git` and is network-less, so it is not a host shell: a `git ...` or OS-package-install command sent as the `command` is rejected up front with a redirect to `git_log`/`project_history`/`project_rollback` (real repo) or `edit_file`/`write_file`, instead of failing silently and burning loops.
 *   **History budget:** `run_tests` output shares `read_file`'s larger char limit so the pytest summary is not truncated out of the LLM history.
 
 ---

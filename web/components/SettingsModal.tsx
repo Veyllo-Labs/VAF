@@ -3198,7 +3198,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 transition-all"
                                                         style={{ width: `${(75 * idx) / 3}%` }}
                                                     />
-                                                    <div className="grid grid-cols-4 max-md:grid-cols-2">
+                                                    {/* relative z-10: paint the dots ABOVE the absolute track lines so the
+                                                        line never shows through the hollow (unselected) dots. */}
+                                                    <div className="relative z-10 grid grid-cols-4 max-md:grid-cols-2">
                                                         {LEVEL_LABELS.map((lbl, i) => (
                                                             <button
                                                                 key={i}

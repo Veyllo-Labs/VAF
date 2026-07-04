@@ -31,6 +31,34 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a5',
+    date: '2026-07-04',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'The coding agent can now run your project’s tests and see the real pass/fail, instead of guessing.',
+          'The coding agent writes a README for what it builds — and updates an existing one when it changes your project.',
+          'Coding tasks on an existing project no longer stall: the agent reads the project before it plans.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'The coding agent’s shell now runs in a locked-down workspace, so a generated build can’t touch VAF itself; host and docker commands run only with your explicit confirmation.',
+          'Project templates now start from a small working example with a passing test, so results are more reliable.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Created Markdown and text files open in the built-in viewer with a preview toggle.',
+          'The failover level selector no longer draws its connecting line through the unselected dots.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a4',
     date: '2026-07-04',
     sections: [

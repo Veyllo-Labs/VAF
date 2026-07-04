@@ -10,6 +10,25 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+### Added
+- **The coding agent edits existing files surgically.** A new `edit_file` tool changes only the
+  targeted text (exact search/replace, a unique match required, all-or-nothing) instead of
+  rewriting the whole file, so a one-line fix no longer risks a full rewrite that drops the
+  framework or unrelated code.
+
+### Fixed
+- **A coder task that restores from git history no longer stalls.** The version-history and
+  restore tools (`git_log`, `project_history`, `project_rollback`) are now available while the
+  agent executes a task, not only while it plans, and they run against the real project repo.
+  `run_tests` also rejects a `git` or OS-package-install command sent as its shell command and
+  points to the right tool, instead of failing silently inside its isolated test sandbox.
+- **Tool calls that a model serializes as XML/text in the message body** are recovered and hidden
+  instead of leaking into the visible reply.
+- **"Allow always" for a directory persists again** — the trusted-directory list stays
+  JSON-serializable.
+- **The coding agent's console shows output immediately.** Removed the typewriter animation that
+  made the live console lag behind the real timestamps.
+
 ## [0.1.0a5] - 2026-07-04
 
 ### Added

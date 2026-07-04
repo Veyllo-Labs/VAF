@@ -39,4 +39,7 @@ def test_save_is_robust_if_a_path_sneaks_in(tmp_path, monkeypatch):
     monkeypatch.setattr(trust, "_trust_file", lambda: store)
     trust.save_trust_state(TrustState(trusted_dirs={Path("/tmp/x")}, tool_policies={}))
     reloaded = trust.load_trust_state()
-    assert reloaded.trusted_dirs == {"/tmp/x"}
+    # The save str()s the Path; str(WindowsPath("/tmp/x")) == "\\tmp\\x", so compare against the
+    # platform-native str() rather than a POSIX literal (real dirs go through resolve()/normalize).
+    assert reloaded.trusted_dirs == {str(Path("/tmp/x"))}
+    assert all(isinstance(d, str) for d in reloaded.trusted_dirs)

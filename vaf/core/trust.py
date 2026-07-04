@@ -66,16 +66,20 @@ def save_trust_state(state: TrustState) -> None:
     path = _trust_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "trusted_dirs": sorted(state.trusted_dirs),
+        # str() defensively: trusted_dirs must be JSON-serializable strings. A Path here
+        # (e.g. from a helper that returns Path) would make json.dumps raise and silently
+        # break "allow always" for every dangerous tool.
+        "trusted_dirs": sorted(str(d) for d in state.trusted_dirs),
         "tool_policies": state.tool_policies,
     }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _norm_dir(p: Path) -> str:
-    # Normalize via Platform helper if available
+    # Normalize via Platform helper if available. Platform.normalize_path returns a Path,
+    # so str() the result - trusted_dirs must hold strings (see save_trust_state).
     try:
-        return Platform.normalize_path(str(p.resolve()))
+        return str(Platform.normalize_path(str(p.resolve())))
     except Exception:
         return str(p.resolve())
 

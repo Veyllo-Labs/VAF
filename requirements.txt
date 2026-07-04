@@ -26,7 +26,7 @@ python-telegram-bot>=21.0
 
 # AI/ML
 huggingface_hub[hf_xet]>=0.20.0
-tqdm>=4.65.0  # Progress bars for downloads
+tqdm>=4.68.3  # Progress bars for downloads
 openai>=1.12.0
 anthropic>=0.18.0
 google-genai>=1.0.0  # new unified SDK; google-generativeai is EOL

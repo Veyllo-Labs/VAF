@@ -2743,7 +2743,14 @@ Thumbs.db
             from vaf.tools.knowledge import UpdateCodexTool, AddMemoryTool
             self.local_tools["update_codex"] = make_git_tool_wrapper(UpdateCodexTool, base_dir)
             self.local_tools["add_memory"] = make_git_tool_wrapper(AddMemoryTool, base_dir)
-        
+
+        # Run the project's tests in the isolated sandbox (real pass/fail, not a guess).
+        # Registered UNCONDITIONALLY (base_dir is always valid, incl. CONTENT_ONLY) so it
+        # matches the run_tests schema, which the execution-phase tool list advertises in
+        # every mode - otherwise the model could call an unregistered tool.
+        from vaf.tools.sandbox_test_runner import RunTestsTool
+        self.local_tools["run_tests"] = RunTestsTool(base_dir)
+
         # ═══════════════════════════════════════════════════════════════════
         # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
         # ═══════════════════════════════════════════════════════════════════
@@ -3101,7 +3108,8 @@ Complete this task: "{task}"
 - `web_search(query)`: Search web for docs, examples, or research BEFORE planning (optional).
 - `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
 - `read_file(path)`: Read existing files.
-- `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files.
+- `run_tests(command?)`: Run the project's tests in the sandbox and get the REAL result. After writing tests, CALL THIS to verify - never claim tests pass without running them.
+- `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files (and run_tests is green if you wrote tests).
 </tools>
 
 <philosophy>
@@ -3759,6 +3767,28 @@ Task {task_idx + 1}: {current_task}
                                     }
                                 },
                                 "required": ["code"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "run_tests",
+                            "description": (
+                                "Run the project's tests inside the isolated sandbox and return the REAL "
+                                "pass/fail result. After writing tests, CALL THIS to verify them — never "
+                                "claim tests pass without running them. Default command: pytest. On failure, "
+                                "read the output, fix the code with write_file, and run_tests again."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "command": {
+                                        "type": "string",
+                                        "description": "Optional shell command to run in the project dir (default: 'python3 -m pytest -q').",
+                                    }
+                                },
+                                "required": []
                             }
                         }
                     },
@@ -8027,8 +8057,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             if _sandbox_writes_files:
                                 result = (
                                     "⛔ BLOCKED: python_sandbox cannot write to project files.\n\n"
-                                    "Use write_file(path='...', content='...') instead to write or update project files.\n"
+                                    "Use write_file(path='...', content='...') to write/update project files.\n"
                                     "Use read_file(path='...') to read project files.\n"
+                                    "To RUN THE PROJECT'S TESTS, call run_tests() — it runs pytest against the "
+                                    "real project files in the sandbox and returns the actual pass/fail result.\n"
                                     "python_sandbox is only for pure computation (math, algorithms, string processing)."
                                 )
                                 history.append({"role": "tool", "tool_call_id": tc['id'], "content": result})
@@ -8435,7 +8467,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 _log_to_file(f"[DEBUG-X] Adding tool result to history: fn_name={fn_name}, result_len={len(result_str)}")
                 # read_file can return large files; give it more room so the agent
                 # can verify file contents without hitting the truncation limit.
-                _result_char_limit = 8000 if fn_name == "read_file" else 3000
+                # run_tests gets the larger limit too: its result is already tail-bounded
+                # (~4 KB) and HEAD-truncating it here would drop the pytest pass/fail summary.
+                _result_char_limit = 8000 if fn_name in ("read_file", "run_tests") else 3000
                 _history_at_dispatch.append({
                     "role": "tool",
                     "tool_call_id": tc['id'],

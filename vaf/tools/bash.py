@@ -104,119 +104,55 @@ IMPORTANT: Long-running commands timeout after 120 seconds."""
         "required": ["command"]
     }
     
+    def __init__(self, base_dir: str = None):
+        # base_dir = the coder's project workspace. Bound at registration (like the git
+        # tools) so bash defaults to the project, not the tray process cwd, and so the
+        # sandbox confines writes to exactly this workspace.
+        self.base_dir = base_dir
+
     def run(self, **kwargs) -> str:
+        import shlex as _shlex
         command = kwargs.get("command", "")
         cwd = kwargs.get("cwd", None)
         timeout = kwargs.get("timeout", 120)
-        
+
         if not command or not command.strip():
             return "Error: No command provided"
-        
-        # Security check
+
+        # Cheap first-line blocklist (defense in depth; the real confinement is the jail).
         is_safe, warning = is_command_safe(command)
         if not is_safe:
             return f"Error: {warning}"
-        
-        # Limit timeout
-        timeout = min(max(10, timeout), 300)
-        
-        # Determine working directory
-        if cwd:
-            work_dir = Path(cwd).expanduser().resolve()
-        else:
-            work_dir = Path.cwd()
-        
-        if not work_dir.exists():
-            return f"Error: Working directory does not exist: {work_dir}"
-        
-        # Try to use Docker Sandbox first
-        try:
-            from vaf.tools.sandbox import DockerSandbox
-            with DockerSandbox() as sandbox:
-                code, out, err = sandbox.execute(command, timeout=timeout, workdir=str(work_dir) if cwd else "/")
-                
-                result_parts = []
-                if warning:
-                    result_parts.append(warning)
-                
-                result_parts.append(f"$ {command}")
-                result_parts.append(f"(in SANDBOX)") # Indicate sandbox usage
-                
-                if out:
-                     if len(out) > 8000: out = out[:8000] + "\n... (truncated)"
-                     result_parts.append(f"\nOutput:\n{out}")
-                
-                if err:
-                     if len(err) > 4000: err = err[:4000] + "\n... (stderr truncated)"
-                     result_parts.append(f"\nStderr:\n{err}")
-                
-                if code == 0:
-                    result_parts.append(f"\n✓ Success (exit code: 0)")
-                else:
-                    result_parts.append(f"\n✗ Failed (exit code: {code})")
-                
-                return "\n".join(result_parts)
-                
-        except (ImportError, RuntimeError) as e:
-            # Fallback to Host Execution if Docker fails/missing
-            warning = f"⚠️  SANDBOX OFFLINE: {e}. Executing on HOST (Less Secure)!"
-            logger.warning(warning)
-            pass
 
-        try:
-            # Cross-platform shell arguments
-            shell_args = {
-                "cwd": work_dir,
-                "capture_output": True,
-                "text": True,
-                "timeout": timeout,
-                "shell": True,
-                "env": {**os.environ, "PYTHONIOENCODING": "utf-8"}
-            }
-            
-            # Use Platform module if available
-            if Platform:
-                if not Platform.is_windows():
-                    shell_args["executable"] = Platform.default_shell()
-            else:
-                # Fallback: manual platform detection
-                if sys.platform == "darwin":
-                    shell_args["executable"] = "/bin/zsh" if os.path.exists("/bin/zsh") else "/bin/bash"
-                elif sys.platform != "win32":
-                    shell_args["executable"] = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
-            
-            process = subprocess.run(command, **shell_args)
-            
-            # Build result
-            result_parts = []
-            
-            if warning:
-                result_parts.append(warning)
-            
-            result_parts.append(f"$ {command}")
-            result_parts.append(f"(in {work_dir})")
-            
-            if process.stdout:
-                # Truncate long output
-                stdout = process.stdout
-                if len(stdout) > 8000:
-                    stdout = stdout[:8000] + "\n... (output truncated)"
-                result_parts.append(f"\nOutput:\n{stdout}")
-            
-            if process.stderr:
-                stderr = process.stderr
-                if len(stderr) > 4000:
-                    stderr = stderr[:4000] + "\n... (stderr truncated)"
-                result_parts.append(f"\nStderr:\n{stderr}")
-            
-            if process.returncode == 0:
-                result_parts.append(f"\n✓ Success (exit code: 0)")
-            else:
-                result_parts.append(f"\n✗ Failed (exit code: {process.returncode})")
-            
-            return "\n".join(result_parts)
-            
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {e}"
+        timeout = min(max(10, timeout), 300)
+
+        workspace = self.base_dir or kwargs.get("base_dir")
+        if not workspace:
+            # No project workspace bound: refuse rather than fall back to the process cwd
+            # (which could be the home dir and would root the jail at HOME + its secrets).
+            return "Error: bash has no project workspace to run in."
+        # A relative cwd is a subdir of the workspace; cd into it inside the jail.
+        run_command = command
+        if cwd:
+            run_command = f"cd {_shlex.quote(str(cwd))} && {command}"
+
+        from vaf.tools.workspace_exec import run_in_workspace
+        rc, out, err, mode = run_in_workspace(workspace, run_command, timeout=timeout)
+
+        parts = []
+        if warning:
+            parts.append(warning)
+        parts.append(f"$ {command}")
+        if mode == "refused":
+            return f"{err}"
+        parts.append(f"(workspace: {mode})")
+        if out:
+            if len(out) > 8000:
+                out = out[:8000] + "\n... (output truncated)"
+            parts.append(f"\nOutput:\n{out}")
+        if err:
+            if len(err) > 4000:
+                err = err[:4000] + "\n... (stderr truncated)"
+            parts.append(f"\nStderr:\n{err}")
+        parts.append("\nSuccess (exit code: 0)" if rc == 0 else f"\nFailed (exit code: {rc})")
+        return "\n".join(parts)

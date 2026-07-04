@@ -115,6 +115,28 @@ _SINGLE_FILE_PATTERNS = [
 ]
 
 
+def _cleanup_content_only_dir(base_dir: str) -> None:
+    """Remove base_dir ONLY if it is a coder-created CONTENT_ONLY temp directory.
+
+    skip_template does NOT imply base_dir is disposable: when a caller (e.g. the
+    workflow engine) injects project_path, base_dir IS the user's per-chat
+    workspace - an unconditional rmtree here deleted real user files (observed
+    live 2026-07-03: a workflow's freshly written draft plus its whole per-chat
+    folder). Only vaf_content_* directories under the system temp dir - exactly
+    what the CONTENT_ONLY branch creates via tempfile.mkdtemp - are ours to delete.
+    Best-effort: any error just leaves the directory behind.
+    """
+    try:
+        import shutil
+        import tempfile
+        p = Path(base_dir).resolve()
+        tmp_root = Path(tempfile.gettempdir()).resolve()
+        if p.name.startswith("vaf_content_") and p.is_relative_to(tmp_root):
+            shutil.rmtree(p)
+    except Exception:
+        pass
+
+
 def _detect_single_file_deliverable(task: str) -> bool:
     """True if the task explicitly asks for a single-file deliverable.
 
@@ -6643,12 +6665,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 if os.path.exists(full_path):
                                     with open(full_path, 'r', encoding='utf-8') as f:
                                         content = f.read()
-                                    # Clean up temporary directory
-                                    try:
-                                        import shutil
-                                        shutil.rmtree(base_dir)
-                                    except:
-                                        pass
+                                    # Clean up ONLY a real CONTENT_ONLY temp dir (an
+                                    # injected project_path is the user's workspace!)
+                                    _cleanup_content_only_dir(base_dir)
                                     return content
                             except Exception:
                                 pass  # Fallback to summary
@@ -7268,12 +7287,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                         if os.path.exists(full_path):
                                             with open(full_path, 'r', encoding='utf-8') as f:
                                                 content = f.read()
-                                            # Clean up temporary directory
-                                            try:
-                                                import shutil
-                                                shutil.rmtree(base_dir)
-                                            except:
-                                                pass
+                                            # Clean up ONLY a real CONTENT_ONLY temp dir (an
+                                            # injected project_path is the user's workspace!)
+                                            _cleanup_content_only_dir(base_dir)
                                             return content
                                     except Exception:
                                         pass  # Fallback to summary
@@ -8523,13 +8539,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             with open(full_path, 'r', encoding='utf-8') as f:
                                 content = f.read()
                             
-                            # Clean up temporary directory in CONTENT_ONLY mode
-                            try:
-                                import shutil
-                                shutil.rmtree(base_dir)
-                            except:
-                                pass  # Ignore cleanup errors
-                            
+                            # Clean up ONLY a real CONTENT_ONLY temp dir (an injected
+                            # project_path is the user's per-chat workspace!)
+                            _cleanup_content_only_dir(base_dir)
+
                             return content
                     except Exception as e:
                         # Fallback to summary if reading fails

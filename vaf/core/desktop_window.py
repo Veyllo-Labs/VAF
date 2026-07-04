@@ -446,6 +446,14 @@ _INTERCEPT_JS = """
     if (window.__vafLinksPatched) return;
     window.__vafLinksPatched = true;
 
+    // A raw file endpoint must NEVER replace the SPA: on failure it returns bare
+    // JSON (e.g. {"detail":"Access denied"}), and the desktop window has no back
+    // button - the user is stranded. Let these fall through to pywebview, which
+    // routes them to the system browser / native download instead.
+    function _isFileEndpoint(u) {
+        return u.pathname === '/api/file' || u.pathname === '/api/download';
+    }
+
     // Intercept window.open() — redirect localhost URLs into the same window,
     // let external URLs fall through to pywebview (opens system browser).
     var _origOpen = window.open;
@@ -453,7 +461,7 @@ _INTERCEPT_JS = """
         if (url) {
             try {
                 var u = new URL(url, window.location.href);
-                if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+                if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && !_isFileEndpoint(u)) {
                     window.location.href = url;
                     return null;
                 }
@@ -468,12 +476,13 @@ _INTERCEPT_JS = """
         if (!link) return;
         try {
             var u = new URL(link.href, window.location.href);
-            if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+            if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && !_isFileEndpoint(u)) {
                 e.preventDefault();
                 e.stopPropagation();
                 window.location.href = link.href;
             }
-            // External links pass through → pywebview opens them in system browser.
+            // File endpoints and external links pass through → pywebview opens
+            // them in the system browser / native download.
         } catch(e) {}
     }, true);
 })();

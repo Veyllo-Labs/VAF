@@ -619,25 +619,47 @@ class WriteFileTool(BaseTool):
         safe, res = is_safe_path(path)
         if not safe: return res
 
-        # If the resolved path lives directly inside the home directory in a folder
-        # that does not yet exist, reroute to Documents/VAF/<subfolder> so the agent
-        # does not fail trying to create arbitrary home-level dirs (e.g. ~/my_project/).
+        # Reroute writes that would land loose in the home directory into
+        # Documents/VAF, so the agent neither creates arbitrary home-level dirs
+        # (e.g. ~/my_project/) nor litters the home root with a cwd-relative bare
+        # filename (a workflow write_file step with path="draft" run from a tray
+        # process whose cwd is the home dir - the 2026-07-03 incident). An EXPLICIT
+        # absolute or ~-anchored target is the user's deliberate choice (e.g.
+        # read-modify-write of ~/.bashrc) and is written in place.
+        _explicit_target = os.path.isabs(os.path.expanduser(path or ""))
         try:
             from vaf.core.platform import Platform as _Plat
             _home = Path.home()
-            _res_path = Path(res)
-            _rel = _res_path.relative_to(_home)          # raises ValueError if not under home
+            # Resolve BOTH sides: is_safe_path's os.path.abspath symlink-resolves the
+            # cwd, but $HOME may itself be an unresolved symlink - comparing raw would
+            # miss a home write on such setups and re-open the litter-the-home bug.
+            _rel = Path(res).resolve().relative_to(_home.resolve())   # ValueError if not under home
             _first = _rel.parts[0] if _rel.parts else None
+            _multi_segment = len(_rel.parts) > 1
             _known_home_dirs = {
                 "Documents", "Downloads", "Desktop", "Pictures", "Videos", "Music",
                 "Dokumente", "Bilder", "Musik", "Herunterladen",  # German
                 "VAF", ".vaf", ".config", ".local", ".cache", ".ssh",
             }
+            _out = _Plat.get_vaf_output_dir()
             if _first and _first not in _known_home_dirs and not (_home / _first).exists():
-                _out = _Plat.get_vaf_output_dir()
+                # New home-level target. A hallucinated multi-segment home dir is always
+                # rerouted; an explicit single new file (e.g. "create ~/.vimrc") is the
+                # user's choice and written in place.
+                if _multi_segment or not _explicit_target:
+                    res = str(_out / _rel)
+            elif len(_rel.parts) == 1 and _first not in _known_home_dirs and not _explicit_target:
+                # Existing bare file at the home root reached via a cwd-relative name
+                # (the workflow-cwd incident) - reroute so it lands in a servable root.
+                # An explicit ~/x or /home/x overwrite happens in place.
                 res = str(_out / _rel)
-        except (ValueError, Exception):
-            pass  # not under home, or any other issue — leave path as-is
+        except ValueError:
+            pass  # not under home - keep the resolved path
+        except Exception as _guard_err:
+            # This guard was silently dead for months (a shadowed import made it raise
+            # on every call, swallowed here). Never swallow silently again.
+            import logging
+            logging.getLogger(__name__).warning("write_file home-reroute guard skipped: %s", _guard_err)
 
         import time
 
@@ -656,7 +678,10 @@ class WriteFileTool(BaseTool):
                         # Desktop might have permission issues, try Documents as fallback (cross-platform)
                         from vaf.core.platform import Platform
                         if "desktop" in res.lower():
-                            from pathlib import Path
+                            # NOTE: no local pathlib import here - a function-local
+                            # 'from pathlib import Path' shadows the module-level Path
+                            # for the WHOLE function scope and killed the home-reroute
+                            # guard above with an UnboundLocalError on every call.
                             fallback = Path.home() / "Documents"
                             if fallback.exists():
                                 # Replace Desktop with Documents in path
@@ -714,7 +739,6 @@ class WriteFileTool(BaseTool):
                         # Desktop might not be writable, try Documents as fallback (cross-platform)
                         from vaf.core.platform import Platform
                         if "desktop" in res.lower():
-                            from pathlib import Path
                             fallback = Path.home() / "Documents"
                             if fallback.exists():
                                 # Replace Desktop with Documents in path

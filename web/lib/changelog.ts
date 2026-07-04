@@ -31,6 +31,26 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a6',
+    date: '2026-07-04',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'The coding agent now changes only the part of a file you asked about, instead of rewriting the whole file — small fixes stay small.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The coding agent can restore an earlier version of a file from your project’s history without getting stuck.',
+          'The coding agent’s live console shows its output immediately, instead of lagging behind.',
+          '“Allow always” for a folder is remembered again.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a5',
     date: '2026-07-04',
     sections: [

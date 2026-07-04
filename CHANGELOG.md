@@ -10,6 +10,8 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a6] - 2026-07-04
+
 ### Added
 - **The coding agent edits existing files surgically.** A new `edit_file` tool changes only the
   targeted text (exact search/replace, a unique match required, all-or-nothing) instead of

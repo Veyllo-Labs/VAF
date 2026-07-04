@@ -2751,6 +2751,12 @@ Thumbs.db
         from vaf.tools.sandbox_test_runner import RunTestsTool
         self.local_tools["run_tests"] = RunTestsTool(base_dir)
 
+        # Re-bind bash to the project workspace: it now runs inside a kernel-confined
+        # jail (bwrap) rooted at base_dir - full workspace access (incl. host docker),
+        # but VAF's core, secrets and the agent itself are structurally out of reach.
+        if HAS_CODING_TOOLS:
+            self.local_tools["bash"] = BashTool(base_dir)
+
         # ═══════════════════════════════════════════════════════════════════
         # TEMPLATE ANALYSIS - Use LLM with own context BEFORE starting work
         # ═══════════════════════════════════════════════════════════════════

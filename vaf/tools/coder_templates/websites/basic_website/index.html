@@ -1,5 +1,11 @@
 <!DOCTYPE html>
-<html lang="de">
+<!--
+  {{BUSINESS_NAME}} website scaffold.
+  REPLACE every {{PLACEHOLDER}} with real content for the task. KEEP the HTML structure,
+  tags and class/id names (styles.css and script.js depend on them). Add or remove sections
+  only if the task calls for it.
+-->
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,10 +18,10 @@
         <nav class="nav">
             <div class="logo">{{BUSINESS_NAME}}</div>
             <ul class="nav-links">
-                <li><a href="#home">Start</a></li>
-                <li><a href="#services">Leistungen</a></li>
-                <li><a href="#about">Über uns</a></li>
-                <li><a href="#contact">Kontakt</a></li>
+                <li><a href="#home">Home</a></li>
+                <li><a href="#services">Services</a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="#contact">Contact</a></li>
             </ul>
             <button class="mobile-menu-btn" aria-label="Menu">☰</button>
         </nav>
@@ -26,13 +32,13 @@
             <div class="hero-content">
                 <h1>{{HEADLINE}}</h1>
                 <p>{{SUBHEADLINE}}</p>
-                <a href="#contact" class="cta-button">Kontakt aufnehmen</a>
+                <a href="#contact" class="cta-button">Get in touch</a>
             </div>
         </section>
 
         <section id="services" class="services">
             <div class="container">
-                <h2>Unsere Leistungen</h2>
+                <h2>Our Services</h2>
                 <div class="services-grid">
                     <div class="service-card">
                         <div class="service-icon">🔧</div>
@@ -56,7 +62,7 @@
         <section id="about" class="about">
             <div class="container">
                 <div class="about-content">
-                    <h2>Über uns</h2>
+                    <h2>About Us</h2>
                     <p>{{ABOUT_TEXT}}</p>
                     <ul class="about-features">
                         <li>✓ {{FEATURE_1}}</li>
@@ -69,7 +75,7 @@
 
         <section id="contact" class="contact">
             <div class="container">
-                <h2>Kontakt</h2>
+                <h2>Contact</h2>
                 <div class="contact-wrapper">
                     <div class="contact-info">
                         <div class="contact-item">
@@ -86,10 +92,10 @@
                         </div>
                     </div>
                     <form class="contact-form" action="#" method="POST">
-                        <input type="text" name="name" placeholder="Ihr Name" required>
-                        <input type="email" name="email" placeholder="Ihre E-Mail" required>
-                        <textarea name="message" placeholder="Ihre Nachricht" rows="4" required></textarea>
-                        <button type="submit" class="submit-button">Nachricht senden</button>
+                        <input type="text" name="name" placeholder="Your Name" required>
+                        <input type="email" name="email" placeholder="Your Email" required>
+                        <textarea name="message" placeholder="Your Message" rows="4" required></textarea>
+                        <button type="submit" class="submit-button">Send Message</button>
                     </form>
                 </div>
             </div>
@@ -98,10 +104,10 @@
 
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2024 {{BUSINESS_NAME}}. Alle Rechte vorbehalten.</p>
+            <p>&copy; 2026 {{BUSINESS_NAME}}. All rights reserved.</p>
             <div class="footer-links">
-                <a href="#">Impressum</a>
-                <a href="#">Datenschutz</a>
+                <a href="#">Imprint</a>
+                <a href="#">Privacy</a>
             </div>
         </div>
     </footer>
@@ -109,4 +115,3 @@
     <script src="script.js"></script>
 </body>
 </html>
-

@@ -39,8 +39,12 @@ def health():
 @app.route('/api/{{API_ENDPOINT}}', methods=['GET', 'POST'])
 def api_endpoint():
     """
-    Example API endpoint.
-    
+    Example API endpoint.  <-- REPLACE with the real endpoint(s) for your task.
+
+    This working example (GET returns a message, POST echoes the body) keeps the
+    scaffold runnable and test_server.py green out of the box. Add your own routes
+    the same way and update the tests.
+
     GET: Returns data
     POST: Accepts data
     """

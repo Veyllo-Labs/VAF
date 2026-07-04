@@ -119,7 +119,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Here you would normally send the data to a server
             // For now, just show a success message
-            alert('Vielen Dank für Ihre Nachricht! Wir werden uns bald bei Ihnen melden.');
+            alert('Thank you for your message! We will get back to you soon.');
             this.reset();
         });
     }

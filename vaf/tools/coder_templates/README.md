@@ -27,6 +27,25 @@ A responsive website template with:
 - Mobile-responsive design
 - Placeholder content for customization
 
+## Scaffold conventions (why these templates help weak models)
+
+Each code template is a **runnable starting point**, not an empty skeleton, so even a small
+model can adapt it reliably:
+
+- **A working example instead of an empty `# TODO`.** The core function does something real
+  (marked `<-- REPLACE ...`) so the scaffold runs immediately and the model has a concrete
+  pattern to adapt rather than a blank to invent.
+- **A test stub that is green out of the box.** Every code template ships a matching test
+  (`test_*.py` for Python, `*.test.js` for Node) that passes against the example. The coder's
+  `run_tests` runs the Python ones; the model updates the tests as it changes the code.
+- **Importable, not auto-running.** Servers/apps guard their entry point
+  (`if __name__ == "__main__"`, `require.main === module`) so tests can import them without
+  starting a process.
+- **English throughout**, with `{{PLACEHOLDER}}` markers filled from the registry `placeholders`.
+
+When adding a template, follow the same pattern: a working example, a matching test stub
+(add it to the template's `files` list), and clear `REPLACE` markers.
+
 ## Adding New Templates
 
 ### 1. Create Your Template Files

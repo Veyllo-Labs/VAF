@@ -164,8 +164,8 @@ public class Server {
          * @return Response body
          */
         private String handleRequest(String method, String path) {
-            // TODO: Implement request handling logic
-            
+            // REPLACE / extend the routing below with the real logic for your task.
+            // These three branches are a working baseline you can keep.
             if (path.equals("/")) {
                 return "{\"message\": \"Welcome to {{SERVER_NAME}}\", \"status\": \"running\"}";
             } else if (path.equals("/api/health")) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * {{APP_NAME}} - Node.js Application
- * 
+ *
  * {{APP_DESCRIPTION}}
  */
 
@@ -12,149 +12,82 @@ const PORT = {{PORT}};
 const HOST = '0.0.0.0';
 
 /**
- * Create HTTP server
+ * Pure routing logic: given a method, path and (already parsed) request body, return
+ * { status, body }. Kept free of `req`/`res` so it is easy to unit test (see app.test.js).
+ *
+ * REPLACE the '/api/{{API_ENDPOINT}}' branch with the real logic for your task. The other
+ * branches (home, health, 404) are a working baseline you can keep.
+ */
+function route(method, path, body) {
+    if (path === '/' && method === 'GET') {
+        return { status: 200, body: { message: 'Welcome to {{APP_NAME}}', status: 'running', version: '1.0.0' } };
+    }
+    if (path === '/api/health' && method === 'GET') {
+        return { status: 200, body: { status: 'healthy', service: '{{APP_NAME}}' } };
+    }
+    if (path === '/api/{{API_ENDPOINT}}') {
+        if (method === 'GET') {
+            return { status: 200, body: { message: '{{API_MESSAGE}}', method: 'GET' } };
+        }
+        if (method === 'POST') {
+            return { status: 201, body: { message: 'Data received', data: body, method: 'POST' } };
+        }
+        return { status: 405, body: { error: 'Method not allowed' } };
+    }
+    return { status: 404, body: { error: 'Not found', message: 'The requested resource was not found' } };
+}
+
+/**
+ * HTTP server: reads the body (for writes), delegates to route(), sends JSON.
  */
 const server = http.createServer((req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
     const method = req.method;
-    
     console.log(`${method} ${path}`);
-    
-    // Set CORS headers
+
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
-    // Handle OPTIONS request
     if (method === 'OPTIONS') {
         res.writeHead(200);
         res.end();
         return;
     }
-    
-    // Route handling
-    if (path === '/' && method === 'GET') {
-        handleHome(req, res);
-    } else if (path === '/api/health' && method === 'GET') {
-        handleHealth(req, res);
-    } else if (path === '/api/{{API_ENDPOINT}}') {
-        handleApiEndpoint(req, res, method);
-    } else {
-        handleNotFound(req, res);
-    }
-});
 
-/**
- * Handle home route
- */
-function handleHome(req, res) {
-    const response = {
-        message: 'Welcome to {{APP_NAME}}',
-        status: 'running',
-        version: '1.0.0'
+    const send = ({ status, body }) => {
+        const json = JSON.stringify(body, null, 2);
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(json) });
+        res.end(json);
     };
-    
-    sendJsonResponse(res, 200, response);
-}
 
-/**
- * Handle health check
- */
-function handleHealth(req, res) {
-    const response = {
-        status: 'healthy',
-        service: '{{APP_NAME}}',
-        timestamp: new Date().toISOString()
-    };
-    
-    sendJsonResponse(res, 200, response);
-}
-
-/**
- * Handle API endpoint
- */
-function handleApiEndpoint(req, res, method) {
-    if (method === 'GET') {
-        const response = {
-            message: '{{API_MESSAGE}}',
-            method: 'GET'
-        };
-        sendJsonResponse(res, 200, response);
-    } else if (method === 'POST') {
-        let body = '';
-        
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        
+    if (method === 'POST' || method === 'PUT') {
+        let raw = '';
+        req.on('data', (chunk) => { raw += chunk.toString(); });
         req.on('end', () => {
-            let data;
-            try {
-                data = JSON.parse(body);
-            } catch (e) {
-                sendJsonResponse(res, 400, { error: 'Invalid JSON' });
-                return;
+            let body = null;
+            if (raw) {
+                try { body = JSON.parse(raw); } catch (e) { return send({ status: 400, body: { error: 'Invalid JSON' } }); }
             }
-            
-            const response = {
-                message: 'Data received',
-                data: data,
-                method: 'POST'
-            };
-            sendJsonResponse(res, 201, response);
+            send(route(method, path, body));
         });
     } else {
-        sendJsonResponse(res, 405, { error: 'Method not allowed' });
+        send(route(method, path, null));
     }
-}
-
-/**
- * Handle 404
- */
-function handleNotFound(req, res) {
-    sendJsonResponse(res, 404, {
-        error: 'Not found',
-        message: 'The requested resource was not found'
-    });
-}
-
-/**
- * Send JSON response
- */
-function sendJsonResponse(res, statusCode, data) {
-    const json = JSON.stringify(data, null, 2);
-    res.writeHead(statusCode, {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(json)
-    });
-    res.end(json);
-}
-
-/**
- * Start server
- */
-server.listen(PORT, HOST, () => {
-    console.log(`{{APP_NAME}} server running on http://${HOST}:${PORT}`);
-    console.log(`Press Ctrl+C to stop`);
 });
 
-/**
- * Handle graceful shutdown
- */
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down gracefully...');
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
+// Start the server only when run directly, so tests can import route()/server safely.
+if (require.main === module) {
+    server.listen(PORT, HOST, () => {
+        console.log(`{{APP_NAME}} server running on http://${HOST}:${PORT}`);
+        console.log('Press Ctrl+C to stop');
     });
-});
+    const shutdown = (sig) => {
+        console.log(`${sig} received, shutting down gracefully...`);
+        server.close(() => { console.log('Server closed'); process.exit(0); });
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
-process.on('SIGINT', () => {
-    console.log('\nSIGINT received, shutting down gracefully...');
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-    });
-});
-
+module.exports = { route, server };

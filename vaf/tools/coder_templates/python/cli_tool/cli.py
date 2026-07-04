@@ -113,16 +113,14 @@ Examples:
     
     def _execute(self, args) -> str:
         """
-        Execute the main logic.
-        
-        Args:
-            args: Parsed arguments
-            
-        Returns:
-            Result string
+        Execute the main logic and return a result string.
+
+        REPLACE the body below with the real logic for your task. This is a WORKING
+        example (it counts the characters of --input) so the scaffold runs and
+        test_cli.py passes out of the box; adapt it and the test to your task.
         """
-        # TODO: Implement your CLI logic here
-        return f"Processing {args.input}..."
+        count = len(str(args.input))
+        return f"input '{args.input}' has {count} characters"
     
     def _handle_process(self, args) -> int:
         """
@@ -134,7 +132,7 @@ Examples:
         Returns:
             Exit code
         """
-        # TODO: Implement process command logic
+        # REPLACE with your real 'process' command logic (working example below).
         print(f"Processing with format: {args.format}")
         return 0
 

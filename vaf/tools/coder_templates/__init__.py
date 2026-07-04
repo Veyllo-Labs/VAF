@@ -25,29 +25,30 @@ class TemplateManager:
                 {"name": "script.js", "template": "websites/basic_website/script.js"},
             ],
             "placeholders": {
-                "{{TITLE}}": "Willkommen",
-                "{{BUSINESS_NAME}}": "Mein Unternehmen",
-                "{{HEADLINE}}": "Professionelle Dienstleistungen",
-                "{{SUBHEADLINE}}": "Qualität, die überzeugt.",
+                "{{TITLE}}": "Welcome",
+                "{{BUSINESS_NAME}}": "My Company",
+                "{{HEADLINE}}": "Professional Services",
+                "{{SUBHEADLINE}}": "Quality you can rely on.",
                 "{{SERVICE_1_TITLE}}": "Service 1",
-                "{{SERVICE_1_DESC}}": "Beschreibung des ersten Services.",
+                "{{SERVICE_1_DESC}}": "Description of the first service.",
                 "{{SERVICE_2_TITLE}}": "Service 2",
-                "{{SERVICE_2_DESC}}": "Beschreibung des zweiten Services.",
+                "{{SERVICE_2_DESC}}": "Description of the second service.",
                 "{{SERVICE_3_TITLE}}": "Service 3",
-                "{{SERVICE_3_DESC}}": "Beschreibung des dritten Services.",
-                "{{ABOUT_TEXT}}": "Wir sind ein erfahrenes Team mit Leidenschaft für Qualität.",
-                "{{FEATURE_1}}": "Jahrelange Erfahrung",
-                "{{FEATURE_2}}": "Faire Preise",
-                "{{FEATURE_3}}": "Schneller Service",
-                "{{ADDRESS}}": "Musterstraße 1, 10115 Berlin",
+                "{{SERVICE_3_DESC}}": "Description of the third service.",
+                "{{ABOUT_TEXT}}": "We are an experienced team with a passion for quality.",
+                "{{FEATURE_1}}": "Years of experience",
+                "{{FEATURE_2}}": "Fair pricing",
+                "{{FEATURE_3}}": "Fast service",
+                "{{ADDRESS}}": "123 Example Street, 10115 Berlin",
                 "{{PHONE}}": "+49 30 12345678",
-                "{{EMAIL}}": "info@example.de",
+                "{{EMAIL}}": "info@example.com",
             }
         },
         "python_script": {
             "description": "Python script with main function and argparse",
             "files": [
                 {"name": "main.py", "template": "python/script/main.py"},
+                {"name": "test_main.py", "template": "python/script/test_main.py"},
             ],
             "placeholders": {
                 "{{SCRIPT_NAME}}": "MyScript",
@@ -60,6 +61,7 @@ class TemplateManager:
             "files": [
                 {"name": "server.py", "template": "python/local_server/server.py"},
                 {"name": "requirements.txt", "template": "python/local_server/requirements.txt"},
+                {"name": "test_server.py", "template": "python/local_server/test_server.py"},
             ],
             "placeholders": {
                 "{{APP_NAME}}": "MyApp",
@@ -73,6 +75,7 @@ class TemplateManager:
             "description": "Python CLI tool with subcommands",
             "files": [
                 {"name": "cli.py", "template": "python/cli_tool/cli.py"},
+                {"name": "test_cli.py", "template": "python/cli_tool/test_cli.py"},
             ],
             "placeholders": {
                 "{{CLI_TOOL_NAME}}": "mytool",
@@ -104,6 +107,7 @@ class TemplateManager:
             "description": "Node.js application with HTTP server",
             "files": [
                 {"name": "app.js", "template": "javascript/node_app/app.js"},
+                {"name": "app.test.js", "template": "javascript/node_app/app.test.js"},
             ],
             "placeholders": {
                 "{{APP_NAME}}": "MyApp",
@@ -118,6 +122,7 @@ class TemplateManager:
             "files": [
                 {"name": "server.js", "template": "javascript/express_server/server.js"},
                 {"name": "package.json", "template": "javascript/express_server/package.json"},
+                {"name": "server.test.js", "template": "javascript/express_server/server.test.js"},
             ],
             "placeholders": {
                 "{{APP_NAME}}": "my-express-app",

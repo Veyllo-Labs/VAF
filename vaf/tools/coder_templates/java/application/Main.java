@@ -49,19 +49,23 @@ class Application {
      */
     public void run() throws Exception {
         System.out.println("Running application logic...");
-        
-        // TODO: Implement your application logic here
-        
-        // Example: Process data
-        processData();
+
+        // REPLACE the call below with the real logic for your task. This working example
+        // computes and prints a value so the scaffold compiles and runs out of the box.
+        int result = compute(5);
+        System.out.println("compute(5) = " + result);
     }
-    
+
     /**
-     * Process application data.
+     * Example computation - REPLACE with your task's real logic.
+     * Returns the sum of 1..n.
      */
-    private void processData() {
-        System.out.println("Processing data...");
-        // TODO: Implement data processing
+    private int compute(int n) {
+        int sum = 0;
+        for (int i = 1; i <= n; i++) {
+            sum += i;
+        }
+        return sum;
     }
 }
 

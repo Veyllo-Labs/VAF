@@ -18,7 +18,7 @@ markdownify>=1.0.0      # HTML->Markdown (MIT); replaces GPL-3.0 html2text - see
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 websockets>=12.0
-pydantic>=2.0.0
+pydantic>=2.13.4
 jsonschema>=4.18.0  # schema validation for tool-input repair (vaf/core/tool_input_repair.py); was only present transitively (mcp via browser-use, py>=3.11), so it was missing on 3.10
 packaging>=23.0  # PEP 440 version parsing/comparison for the self-updater (vaf/cli/cmd/update.py); imported directly, was only transitive (huggingface_hub)
 discord.py>=2.3.2

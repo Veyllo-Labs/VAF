@@ -193,69 +193,6 @@ function highlightLine(line: string, dark: boolean): React.ReactNode[] {
     return nodes;
 }
 
-/**
- * Typewriter animation for console lines — strictly sequential.
- *
- * state:
- *   'done'    — already animated, show full text immediately
- *   'active'  — currently typing (only one at a time)
- *   'pending' — waiting in queue, invisible until its turn
- *
- * When the active line finishes typing it calls onDone() → parent advances
- * animatingIdx → next line becomes 'active'.
- */
-function AnimatedConsoleLine({ text, state, onDone, onType }: {
-    text: string;
-    state: 'done' | 'active' | 'pending';
-    onDone: () => void;
-    onType?: () => void;
-}) {
-    const [typedLen, setTypedLen] = useState(() => state === 'done' ? text.length : 0);
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const progressRef = useRef(state === 'done' ? text.length : 0);
-    const onDoneRef = useRef(onDone);
-    onDoneRef.current = onDone;
-    const onTypeRef = useRef(onType);
-    onTypeRef.current = onType;
-
-    useEffect(() => {
-        if (state === 'done') { progressRef.current = text.length; setTypedLen(text.length); return; }
-        if (state === 'pending') { progressRef.current = 0; setTypedLen(0); return; }
-        // state === 'active'. Streaming redraws GROW the text of the line that is
-        // currently typing — continue from the previous progress instead of
-        // restarting at 0, otherwise fast-growing lines never finish and the
-        // animation queue (and with it the console scroll) stalls.
-        let i = Math.min(progressRef.current, text.length);
-        setTypedLen(i);
-        // Long lines type in bigger steps so the queue keeps up.
-        const step = Math.max(1, Math.ceil(text.length / 150));
-        const tick = () => {
-            i = Math.min(i + step, text.length);
-            progressRef.current = i;
-            setTypedLen(i);
-            // Typing grows the container height without a consoleLines change —
-            // let the parent keep the scroll pinned to the bottom.
-            onTypeRef.current?.();
-            if (i < text.length) {
-                timerRef.current = setTimeout(tick, 7 + Math.random() * 5);
-            } else {
-                onDoneRef.current();
-            }
-        };
-        timerRef.current = setTimeout(tick, 10);
-        return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-    }, [state, text]);
-
-    return (
-        <div className="break-all whitespace-pre-wrap leading-5">
-            {text.slice(0, typedLen)}
-            {state === 'active' && typedLen < text.length && (
-                <span className="inline-block w-[1px] h-[0.85em] bg-gray-400 align-middle ml-[1px] animate-pulse" />
-            )}
-        </div>
-    );
-}
-
 // ── DIN A4 paper preview ──────────────────────────────────────────────────────
 // The report flows through a CSS multi-column container whose column size is
 // exactly the A4 content box (210mm − 2×20mm margins). The browser's own layout
@@ -593,11 +530,6 @@ export default function SubAgentWindow({
     const hasWorkflow = false;
     const codeLines = useMemo(() => (displayCode ? displayCode.split('\n') : []), [displayCode]);
 
-    // Sequential console animation queue — only one line types at a time.
-    // Initialise to current line count so existing lines on mount show instantly.
-    const [animatingIdx, setAnimatingIdx] = useState(() => consoleLines.length);
-    const advanceAnim = () => setAnimatingIdx(i => i + 1);
-
     // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
     const consoleScrollRef = useRef<HTMLDivElement>(null);
     const userScrolledUpRef = useRef(false);
@@ -627,16 +559,6 @@ export default function SubAgentWindow({
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
         userScrolledUpRef.current = distFromBottom > 48;
     };
-
-    // Keep the console pinned to the bottom while lines type out — the
-    // typewriter grows the content height without changing consoleLines.
-    const keepConsolePinned = () => {
-        if (!userScrolledUpRef.current) scrollConsoleToBottom();
-    };
-    useEffect(() => {
-        keepConsolePinned();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [animatingIdx]);
 
     // ── VS-Code view (coding agent only) ──────────────────────────────────
     const [editorDark, setEditorDark] = useState(false);
@@ -1710,13 +1632,12 @@ export default function SubAgentWindow({
                                         {consoleLines.length > 0 ? (
                                             <div className="space-y-0.5">
                                                 {consoleLines.map((line, index) => (
-                                                    <AnimatedConsoleLine
+                                                    <div
                                                         key={`${index}-${line.slice(0, 20)}`}
-                                                        text={line}
-                                                        state={index < animatingIdx ? 'done' : index === animatingIdx ? 'active' : 'pending'}
-                                                        onDone={advanceAnim}
-                                                        onType={keepConsolePinned}
-                                                    />
+                                                        className="break-all whitespace-pre-wrap leading-5"
+                                                    >
+                                                        {line}
+                                                    </div>
                                                 ))}
                                             </div>
                                         ) : (
@@ -2189,13 +2110,12 @@ export default function SubAgentWindow({
                                 {consoleLines.length > 0 ? (
                                     <div className="space-y-0.5">
                                         {consoleLines.map((line, index) => (
-                                            <AnimatedConsoleLine
+                                            <div
                                                 key={`${index}-${line.slice(0, 20)}`}
-                                                text={line}
-                                                state={index < animatingIdx ? 'done' : index === animatingIdx ? 'active' : 'pending'}
-                                                onDone={advanceAnim}
-                                                    onType={keepConsolePinned}
-                                            />
+                                                className="break-all whitespace-pre-wrap leading-5"
+                                            >
+                                                {line}
+                                            </div>
                                         ))}
                                     </div>
                                 ) : (
@@ -2362,13 +2282,12 @@ export default function SubAgentWindow({
                                 ) : consoleLines && consoleLines.length > 0 ? (
                                     <div className="space-y-0.5 px-4 py-4 font-mono text-xs text-gray-900">
                                         {consoleLines.map((line, index) => (
-                                            <AnimatedConsoleLine
+                                            <div
                                                 key={`${index}-${line.slice(0, 20)}`}
-                                                text={line}
-                                                state={index < animatingIdx ? 'done' : index === animatingIdx ? 'active' : 'pending'}
-                                                onDone={advanceAnim}
-                                                    onType={keepConsolePinned}
-                                            />
+                                                className="break-all whitespace-pre-wrap leading-5"
+                                            >
+                                                {line}
+                                            </div>
                                         ))}
                                     </div>
                                 ) : (

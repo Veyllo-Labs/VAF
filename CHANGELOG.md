@@ -10,6 +10,35 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a5] - 2026-07-04
+
+### Added
+- **The coding agent can run its own tests.** A new `run_tests` tool runs the project's
+  test suite inside the isolated Docker sandbox and returns the real pass/fail, so the coder
+  verifies its work instead of asserting that "tests pass".
+- **The coding agent's shell is confined to a kernel-jailed workspace.** Coder `bash` now runs
+  inside a bubblewrap jail with full access to its project but with VAF's own source, config,
+  secrets and the host docker socket structurally out of reach, and with networking unshared —
+  a generated build can never reach or overwrite the running system. Host and docker tasks move
+  to the main agent's new `host_bash` tool, which runs on the host under an explicit per-command
+  confirmation and is blocked on remote messaging channels (Telegram/WhatsApp/Discord) in two
+  layers, so it can never run unconfirmed from a chat message.
+- **Deterministic ORIENT and DOCUMENT phases for the coder.** Before planning, an orientation
+  scan feeds the existing project's file inventory into the planner, so edit tasks on an existing
+  project no longer stall without making a change. After the build, a documentation phase creates
+  or updates the README to reflect the run's real changes (detected via git) — generated projects
+  are now documented, and an existing README is updated in place rather than overwritten.
+- **Runnable scaffold templates.** Each coder template now ships a small working example (instead
+  of an empty TODO) and a matching test that is green out of the box, giving even a small model a
+  concrete pattern to adapt. Server and app templates are importable and testable, and the
+  template chrome is English throughout.
+
+### Fixed
+- **Created Markdown and text files open in the in-app viewer** with a preview toggle instead of
+  dead-ending.
+- **The failover ("failsafe") level selector** no longer shows its connecting line through the
+  hollow, unselected dots.
+
 ## [0.1.0a4] - 2026-07-04
 
 ### Fixed

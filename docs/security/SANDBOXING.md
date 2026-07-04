@@ -218,3 +218,73 @@ The `python_exec` tool runs code directly on your host system. It is:
 - Shows clear warnings when used
 
 Use this only when you need host filesystem/network access and trust the code source.
+
+---
+
+## Shell execution surfaces
+
+Beyond the Python sandbox there are three shell-execution surfaces, each with a distinct
+confinement model. The guiding rule: **the coder is jailed; the host is the main agent's job,
+under human confirmation.**
+
+### Coder `bash` — kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
+
+The coding agent's `bash` (`coder_only`) needs a real shell for its project — run scripts,
+`npm`/`pip install`, run the app — but must never be able to touch VAF's own source, secrets,
+or itself and break the running system. String-filtering a shell is not real security, so the
+command is confined by the **kernel**:
+
+- **Linux + bubblewrap (`bwrap`):** the command runs on the real host inside a bwrap jail.
+  The project workspace is bind-mounted **read-write** (edits persist to the host); system dirs
+  (`/usr`, `/bin`, `/etc`, ...) are **read-only**; and the VAF repo, `~/.vaf`, secrets and the
+  docker socket are simply **not mounted** — they do not exist for the command. The environment
+  is `--clearenv`'d and only non-secret basics (`PATH`, `LANG`, ...) are re-injected, so tray
+  API keys never leak. The network is `--unshare-net`'d, so host-loopback services (the memory
+  DB on `5432`, the VAF API) are unreachable from the jail.
+- **Fallback (no bwrap):** a fresh container with **only** the workspace mounted (`-v ws:/workspace`)
+  and `--network none`. Same confinement, minus host access.
+- **No sandbox at all:** the tool **refuses**. A raw, unconfined host shell is never run, and
+  `bash` also refuses if no project workspace is bound (it would otherwise root the jail at `$HOME`).
+
+**Docker is refused in the coder shell.** The host docker socket is host-root-equivalent
+(a container can `--privileged` / `-v /:/host` / `--pid=host` its way to the whole host
+filesystem, outside this jail's mount namespace) and cannot be safely policed by inspecting the
+command string. So the coder's `bash` refuses any `docker` invocation up front and points the
+user at the main agent instead. Confinement is verified by real escape attempts in
+`tests/test_workspace_exec.py` (VAF-core write blocked, source invisible, host DB unreachable,
+env secrets not leaked, docker always refused).
+
+### `run_tests` (`vaf/tools/sandbox_test_runner.py`)
+
+Gives the coder a sanctioned way to actually run its project's tests and get the **real**
+pass/fail, instead of guessing. It copies the project (tar-pipe) into a fresh
+`/workspace/testrun_...` directory in the `vaf-sandbox` container, runs `python3 -m pytest -q`
+under an in-container `timeout -s KILL`, returns the summary, and removes the run directory in a
+`finally`. It is `read`-level (no host side effects).
+
+### `host_bash` — main-agent host shell (`vaf/tools/host_bash.py`)
+
+Some tasks genuinely need the real host — "check my running docker container", inspect host
+services, run a host CLI. Those belong to the **main agent**, not the coder, and `host_bash`
+runs **unsandboxed on the host on purpose**. Its safety is two hard controls, not a sandbox:
+
+1. **`permission_level = "dangerous"`** → the framework's confirmation gate fires: the user
+   approves each run in the Web UI (tool + command shown) before it executes.
+2. **Remote channels are blocked in two layers.** There is no safe way to show the confirmation
+   on Telegram/WhatsApp/Discord, so:
+   - **`channel_restrictions`** is the policy-layer block (`evaluate_tool_policy`), and
+   - a **non-liftable guard** inside `run()` refuses on a channel *even when the admin enables
+     `channel_tools_unrestricted`* (default ON on a fresh install), which otherwise lifts the
+     policy block for the convenience tools. The guard uses the authoritative `is_channel_session`
+     that `execute_tool` injects (set unconditionally so the LLM cannot spoof it).
+
+   **Local Web UI / CLI only.**
+
+A cheap `is_command_safe` blocklist (shared with `bash`) stops the few catastrophic patterns
+even after confirmation, but the real safety is the per-command human approval plus the
+two-layer local-only gate. Both controls are pinned in `tests/test_host_bash.py`.
+
+> **Note on `channel_tools_unrestricted`:** this admin setting (default ON) lets channel sessions
+> use the same tools as the main agent and lifts `channel_restrictions` for tools that rely on it
+> (e.g. `python_exec`). `host_bash` is deliberately exempt via its own non-liftable guard, because
+> a raw host shell with no confirmation path must never be reachable from a messaging channel.

@@ -9487,6 +9487,11 @@ class Agent:
                     if name == "python_sandbox" and is_channel_session:
                         # Non-main channel sessions must not bridge host tools from sandbox code.
                         tool_args["with_vaf_tools"] = False
+                if name == "host_bash":
+                    # Authoritative channel flag for host_bash's own non-liftable guard. Set
+                    # unconditionally so an LLM-supplied value cannot spoof it. host_bash refuses
+                    # on channels even when channel_tools_unrestricted lifts the policy block.
+                    tool_args["_is_channel_session"] = is_channel_session
                 if name == "create_agent_tool":
                     # Inject agent reference so the tool can call reload_custom_tools()
                     # after writing the file — making the new tool live immediately

@@ -75,6 +75,15 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `create_agent_tool` | system | Create/update a Python tool the agent can use immediately. |
 | `python_sandbox` | write | Run Python in a Docker-isolated sandbox. |
 | `python_exec` | dangerous | Run Python on the host (no sandbox) — confirmed. |
+| `run_tests` | read | *(coder-only)* Run the project's tests in the isolated sandbox and return the real pass/fail. |
+| `host_bash` | dangerous | *(main agent)* Run a shell command on the HOST for host/docker tasks. Requires the user's confirmation each time; hard-blocked on remote channels (Telegram/WhatsApp/Discord), local app only. |
+
+> **Two different shells.** The coder's `bash` (`coder_only`) runs inside a kernel jail
+> (bubblewrap): full access to its project workspace, but VAF's source, `~/.vaf`, secrets and
+> the host docker socket are structurally out of reach, and network is unshared. Host/docker
+> work is the *main agent's* `host_bash`, which runs unsandboxed on the host under an explicit
+> per-command confirmation gate and is never exposed over remote channels.
+> See `docs/security/SANDBOXING.md` § "Shell execution surfaces" for the confinement details.
 
 ## Workflows & skills
 

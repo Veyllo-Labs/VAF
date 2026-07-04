@@ -10,6 +10,31 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a4] - 2026-07-04
+
+### Fixed
+- **Workflow/automation files stay in the run's chat workspace.** A workflow step that
+  wrote a file with a bare relative name resolved it against the backend process working
+  directory (the user's home root), where the file endpoint then refused to serve it —
+  clicking the file chip navigated the whole desktop window to a raw `{"detail":"Access
+  denied"}` page with no way back. Relative new-artifact paths in `write_file`/`move_file`
+  steps now resolve against the shared per-run project directory; explicit absolute/`~`
+  paths, folder aliases, and in-place updates of existing files are left untouched. The
+  `WriteFileTool` home-reroute guard (dead for months due to a shadowed import) is
+  restored, and the coder's CONTENT_ONLY cleanup only removes its own temp directories,
+  never an injected workspace (which had deleted freshly written files).
+- **Created-file chips never dead-end the UI.** Extension-less files open in the in-app
+  viewer; downloads use the native Save-As bridge in the desktop window and a safe blob
+  download in the browser, with a toast on failure instead of a full-window navigation.
+  Raw file links are excluded from the desktop same-window link rewrite.
+- **In-app update notes now appear for pre-alpha installs** whose stored acknowledgement
+  used the old internal version numbering, and long release notes scroll inside the card.
+- **Security:** refreshed the WhatsApp bridge and web dependency locks — all critical and
+  high advisories resolved (63 of 64 alerts; the last is fixed by a future Next upgrade).
+
+### Added
+- VAF records itself as a co-author on commits it creates.
+
 ## [0.1.0a3] - 2026-07-03
 
 ### Added

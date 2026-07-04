@@ -31,7 +31,20 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    // NOTE: finalize version + date when the release is tagged (see header comment).
+    version: '0.1.0a4',
+    date: '2026-07-04',
+    sections: [
+      {
+        kind: 'fixed',
+        items: [
+          'Files an automation or workflow creates now stay in your chat’s workspace instead of ending up in your home folder.',
+          'Opening a created file no longer replaces the whole window with a raw error page — it opens in the viewer, and downloads show a clear message if something goes wrong.',
+          'Security: refreshed bundled dependencies (all critical and high advisories resolved).',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a3',
     date: '2026-07-03',
     sections: [

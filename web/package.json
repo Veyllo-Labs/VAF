@@ -16,7 +16,7 @@
     "clsx": "^2.1.0",
     "framer-motion": "^10.18.0",
     "html2pdf.js": "^0.14.0",
-    "lucide-react": "^0.300.0",
+    "lucide-react": "^1.23.0",
     "mammoth": "^1.12.0",
     "marked": "^17.0.2",
     "monaco-editor": "^0.55.1",

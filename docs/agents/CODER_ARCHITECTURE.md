@@ -155,7 +155,7 @@ Inside the loop, `current_tools` is generated dynamically based on state:
     *   **Hidden:** `write_file`, `task_done`.
     *   **Goal:** Force the agent to plan.
 *   **IF `task_mgr.has_plan() == True`:**
-    *   **Allowed:** `write_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `task_done`, `bash` (when loaded), plus plug-and-play runtime tools.
+    *   **Allowed:** `write_file`, `read_file`, `list_files`, `web_search`, `python_sandbox`, `run_tests`, `task_done`, `bash` (kernel-jailed; see 5.x), plus plug-and-play runtime tools.
     *   **Hidden:** `set_todos` (to prevent re-planning loops).
 
 ### E. LLM Interaction & Safety Nets
@@ -201,7 +201,7 @@ The inactivity auto-complete (idle with files present) runs the same determinist
 ### `write_file` (Lines ~5900)
 *   **Pre-Check:**
     *   **IF** no TODOs set: **BLOCK** ("Call set_todos first").
-*   **Meta-file Guard:** Rejects writes to planning documents by filename (`plan.md`, `structure.md`, `notes.md`, `todo.md`, `design.md`, `layout.md`, `readme.md`, `read_chunks.py`, etc.). Returns a blocked error to the LLM.
+*   **Meta-file Guard (phase-aware):** `_meta_file_block_reason(path, phase)`. Scratch/planning files (`plan.md`, `structure.md`, `notes.md`, `todo.md`, `design.md`, `layout.md`, `read_chunks.py`) are **always** blocked, in every phase. `README.md` is **doc-gated**: blocked during planning/build (`main`/`task_N`) but written by the dedicated DOCUMENT phase (see section 6a). Arbitrary docs (`docs/api.md`, `article.md`) are normal deliverables and are not gated. Returns a blocked error to the LLM.
 *   **Template Validation (soft guidance only):**
     *   **IF** target file is a template file:
         *   Reads original file.
@@ -255,6 +255,32 @@ The inactivity auto-complete (idle with files present) runs the same determinist
 *   **Execution:** Runs code in `vaf.tools.python_sandbox`.
 *   **Context:** Returns output (stdout/result) to the LLM history.
 *   **File-Write Guard:** Before execution, the submitted code is scanned for file-write patterns: `open(..., 'w'/'a')`, `.write(...)` on non-stdout/stderr/StringIO handles, and direct references to `base_dir`. If any pattern matches, the call is **BLOCKED** and the LLM is instructed to use `write_file` instead.
+
+### `bash` — kernel-jailed workspace shell (`vaf.tools.bash` → `vaf.tools.workspace_exec`)
+*   **Purpose:** The coder needs a real shell for its project (run scripts, `npm`/`pip install`, run the app), but must never be able to touch VAF's own source or itself and break the running system.
+*   **Registration:** `BashTool(base_dir)` is bound to the coder's workspace at registration (like the git tools), so the shell defaults to the project and confinement is scoped to exactly that directory. With no workspace bound it **refuses** rather than fall back to the process cwd.
+*   **Confinement (kernel, not string-filtering):** `run_in_workspace` runs the command inside a **bubblewrap** jail on Linux — the workspace is bind-mounted read-write (edits persist); the system (`/usr`, `/bin`, `/etc`, ...) is read-only; the VAF repo, `~/.vaf`, secrets and the docker socket are **not mounted** (they do not exist for the command); env is `--clearenv`'d (tray API keys never leak) and the network is `--unshare-net`'d (host loopback services like the memory DB are unreachable). Without bubblewrap it falls back to a container with only the workspace mounted and `--network none`; with neither it **refuses** (never a raw host shell).
+*   **Docker is refused:** the host docker socket is host-root-equivalent and cannot be safely policed by inspecting the command string, so `bash` refuses any `docker` invocation up front. Host/docker tasks are the *main agent's* `host_bash` (below), under explicit confirmation.
+*   **Blocklist:** a cheap `is_command_safe` blocklist (fork bomb, `rm -rf /`, `mkfs`, `curl|bash`, ...) is defense-in-depth; the real safety is the jail.
+
+### `run_tests` (`vaf.tools.sandbox_test_runner`)
+*   **Purpose:** Give the coder a sanctioned way to actually run its project's tests and get the **real** pass/fail, instead of guessing "tests pass".
+*   **Execution:** Copies the project (tar-pipe) into a fresh `/workspace/testrun_...` dir in the `vaf-sandbox` container, runs `python3 -m pytest -q` under an in-container `timeout -s KILL`, streams the summary back, and cleans up the run dir in a `finally`.
+*   **History budget:** `run_tests` output shares `read_file`'s larger char limit so the pytest summary is not truncated out of the LLM history.
+
+---
+
+## 5a. Deterministic guardrail phases (ORIENT → PLAN → BUILD → DOCUMENT)
+
+Two always-run, deterministic phases wrap the planning/execution loop. They are guardrails (like the guided/template rails): fixed stages that lead even a weak model, rather than prompt hints it can ignore. Both are gated `not skip_template` (skipped in CONTENT_ONLY).
+
+*   **ORIENT (before planning) — `_build_orientation_summary(base_dir)`:** a bounded, pure-Python project scan (no LLM). It lists the existing file inventory (in-place-pruned `os.walk`, depth/file caps) and the heads of existing docs, then injects that summary into the planner's `system_prompt` via the `orientation_summary` variable in the `<context>` block. This fixes the previously **dead** `existing_files_info` (the planner used to be blind to an existing project, causing zero-change doom-loops on edit tasks). A fresh/empty project yields a short no-op notice. Deterministic by construction: the inventory is baked into the planner's first request, and the scan cannot loop.
+*   **DOCUMENT (after the task loop, before `_final_commit`) — `self._run_document_phase(...)`:** creates or updates the README to reflect this run's real changes.
+    *   **Change detection:** `_detect_run_changes(base_dir, run_start_sha)` diffs the working tree against `_run_start_sha` (HEAD captured right after `_ensure_git_repo`; the git-empty-tree when there is no baseline) plus untracked files — `git diff --diff-filter=ACMR` + `git ls-files --others`. If only docs changed, it is a no-op.
+    *   **Single-shot, not a loop:** the model is asked **once** (`self.query_llm`) for the README content; Python then writes it. The model has **no tools** in this phase, so it cannot derail or touch source.
+    *   **Positive allowlist:** writes only a top-level README (exact `readme` stem + doc extension via `_is_readme_name`) or `docs/**`; the target is symlink- and containment-checked (`_doc_target_is_safe`) so the write can never follow a link out of the project.
+    *   **Non-destructive:** create-mode without an LLM answer writes a minimal deterministic README; update-mode never overwrites a good README with a stub or a materially shorter/truncated regeneration (kept-existing guard). Leaked `<think>` reasoning and wrapping code fences are stripped only when unambiguous.
+    *   The written doc lands in the same `_final_commit`. The whole phase is exception-isolated so a failure never skips that commit.
 
 ---
 

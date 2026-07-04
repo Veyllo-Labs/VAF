@@ -115,6 +115,254 @@ _SINGLE_FILE_PATTERNS = [
 ]
 
 
+# ── Meta-file write guard (phase-aware) ──────────────────────────────────────
+# Two classes of filename the model must not dump into the project:
+#   _ALWAYS_BLOCKED_META  - planning/scratch pollution; blocked in EVERY phase.
+#   _DOC_GATED_BASENAMES  - real deliverables (README) allowed ONLY in the dedicated
+#                           documentation phase, not during planning/build.
+# The documentation phase passes phase="document"; the planning/build phases pass
+# their real ContextState.phase ("main"/"task_N"), so README stays blocked there
+# exactly as before. Only the README *basename* is doc-gated - arbitrary docs
+# (docs/api.md, article.md) remain writable as normal deliverables; the doc phase
+# restricts itself to README/docs via its own positive allowlist.
+_ALWAYS_BLOCKED_META = {
+    "plan.md", "structure.md", "structure_plan.md", "notes.md",
+    "todo.md", "design.md", "layout.md", "read_chunks.py",
+}
+_DOC_GATED_BASENAMES = {"readme.md"}
+
+
+def _meta_file_block_reason(path_arg: str, phase: str) -> Optional[str]:
+    """Return a block message if this write must be refused in ``phase``, else None."""
+    basename = os.path.basename(path_arg or "").lower()
+    if basename in _ALWAYS_BLOCKED_META:
+        return (
+            f"BLOCKED: Writing '{os.path.basename(path_arg)}' is not allowed.\n\n"
+            "Meta files (PLAN.md, STRUCTURE.md, NOTES.md, read_chunks.py, etc.) must "
+            "NOT be written to the project directory.\n"
+            "Planning is mental - do it in your head. Only write actual deliverable "
+            "files (index.html, styles.css, app.py, etc.).\n\n"
+            "Call write_file with an actual output file instead."
+        )
+    if basename in _DOC_GATED_BASENAMES and phase != "document":
+        return (
+            f"BLOCKED: Writing '{os.path.basename(path_arg)}' during the build is not "
+            "allowed. Documentation is written in the dedicated final documentation "
+            "phase, after the code exists.\n"
+            "Write actual code/deliverable files now; the README is handled automatically."
+        )
+    return None
+
+
+# ── ORIENT phase: deterministic pre-planning project scan (no LLM) ────────────
+# Bounded so it always terminates fast, even on a large monorepo: skip-dirs are pruned
+# in place (os.walk never descends them), depth is capped, and collection hard-breaks at
+# the file cap. Caps are also a token budget - the summary is injected into the planner
+# system prompt, so it must stay small relative to n_ctx.
+_ORIENT_SKIP_DIRS = {
+    ".git", ".vaf", "node_modules", "venv", ".venv", "env", "__pycache__",
+    "dist", "build", ".pytest_cache", ".mypy_cache", ".idea", ".vscode", "target",
+}
+_ORIENT_INFRA_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".env.example"}
+_ORIENT_MAX_FILES = 60
+_ORIENT_MAX_DEPTH = 3
+_ORIENT_DOC_HEADS = 2
+_ORIENT_DOC_HEAD_BYTES = 1024
+_ORIENT_FRESH = "## EXISTING PROJECT ORIENTATION\nFresh project - no existing files or docs to read.\n"
+
+
+def _build_orientation_summary(base_dir: str) -> str:
+    """Deterministic scan of an existing project to seed the planner (no LLM, no writes).
+
+    Returns a compact ASCII summary (file inventory + doc heads) that the ORIENT phase
+    injects into the planner prompt so the planner is not blind to an existing project.
+    On a fresh/empty project returns a short no-op notice. Best-effort: never raises.
+    """
+    try:
+        root = Path(base_dir)
+        if not root.is_dir():
+            return _ORIENT_FRESH
+
+        files: List[str] = []
+        docs: List[str] = []
+        capped = False
+        base_depth = len(root.parts)
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune skip-dirs and hidden dirs IN PLACE so os.walk never descends them.
+            dirnames[:] = [d for d in dirnames
+                           if d not in _ORIENT_SKIP_DIRS and not d.startswith(".")]
+            if len(Path(dirpath).parts) - base_depth >= _ORIENT_MAX_DEPTH:
+                dirnames[:] = []  # stop descending past the depth cap
+            for fn in sorted(filenames):
+                if fn.startswith(".") or fn.startswith("PARTIAL_") or fn in _ORIENT_INFRA_FILES:
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+                files.append(rel)
+                low = fn.lower()
+                if (rel.count("/") == 0 and (low.startswith("readme") or low.startswith("changelog"))) \
+                        or (rel.startswith("docs/") and low.endswith(".md")):
+                    docs.append(rel)
+                if len(files) >= _ORIENT_MAX_FILES:
+                    capped = True
+                    break
+            if capped:
+                break
+
+        if not files:
+            return _ORIENT_FRESH
+
+        out = ["## EXISTING PROJECT ORIENTATION", "Files:"]
+        out += [f"- {rel}" for rel in files]
+        if capped:
+            out.append(f"- ... (truncated at {_ORIENT_MAX_FILES} files)")
+        if docs:
+            out.append("Docs present: " + ", ".join(docs[:10]))
+            for rel in docs[:_ORIENT_DOC_HEADS]:
+                try:
+                    text = (root / rel).read_text(encoding="utf-8", errors="replace")[:_ORIENT_DOC_HEAD_BYTES]
+                except Exception:
+                    continue
+                out.append(f"{rel} (head):")
+                out += [f"> {line}" for line in text.splitlines()[:15]]
+        else:
+            out.append("Docs present: none")
+        return "\n".join(out) + "\n"
+    except Exception:
+        return _ORIENT_FRESH
+
+
+# ── DOCUMENT phase: git-based change detection ───────────────────────────────
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's canonical empty tree
+
+
+def _detect_run_changes(base_dir: str, run_start_sha: str) -> List[str]:
+    """Repo-relative POSIX paths the model added/modified/renamed this run.
+
+    Diffs the working tree against ``run_start_sha`` (the empty tree when there was no
+    baseline commit, i.e. a fresh build) and adds still-untracked files. Deletions are
+    excluded (ACMR). Captures both mid-run committed files and uncommitted writes.
+    Best-effort: returns [] on any git error - the caller must never lose the run.
+    """
+    try:
+        from vaf.tools.project_git import _run_git
+        base = run_start_sha or _EMPTY_TREE_SHA
+        tracked = _run_git(["diff", "--name-only", "--diff-filter=ACMR", base], cwd=base_dir).stdout or ""
+        untracked = _run_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or ""
+        names = {ln.strip() for ln in (tracked.splitlines() + untracked.splitlines()) if ln.strip()}
+        return sorted(names)
+    except Exception:
+        return []
+
+
+_README_EXTS = {"", ".md", ".markdown", ".rst", ".txt", ".adoc"}
+
+
+def _is_readme_name(basename: str) -> bool:
+    """True only for a real README document (exact 'readme' stem + doc-ish/empty ext).
+
+    Deliberately strict: a source file like readme_utils.py / readme.py / readmeGen.js
+    must NOT be treated as a README, or the doc phase could overwrite it.
+    """
+    stem, ext = os.path.splitext(os.path.basename(basename or "").lower())
+    return stem == "readme" and ext in _README_EXTS
+
+
+def _doc_write_allowed(rel_path: str) -> bool:
+    """Positive allowlist for the DOCUMENT phase: only a top-level README doc or top-level
+    docs/**. Guarantees the doc phase can never touch source deliverables, and classifies
+    which changed files are docs vs code. Operates on repo-relative POSIX paths.
+    """
+    p = (rel_path or "").replace("\\", "/")
+    if p.startswith("./"):
+        p = p[2:]
+    if "/" not in p and _is_readme_name(p):
+        return True
+    # Only a TOP-LEVEL docs/ dir - not any '/docs/' segment (app/docs/handler.py is code).
+    return p.startswith("docs/")
+
+
+def _existing_docs(base_dir: str) -> List[str]:
+    """Existing doc files: top-level README docs and docs/**/*.md (repo-relative POSIX).
+
+    Symlinks are skipped - a README symlink must never be selected as a write target
+    (writing through it would corrupt the link target, possibly outside the project).
+    """
+    root = Path(base_dir)
+    found: List[str] = []
+    try:
+        for entry in sorted(os.listdir(root)):
+            fp = root / entry
+            if _is_readme_name(entry) and fp.is_file() and not fp.is_symlink():
+                found.append(entry)
+        docs_dir = root / "docs"
+        if docs_dir.is_dir() and not docs_dir.is_symlink():
+            for dp, _dn, fns in os.walk(docs_dir):
+                for fn in sorted(fns):
+                    fp = Path(dp) / fn
+                    if fn.lower().endswith(".md") and not fp.is_symlink():
+                        found.append(os.path.relpath(str(fp), root).replace(os.sep, "/"))
+    except Exception:
+        pass
+    return found
+
+
+def _doc_target_is_safe(base_dir: str, target: str) -> bool:
+    """True only if writing ``target`` stays inside the project and follows no symlink.
+
+    Guards the doc phase's direct Path.write_text (which, unlike WriteFileTool, would
+    otherwise follow a symlink and truncate its target, possibly outside base_dir).
+    """
+    try:
+        root = os.path.realpath(base_dir)
+        full = os.path.join(base_dir, target)
+        if os.path.islink(full):
+            return False
+        real = os.path.realpath(full)
+        return real == root or real.startswith(root + os.sep)
+    except Exception:
+        return False
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a leading <think>...</think> reasoning block that reasoning models (e.g.
+    DeepSeek) sometimes leak into the content field. ONLY strips when the content actually
+    begins with <think> (using the FIRST closing tag) - a README that merely mentions
+    '</think>' in its body is left untouched. An unclosed leading block collapses to "".
+    """
+    s = (text or "").lstrip()
+    if s.lower().startswith("<think>"):
+        end = s.lower().find("</think>")
+        return s[end + len("</think>"):].strip() if end != -1 else ""
+    return text
+
+
+def _strip_md_fence(text: str) -> str:
+    """Drop a single wrapping ``` / ```markdown fence if the model wrapped the WHOLE doc.
+
+    Only acts on an unambiguous single wrap (exactly one opening + one closing fence) so a
+    document that legitimately contains code blocks is never corrupted.
+    """
+    t = (text or "").strip()
+    if t.startswith("```") and t.rstrip().endswith("```") and t.count("```") == 2:
+        first_nl = t.find("\n")
+        if first_nl != -1:
+            t = t[first_nl + 1:]
+        t = t.rstrip()
+        if t.endswith("```"):
+            t = t[:-3].rstrip()
+    return t
+
+
+def _deterministic_readme(base_dir: str, changed_files: List[str]) -> str:
+    """Minimal, safe README for the create-mode fallback when the LLM is unavailable."""
+    name = os.path.basename(os.path.normpath(base_dir)) or "project"
+    lines = [f"# {name}", "", "Files in this project:", ""]
+    lines += [f"- `{f}`" for f in changed_files[:50] if not _doc_write_allowed(f)]
+    lines += ["", "Generated by the VAF coder.", ""]
+    return "\n".join(lines)
+
+
 def _cleanup_content_only_dir(base_dir: str) -> None:
     """Remove base_dir ONLY if it is a coder-created CONTENT_ONLY temp directory.
 
@@ -2257,6 +2505,117 @@ Thumbs.db
             # Git not available or failed - continue without git (graceful degradation)
             pass
 
+    def _run_document_phase(self, base_dir: str, run_start_sha: str, tui=None) -> str:
+        """Final DOCUMENT phase: create or update the README to reflect this run's changes.
+
+        Deterministic control flow, NOT an agentic loop: git tells us exactly what the model
+        changed this run, the LLM is asked ONCE for the README content, then Python writes it
+        through a positive allowlist (README/docs only) - so the phase can never touch source
+        deliverables and there is no loop to derail or stall in. Graceful, non-destructive
+        fallback: create-mode without an LLM answer writes a minimal deterministic README;
+        update-mode without an answer leaves the existing README untouched (never overwrites a
+        good README with a stub). Fully isolated: never raises, so run()'s final commit always
+        follows. Returns a short status note (or "").
+        """
+        try:
+            changed = _detect_run_changes(base_dir, run_start_sha)
+            if not changed:
+                return ""
+            code_files = [f for f in changed if not _doc_write_allowed(f)]
+            if not code_files:
+                return ""  # nothing but docs changed - nothing to document
+
+            # Pick an existing top-level README to update, else create README.md.
+            readme_path = next(
+                (e for e in _existing_docs(base_dir) if "/" not in e and _is_readme_name(e)),
+                None,
+            )
+            create_mode = readme_path is None
+            target = readme_path or "README.md"
+            if not _doc_write_allowed(target):
+                return ""
+
+            existing_text = ""
+            if not create_mode:
+                try:
+                    existing_text = (Path(base_dir) / target).read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    existing_text = ""
+
+            # Read a little of the changed code so the model can describe what it does.
+            snippets = []
+            for f in code_files[:8]:
+                try:
+                    txt = (Path(base_dir) / f).read_text(encoding="utf-8", errors="replace")[:1500]
+                    snippets.append(f"### {f}\n{txt}")
+                except Exception:
+                    pass
+
+            # Proportional sizing: a tiny output gets a short README, not a docs tree.
+            proportional = (
+                "a short README (title, one-line purpose, how to run it, and the file list)"
+                if len(code_files) <= 2 else
+                "a clear README (title, purpose, install/usage, and a short overview of the main files)"
+            )
+            if create_mode:
+                instruction = (
+                    f"Write {proportional} for this project as one Markdown document. "
+                    "Output ONLY the Markdown content - no preamble, no surrounding code fence."
+                )
+            else:
+                instruction = (
+                    "Update the existing README below so it reflects the changed files. Preserve "
+                    "unrelated sections; revise only what the changes affect. Output ONLY the full "
+                    "updated Markdown content - no preamble."
+                )
+            prompt = (
+                "You are documenting a software project after a coding run.\n"
+                "Files changed this run:\n" + "\n".join(f"- {f}" for f in changed) + "\n\n"
+                + (f"Current README:\n<<<\n{existing_text[:8000]}\n>>>\n\n" if existing_text else "")
+                + (("Changed code (excerpts):\n" + "\n\n".join(snippets))[:6000] + "\n\n" if snippets else "")
+                + instruction
+            )
+
+            content = None
+            try:
+                # Single bounded call (provider-aware via BaseTool.query_llm). A short timeout
+                # keeps this phase cheap even on a run that already spent its main budget.
+                content = self.query_llm(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=2500, temperature=0.2, timeout=60,
+                )
+            except Exception:
+                content = None
+            content = _strip_md_fence(_strip_reasoning((content or "").strip()))
+
+            if not content:
+                if not create_mode:
+                    return "Docs: kept existing README (no LLM answer)."
+                content = _deterministic_readme(base_dir, changed)
+            elif not create_mode:
+                # Never let a full-overwrite silently drop a long, curated README: if we could
+                # not show the model the whole file, or the rewrite came back materially shorter,
+                # keep the existing README rather than risk lossy truncation.
+                if len(existing_text) > 8000 or len(content) < 0.85 * len(existing_text):
+                    return "Docs: kept existing README (update looked lossy)."
+
+            # Containment + symlink guard: this write bypasses WriteFileTool, so verify the
+            # target is a doc, stays in-project, and is not a symlink before truncating it.
+            if not _doc_write_allowed(target) or not _doc_target_is_safe(base_dir, target):
+                return ""
+            try:
+                (Path(base_dir) / target).write_text(
+                    content if content.endswith("\n") else content + "\n", encoding="utf-8"
+                )
+            except Exception:
+                return ""
+            note = f"DOCUMENT phase: {'created' if create_mode else 'updated'} {target}"
+            if tui:
+                tui.append_stream(f"[Coder] {note}")
+            return note
+        except Exception:
+            return ""  # documentation is best-effort; never break the run
+
     def run(self, **kwargs) -> str:
         # Accept 'prompt' as an alias for 'task' (LLMs sometimes use either name)
         task = kwargs.get('task', '') or kwargs.get('prompt', '')
@@ -2695,10 +3054,23 @@ Thumbs.db
         time.sleep(0.05)
         
         # Initialize Git repository if not already initialized (skip for CONTENT_ONLY)
+        # _run_start_sha is the DOCUMENT phase's baseline: HEAD right after the initial
+        # commit (pre-existing files for an existing project; empty for a fresh one). The
+        # doc phase diffs against it to find exactly what the model changed this run.
+        # Templates are generated later and only in from-scratch mode, where they are part
+        # of the deliverable, so counting them as this run's output is correct. "" => no
+        # commit yet (fresh empty dir); the doc phase falls back to the empty tree.
+        _run_start_sha = ""
         if not skip_template:
             tui.set_action("Git initialization...")
             self._ensure_git_repo(base_dir)
-            
+            try:
+                from vaf.tools.project_git import _run_git as _rg
+                _hs = _rg(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=base_dir)
+                _run_start_sha = (_hs.stdout or "").strip()
+            except Exception:
+                _run_start_sha = ""
+
         # Initialize Persistence for TaskManager
         task_mgr.initialize(base_dir)
 
@@ -3096,6 +3468,13 @@ The following template files exist as a starting point:
 - The template is a starting point, not a constraint
 """
         
+        # ORIENT phase: deterministic pre-planning scan (no LLM). Injected into the planner
+        # <context> below so the planner sees an existing project's files/docs - the measured
+        # cause of the existing-project doom-loop. Fresh projects get a short no-op notice.
+        # Injected as its own variable (not via existing_files_info) so template/guided mode
+        # is unaffected.
+        orientation_summary = "" if skip_template else _build_orientation_summary(base_dir)
+
         system_prompt = f"""<identity>
 You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
 </identity>
@@ -3103,7 +3482,7 @@ You are a Senior software developer Sub-agent. Your task is to complete coding t
 <context>
 project_directory: {base_dir}
 All file paths must be OS-independent (use forward slashes or Path objects).
-</context>
+{orientation_summary}</context>
 
 <goal>
 Complete this task: "{task}"
@@ -7865,19 +8244,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 except Exception:
                                     pass  # Don't fail if render is blocked
                             
-                            # GUARD: Block writing of meta/planning files that pollute the project
-                            _path_arg = fn_args.get("path", "")
-                            _basename_lower = os.path.basename(_path_arg).lower()
-                            _META_FILE_PATTERNS = {"plan.md", "structure.md", "structure_plan.md", "notes.md", "todo.md", "design.md", "layout.md", "readme.md", "read_chunks.py"}
-                            if _basename_lower in _META_FILE_PATTERNS:
-                                result = (
-                                    f"⛔ BLOCKED: Writing '{os.path.basename(_path_arg)}' is not allowed.\n\n"
-                                    "Meta files (PLAN.md, STRUCTURE.md, NOTES.md, read_chunks.py, etc.) must NOT be written to the project directory.\n"
-                                    "Planning is mental — do it in your head. Only write actual deliverable files (index.html, styles.css, app.py, etc.).\n\n"
-                                    "Call write_file with an actual output file instead."
-                                )
-                                tui.append_stream(f"[GUARD] write_file blocked: {_basename_lower} is a meta file")
-                                history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": result})
+                            # GUARD: block scratch/meta files (every phase) and README
+                            # outside the dedicated documentation phase. Phase-aware, so the
+                            # final documentation phase (phase="document") may write the README
+                            # while planning/build ("main"/"task_N") still cannot. See
+                            # _meta_file_block_reason.
+                            _block_reason = _meta_file_block_reason(
+                                fn_args.get("path", ""), current_state.phase
+                            )
+                            if _block_reason:
+                                _bn = os.path.basename(fn_args.get("path", "")).lower()
+                                tui.append_stream(f"[GUARD] write_file blocked: {_bn} is a meta file")
+                                history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _block_reason})
                                 continue
 
                             # CRITICAL: Must set TODOs before writing files!
@@ -8513,6 +8891,20 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 pass
         except Exception:
             pass
+
+        # ═══════════════════════════════════════════════════════════════
+        # DOCUMENT phase - create/update the README to reflect this run's
+        # changes, after the code exists and before the final commit (so the
+        # doc lands in the same commit). Isolated: any failure here must never
+        # skip the final commit below. Gated to real projects (not CONTENT_ONLY).
+        # ═══════════════════════════════════════════════════════════════
+        if not skip_template:
+            try:
+                _doc_note = self._run_document_phase(base_dir, _run_start_sha, tui)
+                if _doc_note and lg:
+                    lg.event("document_phase", note=_doc_note)
+            except Exception:
+                pass
 
         # ═══════════════════════════════════════════════════════════════
         # FINAL COMMIT - persist the run result on every exit path.

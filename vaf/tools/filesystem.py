@@ -852,6 +852,162 @@ class WriteFileTool(BaseTool):
                 error_type = type(e).__name__
                 return f"❌ Error writing file ({error_type}): {e}\nFile: {res}"
 
+
+class EditFileTool(BaseTool):
+    """Surgical search/replace edit of an EXISTING file - the alternative to rewriting the
+    whole file with write_file. Modeled on Claude Code's exact old->new string replacement:
+    each edit's `search` must match the file EXACTLY and UNIQUELY. All edits are applied
+    all-or-nothing against the original buffer, then written once via WriteFileTool (so the
+    workspace jail, home-reroute and atomic write are all inherited)."""
+
+    name = "edit_file"
+    permission_level = "write"
+    side_effect_class = "reversible"
+    description = (
+        "Change ONLY specific parts of an EXISTING file via search/replace, instead of "
+        "rewriting the whole file. For each edit give the exact `search` text (with enough "
+        "surrounding context that it is UNIQUE in the file) and its `replace`. PREFERRED over "
+        "write_file for editing an existing file - it preserves everything you do not touch."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the EXISTING file to edit."},
+            "edits": {
+                "type": "array",
+                "description": "One or more search/replace edits, applied together (all-or-nothing).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "search": {"type": "string", "description": "Exact text to find - must be unique in the file."},
+                        "replace": {"type": "string", "description": "Text to replace it with."},
+                    },
+                    "required": ["search", "replace"],
+                },
+            },
+        },
+        "required": ["path", "edits"],
+    }
+
+    @staticmethod
+    def _nearby(text: str, needle_first_line: str) -> str:
+        """A few lines around the closest line to help the model retarget on a miss."""
+        lines = text.splitlines()
+        key = (needle_first_line or "").strip()
+        for i, ln in enumerate(lines):
+            if key and key in ln:
+                lo, hi = max(0, i - 3), min(len(lines), i + 4)
+                return "\n".join(lines[lo:hi])
+        return "\n".join(lines[:6])
+
+    @staticmethod
+    def _locate(original: str, search: str):
+        """Byte span (start, end) of `search` in `original`, or 'not_found' / 'ambiguous'.
+
+        Exact match first; then a line-based fallback tolerant of carriage returns and
+        trailing whitespace. The fallback only LOCATES the span - the original bytes are what
+        get replaced, so nothing is silently normalized."""
+        count = original.count(search)
+        if count == 1:
+            s = original.index(search)
+            return (s, s + len(search))
+        if count > 1:
+            return "ambiguous"
+        # Fallback: match line-by-line ignoring CR and trailing whitespace.
+        def _n(line: str) -> str:
+            return line.replace("\r", "").rstrip()
+        o_lines = original.splitlines(keepends=True)
+        s_norm = [_n(l) for l in search.splitlines()]
+        if not s_norm:
+            return "not_found"
+        hits = []
+        for i in range(len(o_lines) - len(s_norm) + 1):
+            if [_n(o_lines[i + j]) for j in range(len(s_norm))] == s_norm:
+                start = sum(len(o_lines[k]) for k in range(i))
+                end = start + sum(len(o_lines[i + j]) for j in range(len(s_norm)))
+                hits.append((start, end))
+        if len(hits) == 1:
+            return hits[0]
+        return "ambiguous" if len(hits) > 1 else "not_found"
+
+    def run(self, **kwargs) -> str:
+        path = kwargs.get("path", "")
+        edits = kwargs.get("edits")
+        # Weak models sometimes pass a single {search,replace} or flat search/replace.
+        if isinstance(edits, dict):
+            edits = [edits]
+        if not edits and ("search" in kwargs and "replace" in kwargs):
+            edits = [{"search": kwargs.get("search", ""), "replace": kwargs.get("replace", "")}]
+        if not path:
+            return "Error: edit_file needs a 'path'."
+        if not edits or not isinstance(edits, list):
+            return "Error: edit_file needs 'edits' - a list of {search, replace} objects."
+
+        safe, res = is_safe_path(path)
+        if not safe:
+            return res
+        if not os.path.isfile(res):
+            return (f"Error: edit_file target does not exist: {path}. "
+                    "edit_file changes an EXISTING file; use write_file to create a new one.")
+        try:
+            with open(res, "r", encoding="utf-8") as f:
+                original = f.read()
+        except Exception as e:
+            return f"Error: could not read {path}: {e}"
+
+        # Phase 1 - locate every edit as a UNIQUE byte span in the ORIGINAL (all-or-nothing).
+        spans = []  # (start, end, replace, edit_number)
+        for i, ed in enumerate(edits, 1):
+            if not isinstance(ed, dict) or "search" not in ed or "replace" not in ed:
+                return f"Error: edit {i} must be an object with 'search' and 'replace'."
+            search, replace = ed.get("search", ""), ed.get("replace", "")
+            if not search:
+                return f"Error: edit {i} has an empty 'search'."
+            if search == replace:
+                continue  # no-op edit
+            loc = self._locate(original, search)
+            if loc == "not_found":
+                # Idempotency: old anchor gone AND the replacement already present -> already
+                # applied (e.g. a retry). Skip rather than fail the whole call.
+                _sfirst = (search.splitlines()[0].strip() if search.splitlines() else search.strip())
+                if replace and replace in original and _sfirst and _sfirst not in original:
+                    continue
+                return (f"EDIT FAILED: edit {i}'s search block was not found - read_file the region "
+                        f"and copy the EXACT text (including indentation). Nothing was written.\n"
+                        f"--- nearest region ---\n{self._nearby(original, _sfirst)}")
+            if loc == "ambiguous":
+                return (f"EDIT FAILED: edit {i}'s search block is not unique - add more surrounding "
+                        f"context so it matches exactly once. Nothing was written.")
+            spans.append((loc[0], loc[1], replace, i))
+
+        if not spans:
+            return "Error: edit_file made no change (nothing to apply, or every edit was already applied)."
+
+        # Reject overlapping edits - a sequential replace would corrupt them.
+        spans.sort()
+        for a, b in zip(spans, spans[1:]):
+            if a[1] > b[0]:
+                return (f"EDIT FAILED: edits {a[3]} and {b[3]} target overlapping regions - "
+                        f"combine them into one edit. Nothing was written.")
+
+        # Apply span-based (order-independent, atomic), then ONE write via WriteFileTool.
+        parts, last = [], 0
+        for start, end, replace, _ in spans:
+            parts.append(original[last:start])
+            parts.append(replace)
+            last = end
+        parts.append(original[last:])
+        new_content = "".join(parts)
+        if new_content == original:
+            return "Error: edit_file produced no change."
+
+        write_res = WriteFileTool().run(path=res, content=new_content)
+        _wr = str(write_res)
+        if _wr.startswith("❌") or _wr.startswith("Error"):
+            return write_res
+        return f"Edited {os.path.basename(res)}: applied {len(spans)} change(s), everything else preserved."
+
+
 class MoveFileTool(BaseTool):
     name = "move_file"
     permission_level = "write"

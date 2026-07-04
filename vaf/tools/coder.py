@@ -39,7 +39,7 @@ from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
 from vaf.tools.base import BaseTool
-from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
+from vaf.tools.filesystem import WriteFileTool, EditFileTool, ReadFileTool, ListFilesTool, MoveFileTool
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.coder_templates import TemplateManager
 from vaf.core.persistence import PersistenceManager, ProjectState, Task
@@ -2961,6 +2961,7 @@ Thumbs.db
         from vaf.tools.linter import LinterTool
         self.local_tools = {
             "write_file": WriteFileTool(),
+            "edit_file": EditFileTool(),
             "read_file": ReadFileTool(),
             "list_files": ListFilesTool(),
             "python_sandbox": PythonSandboxTool(),
@@ -4132,7 +4133,7 @@ Task {task_idx + 1}: {current_task}
                         "type": "function",
                         "function": {
                             "name": "write_file",
-                            "description": "Write content to a file.",
+                            "description": "Write a file's FULL content (use to CREATE a new file, or for a deliberate full rewrite). To change part of an EXISTING file, prefer edit_file.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -4140,6 +4141,32 @@ Task {task_idx + 1}: {current_task}
                                     "content": {"type": "string", "description": "File content"}
                                 },
                                 "required": ["path", "content"]
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "edit_file",
+                            "description": "Change ONLY specific parts of an EXISTING file via search/replace - PREFERRED over write_file for edits (it preserves everything you do not touch: framework, language, unrelated code). Each edit's 'search' must be the exact text (with enough context to be unique). If a search is not found or not unique, NOTHING is written and you get told - read_file the region and retry with an exact anchor. Never rewrite a whole existing file to change a few lines.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": f"Absolute path to the existing file (use {base_dir}/)"},
+                                    "edits": {
+                                        "type": "array",
+                                        "description": "One or more edits, applied all-or-nothing.",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "search": {"type": "string", "description": "Exact text to find (unique in the file)"},
+                                                "replace": {"type": "string", "description": "Replacement text"}
+                                            },
+                                            "required": ["search", "replace"]
+                                        }
+                                    }
+                                },
+                                "required": ["path", "edits"]
                             }
                         }
                     },
@@ -6857,7 +6884,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 
                 # Check if model is making progress on the current task
                 # If no tool calls OR only read_file calls without write_file, nudge to continue
-                has_write_file = any(tc.get('function', {}).get('name') == 'write_file' for tc in tool_calls) if tool_calls else False
+                has_write_file = any(tc.get('function', {}).get('name') in ('write_file', 'edit_file') for tc in tool_calls) if tool_calls else False
                 has_read_file = any(tc.get('function', {}).get('name') == 'read_file' for tc in tool_calls) if tool_calls else False
                 has_task_done_call = any(tc.get('function', {}).get('name') == 'task_done' for tc in tool_calls) if tool_calls else False
                 only_reading = has_read_file and not has_write_file
@@ -8240,6 +8267,24 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     tool = self.local_tools[fn_name]
                     
                     # Fix relative paths and show in stream
+                    if fn_name == "edit_file":
+                        # edit_file shares write_file's pre-dispatch guards: plan-first, the
+                        # phase-aware meta-file block, and relative->base_dir path normalization.
+                        # (The write_file-content-specific setup below - preview, PARTIAL, template
+                        # overwrite - does not apply; edit_file only changes parts of an existing file.)
+                        if not task_mgr.todos:
+                            _emsg = "ERROR: call set_todos FIRST, then edit files."
+                            tui.append_stream("edit_file rejected - call set_todos FIRST!")
+                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _emsg})
+                            continue
+                        _epath = fn_args.get("path", "")
+                        _ebr = _meta_file_block_reason(_epath, current_state.phase)
+                        if _ebr:
+                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _ebr})
+                            continue
+                        if _epath and not os.path.isabs(_epath):
+                            fn_args["path"] = os.path.join(base_dir, _epath)
+
                     if fn_name == "write_file":
                         is_template_file = False  # Initialize to prevent UnboundLocalError
                         if "path" not in fn_args:
@@ -8502,8 +8547,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         
                         # Check if result indicates an error (even if no exception was raised)
                         is_error_result = (
-                            result_str.startswith("❌") or 
+                            result_str.startswith("❌") or
                             result_str.startswith("Error:") or
+                            result_str.startswith("EDIT FAILED") or   # edit_file: search not found / not unique -> nothing written
                             "permission denied" in result_str.lower() or
                             "locked" in result_str.lower() or
                             "file write error" in result_str.lower() or
@@ -8511,9 +8557,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         )
                         
                         # Track created files (after execution)
-                        if fn_name == "write_file" and "path" in fn_args:
+                        if fn_name in ("write_file", "edit_file") and "path" in fn_args:
                             path = fn_args["path"]
-                            
+
                             if is_error_result:
                                 # Error occurred - track it
                                 tui.update_file(os.path.basename(path), "error")
@@ -8549,7 +8595,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
                                 # CONTEXT STATE TRACKING
                                 current_state.record_file_created(path)
-                                current_state.record_tool_call("write_file")
+                                current_state.record_tool_call(fn_name)
 
                                 # Legacy tracking
                                 files_created.append(path)
@@ -8804,7 +8850,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 lg.event("tool_end", tool=fn_name, ok=False, error=error_msg, **summarize_result(result))
                         except Exception:
                             pass
-                        if fn_name == "write_file" and "path" in fn_args:
+                        if fn_name in ("write_file", "edit_file") and "path" in fn_args:
                             tui.update_file(os.path.basename(fn_args["path"]), "error")
                             
                             # Track repeated errors

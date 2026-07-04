@@ -17,6 +17,7 @@ the agent finally gets ground-truth test results.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -70,6 +71,54 @@ def _included_size(base_dir: str) -> int:
     return total
 
 
+# OS package managers that can never work in the fixed, network-less sandbox image.
+_PKG_MANAGERS = {"apt", "apt-get", "aptitude", "yum", "dnf", "apk", "pacman", "zypper", "brew"}
+
+_GIT_REDIRECT = (
+    "run_tests runs your tests in an ISOLATED sandbox — a COPY of the project with no .git, no "
+    "git binary and no network. It is NOT a shell on your real repo, so git commands here always "
+    "fail. Nothing was run.\n"
+    "For the REAL repo use the dedicated tools instead:\n"
+    "  - git_log         : view commit history\n"
+    "  - project_history : list restorable versions (id, date, changed files)\n"
+    "  - project_rollback: restore the project to an earlier version (safe, undoable)\n"
+    "To change a file, use edit_file (surgical) or write_file."
+)
+
+_PKG_REDIRECT = (
+    "run_tests runs in an ISOLATED sandbox with a FIXED image and NO network, so installing OS "
+    "packages ({tool}) cannot work here. Nothing was run. Run your tests with the tooling already "
+    "present (e.g. 'python3 -m pytest -q')."
+)
+
+
+def _reject_non_test_command(command: Optional[str]) -> Optional[str]:
+    """Redirect commands that misuse run_tests as a host shell (a real doom-loop trigger).
+
+    The test sandbox is a network-less copy of the project with no .git and no git binary, so a
+    ``git`` invocation or an OS-package install can never succeed here. Instead of letting the model
+    burn loops rediscovering that, return a message pointing at the right tool. Returns ``None`` for
+    anything that could be a legitimate test command (pytest, npm/cargo/go/make test, ...).
+    """
+    if not command:
+        return None
+    for seg in re.split(r"&&|\|\||;|\n|\|", command):
+        toks = seg.strip().split()
+        i = 0
+        while i < len(toks) and toks[i] == "sudo":
+            i += 1
+        if i >= len(toks):
+            continue
+        head = toks[i]
+        if head == "cd":
+            continue  # navigation; the real verb is in the next segment
+        if head == "git":
+            return _GIT_REDIRECT
+        if head in _PKG_MANAGERS:
+            return _PKG_REDIRECT.format(tool=head)
+    return None
+
+
 def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int = 180) -> str:
     """Run ``command`` (default pytest) against a copy of ``base_dir`` in the sandbox.
 
@@ -77,6 +126,10 @@ def run_project_tests(base_dir: str, command: Optional[str] = None, timeout: int
     Never raises for expected conditions (docker down, no project) - returns a message.
     """
     cmd = (command or _DEFAULT_COMMAND).strip() or _DEFAULT_COMMAND
+
+    redirect = _reject_non_test_command(cmd)
+    if redirect:
+        return redirect
 
     if not base_dir or not os.path.isdir(base_dir):
         return f"Cannot run tests: project directory not found ({base_dir!r})."

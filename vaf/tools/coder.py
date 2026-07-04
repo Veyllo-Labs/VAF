@@ -4197,10 +4197,13 @@ Task {task_idx + 1}: {current_task}
                         "function": {
                             "name": "run_tests",
                             "description": (
-                                "Run the project's tests inside the isolated sandbox and return the REAL "
-                                "pass/fail result. After writing tests, CALL THIS to verify them — never "
-                                "claim tests pass without running them. Default command: pytest. On failure, "
-                                "read the output, fix the code with write_file, and run_tests again."
+                                "Run the project's tests and return the REAL pass/fail result. After writing "
+                                "tests, CALL THIS to verify them — never claim tests pass without running them. "
+                                "Default command: pytest. On failure, read the output, fix with write_file/edit_file, "
+                                "run_tests again. NOTE: this runs in an ISOLATED sandbox on a COPY of the project "
+                                "(no .git, no git binary, no network) — it is NOT a shell on your real repo. For git "
+                                "on the real repo use git_log / project_history / project_rollback; to change files "
+                                "use edit_file / write_file."
                             ),
                             "parameters": {
                                 "type": "object",
@@ -4272,6 +4275,49 @@ Task {task_idx + 1}: {current_task}
                                 "required": ["note"]
                             }
                         }
+                    },
+                    # History + restore, available IN task context too: a task step may
+                    # legitimately need to find an earlier version and restore it. These run
+                    # against the REAL project repo on the host (NOT the run_tests sandbox).
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "git_log",
+                            "description": "View the project's Git commit history (id + message). Runs on the real repo.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"limit": {"type": "integer", "description": "Number of commits to show (default: 10)", "default": 10}},
+                                "required": []
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "project_history",
+                            "description": "Show the project's restorable version history (commit id, date, description, changed files). Runs on the real repo.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"limit": {"type": "integer", "description": "Maximum versions to show (default 15)"}},
+                                "required": []
+                            }
+                        }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "project_rollback",
+                            "description": (
+                                "Restore the project to an earlier version (safe: backs up current state first, "
+                                "rollback is itself undoable). Use when the task asks to restore/revert to a known-good "
+                                "state. Runs on the real repo (NOT the run_tests sandbox)."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"commit": {"type": "string", "description": "Version id from project_history / git_log"}},
+                                "required": ["commit"]
+                            }
+                        }
                     }
                 ] + common_tools
         
@@ -4323,7 +4369,17 @@ Task {task_idx + 1}: {current_task}
                                 ]
                                 if instance.name in MANUALLY_ADDED_TOOLS:
                                     continue
-                                
+
+                                # Never overwrite a tool that was deliberately registered
+                                # earlier. The base_dir-wrapped git/history/knowledge tools
+                                # (git_log, project_history, project_rollback, update_codex,
+                                # add_memory) carry the workspace via a wrapper; the auto-
+                                # discovered instance() does NOT, and clobbering it silently
+                                # drops base_dir -> project_rollback failed with "No project
+                                # found". Their schema is advertised elsewhere, so skip both.
+                                if instance.name in self.local_tools:
+                                    continue
+
                                 # Get parameters schema
                                 params = getattr(instance, 'parameters', {})
                                 if not isinstance(params, dict):

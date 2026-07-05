@@ -1530,21 +1530,29 @@ export default function SubAgentWindow({
         const headSha = coder.git.commits[0]?.sha || '';
         // Editor shows either the live stream or an explorer-opened file
         const viewingName = openedFile?.name ?? activeName;
-        const editorLines = openedFile ? openedFile.content.split('\n') : codeLines;
-        const editorIsLive = !openedFile && isLive;
-        // No live code stream (e.g. the agent is doing edit_file, which does not stream new
-        // content) → show the edited file's red/green diff in the editor, jumped to the changed
-        // hunks, instead of a blank "Waiting for code…". Prefer the file being edited.
+        // The CURRENT file's red/green diff takes PRIORITY over the live code buffer.
+        // read_file mirrors a file's content into codeContent so reads are visible in the
+        // editor, but that must NOT hide the edit diff: if the file being touched has
+        // changes, show the diff; a plain read (file has no diff) falls through to its
+        // content below. Prefer the current file; only when there is NO current file (agent
+        // between actions) surface the most relevant changed file so the editor isn't blank.
         const diffMap = coder.diffs || {};
-        const activeDiff = (!openedFile && editorLines.length === 0) ? (() => {
+        const curDiffName = (displayFile || '').split('/').pop() || '';
+        const activeDiff = openedFile ? null : (() => {
             const keys = Object.keys(diffMap);
             if (keys.length === 0) return null;
-            const curName = (displayFile || '').split('/').pop() || '';
-            if (curName && diffMap[curName]) return { name: curName, diff: diffMap[curName] };
-            const w = coder.fileTree.find(f => (f.status === 'W' || f.status === 'M') && diffMap[f.name]);
-            if (w) return { name: w.name, diff: diffMap[w.name] };
-            return { name: keys[0], diff: diffMap[keys[0]] };
-        })() : null;
+            if (curDiffName && diffMap[curDiffName]) return { name: curDiffName, diff: diffMap[curDiffName] };
+            if (!curDiffName) {
+                const w = coder.fileTree.find(f => (f.status === 'W' || f.status === 'M') && diffMap[f.name]);
+                if (w) return { name: w.name, diff: diffMap[w.name] };
+                return { name: keys[0], diff: diffMap[keys[0]] };
+            }
+            return null;  // current file has no diff → show its live/read content instead
+        })();
+        // Opened file wins; else if the current file has a diff show that (editorLines empty
+        // → the render falls through to the diff block); else the live stream / read buffer.
+        const editorLines = openedFile ? openedFile.content.split('\n') : (activeDiff ? [] : codeLines);
+        const editorIsLive = !openedFile && isLive;
 
         return (
             <div
@@ -1824,7 +1832,10 @@ export default function SubAgentWindow({
                                                 {(step.status === 'pending' || step.status === 'skipped') && <Circle size={7} />}
                                             </span>
                                             <span className="min-w-0 flex-1">
-                                                <span className="block text-[11px] font-semibold leading-tight text-gray-800">{step.title}</span>
+                                                <span
+                                                    className="line-clamp-3 break-words text-[11px] font-semibold leading-tight text-gray-800"
+                                                    title={step.title}
+                                                >{step.title}</span>
                                                 {step.description && (
                                                     <span className="block truncate text-[9.5px] text-gray-400">{step.description}</span>
                                                 )}

@@ -3056,6 +3056,10 @@ Thumbs.db
             "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-sonnet-4.6"),
             "anthropic":  ("https://api.anthropic.com/v1",      "claude-sonnet-4-6"),
             "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+            # Veyllo is OpenAI-compatible; base URL from config (staging/self-host override).
+            # Missing here meant provider=veyllo fell into the LOCAL branch -> the coder
+            # health-checked 127.0.0.1:8080 and died with "VAF Server unreachable".
+            "veyllo":     (Config.get("veyllo_base_url", "https://api.veyllo.app/v1").rstrip("/"), "veyllo-chat"),
         }
         _is_api_mode = _provider in _API_PROVIDERS
         if _is_api_mode:

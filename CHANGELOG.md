@@ -75,6 +75,10 @@ To update an installed VAF, run `vaf update`.
   sub-agent keeps working (stopping it is an explicit second press when nothing is streaming).
   On local mode nothing changes (the adapted behavior is API-only; the single local
   llama server should not serve two inferences at once).
+- **The coding agent works on the Veyllo API.** The coder resolved providers from its own
+  hardcoded list that was missing `veyllo`, so switching the provider to Veyllo made every
+  coding task fail with "VAF Server unreachable (Port 8080)" (it wrongly fell back to the
+  local-server path) while normal chat worked fine.
 - **Chat messages no longer queue for minutes behind a coding run.** A crashed workflow step
   could leak an internal "run sub-agents in-process" flag into the long-running backend; after
   that, every coding task silently ran inside the chat turn itself instead of as a separate

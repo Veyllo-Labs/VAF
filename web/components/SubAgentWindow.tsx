@@ -71,6 +71,9 @@ export type CoderViewState = {
     linterOk: boolean;
     projectName: string;
     projectPath: string;
+    /** Human-readable current action ("Loop 26", "Checking quality...") for the
+     *  header's live activity signal in file-less phases (docs/verify). */
+    activity?: string;
 };
 
 /** Live state streamed by the browser agent (`browser_state` event) for the browser
@@ -1518,6 +1521,14 @@ export default function SubAgentWindow({
         // Explorer, Tasks, Source Control. Bottom: status bar.
         const coder = coderV;  // guaranteed-valid shell while data streams (loading shown via banner)
         const isLive = inferredPresence === 'online';
+        // Coarse phase for the live activity signal: no tasks yet = planning, all tasks
+        // done = the file-less finalizing phase (docs/verify) that otherwise reads as
+        // "stuck", else actively building.
+        const coderTasks = coder.tasks || [];
+        const livePhase = coderTasks.length === 0 ? 'Planning'
+            : coderTasks.every(t => t.status === 'completed') ? 'Finalizing'
+                : 'Building';
+        const liveActivity = (coder.activity || '').trim();
         const activeName = (displayFile || '').split('/').pop() || '';
         const touched = coder.fileTree.filter(f => f.status);
         let fileTabs = (activeName && !touched.some(f => f.name === activeName)
@@ -1575,9 +1586,23 @@ export default function SubAgentWindow({
                                     <div>
                                         <div className="text-xs font-semibold text-gray-900">{agentName}</div>
                                         <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                            <span className={cn("h-1.5 w-1.5 rounded-full", presenceTone)} />
-                                            {displayStatus ? (
-                                                <span className="text-gray-500">{displayStatus}</span>
+                                            <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone, isLive && "animate-pulse")} />
+                                            {isLive ? (
+                                                // Continuously-animated liveness signal: the phase always
+                                                // updates + the pulsing dot keeps moving even during a long
+                                                // LLM call where no state emits, so file-less phases
+                                                // (docs/verify) no longer read as "stuck".
+                                                <span className="flex items-center gap-1.5 truncate">
+                                                    <span className="font-semibold text-gray-600">{livePhase}</span>
+                                                    {liveActivity && (
+                                                        <>
+                                                            <span className="text-gray-300">·</span>
+                                                            <span className="truncate text-gray-500">{liveActivity}</span>
+                                                        </>
+                                                    )}
+                                                </span>
+                                            ) : displayStatus ? (
+                                                <span className="truncate text-gray-500">{displayStatus}</span>
                                             ) : (
                                                 <span className="uppercase">{presenceLabel}</span>
                                             )}
@@ -1639,6 +1664,15 @@ export default function SubAgentWindow({
                                 <span className={cn("font-semibold", editorDark ? "text-gray-300" : "text-gray-600")}>{viewingName || 'No active file'}</span>
                                 {openedFile && (
                                     <span className="ml-1 rounded bg-gray-100 px-1.5 py-px text-[8px] font-semibold uppercase tracking-wide text-gray-400">Read</span>
+                                )}
+                                {isLive && (
+                                    // Always-visible working indicator on the editor itself: a continuously
+                                    // spinning loader + phase so file-less phases (docs/verify), where the
+                                    // editor content doesn't change, never look frozen.
+                                    <span className="ml-auto flex flex-none items-center gap-1.5 text-[9px] font-medium text-blue-500">
+                                        <Loader2 size={10} className="animate-spin" />
+                                        <span>{liveActivity || `${livePhase}…`}</span>
+                                    </span>
                                 )}
                             </div>
 

@@ -4761,6 +4761,11 @@ Task {task_idx + 1}: {current_task}
                     "linterOk": not bool(getattr(current_state, 'linter_errors_active', False)),
                     "projectName": os.path.basename(base_dir),
                     "projectPath": base_dir,
+                    # Human-readable current action (e.g. "Loop 26", "Compressing
+                    # context...", "Checking quality...") so the UI can show a LIVE
+                    # activity signal even in phases with no file/diff change (docs,
+                    # verify) -- otherwise the frozen editor reads as "stuck".
+                    "activity": (getattr(tui, "current_action", "") or "")[:80],
                 }
                 payload_hash = hash(json.dumps(payload, sort_keys=True, default=str))
                 if payload_hash == _last_coder_state_hash[0]:

@@ -1666,6 +1666,7 @@ function VAFDashboardContent() {
             projectName: string;
             projectPath: string;
             diffs?: Record<string, string>;
+            activity?: string;
         } | null;
         // Research view: streamed by the research agent as `research_state`
         research: {
@@ -3338,6 +3339,10 @@ function VAFDashboardContent() {
                             // Per-file red/green diff for the editor's live "what is being edited" view.
                             // Was dropped here (built field-by-field), so the diff never reached the window.
                             diffs: (data.diffs && typeof data.diffs === 'object') ? data.diffs : (prev.coder?.diffs ?? {}),
+                            // Live current action ("Loop 26", "Checking quality...") for the header's
+                            // liveness signal in file-less phases (docs/verify). Forward it too, else
+                            // the field-by-field rebuild drops it (same trap as diffs above).
+                            activity: typeof data.activity === 'string' ? data.activity : (prev.coder?.activity ?? ''),
                         },
                     }));
                 }

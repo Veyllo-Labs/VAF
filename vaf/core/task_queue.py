@@ -217,6 +217,34 @@ class TaskQueue:
                         self._queues[task_class].clear()
             self._cv.notify_all()
 
+    def try_claim_session(self, session_id: str) -> bool:
+        """Claim a session for OUT-OF-QUEUE work (the headless runner's result drain).
+
+        The drain runs outside get()/task_done(), so without a claim its summary
+        chat_step could mutate the same session concurrently with a worker's chat turn
+        (history/session.json write races — chat-while-subagent-runs with
+        parallel_main_workers>1). Returns False when the session is already in flight;
+        the caller must skip that session and retry on a later pass. A successful claim
+        also makes queued tasks for the session wait (get() skips in-flight sessions)
+        until release_session_claim().
+        """
+        if not session_id:
+            return True  # no session to protect — don't block the drain
+        with self._cv:
+            if session_id in self._session_inflight:
+                return False
+            self._session_inflight.add(session_id)
+            return True
+
+    def release_session_claim(self, session_id: str) -> None:
+        """Release a try_claim_session() claim. Only call after a successful claim —
+        the claim/skip contract guarantees this never releases a lock a worker holds."""
+        if not session_id:
+            return
+        with self._cv:
+            self._session_inflight.discard(session_id)
+            self._cv.notify_all()
+
     def task_done(self, task: Optional[AgentTask] = None, worker_id: Optional[str] = None):
         """Mark a task as done and release session in-flight lock."""
         worker_key = worker_id or str(threading.get_ident())

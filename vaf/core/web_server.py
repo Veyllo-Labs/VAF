@@ -5787,6 +5787,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     from vaf.core.platform import Platform
                     tq = TaskQueue()
                     session_id = cmd.get("sessionId") or manager.get_session_for_connection(websocket)
+                    # Scope (chat-while-subagent-runs): a Stop press while a sub-agent is
+                    # active stops ONLY the generation — cancelling a throwaway chat reply
+                    # must not destroy a 20-minute coder run. Killing the sub-agent needs
+                    # the EXPLICIT scope "all" (the UI's dedicated stop-sub-agent action).
+                    # With no active sub-agent, behavior is unchanged.
+                    stop_scope = str(cmd.get("scope") or "").strip().lower()
                     if session_id:
                         tq.request_stop(session_id)
                         # Cancel any in-flight attachment indexing for this session — the kill
@@ -5803,26 +5809,42 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             dropped = tq.drop_queued_tasks_for_session(str(session_id))
                         except Exception:
                             dropped = 0
-                        killed = 0
-                        try:
-                            # Hard-stop any running sub-agent processes for this chat session.
-                            killed = Platform.stop_webui_subagent_processes(str(session_id))
-                        except Exception:
-                            killed = 0
-                        # Also convert active sub-agent tasks into failed results immediately.
+                        _has_active_subagents = False
                         try:
                             from vaf.core.subagent_ipc import get_ipc
                             ipc = get_ipc()
-                            active = ipc.get_active_tasks(session_id=str(session_id))
-                            for t in active:
-                                try:
-                                    ipc.fail_task(t.task_id, "[USER_CANCELLED] Stopped/Cancelled by user via stop button.")
-                                except Exception:
-                                    pass
+                            _has_active_subagents = bool(ipc.get_active_tasks(session_id=str(session_id)))
                         except Exception:
-                            pass
-                        log("WebServer", f"Stop requested for session {session_id}; killed_subagents={killed}; dropped_queued={dropped}")
-                        await websocket.send_json({"type": "generation_stopped", "sessionId": session_id})
+                            _has_active_subagents = False
+                        killed = 0
+                        subagents_kept = False
+                        if _has_active_subagents and stop_scope != "all":
+                            # Scoped stop: generation halted, the sub-agent keeps working.
+                            subagents_kept = True
+                        else:
+                            try:
+                                # Hard-stop any running sub-agent processes for this chat session.
+                                killed = Platform.stop_webui_subagent_processes(str(session_id))
+                            except Exception:
+                                killed = 0
+                            # Also convert active sub-agent tasks into failed results immediately.
+                            try:
+                                from vaf.core.subagent_ipc import get_ipc
+                                ipc = get_ipc()
+                                active = ipc.get_active_tasks(session_id=str(session_id))
+                                for t in active:
+                                    try:
+                                        ipc.fail_task(t.task_id, "[USER_CANCELLED] Stopped/Cancelled by user via stop button.")
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        log("WebServer", f"Stop requested for session {session_id}; scope={stop_scope or 'default'}; killed_subagents={killed}; subagents_kept={subagents_kept}; dropped_queued={dropped}")
+                        await websocket.send_json({
+                            "type": "generation_stopped",
+                            "sessionId": session_id,
+                            "subagentsKept": subagents_kept,
+                        })
 
             except json.JSONDecodeError:
                 pass

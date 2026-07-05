@@ -355,6 +355,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             _lifecycle("Agent() constructor OK, calling init_chat()")
             agent.init_chat()
             _lifecycle("init_chat() OK")
+            # Result-ownership: this runner's idle drain delivers sub-agent results with
+            # full side effects (SubAgentWindow, subagent_output, messenger summaries).
+            # Marking the agent makes USER chat turns leave pending results to the drain
+            # instead of consuming them mid-reply (chat-while-subagent-runs).
+            agent._runner_owns_subagent_delivery = True
 
             # Register with Web Interface (single owner to avoid pointer races)
             if worker_id == 1:
@@ -2169,11 +2174,26 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _pushed = False
                 if _pushed or (now - last_subagent_check >= 1.0):
                     last_subagent_check = now
+                    _drain_claims = set()
                     try:
                         # Drain EVERY session's results here (not just the runner's stale
                         # "current" one) — each is routed by its own session_id below via
                         # load_session_context, so a push for any session reacts at once.
                         pending_results = agent._check_subagent_results(all_sessions=True)
+                        # Claim each result's session before touching it: this drain runs
+                        # OUTSIDE the TaskQueue, so without the claim its load_session_context
+                        # + summary chat_step would race a worker's concurrent chat turn on the
+                        # same session (parallel_main_workers>1). A busy session's results stay
+                        # pending and are picked up on a later pass once it frees up.
+                        if pending_results:
+                            _kept_results = []
+                            for _rt in pending_results:
+                                _rs = str(_rt.session_id or "")
+                                if _rs in _drain_claims or tq.try_claim_session(_rs):
+                                    if _rs:
+                                        _drain_claims.add(_rs)
+                                    _kept_results.append(_rt)
+                            pending_results = _kept_results
                         if pending_results:
                             found_results_text = []
                             any_needs_retry = False
@@ -2484,6 +2504,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             get_web_interface().emit_message_complete(content=_fb_msg, session_id=_fb_sid)
                         except Exception:
                             pass
+                    finally:
+                        # Always release drain claims so a skipped/failed pass can never
+                        # deadlock the session's queued chat turns.
+                        for _cs in _drain_claims:
+                            try:
+                                tq.release_session_claim(_cs)
+                            except Exception:
+                                pass
 
                 # Periodically update Sub-Agent window state for WebUI
                 if now - last_subagent_ui_update >= 1.0:

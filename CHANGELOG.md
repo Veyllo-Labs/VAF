@@ -56,6 +56,19 @@ To update an installed VAF, run `vaf update`.
   notification that wakes the main runner immediately — with the previous periodic poll kept as a
   fallback — and the runner drains every session's result, so a completion is never missed because
   the runner's "current" session had moved on.
+- **You can keep chatting while a sub-agent works (API mode).** The main agent now knows a
+  sub-agent is running for your chat and keeps replies light: it will not start heavy new work,
+  will not delegate the same task twice (a duplicate spawn is refused outright), and leaves the
+  sub-agent's workspace alone; a passive hint shows you can keep chatting. Safety fixes that make
+  this reliable: a casual "done!"/"fertig" reply is no longer erased by the completion gate (only
+  replies that actually reference the delegated work are held); the result is delivered once, by
+  the background runner, with all window/messenger notifications — not mixed into a chat reply;
+  a result is never validated against unrelated small talk (no more forced-retry storms);
+  chatting can no longer force-expire a long run (the 30-minute hardcoded reaper now honors the
+  configured timeout); and pressing Stop while a reply streams stops only the reply — the
+  sub-agent keeps working (stopping it is an explicit second press when nothing is streaming).
+  On local mode nothing changes (the hint and adapted behavior are API-only; the single local
+  llama server should not serve two inferences at once).
 
 ## [0.1.0a6] - 2026-07-04
 

@@ -930,9 +930,84 @@ Then use the results to answer. Do NOT guess from your training data!
                 # still non-fatal (the prompt is built without the block rather than failing).
                 logging.warning("Persistent context injection failed; live-state block omitted: %s", e)
 
-        # 
+        #
+        # 4b. SUB-AGENT ACTIVE (chat-while-subagent-runs, API mode only)
+        #
+        # While a sub-agent genuinely runs for THIS session, tell the model so it keeps the
+        # chat light instead of starting heavy work or re-delegating. Placed next to the
+        # persistent-context (<team_state>) so state + behavior rules read as one unit.
+        # Recomputed on every per-turn rebuild — appears when a sub-agent starts, disappears
+        # when it finishes; no module activation involved (module decay would drop it).
+        #
+        # Gates (ALL required):
+        #  - config subagent_concurrent_chat_enabled (admin-only kill-switch)
+        #  - MAIN provider != "local" AND api_backend initialized: on local the single llama
+        #    server would serve two inferences at once (weak desktops thrash). The api_backend
+        #    check closes the fallback hole where an API-init failure drops to the local
+        #    backend WITHOUT resetting provider.
+        #  - not _background_run: an automation's thread has no session ContextVar and would
+        #    inherit the user's last chat session via the process-global fallback — it must
+        #    never be told to "keep replies light".
+        #  - not front_office: a third-party contact must not learn what the owner's
+        #    sub-agent is working on.
+        #
+        # Data comes ONLY from agent.get_live_session_subagents() (session-filtered IPC +
+        # heartbeat freshness) — NEVER from agent._async_subagent_tasks (unkeyed on the
+        # shared worker agent; would leak another user's task text into this prompt).
+        try:
+            _cc_agent = self.agent
+            if (
+                _cc_agent is not None
+                and bool(Config.get("subagent_concurrent_chat_enabled", True))
+                and str(getattr(_cc_agent, "provider", "local") or "local").strip().lower() != "local"
+                and getattr(_cc_agent, "api_backend", None) is not None
+                and not getattr(_cc_agent, "_background_run", False)
+                and not front_office
+            ):
+                _cc_types = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
+                _cc_live = [
+                    t for t in (_cc_agent.get_live_session_subagents() or [])
+                    if t.get("agent_type") in _cc_types
+                ]
+                if _cc_live:
+                    _cc_ws = ""
+                    try:
+                        from vaf.core.session import get_session_workspace_dir
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        _cc_ws_path = get_session_workspace_dir(get_current_session_id(), create=False)
+                        _cc_ws = str(_cc_ws_path) if _cc_ws_path else ""
+                    except Exception:
+                        _cc_ws = ""
+                    _cc_lines = []
+                    for t in _cc_live[:3]:
+                        _mins = max(0, int(t.get("running_seconds", 0)) // 60)
+                        _cc_lines.append(
+                            f"- {t.get('agent_type')} is working on: "
+                            f"{(t.get('task_description') or '')[:200]} (running {_mins} min)"
+                        )
+                    _cc_ws_rule = (
+                        f"- Do NOT read or write files under {_cc_ws} — the sub-agent is working there.\n"
+                        if _cc_ws else ""
+                    )
+                    parts.append(
+                        "<subagent_active>\n"
+                        + "\n".join(_cc_lines) + "\n"
+                        "While this runs, you may keep chatting casually with the user:\n"
+                        "- Keep replies light and conversational.\n"
+                        "- Do NOT start heavy new work, workflows, or long tool chains.\n"
+                        "- Do NOT delegate this or a similar task again — it is already in progress.\n"
+                        + _cc_ws_rule +
+                        "- The result will arrive automatically when the sub-agent finishes.\n"
+                        "- Avoid phrases that sound like overall completion (e.g. \"all done\", "
+                        "\"fertig\", \"erledigt\") — a completion gate is active.\n"
+                        "</subagent_active>"
+                    )
+        except Exception as e:
+            logging.debug("subagent_active block omitted: %s", e)
+
+        #
         # 5. TOOL DOCUMENTATION
-        # 
+        #
         if self.tools:
             tool_docs = self._build_tool_documentation()
             if tool_docs:

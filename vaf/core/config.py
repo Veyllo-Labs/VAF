@@ -160,6 +160,12 @@ class Config:
         "subagent_provider": "inherit",  # Options: "inherit", or any provider name
         "subagent_use_separate_provider": False,
         "subagent_model": "",  # Hybrid mode: model for tools/workflows (empty = same as main chat)
+        # Global kill-switch for the chat-while-subagent-runs behavior (the SUB-AGENT ACTIVE
+        # prompt block + UI hint). Renders only in API mode regardless (code gate: the MAIN
+        # provider must not be "local" AND api_backend must be initialized — on local the
+        # single llama server would serve two inferences at once). Admin-only via the
+        # "subagent_" prefix in GLOBAL_CONFIG_KEY_PREFIXES.
+        "subagent_concurrent_chat_enabled": True,
         
         # Auto-start local llama-server (disable if only using APIs)
         "auto_start_local_server": True,

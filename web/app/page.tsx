@@ -4367,10 +4367,15 @@ function VAFDashboardContent() {
             setAttachmentIndexStatus(prev => { const next = { ...prev }; delete next[sid]; return next; });
             setAttachmentIndexCount(prev => { const next = { ...prev }; delete next[sid]; return next; });
         }
+        // Stop scope (chat-while-subagent-runs): while a reply is streaming, a press stops
+        // ONLY the generation — the backend keeps active sub-agents alive (scoped stop).
+        // When nothing is streaming but a sub-agent runs, the press can only mean the
+        // sub-agent → that IS the explicit stop-sub-agent action (scope 'all').
+        const stopScope = (!isGenerating && isSubAgentRunning) ? 'all' : undefined;
         if (isStoppingGenerationRef.current) {
             // Already stopping a generation; still send the stop so any in-flight indexing
             // for this session is cancelled, then bail out of the pulse/animation setup.
-            ws.send(JSON.stringify({ type: 'stop_generation', sessionId: currentSessionId }));
+            ws.send(JSON.stringify({ type: 'stop_generation', sessionId: currentSessionId, ...(stopScope ? { scope: stopScope } : {}) }));
             return;
         }
         isStoppingGenerationRef.current = true;
@@ -4386,7 +4391,8 @@ function VAFDashboardContent() {
         stopPulseTimerRef.current = setTimeout(() => { setStopPulsing(false); setStopBtnPos(null); }, 3500);
         ws.send(JSON.stringify({
             type: 'stop_generation',
-            sessionId: currentSessionId
+            sessionId: currentSessionId,
+            ...(stopScope ? { scope: stopScope } : {})
         }));
     };
 
@@ -6505,6 +6511,18 @@ function VAFDashboardContent() {
                                                             >✕</button>
                                                         </div>
                                                     ))}
+                                                </div>
+                                            )}
+                                            {isSubAgentRunning && !isLocalProvider && (
+                                                // Chat-while-subagent-runs (API mode only): passive hint that light
+                                                // chatting is fine while the sub-agent works. Not shown on local
+                                                // (single llama server — we don't encourage parallel inference).
+                                                // Input is NOT gated either way.
+                                                <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
+                                                    <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                                                        <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+                                                        Sub-Agent arbeitet im Hintergrund — du kannst weiter chatten. Stop bricht nur die Antwort ab, nicht den Sub-Agent.
+                                                    </span>
                                                 </div>
                                             )}
                                             {imageViewerState.isOpen && imageMark && (

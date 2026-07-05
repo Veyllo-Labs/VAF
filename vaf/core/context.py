@@ -435,6 +435,10 @@ class ContextManager:
                 "set_todos", "write_file", "read_file",
                 "github_list_repos", "github_get_file", "github_get_file_structure", "github_list_issues", "github_list_pulls",
                 "web_search",
+                # Sub-agent spawns: keep the "[!] TASK DELEGATED" anchor and its
+                # tool_call/tool pairing alive across compression, so a long light chat
+                # while the sub-agent runs cannot erase the evidence that work is pending.
+                "coding_agent", "research_agent", "document_agent", "librarian_agent",
             ]
 
         # REMOVED: history length check. If tokens are full, we MUST compress.

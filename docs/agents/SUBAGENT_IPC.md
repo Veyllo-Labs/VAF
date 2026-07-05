@@ -275,6 +275,22 @@ Sub-Agents can now request help instead of failing blindly:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+**Adapted behavior while a sub-agent runs (API mode):** chatting during a run has always
+been mechanically possible; in API mode the main agent now also *knows* about it. While a
+sub-agent genuinely runs for the session (heartbeat-verified via
+`Agent.get_live_session_subagents()`, the shared liveness helper), the system prompt gets a
+`<subagent_active>` block (keep replies light; do not start heavy work; do not re-delegate;
+hands off the session workspace; the result arrives automatically), a hard guard refuses a
+duplicate same-type spawn, the workflow router is suppressed pre-LLM, and the web UI shows a
+passive "you can keep chatting" hint. A Stop press while a reply streams stops ONLY the
+generation — killing the sub-agent requires pressing Stop again when nothing is streaming
+(explicit `scope: "all"`). Completed results are delivered exclusively by the headless
+runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) —
+a user chat turn no longer consumes them mid-reply. On `provider=local` the block and hint
+are simply absent (no new gating of messages): the single llama server would otherwise serve
+two inferences at once. Kill-switch: `subagent_concurrent_chat_enabled`. See
+[PROVIDER_MODES.md](../llm/PROVIDER_MODES.md).
+
 ### Step 5: Status Banner & Result Display
 
 ```

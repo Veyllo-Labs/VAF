@@ -171,28 +171,59 @@ class MainPersistenceManager:
         """
         Write user intent and delegation goal BEFORE sub-agent invocation.
         Resets retry_count to 0 (fresh delegation). Called from execute_tool.
+
+        Stored BOTH in the legacy top-level slot (last delegation, backward compatible)
+        AND keyed per agent_type under "by_agent" — so with chat-while-subagent-runs, a
+        research spawn from light chat cannot clobber the running coder's intent that its
+        result validation depends on.
         """
         from datetime import datetime
         data = self._get_validation_data()
-        data["intent"] = (intent or "").strip()
-        data["goal"] = (goal or "").strip()
-        data["agent_type"] = (agent_type or "").strip()
+        _intent = (intent or "").strip()
+        _goal = (goal or "").strip()
+        _atype = (agent_type or "").strip()
+        data["intent"] = _intent
+        data["goal"] = _goal
+        data["agent_type"] = _atype
         data["retry_count"] = 0
         data["updated_at"] = datetime.now().isoformat()
+        if _atype:
+            by_agent = data.get("by_agent") or {}
+            by_agent[_atype] = {
+                "intent": _intent,
+                "goal": _goal,
+                "updated_at": data["updated_at"],
+            }
+            data["by_agent"] = by_agent
         self._save_json(self.context_dir / SUBAGENT_VALIDATION_FILE, data)
 
-    def get_subagent_delegation_intent(self) -> Optional[Dict[str, Any]]:
+    def get_subagent_delegation_intent(self, agent_type: str = None) -> Optional[Dict[str, Any]]:
         """
         Return the intent/goal we wrote before the last sub-agent call.
         Used during validation. Returns None if no delegation intent stored.
+
+        With agent_type, prefer that agent's own slot (immune to a later delegation of a
+        DIFFERENT agent type overwriting the top-level fields); fall back to the legacy
+        top-level slot for pre-existing files — but never to another agent's delegation.
         """
         data = self._get_validation_data()
+        _atype_req = (agent_type or "").strip()
+        if _atype_req:
+            per = (data.get("by_agent") or {}).get(_atype_req) or {}
+            p_intent = (per.get("intent") or "").strip()
+            p_goal = (per.get("goal") or "").strip()
+            if p_intent or p_goal:
+                return {"intent": p_intent, "goal": p_goal, "agent_type": _atype_req}
         intent = (data.get("intent") or "").strip()
         goal = (data.get("goal") or "").strip()
-        agent_type = (data.get("agent_type") or "").strip()
+        stored_type = (data.get("agent_type") or "").strip()
         if not intent and not goal:
             return None
-        return {"intent": intent, "goal": goal, "agent_type": agent_type}
+        if _atype_req and stored_type and stored_type != _atype_req:
+            # The top-level slot belongs to a DIFFERENT agent's delegation — do not
+            # validate this agent's result against it.
+            return None
+        return {"intent": intent, "goal": goal, "agent_type": stored_type}
 
     # --- TEAM STATE ---
     def get_team_state(self) -> TeamState:

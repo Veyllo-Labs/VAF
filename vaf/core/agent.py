@@ -813,6 +813,62 @@ class Agent:
         except Exception:
             return None
 
+    def get_live_session_subagents(self) -> list:
+        """Session-scoped, heartbeat-verified list of GENUINELY running sub-agent tasks.
+
+        The single source of truth for "is a sub-agent working for THIS chat right now" —
+        shared by team_await, the SUB-AGENT ACTIVE prompt block, and the anti-re-delegation
+        guard, so those gates can never disagree. Isolation: reads ONLY
+        ipc.get_active_tasks_for_current_session() (session-filtered; active_tasks.json is
+        one global file for all users, and task descriptions carry raw user text — never
+        widen this to all sessions). NEVER read agent._async_subagent_tasks for this: that
+        dict lives unkeyed on the shared per-worker agent and would leak across sessions.
+        Anti-stuck: zombies are reaped first and stale heartbeats are filtered, so a crashed
+        sub-agent can neither block "done" nor pin the prompt block. Fails open (empty list).
+
+        Returns dicts: {task_id, agent_type, task_description, running_seconds}.
+        """
+        try:
+            from vaf.core.subagent_ipc import get_ipc
+            ipc = get_ipc()
+            try:
+                hb_timeout = int(self.config.get("subagent_heartbeat_timeout_seconds", 90) or 90)
+            except Exception:
+                hb_timeout = 90
+            hb_timeout = max(20, min(600, hb_timeout))
+            try:
+                ipc.check_zombies(timeout_seconds=hb_timeout)
+            except Exception:
+                pass
+
+            from datetime import datetime as _dt
+            now = _dt.now()
+            live = []
+            for t in ipc.get_active_tasks_for_current_session():
+                # Keep only genuinely-alive tasks (fresh heartbeat). Stale ones are
+                # dead-but-not-yet-reaped and must NOT count.
+                last_seen = getattr(t, "last_heartbeat", None) or getattr(t, "created_at", None)
+                try:
+                    hb_age = (now - _dt.fromisoformat(last_seen)).total_seconds() if last_seen else 0.0
+                except Exception:
+                    hb_age = 0.0
+                if hb_age >= hb_timeout:
+                    continue
+                created = getattr(t, "created_at", None)
+                try:
+                    running = (now - _dt.fromisoformat(created)).total_seconds() if created else hb_age
+                except Exception:
+                    running = hb_age
+                live.append({
+                    "task_id": getattr(t, "task_id", "") or "",
+                    "agent_type": getattr(t, "agent_type", "sub-agent") or "sub-agent",
+                    "task_description": getattr(t, "task_description", "") or "",
+                    "running_seconds": int(max(0, running)),
+                })
+            return live
+        except Exception:
+            return []
+
     def _detect_premature_done_claim(self, response_text):
         """Team-await: detect a reply that declares the overall task complete while a sub-agent is
         GENUINELY still running. Returns (blocked, [labels]). Anti-stuck by design: crashed/stale
@@ -834,33 +890,30 @@ class Agent:
             if not any(m in text for m in completion_markers):
                 return (False, [])
 
-            from vaf.core.subagent_ipc import get_ipc
-            ipc = get_ipc()
-            # Liveness window (same as the agent's existing reaping): reap dead sub-agents first so
-            # a crashed one cannot block the agent on "done".
-            try:
-                hb_timeout = int(self.config.get("subagent_heartbeat_timeout_seconds", 90) or 90)
-            except Exception:
-                hb_timeout = 90
-            hb_timeout = max(20, min(600, hb_timeout))
-            try:
-                ipc.check_zombies(timeout_seconds=hb_timeout)
-            except Exception:
-                pass
+            live = self.get_live_session_subagents()
+            if not live:
+                return (False, [])
 
-            from datetime import datetime as _dt
-            now = _dt.now()
-            labels = []
-            for t in ipc.get_active_tasks_for_current_session():
-                # Keep only genuinely-alive tasks (fresh heartbeat). Stale ones are dead-but-not-yet
-                # reaped and must NOT block.
-                last_seen = getattr(t, "last_heartbeat", None) or getattr(t, "created_at", None)
-                try:
-                    age = (now - _dt.fromisoformat(last_seen)).total_seconds() if last_seen else 0.0
-                except Exception:
-                    age = 0.0
-                if age < hb_timeout:
-                    labels.append(f"{getattr(t, 'agent_type', 'sub-agent')} (running {int(max(0, age))}s)")
+            # Narrowing (chat-while-subagent-runs): only bounce when the reply ALSO
+            # references the delegated work. A bare "Erledigt!" about small talk while a
+            # coder runs must pass — casual German is full of completion words, and the
+            # bounce erases an already-streamed reply. A genuine premature claim ("der
+            # Code ist fertig", "task is done") references the work and is still caught.
+            _work_terms = {
+                "task", "aufgabe", "auftrag", "projekt", "project", "arbeit",
+                "agent", "sub-agent", "subagent", "code", "coding", "coder",
+                "research", "recherche", "librarian", "dokument", "document", "bericht", "report",
+            }
+            for t in live:
+                _work_terms.add(str(t.get("agent_type") or "").lower().replace("_agent", ""))
+                for _w in str(t.get("task_description") or "").lower().split():
+                    _w = _w.strip(".,:;!?()[]\"'")
+                    if len(_w) > 5:
+                        _work_terms.add(_w)
+            if not any(_wt and _wt in text for _wt in _work_terms):
+                return (False, [])
+
+            labels = [f"{t['agent_type']} (running {t['running_seconds']}s)" for t in live]
             return (len(labels) > 0, labels)
         except Exception:
             return (False, [])
@@ -2061,7 +2114,10 @@ class Agent:
             ipc = get_ipc()
             
             # Cleanup stale tasks (crashed sub-agents)
-            ipc.cleanup_stale_active_tasks(max_age_minutes=30)
+            # None -> the config default applies (subagent_timeout_minutes, 120). The old
+            # hardcoded 30 meant every chat turn could force-expire a long coder run —
+            # fatal once the user chats WHILE a sub-agent works.
+            ipc.cleanup_stale_active_tasks(max_age_minutes=None)
             
             # In-chat caller: only the CURRENT session's results (injected into the
             # current conversation). Runner (all_sessions=True): drain every session and
@@ -2404,10 +2460,10 @@ class Agent:
                         retry_instruction = line.split(":", 1)[-1].strip()
                         break
                 if not retry_instruction:
-                    # Use intent from delegation file, not task_description
+                    # Use intent from delegation file (this agent's own slot), not task_description
                     if hasattr(self, "main_persistence") and self.main_persistence:
                         try:
-                            delegation = self.main_persistence.get_subagent_delegation_intent()
+                            delegation = self.main_persistence.get_subagent_delegation_intent(agent_type)
                             if delegation and delegation.get("intent"):
                                 retry_instruction = delegation["intent"]
                         except Exception:
@@ -2471,26 +2527,20 @@ class Agent:
                     )
 
                 # Validate: does the result fulfill the user's intent? (LLM-based, heuristic fallback)
-                # Prefer intent from delegation file (written before sub-agent call)
+                # ONLY the delegation-intent slot written at spawn time is a trustworthy
+                # reference. Deliberately NO fallback to the persisted intent or the last
+                # user message: with chat-while-subagent-runs, those are casual small talk
+                # by the time the result lands — validating the coder result against "wie
+                # geht's?" produced forced-retry storms (up to 20). Missing intent → empty
+                # user_intent → the validator returns fulfilled immediately (skip).
                 user_intent = ""
                 try:
                     if hasattr(self, "main_persistence") and self.main_persistence:
-                        delegation = self.main_persistence.get_subagent_delegation_intent()
+                        delegation = self.main_persistence.get_subagent_delegation_intent(task.agent_type)
                         if delegation and delegation.get("intent"):
                             user_intent = delegation["intent"]
                 except Exception:
                     pass
-                if not user_intent:
-                    try:
-                        if hasattr(self, "main_persistence") and self.main_persistence:
-                            user_intent = self.main_persistence.get_user_intent() or ""
-                    except Exception:
-                        pass
-                if not user_intent and self.history:
-                    for msg in reversed(self.history):
-                        if isinstance(msg, dict) and msg.get("role") == "user":
-                            user_intent = msg.get("content", "") or ""
-                            break
 
                 fulfilled, retry_instruction = self._validate_subagent_result_with_llm(
                     user_intent, task.task_description, task.result, task.agent_type
@@ -2525,12 +2575,12 @@ class Agent:
                     else:
                         needs_retry = True
                         UI.event("Warning", f"Sub-agent result does not fulfill user intent. Retry {count}/20.", style="yellow")
-                        # Get intent/goal from delegation (source of truth)
+                        # Get intent/goal from delegation (source of truth; this agent's own slot)
                         dlg_intent = user_intent or ""
                         dlg_goal = (task.task_description or "").strip()
                         if hasattr(self, "main_persistence") and self.main_persistence:
                             try:
-                                d = self.main_persistence.get_subagent_delegation_intent()
+                                d = self.main_persistence.get_subagent_delegation_intent(task.agent_type)
                                 if d:
                                     dlg_intent = d.get("intent", dlg_intent) or dlg_intent
                                     dlg_goal = d.get("goal", dlg_goal) or dlg_goal
@@ -2724,13 +2774,32 @@ class Agent:
         if match:
             task_id = match.group(1)
             agent_type = match.group(2)
-            
+
             # Track the async task
             self._async_subagent_tasks[task_id] = {
                 "agent_type": agent_type,
                 "started_at": datetime.now()
             }
-            
+
+            # Durable 'running' team-state entry: lights up the <team_state> renderer
+            # (whose 'running' branch was dead code — only completion was ever written)
+            # and survives compression and restarts, unlike the in-memory dict above.
+            # Cleared by the existing completion writer in _process_subagent_result.
+            try:
+                if getattr(self, "main_persistence", None):
+                    _task_desc = ""
+                    try:
+                        _d = self.main_persistence.get_subagent_delegation_intent(agent_type)
+                        _task_desc = (_d or {}).get("goal") or (_d or {}).get("intent") or ""
+                    except Exception:
+                        _task_desc = ""
+                    self.main_persistence.update_subagent_status(
+                        task_id, agent_type, "running",
+                        details=(_task_desc[:200] or "Working..."),
+                    )
+            except Exception:
+                pass
+
             return True
         return False
     
@@ -4786,6 +4855,16 @@ class Agent:
         if "CURRENT DOCUMENT (Editor)" in (user_input or ""):
             return None
 
+        # Skip workflow matching while a sub-agent genuinely runs for this session
+        # (chat-while-subagent-runs): the router fires PRE-LLM, so the SUB-AGENT ACTIVE
+        # prompt block cannot bind it — a light message keyword-matching a workflow
+        # would inject an execute nudge or spawn heavy work next to the running task.
+        try:
+            if self.get_live_session_subagents():
+                return None
+        except Exception:
+            pass
+
         # Note: Intent-based keyword guards (fix/debug vs create) have been removed.
         # The router now surfaces matched workflows as [WORKFLOW SUGGESTION] hints so
         # the main agent — which has full conversation context and [SESSION WORKSPACE] —
@@ -6132,7 +6211,16 @@ class Agent:
         # ------------------------------------------------------------------
         # Sub-Agent Results: Check for completed async tasks
         # ------------------------------------------------------------------
-        pending_results = self._check_subagent_results()
+        # Result-ownership: when the headless runner owns delivery (web/desktop) and this
+        # is a USER chat turn, leave pending results for the runner's idle drain — it
+        # delivers with ALL side effects (SubAgentWindow "Completed", subagent_output,
+        # messenger summaries), which this in-chat path skips. Consuming here would mix
+        # the sub-agent handoff into a casual reply and silently drop those signals
+        # (chat-while-subagent-runs). CLI/no-runner contexts keep the in-chat drain.
+        if user_input and getattr(self, "_runner_owns_subagent_delivery", False):
+            pending_results = []
+        else:
+            pending_results = self._check_subagent_results()
         any_needs_retry = False
         if pending_results:
             for task in pending_results:
@@ -9575,7 +9663,33 @@ class Agent:
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 # Pre-write intent/goal before sub-agent invocation for validation/retry
                 SUBAGENT_TOOLS = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
-                if name in SUBAGENT_TOOLS and hasattr(self, "main_persistence") and self.main_persistence:
+                # HARD anti-re-delegation guard: while a sub-agent of the SAME type genuinely
+                # runs for this session (heartbeat-verified via the shared liveness helper),
+                # refuse to spawn a duplicate. The prompt-level prohibition is soft; the
+                # repeated-tool-call dedup is bypassed after any user message — so chatting
+                # while a coder runs could otherwise spawn a second coder into the same
+                # workspace. Same-type-only: mixed delegation (e.g. research while coding)
+                # stays possible. Also skips the intent pre-write below so a refused spawn
+                # cannot clobber the RUNNING task's delegation-intent slot.
+                _subagent_dup_msg = None
+                if name in SUBAGENT_TOOLS:
+                    try:
+                        _live_same = [
+                            t for t in self.get_live_session_subagents()
+                            if t.get("agent_type") == name
+                        ]
+                        if _live_same:
+                            _t0 = _live_same[0]
+                            _subagent_dup_msg = (
+                                f"⚠️ A {name} is ALREADY RUNNING on: "
+                                f"{(_t0.get('task_description') or 'the delegated task')[:200]} "
+                                f"(running {max(0, int(_t0.get('running_seconds', 0)) // 60)} min).\n"
+                                "Not starting a duplicate — the result will arrive automatically "
+                                "when it finishes. Tell the user the task is already in progress."
+                            )
+                    except Exception:
+                        _subagent_dup_msg = None
+                if name in SUBAGENT_TOOLS and _subagent_dup_msg is None and hasattr(self, "main_persistence") and self.main_persistence:
                     intent = ""
                     try:
                         intent = self.main_persistence.get_user_intent() or ""
@@ -9600,6 +9714,9 @@ class Agent:
                     # with invalid input. Keep the "Tool Error:" prefix so is_err and
                     # the Whare Wananga reactive-retry keep recognising it unchanged.
                     result = "Tool Error: invalid arguments for '%s': %s" % (name, "; ".join(_ti_errors))
+                elif _subagent_dup_msg is not None:
+                    # Anti-re-delegation: a same-type sub-agent already runs for this session.
+                    result = _subagent_dup_msg
                 elif name in _SELF_SUPERVISED:
                     result = self.tools[name].run(**tool_args)
                 else:

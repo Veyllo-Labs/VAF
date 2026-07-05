@@ -587,7 +587,7 @@ export default function SubAgentWindow({
     const [editorDark, setEditorDark] = useState(false);
 
     // Bottom panel tabs (Console / Linter / Telemetry)
-    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry' | 'diff'>('console');
+    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry'>('console');
 
     // Explorer file viewing: click a file -> load its content as a read-only
     // tab; clicking the live file (or the same tab again) returns to the
@@ -609,6 +609,16 @@ export default function SubAgentWindow({
             editorScrollRef.current.scrollTop = 0;
         }
     }, [openedFile]);
+    useEffect(() => {
+        // Follow the live EDIT: when the diff updates and the editor is showing it (no opened
+        // file, no write-stream), jump to the newest change so you land where the agent is
+        // editing (e.g. line 600) instead of staying at the top of the file.
+        if (!openedFileRef.current && !codeContent && editorScrollRef.current) {
+            requestAnimationFrame(() => {
+                if (editorScrollRef.current) editorScrollRef.current.scrollTop = editorScrollRef.current.scrollHeight;
+            });
+        }
+    }, [coder?.diffs]);
     const openFileFromExplorer = async (name: string) => {
         if (!coder?.projectPath) return;
         const liveName = (currentFile || '').split('/').pop() || '';
@@ -1651,8 +1661,7 @@ export default function SubAgentWindow({
                             {/* Bottom panel: Console / Linter / Telemetry */}
                             <div className="flex h-[150px] flex-none flex-col border-t border-gray-200 bg-white">
                                 <div className="flex h-7 flex-none items-center gap-4 border-b border-gray-100 px-4">
-                                    {(['console', 'linter', 'telemetry', 'diff'] as const).map(tab => {
-                                        const diffCount = Object.keys(coder.diffs || {}).length;
+                                    {(['console', 'linter', 'telemetry'] as const).map(tab => {
                                         return (
                                         <button
                                             key={tab}
@@ -1664,7 +1673,7 @@ export default function SubAgentWindow({
                                                     : 'text-gray-300 hover:text-gray-500'
                                             )}
                                         >
-                                            {tab === 'diff' && diffCount > 0 ? `diff (${diffCount})` : tab}
+                                            {tab}
                                         </button>
                                         );
                                     })}
@@ -1723,20 +1732,6 @@ export default function SubAgentWindow({
                                                 <span className="min-w-0 flex-1 break-all">{v}</span>
                                             </div>
                                         ))}
-                                    </div>
-                                )}
-                                {activeConsoleTab === 'diff' && (
-                                    <div className="min-h-0 flex-1 overflow-y-auto py-1 text-[11px]">
-                                        {Object.keys(coder.diffs || {}).length > 0 ? (
-                                            Object.entries(coder.diffs || {}).map(([name, diff]) => (
-                                                <div key={name} className="mb-1.5">
-                                                    <div className="sticky top-0 z-10 border-b border-gray-100 bg-white px-3 py-1 font-mono text-[10px] font-bold text-gray-500">{name}</div>
-                                                    <DiffLines diff={diff} />
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <div className="px-4 py-2 text-gray-300">No changes yet — edits will show here as a red/green diff.</div>
-                                        )}
                                     </div>
                                 )}
                             </div>

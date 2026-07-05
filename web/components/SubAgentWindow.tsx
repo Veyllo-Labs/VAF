@@ -607,13 +607,20 @@ export default function SubAgentWindow({
     // Bottom panel tabs (Console / Linter / Telemetry)
     const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry'>('console');
 
-    // Explorer file viewing: click a file -> load its content as a read-only
-    // tab; clicking the live file (or the same tab again) returns to the
-    // live stream view.
-    const [openedFile, setOpenedFile] = useState<{ name: string; content: string } | null>(null);
+    // Multi-tab editor: a persistent LIVE tab (always shows what the agent is
+    // doing and keeps updating in the background) plus one read-only tab per file
+    // the user opened from the explorer. `openedFile` is DERIVED from the active
+    // tab, so all the live-view logic below (diff/stream priority, scroll-follow,
+    // viewingName) stays unchanged — it just reads null while the Live tab is active.
+    const LIVE_TAB = '__live__';
+    const [openTabs, setOpenTabs] = useState<Array<{ name: string; content: string }>>([]);
+    const [activeTab, setActiveTab] = useState<string>(LIVE_TAB);
     const editorScrollRef = useRef<HTMLDivElement>(null);
+    const openedFile = activeTab === LIVE_TAB ? null : (openTabs.find(t => t.name === activeTab) ?? null);
     const openedFileRef = useRef(openedFile);
     openedFileRef.current = openedFile;
+    // Basename of the file the agent is live-editing (matches the Live tab label).
+    const liveBasename = (displayFile || '').split('/').pop() || '';
     useEffect(() => {
         // Follow the live code stream like the typing cursor in an editor —
         // but never while the user is reading an explorer-opened file.
@@ -637,26 +644,62 @@ export default function SubAgentWindow({
             });
         }
     }, [coder?.diffs]);
-    const openFileFromExplorer = async (name: string) => {
-        if (!coder?.projectPath) return;
-        const liveName = (currentFile || '').split('/').pop() || '';
-        if (name === liveName || openedFile?.name === name) {
-            setOpenedFile(null);
-            return;
+    useEffect(() => {
+        // Switching back to the Live tab -> jump to where the agent is (bottom of the
+        // stream / newest diff hunk); otherwise the editor keeps the opened file's old
+        // scroll position until the next stream/diff tick.
+        if (activeTab === LIVE_TAB && editorScrollRef.current) {
+            requestAnimationFrame(() => {
+                if (editorScrollRef.current) editorScrollRef.current.scrollTop = editorScrollRef.current.scrollHeight;
+            });
         }
+    }, [activeTab]);
+    // Open a file from the explorer in its own tab (or focus it if already open).
+    // Clicking the file the agent is live-editing just focuses the omnipresent Live
+    // tab — no point in a static read-only copy of it.
+    const openFileTab = async (name: string) => {
+        if (!coder?.projectPath) return;
+        if (name === liveBasename) { setActiveTab(LIVE_TAB); return; }
+        if (openTabs.some(t => t.name === name)) { setActiveTab(name); return; }
         try {
             const res = await fetch(`/api/file?path=${encodeURIComponent(`${coder.projectPath}/${name}`)}`);
             if (!res.ok) return;
             const text = await res.text();
-            setOpenedFile({ name, content: text.slice(0, 120000) });
+            setOpenTabs(prev => prev.some(t => t.name === name) ? prev : [...prev, { name, content: text.slice(0, 120000) }]);
+            setActiveTab(name);
         } catch {
             /* file not readable - keep current view */
         }
     };
-    // A new coder run starts -> drop the stale opened file
+    const closeFileTab = (name: string) => {
+        setOpenTabs(prev => prev.filter(t => t.name !== name));
+        setActiveTab(cur => (cur === name ? LIVE_TAB : cur));
+    };
+    // If a file the user opened read-only later becomes the agent's LIVE file, collapse
+    // its static tab into the omnipresent Live tab — avoids a duplicate 'foo.py' tab and a
+    // frozen snapshot shown while the real edits stream in the (then inactive) Live tab.
     useEffect(() => {
-        if (!coder) setOpenedFile(null);
-    }, [coder]);
+        if (!liveBasename) return;
+        setOpenTabs(prev => (prev.some(t => t.name === liveBasename) ? prev.filter(t => t.name !== liveBasename) : prev));
+        setActiveTab(cur => (cur === liveBasename ? LIVE_TAB : cur));
+    }, [liveBasename]);
+    // Reset opened tabs on a new run: a different project dir...
+    useEffect(() => {
+        setOpenTabs([]);
+        setActiveTab(LIVE_TAB);
+    }, [coder?.projectPath]);
+    // ...and a fresh run in the SAME dir (presence flips to online), the common
+    // "edit existing repo" rerun where projectPath is unchanged, so stale one-shot
+    // file snapshots don't linger across runs.
+    const prevPresenceRef = useRef(inferredPresence);
+    useEffect(() => {
+        const newRun = inferredPresence === 'online' && prevPresenceRef.current !== 'online';
+        prevPresenceRef.current = inferredPresence;
+        if (newRun) {
+            setOpenTabs([]);
+            setActiveTab(LIVE_TAB);
+        }
+    }, [inferredPresence]);
 
     // ── Research view (research agent only) ───────────────────────────────
     const researchViewerRef = useRef<HTMLDivElement>(null);
@@ -1530,14 +1573,8 @@ export default function SubAgentWindow({
                 : 'Building';
         const liveActivity = (coder.activity || '').trim();
         const activeName = (displayFile || '').split('/').pop() || '';
-        const touched = coder.fileTree.filter(f => f.status);
-        let fileTabs = (activeName && !touched.some(f => f.name === activeName)
-            ? [{ name: activeName, size: 0, status: 'W' }, ...touched]
-            : touched
-        ).slice(0, 4);
-        if (openedFile && !fileTabs.some(f => f.name === openedFile.name)) {
-            fileTabs = [...fileTabs.slice(0, 3), { name: openedFile.name, size: 0, status: '' }];
-        }
+        // Status badge for the Live tab (M/A) when the current file isn't actively streaming.
+        const liveFileStatus = coder.fileTree.find(f => f.name === activeName)?.status || '';
         const headSha = coder.git.commits[0]?.sha || '';
         // Editor shows either the live stream or an explorer-opened file
         const viewingName = openedFile?.name ?? activeName;
@@ -1628,30 +1665,53 @@ export default function SubAgentWindow({
                                 </div>
                             </div>
 
-                            {/* File tabs */}
-                            <div className="flex h-8 flex-none items-end gap-1 border-b border-gray-100 bg-white px-2">
-                                {fileTabs.map(tab => (
-                                    <button
-                                        key={tab.name}
-                                        onClick={() => openFileFromExplorer(tab.name)}
+                            {/* File tabs: a persistent LIVE tab (what the agent is doing, always
+                                updating) + one closable read-only tab per file opened from the
+                                explorer. Opening a file no longer hides the live view — switch back
+                                to the Live tab any time. */}
+                            <div className="flex h-8 flex-none items-end gap-1 overflow-x-auto border-b border-gray-100 bg-white px-2">
+                                <button
+                                    onClick={() => setActiveTab(LIVE_TAB)}
+                                    className={cn(
+                                        // sticky so it stays pinned/visible when many open tabs overflow the bar
+                                        'sticky left-0 z-10 flex flex-none items-center gap-1.5 rounded-t-lg border border-b-0 px-3 py-1.5 font-mono text-[11px]',
+                                        activeTab === LIVE_TAB
+                                            ? (editorDark ? 'border-gray-200 bg-[#1e1e2e] font-semibold text-gray-200' : 'border-gray-100 bg-white font-semibold text-gray-900 shadow-sm')
+                                            : 'border-transparent bg-white text-gray-400 hover:text-gray-600'
+                                    )}
+                                    title="Live view — what the agent is doing right now"
+                                >
+                                    <span className="max-w-[130px] truncate">{activeName || 'Live'}</span>
+                                    {isLive ? (
+                                        <span className="animate-pulse rounded bg-red-500 px-1 py-px text-[7px] font-extrabold tracking-wider text-white">LIVE</span>
+                                    ) : (
+                                        <>
+                                            {liveFileStatus === 'M' && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />}
+                                            {liveFileStatus === 'A' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />}
+                                        </>
+                                    )}
+                                </button>
+                                {openTabs.map(t => (
+                                    <div
+                                        key={t.name}
                                         className={cn(
-                                            'flex items-center gap-1.5 rounded-t-lg border border-b-0 px-3 py-1.5 font-mono text-[11px]',
-                                            tab.name === viewingName
+                                            'group flex flex-none items-center gap-1 rounded-t-lg border border-b-0 py-1.5 pl-3 pr-1.5 font-mono text-[11px]',
+                                            activeTab === t.name
                                                 ? (editorDark ? 'border-gray-200 bg-[#1e1e2e] font-semibold text-gray-200' : 'border-gray-100 bg-white font-semibold text-gray-900 shadow-sm')
                                                 : 'border-transparent text-gray-400 hover:text-gray-600'
                                         )}
                                     >
-                                        <span className="max-w-[130px] truncate">{tab.name}</span>
-                                        {tab.status === 'W' && tab.name === activeName && isLive && (
-                                            <span className="animate-pulse rounded bg-red-500 px-1 py-px text-[7px] font-extrabold tracking-wider text-white">LIVE</span>
-                                        )}
-                                        {tab.status === 'M' && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />}
-                                        {tab.status === 'A' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />}
-                                    </button>
+                                        <button onClick={() => setActiveTab(t.name)} className="max-w-[130px] truncate">{t.name}</button>
+                                        <button
+                                            onClick={() => closeFileTab(t.name)}
+                                            className="rounded p-0.5 text-gray-300 opacity-60 transition hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100"
+                                            aria-label={`Close ${t.name}`}
+                                            title="Close tab"
+                                        >
+                                            <X size={10} />
+                                        </button>
+                                    </div>
                                 ))}
-                                {fileTabs.length === 0 && (
-                                    <span className="px-3 py-1.5 text-[11px] text-gray-300">No files yet</span>
-                                )}
                             </div>
 
                             {/* Breadcrumb */}
@@ -1809,7 +1869,7 @@ export default function SubAgentWindow({
                                     {coder.fileTree.map(f => (
                                         <button
                                             key={f.name}
-                                            onClick={() => openFileFromExplorer(f.name)}
+                                            onClick={() => openFileTab(f.name)}
                                             className={cn(
                                                 'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left',
                                                 f.name === viewingName ? 'bg-blue-50' : 'hover:bg-gray-50'

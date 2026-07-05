@@ -1867,6 +1867,13 @@ function VAFDashboardContent() {
         const docExts = new Set([
             'pdf', 'docx', 'xlsx', 'pptx', 'rtf', 'csv',
         ]);
+        // HTML → HtmlViewer (rendered Preview/Source toggle), like the file-chip flow — not raw code.
+        if (isHtmlFile(name)) {
+            setHtmlViewerState({ isOpen: true, filePath: full, title: name });
+            setShowSubAgentPanel(true);
+            setIsWorkspaceModalOpen(false);
+            return;
+        }
         if (!docExts.has(ext) && (isCodeFile(name) || isTextFile(name))) {
             setCodeViewerState({ isOpen: true, filePath: full, title: name });
             setShowSubAgentPanel(true);
@@ -4530,7 +4537,12 @@ function VAFDashboardContent() {
         if (codeFiles.length > 0) {
             const first = codeFiles[0]; // show the first one; user can attach more one at a time
             const text = await first.text();
-            setCodeViewerState({ isOpen: true, filePath: first.name, title: first.name, initialContent: text } as typeof codeViewerState);
+            // HTML → HtmlViewer (rendered preview); other code → CodeViewer.
+            if (isHtmlFile(first.name)) {
+                setHtmlViewerState({ isOpen: true, filePath: first.name, title: first.name, initialContent: text });
+            } else {
+                setCodeViewerState({ isOpen: true, filePath: first.name, title: first.name, initialContent: text } as typeof codeViewerState);
+            }
             setShowSubAgentPanel(true);
             // Also send as context attachment if there's content (so the agent can see the code)
         }
@@ -5964,7 +5976,7 @@ function VAFDashboardContent() {
                                                                     {!isBot && msg.codeViewerFile && (
                                                                         <div className="flex justify-end mt-1">
                                                                             <button
-                                                                                onClick={() => { setCodeViewerState(prev => ({ ...prev, isOpen: true, filePath: msg.codeViewerFile!.path, title: msg.codeViewerFile!.name })); setShowSubAgentPanel(true); }}
+                                                                                onClick={() => { if (isHtmlFile(msg.codeViewerFile!.path)) { setHtmlViewerState({ isOpen: true, filePath: msg.codeViewerFile!.path, title: msg.codeViewerFile!.name }); } else { setCodeViewerState(prev => ({ ...prev, isOpen: true, filePath: msg.codeViewerFile!.path, title: msg.codeViewerFile!.name })); } setShowSubAgentPanel(true); }}
                                                                                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 border border-violet-200 text-violet-700 text-[11px] font-medium hover:bg-violet-100 transition-colors"
                                                                                 title={msg.codeViewerFile.path}
                                                                             >

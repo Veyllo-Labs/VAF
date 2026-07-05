@@ -1540,10 +1540,11 @@ class TaskManager:
         if base_dir:
             self.initialize(base_dir)
             
-    def initialize(self, base_dir: str):
+    def initialize(self, base_dir: str, current_task: str = ""):
         """Initialize persistence with the project directory."""
         self.pm = PersistenceManager(base_dir)
         project_name = os.path.basename(base_dir)
+        cur = (current_task or "").strip()
         # Load existing state or create new
         loaded_state = self.pm.load_state()
         if loaded_state:
@@ -1553,10 +1554,15 @@ class TaskManager:
                 bool(loaded_state.tasks)
                 and all(t.status == "completed" for t in loaded_state.tasks)
             )
-            if all_done:
+            # A DIFFERENT user request must plan fresh, not resume a leftover (e.g. failed)
+            # plan from a previous request. Only a genuine crash-resume of the SAME request
+            # keeps the persisted, incomplete tasks.
+            stored = (getattr(loaded_state, "task", "") or "").strip()
+            new_request = bool(cur) and bool(stored) and stored != cur
+            if all_done or new_request:
                 # init_project() only creates the file if it doesn't exist, so we
                 # must explicitly overwrite the stale state with a fresh ProjectState.
-                fresh = ProjectState(project_name=project_name)
+                fresh = ProjectState(project_name=project_name, task=cur)
                 self.pm.save_state(fresh)
                 loaded_state = self.pm.load_state()
             self.state = loaded_state
@@ -1568,7 +1574,12 @@ class TaskManager:
             # so that set_todos() and write_file are never blocked by state=None
             if not self.state:
                 print(f"[TaskManager] WARNING: PersistenceManager.save_state() failed for {base_dir}; using in-memory ProjectState")
-                self.state = ProjectState(project_name=project_name)
+                self.state = ProjectState(project_name=project_name, task=cur)
+        # Stamp the current request onto the state so the NEXT invocation can tell new-vs-resume.
+        if self.state and cur and (getattr(self.state, "task", "") or "").strip() != cur:
+            self.state.task = cur
+            if self.pm:
+                self.pm.save_state(self.state)
     
     @property
     def todos(self) -> List[Dict]:
@@ -3121,8 +3132,9 @@ Thumbs.db
             except Exception:
                 _run_start_sha = ""
 
-        # Initialize Persistence for TaskManager
-        task_mgr.initialize(base_dir)
+        # Initialize Persistence for TaskManager (pass the task so a NEW request plans fresh
+        # instead of resuming a leftover/failed plan from a previous, different request).
+        task_mgr.initialize(base_dir, current_task=task)
 
         # Snapshot of visible files at run start — lets the WebUI file tree
         # distinguish files added (A) vs modified (M) during this run.

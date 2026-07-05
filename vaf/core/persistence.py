@@ -28,6 +28,9 @@ class ProjectState:
     created_at: float = field(default_factory=time.time)
     tasks: List[Task] = field(default_factory=list)
     current_task_idx: int = 0
+    # The user request this plan was made for. Lets a new invocation tell a DIFFERENT request
+    # (plan fresh) from a genuine crash-resume of the SAME request (resume the incomplete plan).
+    task: str = ""
     
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -54,7 +57,8 @@ class ProjectState:
             project_name=data.get("project_name", "Unknown"),
             created_at=data.get("created_at", time.time()),
             tasks=tasks,
-            current_task_idx=data.get("current_task_idx", 0)
+            current_task_idx=data.get("current_task_idx", 0),
+            task=data.get("task", "")
         )
 
 class PersistenceManager:

@@ -36,12 +36,34 @@ document is used in the first two (separate-process) modes:
 
 | Mode | How the sub-agent runs | Blocks the main turn? |
 |------|------------------------|-----------------------|
-| **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No — result picked up via IPC on the next turn |
-| **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No — result picked up via IPC on the next turn |
+| **CLI** (terminal session) | a new **terminal window** running `vaf subagent run …` | No — result picked up via IPC on the next turn (poll; no backend to push to) |
+| **WebUI / desktop app** | a **piped child process** (no visible terminal); the parent drains its stdout (`stderr` is merged in) | No — but the result is **pushed back immediately** (see *Result push* below), so the main agent reacts as soon as the sub-agent finishes, not only on your next message |
 | **Inside a workflow** | **in-process** — the engine sets `VAF_IN_SUBAGENT_TERMINAL=1` to avoid nested spawns, so the step runs the sub-agent directly and **waits** for its result | Yes — the step waits (so step N can feed step N+1) |
 
 The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
 Terminal" box is a headless child process; inside a workflow there is no child at all.
+
+### Result push (`<ipc-notification>`)
+
+Writing the result to the queue is only half the story — the main agent still has to *notice*.
+Historically it noticed via the headless runner's ~1s idle poll, which fired only when it was
+free and was scoped to its "current" session, so a completion arriving while it was idle (or
+after its current session had moved on) waited for the next user message. Now completion emits an
+active **push**, modelled on the harness `<task-notification>`:
+
+- `complete_task()` / `fail_task()` call `_push_result_ready()` after writing the result. From a
+  sub-agent **subprocess** it POSTs `{type: "ipc_notification"}` to the parent
+  (`/api/subagent/stream`, via the fire-and-forget `_BRIDGE_POOL`); **in-process** it sets a
+  shared `threading.Event` directly.
+- The parent's `receive_subagent_stream` handler calls `notify_result_ready()` on that type (and
+  returns early — it is an internal signal, not a UI broadcast).
+- The headless runner's idle maintenance consumes the event and runs the result check
+  **immediately**, draining **every** session's results (routing each by its own `session_id`),
+  with the ~1s poll retained as a fallback if a push is ever undeliverable.
+
+Guard: task_ids an **in-process workflow engine loop** (`engine._await_subagent`) is actively
+consuming are marked owned (time-stamped, TTL, auto-expiring) so the all-sessions runner drain
+never steals a step result the engine is waiting on. Only relevant with `parallel_main_workers > 1`.
 
 In every mode the call is **time-bounded** (`vaf/core/bounded_run.py`, config keys
 `subagent_timeout_seconds` / `tool_timeout_seconds`) and **stop-aware**: a stuck sub-agent

@@ -339,11 +339,14 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## Star History
 
-<a href="https://www.star-history.com/#Veyllo-Labs/VAF&Date">
+<a href="https://www.star-history.com/?type=date&repos=Veyllo-Labs/VAF">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Veyllo-Labs/VAF&type=Date" />
+   <!-- The `repos` value MUST be lowercase here: api.star-history.com 301-redirects a
+        mixed-case path to lowercase, and GitHub's image proxy (Camo) does not follow the
+        redirect, so a mixed-case URL renders as an empty chart. Do not "fix" the case. -->
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date" />
  </picture>
 </a>
 

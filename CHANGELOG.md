@@ -59,7 +59,7 @@ To update an installed VAF, run `vaf update`.
 - **You can keep chatting while a sub-agent works (API mode).** The main agent now knows a
   sub-agent is running for your chat and keeps replies light: it will not start heavy new work,
   will not delegate the same task twice (a duplicate spawn is refused outright), and leaves the
-  sub-agent's workspace alone; a passive hint shows you can keep chatting. Safety fixes that make
+  sub-agent's workspace alone; typing and sending stay unlocked the whole time. Safety fixes that make
   this reliable: a casual "done!"/"fertig" reply is no longer erased by the completion gate (only
   replies that actually reference the delegated work are held); the result is delivered once, by
   the background runner, with all window/messenger notifications — not mixed into a chat reply;
@@ -67,8 +67,14 @@ To update an installed VAF, run `vaf update`.
   chatting can no longer force-expire a long run (the 30-minute hardcoded reaper now honors the
   configured timeout); and pressing Stop while a reply streams stops only the reply — the
   sub-agent keeps working (stopping it is an explicit second press when nothing is streaming).
-  On local mode nothing changes (the hint and adapted behavior are API-only; the single local
+  On local mode nothing changes (the adapted behavior is API-only; the single local
   llama server should not serve two inferences at once).
+- **Chat messages no longer queue for minutes behind a coding run.** A crashed workflow step
+  could leak an internal "run sub-agents in-process" flag into the long-running backend; after
+  that, every coding task silently ran inside the chat turn itself instead of as a separate
+  process — the window showed the coder working, but new messages waited in line until it
+  finished. The flag is now restored even when a step fails, and the runner additionally clears
+  a stale flag before every chat turn.
 
 ## [0.1.0a6] - 2026-07-04
 

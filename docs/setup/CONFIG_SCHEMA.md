@@ -90,7 +90,7 @@ print(agent.run("In one sentence, what is Python?"))
 | `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. |
 | `subagent_use_separate_provider` | `False` | Use `subagent_provider` instead of inheriting. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |
-| `subagent_concurrent_chat_enabled` | `True` | Kill-switch for chat-while-a-sub-agent-runs (the SUB-AGENT ACTIVE prompt block + UI hint). Renders only in API mode regardless (code gate on the main provider + an initialized API backend). Admin-only via the `subagent_` prefix. |
+| `subagent_concurrent_chat_enabled` | `True` | Kill-switch for chat-while-a-sub-agent-runs (the SUB-AGENT ACTIVE prompt block). Renders only in API mode regardless (code gate on the main provider + an initialized API backend). Admin-only via the `subagent_` prefix. |
 
 ## Failover & resilience
 

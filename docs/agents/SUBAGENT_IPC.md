@@ -43,6 +43,15 @@ document is used in the first two (separate-process) modes:
 The ASCII diagrams below depict the **CLI terminal** mode. In WebUI/desktop the "Separate
 Terminal" box is a headless child process; inside a workflow there is no child at all.
 
+**Leak protection for `VAF_IN_SUBAGENT_TERMINAL`:** the flag lives in the long-lived main
+process while a legacy in-process workflow step runs, and `coding_agent`/co. check it to decide
+"run inline" vs "spawn the async child". A step that raised used to skip the restore and leak
+the flag — after which every later `coding_agent` call ran inline INSIDE the chat turn,
+serializing the whole session behind a minutes-long tool call. Two layers now prevent this:
+the engine restores the step env on its exception paths too (`_restore_subagent_step_env`),
+and the headless runner pops a stale flag before every chat turn, logging `[LEAK-GUARD]` so a
+future leak is visible instead of silent.
+
 ### Result push (`<ipc-notification>`)
 
 Writing the result to the queue is only half the story — the main agent still has to *notice*.
@@ -281,8 +290,8 @@ sub-agent genuinely runs for the session (heartbeat-verified via
 `Agent.get_live_session_subagents()`, the shared liveness helper), the system prompt gets a
 `<subagent_active>` block (keep replies light; do not start heavy work; do not re-delegate;
 hands off the session workspace; the result arrives automatically), a hard guard refuses a
-duplicate same-type spawn, the workflow router is suppressed pre-LLM, and the web UI shows a
-passive "you can keep chatting" hint. A Stop press while a reply streams stops ONLY the
+duplicate same-type spawn, the workflow router is suppressed pre-LLM, and the web UI keeps typing and
+sending unlocked (no banner — the SubAgent window already shows the work). A Stop press while a reply streams stops ONLY the
 generation — killing the sub-agent requires pressing Stop again when nothing is streaming
 (explicit `scope: "all"`). Completed results are delivered exclusively by the headless
 runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) —

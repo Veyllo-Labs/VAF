@@ -3151,6 +3151,21 @@ Thumbs.db
             except Exception:
                 _run_start_sha = ""
 
+        # Live-diff baseline: a SNAPSHOT of the working tree at run start. `git stash create`
+        # records uncommitted leftovers from a previous run WITHOUT touching the tree, so the
+        # editor's live diff shows only what THIS run changes - a previous run's uncommitted edits
+        # never leak in. Falls back to HEAD (_run_start_sha) when the tree is clean or on error.
+        # Kept separate from _run_start_sha, which the DOCUMENT phase needs as HEAD.
+        _diff_baseline_sha = _run_start_sha
+        if _run_start_sha and not skip_template:
+            try:
+                from vaf.tools.project_git import _run_git as _rg2
+                _snap = (_rg2(["stash", "create"], cwd=base_dir).stdout or "").strip()
+                if _snap:
+                    _diff_baseline_sha = _snap
+            except Exception:
+                pass
+
         # Initialize Persistence for TaskManager (pass the task so a NEW request plans fresh
         # instead of resuming a leftover/failed plan from a previous, different request).
         task_mgr.initialize(base_dir, current_task=task)
@@ -4669,7 +4684,7 @@ Task {task_idx + 1}: {current_task}
                         base_dir, files_created, current_file, _initial_file_names
                     ),
                     "git": _build_git_state(base_dir),
-                    "diffs": _build_file_diffs(base_dir, _run_start_sha, files_created),
+                    "diffs": _build_file_diffs(base_dir, _diff_baseline_sha, files_created),
                     "tasks": _tasks_payload[:12],
                     "loop": loop.loop_count,
                     "taskProgress": task_mgr.get_progress() if task_mgr else "",

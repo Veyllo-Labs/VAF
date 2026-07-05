@@ -999,7 +999,7 @@ Then use the results to answer. Do NOT guess from your training data!
                         + _cc_ws_rule +
                         "- The result will arrive automatically when the sub-agent finishes.\n"
                         "- Avoid phrases that sound like overall completion (e.g. \"all done\", "
-                        "\"fertig\", \"erledigt\") — a completion gate is active.\n"
+                        "\"fertig\", \"erledigt\") — the delegated work is not finished yet.\n"
                         "</subagent_active>"
                     )
         except Exception as e:

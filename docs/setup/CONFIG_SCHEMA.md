@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (252 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (251 keys).
 
 ## How configuration is set
 
@@ -143,8 +143,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `workflow_generation_timeout_seconds` | `30` | create_automation: time-bound the inline LLM workflow pre-generation (fast-fail to robust prompt-based execution). |
 | `result_grounding_enabled` | `True` | Bounce a reply that claims a tool outcome the turn's results don't support. |
 | `result_grounding_max_retries` | `2` | Corrections before proceeding anyway. |
-| `team_await_enabled` | `True` | Don't let the agent finish while a sub-agent is genuinely still running. |
-| `team_await_max_blocks` | `3` | Bounces before proceeding anyway. |
+| `team_await_enabled` | `True` | When a reply claims completion while a sub-agent still runs, keep the reply (never erased) and append a "work not finished" note for the next turn. |
 | `autocontinue_pending_tasks_enabled` | `True` | Keep working within the turn while tasks remain pending. |
 | `autocontinue_question_classifier_enabled` | `True` | LLM check whether a reply is a blocking question before auto-continuing. |
 | `task_overwrite_guard_enabled` | `True` | Confirm before replacing the whole task list while steps are pending. |

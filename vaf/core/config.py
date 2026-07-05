@@ -231,13 +231,12 @@ class Config:
                 "plan_gate_enabled": True,                     # global kill-switch
                 "plan_gate_max_blocks": 3,                     # blocks before proceeding without a plan
 
-                # Team-await gate (main agent): do not let the agent declare the task complete while
-                # a sub-agent is genuinely still running (fresh heartbeat). Crashed/stale sub-agents
-                # are reaped first (check_zombies) so they never block; a finished sub-agent leaves
-                # the active list so the block lifts on its own; after team_await_max_blocks bounces
-                # "done" proceeds anyway so the agent can never get stuck waiting.
-                "team_await_enabled": True,                    # global kill-switch
-                "team_await_max_blocks": 3,                    # bounces before proceeding anyway
+                # Team-await note (main agent): when a reply claims the task is complete while a
+                # sub-agent is genuinely still running (fresh heartbeat), the reply is KEPT as-is
+                # (a streamed answer is never erased or regenerated) and a system note is appended
+                # so the next turn does not build on a false "done". Crashed/stale sub-agents are
+                # reaped first (check_zombies) so they never trigger the note.
+                "team_await_enabled": True,                    # global kill-switch for the note
 
                 # Anti-spin guard (main agent): a weak model can churn the bookkeeping tools
                 # (update_working_memory / update_intent / add_task) over and over — re-planning

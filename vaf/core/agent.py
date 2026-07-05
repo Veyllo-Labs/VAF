@@ -553,7 +553,6 @@ class Agent:
         self._plan_gate_blocks = 0
 
         # Team-await State (main agent: don't declare done while sub-agents genuinely run)
-        self._team_await_blocks = 0
 
     @staticmethod
     def _is_placeholder_plan(plan) -> bool:
@@ -6397,7 +6396,6 @@ class Agent:
             self.history.append(_user_msg)
             self._orchestrator_heavy_calls_this_turn = 0  # New turn: reset heavy-tool budget for orchestrator gate
             self._plan_gate_blocks = 0  # New turn: fresh plan-gate budget
-            self._team_await_blocks = 0  # New turn: fresh team-await budget
             self._anti_spin_streak = 0  # New turn: fresh anti-spin streak
             # New turn: age finished team entries; "done HH:MM" lingers a few turns then drops.
             if hasattr(self, 'main_persistence') and self.main_persistence:
@@ -7747,9 +7745,6 @@ class Agent:
                                 "automatically)."
                             ),
                         })
-                        self._team_await_blocks = 0
-                    else:
-                        self._team_await_blocks = 0
 
             # 1. Handle Tool Calls
             # ... (Tool logic unchanged) ...

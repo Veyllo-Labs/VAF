@@ -112,7 +112,7 @@ grep the symbol names to find them.
 | 4 | Tool router | `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
-| 7 | Guardrails | false-promise, result-grounding, team-await gates |
+| 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT — never erased — and a history note keeps the next turn honest) |
 | 8 | Tool dispatch | `execute_tool`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation | `_validate_final_answer` |
 | 10 | Pending-task auto-continue | `_reply_needs_user`, `_task_stuck_step` |
@@ -124,7 +124,7 @@ grep the symbol names to find them.
 |---------|---------|
 | `empty_retry_count` | retries when the model returns only reasoning / empty |
 | `tool_turn_count` | soft reminder ~50, hard stop ~75 tool steps in one turn |
-| `_plan_gate_blocks` / `_team_await_blocks` | gate bounces before proceeding anyway |
+| `_plan_gate_blocks` | gate bounces before proceeding anyway |
 | `_anti_spin_streak` | consecutive bookkeeping-only calls before tools are disabled for a turn |
 | `_nonprogress_streak` | consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, `read_automation`, …; NOT `web_search`/`memory_search`, which are genuine gathering) before a nudge then a forced text answer — catches a "verify forever" loop where the work is already done; any mutating/producing tool resets it (`nonprogress_max_turns`, default 6) |
 | `redundant_block_count` | repeated identical tool calls before a nudge |

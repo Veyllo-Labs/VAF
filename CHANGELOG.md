@@ -66,8 +66,8 @@ To update an installed VAF, run `vaf update`.
   sub-agent is running for your chat and keeps replies light: it will not start heavy new work,
   will not delegate the same task twice (a duplicate spawn is refused outright), and leaves the
   sub-agent's workspace alone; typing and sending stay unlocked the whole time. Safety fixes that make
-  this reliable: a casual "done!"/"fertig" reply is no longer erased by the completion gate (only
-  replies that actually reference the delegated work are held); the result is delivered once, by
+  this reliable: a streamed reply is NEVER erased anymore — if it sounds like completion while the
+  sub-agent still runs, it stays visible and a note keeps the next turn honest; the result is delivered once, by
   the background runner, with all window/messenger notifications — not mixed into a chat reply;
   a result is never validated against unrelated small talk (no more forced-retry storms);
   chatting can no longer force-expire a long run (the 30-minute hardcoded reaper now honors the

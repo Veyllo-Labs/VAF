@@ -1513,6 +1513,19 @@ export default function SubAgentWindow({
         const viewingName = openedFile?.name ?? activeName;
         const editorLines = openedFile ? openedFile.content.split('\n') : codeLines;
         const editorIsLive = !openedFile && isLive;
+        // No live code stream (e.g. the agent is doing edit_file, which does not stream new
+        // content) → show the edited file's red/green diff in the editor, jumped to the changed
+        // hunks, instead of a blank "Waiting for code…". Prefer the file being edited.
+        const diffMap = coder.diffs || {};
+        const activeDiff = (!openedFile && editorLines.length === 0) ? (() => {
+            const keys = Object.keys(diffMap);
+            if (keys.length === 0) return null;
+            const curName = (displayFile || '').split('/').pop() || '';
+            if (curName && diffMap[curName]) return { name: curName, diff: diffMap[curName] };
+            const w = coder.fileTree.find(f => (f.status === 'W' || f.status === 'M') && diffMap[f.name]);
+            if (w) return { name: w.name, diff: diffMap[w.name] };
+            return { name: keys[0], diff: diffMap[keys[0]] };
+        })() : null;
 
         return (
             <div
@@ -1626,7 +1639,14 @@ export default function SubAgentWindow({
                                             </span>
                                         </div>
                                     );
-                                }) : (
+                                }) : activeDiff ? (
+                                    <div className="bg-white text-gray-800">
+                                        <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-gray-100 bg-white/95 px-3 py-1 text-[10px] font-bold text-gray-500">
+                                            <Pencil size={11} className="text-violet-500" /> Editing {activeDiff.name} — live changes
+                                        </div>
+                                        <DiffLines diff={activeDiff.diff} />
+                                    </div>
+                                ) : (
                                     <div className={cn("flex items-center gap-2 px-4 py-2 text-xs", editorDark ? "text-gray-600" : "text-gray-300")}>
                                         <Loader2 size={13} className="animate-spin opacity-60" />
                                         Waiting for code…

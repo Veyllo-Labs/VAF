@@ -31,10 +31,12 @@ To update an installed VAF, run `vaf update`.
   providers (DeepSeek, OpenAI) reject the request with `400 "insufficient tool messages following
   tool_calls"`. The history is now normalized before every request so tool results always
   immediately follow their tool call, for all providers.
-- **A plan whose items the model sends as objects no longer crashes the coder.** `set_todos`
-  items are normalized to plain text (the description is extracted from `{"text": ...}` /
-  `{"task": ...}` shapes), so a task title is never a raw object — which otherwise crashed a
-  `title[:N]` slice on Python 3.12+ with `KeyError: slice(None, 50, None)`.
+- **A plan whose items the model sends as objects no longer crashes the coder.** Task titles are
+  coerced to plain text at the data-model boundary (the description is extracted from
+  `{"text": ...}` / `{"task": ...}` shapes), covering both a fresh `set_todos` call and
+  loading or resuming a previously-persisted plan — and self-healing an already-affected
+  `tasks.json`. A raw object title otherwise crashed downstream `title[:N]` or `title.lower()`
+  (on Python 3.12+, `object[:50]` raises `KeyError: slice(None, 50, None)`).
 - **The coding agent is given time to finish a long edit** instead of being cut off by a fixed
   timeout; it runs until genuinely idle.
 - **The coder edits the intended file surgically:** `edit_file` and `write_file` are chosen by

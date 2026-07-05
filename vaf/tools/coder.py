@@ -42,7 +42,7 @@ from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import WriteFileTool, EditFileTool, ReadFileTool, ListFilesTool, MoveFileTool
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.coder_templates import TemplateManager
-from vaf.core.persistence import PersistenceManager, ProjectState, Task
+from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_task_title
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -571,26 +571,11 @@ def _normalize_tool_adjacency(messages):
 def _todo_item_text(item):
     """Coerce a single set_todos item to a plain task-description string.
 
-    Models (especially DeepSeek) sometimes send todo items as dicts like
-    ``{"text": "...", "status": "..."}`` or ``{"task": "..."}`` instead of plain
-    strings. A dict left in place propagates into the task title and later crashes
-    any ``title[:N]`` slice — on Python 3.12+ ``slice`` objects became hashable, so
-    ``a_dict[:50]`` is a (failing) key lookup that raises ``KeyError: slice(None,
-    50, None)`` — besides showing raw dicts in the UI. Extract the description from
-    the common keys; fall back to a JSON string, then ``str()``.
+    Thin alias for :func:`vaf.core.persistence.coerce_task_title` — the single source
+    of truth, also applied at the ``Task`` data-model boundary so persisted/resumed
+    plans (not just fresh ``set_todos`` calls) are covered too.
     """
-    if isinstance(item, str):
-        return item
-    if isinstance(item, dict):
-        for _k in ("task", "text", "title", "description", "name", "content"):
-            _v = item.get(_k)
-            if isinstance(_v, str) and _v.strip():
-                return _v
-        try:
-            return json.dumps(item, ensure_ascii=False)
-        except Exception:
-            return str(item)
-    return str(item)
+    return coerce_task_title(item)
 
 
 def _build_file_diffs(

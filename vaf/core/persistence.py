@@ -11,6 +11,35 @@ from pathlib import Path
 # Types
 TaskStatus = Literal["pending", "in_progress", "completed", "failed", "skipped"]
 
+
+def coerce_task_title(value) -> str:
+    """A task title must be a plain string.
+
+    Some model tool calls (and any ``tasks.json`` written before that was enforced)
+    put a dict here, e.g. ``{"text": "...", "status": "pending"}``. A dict title then
+    crashes every downstream ``title.lower()`` / ``title[:N]`` — and on Python 3.12+,
+    where slices became hashable, ``dict[:50]`` raises ``KeyError: slice(None, 50,
+    None)`` rather than a TypeError. Extract the description from the common keys;
+    fall back to a JSON string, then ``str()``. Applied at the data-model boundary
+    (`Task.__post_init__`) so it covers BOTH fresh ``set_todos`` and loading/resuming
+    a previously-persisted (possibly poisoned) plan, and self-heals the file on save.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for k in ("task", "text", "title", "description", "name", "content"):
+            v = value.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 @dataclass
 class Task:
     id: int
@@ -21,6 +50,12 @@ class Task:
     files_created: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
+
+    def __post_init__(self):
+        # Guarantee a string title no matter how the Task was built (set_todos,
+        # from_dict/resume, or any future caller). See coerce_task_title.
+        if not isinstance(self.title, str):
+            self.title = coerce_task_title(self.title)
 
 @dataclass
 class ProjectState:

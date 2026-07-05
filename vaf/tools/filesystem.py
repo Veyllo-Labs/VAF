@@ -972,8 +972,27 @@ class EditFileTool(BaseTool):
                 _sfirst = (search.splitlines()[0].strip() if search.splitlines() else search.strip())
                 if replace and replace in original and _sfirst and _sfirst not in original:
                     continue
+                # Whole-file rewrite disguised as an edit: a weaker model "edits" by pasting the
+                # entire old file as `search` and the entire new file as `replace`; a few chars of
+                # drift then break the exact match. When the search covers essentially the WHOLE
+                # file, `replace` IS the intended new file, so rescue the work as a write_file
+                # rather than trashing it. Gated to the sole edit covering ~the whole file — a
+                # partial huge chunk's `replace` is only a fragment and writing it would destroy
+                # the rest of the file (there is nothing safe to rescue there).
+                if len(edits) == 1 and replace.strip() and len(search) >= 0.9 * max(1, len(original)):
+                    write_res = WriteFileTool().run(path=res, content=replace)
+                    _wr = str(write_res)
+                    if _wr.startswith("❌") or _wr.startswith("Error"):
+                        return write_res
+                    return (f"Edited {os.path.basename(res)}: the search covered essentially the whole "
+                            f"file, so this was a full rewrite - applied via write_file. For a rewrite, "
+                            f"call write_file directly; keep edit_file for small, surgical changes.")
+                _hint = ""
+                if len(search) > 2000:
+                    _hint = ("\nThis search block is very large. To rewrite the whole file use write_file "
+                             "with the new content; for a targeted change use a smaller, exact search.")
                 return (f"EDIT FAILED: edit {i}'s search block was not found - read_file the region "
-                        f"and copy the EXACT text (including indentation). Nothing was written.\n"
+                        f"and copy the EXACT text (including indentation). Nothing was written.{_hint}\n"
                         f"--- nearest region ---\n{self._nearby(original, _sfirst)}")
             if loc == "ambiguous":
                 return (f"EDIT FAILED: edit {i}'s search block is not unique - add more surrounding "

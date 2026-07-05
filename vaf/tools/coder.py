@@ -4178,7 +4178,7 @@ Task {task_idx + 1}: {current_task}
                         "type": "function",
                         "function": {
                             "name": "write_file",
-                            "description": "Write a file's FULL content (use to CREATE a new file, or for a deliberate full rewrite). To change part of an EXISTING file, prefer edit_file.",
+                            "description": "Write a file's FULL content. Use it to CREATE a new file, OR to REWRITE most/all of an existing file (e.g. transforming a page into something different, or replacing a large section). For a rewrite this is the RIGHT tool - do NOT try to rewrite a whole file with edit_file. To change only a few specific lines of an existing file, use edit_file instead.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -4193,7 +4193,7 @@ Task {task_idx + 1}: {current_task}
                         "type": "function",
                         "function": {
                             "name": "edit_file",
-                            "description": "Change ONLY specific parts of an EXISTING file via search/replace - PREFERRED over write_file for edits (it preserves everything you do not touch: framework, language, unrelated code). Each edit's 'search' must be the exact text (with enough context to be unique). If a search is not found or not unique, NOTHING is written and you get told - read_file the region and retry with an exact anchor. Never rewrite a whole existing file to change a few lines.",
+                            "description": "Make SMALL, SURGICAL changes to an EXISTING file via search/replace - it preserves everything you do not touch (framework, language, unrelated code). Best for a few targeted lines. Each edit's 'search' must be the exact text (with enough context to be unique); if not found/unique, NOTHING is written and you are told - read_file the region and retry with an exact anchor. Do NOT paste a whole file (or a huge block) as the search to rewrite it - that is a REWRITE: use write_file with the new content instead.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {

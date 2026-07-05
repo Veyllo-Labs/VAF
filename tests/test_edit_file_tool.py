@@ -124,3 +124,32 @@ def test_jail_rejection_is_returned(tmp_path, monkeypatch):
     monkeypatch.setattr(fs, "is_safe_path", lambda p: (False, "Error: outside the workspace"))
     r = EditFileTool().run(path="/etc/passwd", edits=[{"search": "root", "replace": "x"}])
     assert r == "Error: outside the workspace"
+
+
+def test_whole_file_rewrite_via_edit_is_rescued_as_write(tmp_path, unjail):
+    # A weak model "edits" by pasting the whole old file as search + the whole new file as replace,
+    # but the search drifted by a word so the exact match fails. Since search ~= the WHOLE file, the
+    # replace IS the intended new file -> rescued as a full write instead of being trashed.
+    original = "line1\nline2\nline3\nline4\nline5\nline6\n"
+    p = _write(tmp_path, "app.py", original)
+    new_content = "brand new file\ncompletely different content\n"
+    stale_search = original.replace("line3", "lineX")   # same length, whole file, one word off
+    r = EditFileTool().run(path=p, edits=[{"search": stale_search, "replace": new_content}])
+    assert "full rewrite" in r.lower() or "write_file" in r.lower()
+    assert (tmp_path / "app.py").read_text() == new_content   # rescued: replace became the file
+
+
+def test_partial_huge_chunk_is_not_rescued_and_writes_nothing(tmp_path, unjail):
+    # A huge search that is only a FRAGMENT of a much bigger file must NOT be auto-written (that
+    # would destroy the untouched rest); it fails with a write_file hint and writes nothing.
+    header = "H" * 200 + "\n"
+    chunk = "\n".join(f"old_line_{i}" for i in range(300)) + "\n"   # ~3.3 KB, but far below the file
+    footer = "F" * 10000 + "\n"
+    original = header + chunk + footer
+    p = _write(tmp_path, "big.py", original)
+    before = (tmp_path / "big.py").read_text()
+    stale_chunk = chunk.replace("old_line_5", "MISSING")           # >2000 chars, not the whole file
+    r = EditFileTool().run(path=p, edits=[{"search": stale_chunk, "replace": "tiny new chunk"}])
+    assert r.startswith("EDIT FAILED")
+    assert "write_file" in r                                       # size hint present
+    assert (tmp_path / "big.py").read_text() == before            # nothing written

@@ -39,6 +39,7 @@ import subprocess
 import logging
 import time
 import uuid
+import re
 from typing import Any, Callable, Dict, Optional, Tuple
 from vaf.tools.base import BaseTool
 
@@ -75,6 +76,9 @@ class PythonSandboxTool(BaseTool):
         "Execute Python code safely in a Docker-isolated sandbox. "
         "Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU). "
         "Use for calculations, data processing, algorithms, and running untrusted code. "
+        "The sandbox filesystem is EPHEMERAL and isolated from the host: files you write here "
+        "do NOT persist to the user's workspace and vanish when the run ends. To SAVE a file for "
+        "the user, use write_file(path=..., content=...) instead — never python_sandbox. "
         "Set with_vaf_tools=True to call other VAF tools from inside the code via "
         "`import vaf_tools; result = vaf_tools.call('tool_name', {...})` — "
         "only the final print output returns to context (Programmatic Tool Calling). "
@@ -304,6 +308,42 @@ class PythonSandboxTool(BaseTool):
     #  Main run()                                                           #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _blocked_persistence_write(code: str) -> Optional[str]:
+        """Return a redirect message if `code` tries to write a file to a host/workspace
+        path, else None.
+
+        python_sandbox runs in a Docker container isolated from the host filesystem (only a
+        scratch `/workspace` volume, no bind-mount to the user's Documents/VAF_Projects). A
+        write to a host/workspace path therefore lands in the container's ephemeral layer and
+        is silently discarded — yet the code's own `print("Saved: ...")` makes it look like it
+        worked, so the file the user asked for just vanishes. Detect that intent and redirect
+        to write_file (which runs in the host process and actually persists to the chat
+        workspace). Pure scratch writes (`/tmp`, `/workspace`, relative paths) are allowed.
+        """
+        if not code:
+            return None
+        # A file WRITE (not a read, not stdout/StringIO)?
+        writes = (
+            (bool(re.search(r"\bopen\s*\(", code)) and bool(re.search(r"""['"](?:x|w|a)b?\+?['"]""", code)))
+            or bool(re.search(r"\.(write_text|write_bytes|to_csv|to_json|to_markdown|to_excel|to_html|savefig)\s*\(", code))
+        )
+        if not writes:
+            return None
+        # ...targeting a host/workspace persistence path (where the user expects it to land)?
+        markers = ("VAF_Projects", "VAF_Documents", "/home/", "/Users/", "\\Users\\", "Documents")
+        if not any(m in code for m in markers):
+            return None
+        return (
+            "BLOCKED: python_sandbox runs in an isolated Docker sandbox, so a file written to a "
+            "host/workspace path (e.g. under VAF_Projects or Documents) does NOT persist — it "
+            "vanishes when the run ends, even though a print(\"Saved: ...\") looks successful. "
+            "That is why such 'saved' files never appear in the workspace.\n\n"
+            "To SAVE a file to the chat workspace, call write_file(path=\"<name>\", content=\"...\") "
+            "— it writes to the real workspace and shows up in the file browser. Use python_sandbox "
+            "only for computation and scratch files (/tmp, /workspace)."
+        )
+
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""
         code = str(kwargs.get("code", "")).strip()
@@ -320,6 +360,13 @@ class PythonSandboxTool(BaseTool):
 
         if not code:
             return "[ERROR] python_sandbox: No code provided."
+
+        # Guard: the sandbox is isolated from the host FS, so a write to a workspace/host path
+        # silently vanishes. Redirect persistence-intent writes to write_file before running.
+        _persist_block = self._blocked_persistence_write(code)
+        if _persist_block:
+            logger.info("python_sandbox: blocked host-path write, redirecting to write_file")
+            return _persist_block
 
         # Step 1: Verify Docker is available (NO FALLBACK TO HOST)
         docker_ok, docker_error = self._ensure_docker_available()

@@ -45,6 +45,12 @@ To update an installed VAF, run `vaf update`.
 - **A new coder request plans from scratch** instead of resuming a leftover task list from a
   previous request.
 - **The workspace viewer stays on the workspace you opened,** not the active chat.
+- **A file the agent "saved" no longer silently vanishes.** When the agent used `python_sandbox`
+  to write a file to your workspace, the write went to the sandbox's isolated Docker filesystem
+  and was discarded — while the code's own `print("Saved: ...")` made it look successful, so the
+  file never appeared. `python_sandbox` now blocks writes aimed at a workspace/host path and
+  redirects the agent to `write_file` (which actually persists to the chat workspace); its
+  description also states the sandbox filesystem is ephemeral.
 
 ## [0.1.0a6] - 2026-07-04
 

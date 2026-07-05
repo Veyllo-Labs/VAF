@@ -78,7 +78,10 @@ To update an installed VAF, run `vaf update`.
 - **The coding agent works on the Veyllo API.** The coder resolved providers from its own
   hardcoded list that was missing `veyllo`, so switching the provider to Veyllo made every
   coding task fail with "VAF Server unreachable (Port 8080)" (it wrongly fell back to the
-  local-server path) while normal chat worked fine.
+  local-server path) while normal chat worked fine — or, with a leftover local llama-server
+  still running, silently generated with the LOCAL model instead of the API. An unknown API
+  provider now fails loudly instead of falling back, and a test keeps the coder's provider
+  map in sync with the central provider list so this cannot drift again.
 - **Chat messages no longer queue for minutes behind a coding run.** A crashed workflow step
   could leak an internal "run sub-agents in-process" flag into the long-running backend; after
   that, every coding task silently ran inside the chat turn itself instead of as a separate

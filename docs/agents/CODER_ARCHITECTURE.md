@@ -104,9 +104,10 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
 ### B. Initialization (Lines ~1700-2200)
 *   **TUI Start:** Checks `VAF_IN_WORKFLOW_TERMINAL`. If set, `CoderTUI` is created with `simple_mode=True` and `live = _NoopLive()`. Otherwise, a full `rich.Live` context is started at 12 FPS.
 *   **API Mode Detection (`_is_api_mode`):**
-    *   Checks if the active provider is an API backend (OpenAI, Anthropic, DeepSeek, OpenRouter, Google).
+    *   The coder talks plain OpenAI wire format over raw HTTP, so it resolves its endpoint from its own map: `coder_api_providers()` (module level) — OpenAI, Anthropic (OpenAI-compat URL), DeepSeek, OpenRouter, Google (OpenAI-compat URL), Veyllo (base URL from config `veyllo_base_url`).
+    *   **Sync guard:** the map MUST cover every provider in `config.PROVIDER_MODELS` — enforced by `tests/test_coder_provider_map.py`. An API provider missing from the map returns a loud "coder configuration error" instead of silently falling into the local branch (the historical Veyllo gap either died with "VAF Server unreachable (Port 8080)" or silently generated with the local model when a leftover llama-server was running).
     *   **IF API mode:** Templates are **skipped entirely** — capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
-    *   **IF local model:** Template selection logic runs as normal.
+    *   **IF local model (`provider == "local"` only):** Template selection logic runs as normal; the `:8080` health check applies only here.
 *   **Template Logic (local models only):**
     *   **Edit-mode guard:** templates are skipped entirely when `base_dir` already contains code files (html/css/js/py/...). `TemplateManager.generate_files()` writes into `base_dir` and would overwrite the user's work — a follow-up task whose text merely mentions "Website" must never replace a finished site with placeholder scaffolding. Existing projects always go through normal planning, where the fresh task context injects the existing file list for editing. Telemetry event: `template_skipped_existing_project`.
     *   Checks task keywords for template type ("website", "html", etc.) with an LLM-based fallback detector. HTML-specific keywords (`index.html`, `.html`, `html datei`) are included to prevent misclassification.

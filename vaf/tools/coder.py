@@ -2969,7 +2969,7 @@ Thumbs.db
         }
         if HAS_CODING_TOOLS:
             self.local_tools["bash"] = BashTool()
-            self.local_tools["codesearch"] = CodeSearchTool()
+            self.local_tools["codesearch"] = CodeSearchTool()  # placeholder; rebound to base_dir below (base_dir not defined yet here)
 
         # Setup working directory
         tui.set_action("Creating project...")
@@ -3133,6 +3133,11 @@ Thumbs.db
         # every mode - otherwise the model could call an unregistered tool.
         from vaf.tools.sandbox_test_runner import RunTestsTool
         self.local_tools["run_tests"] = RunTestsTool(base_dir)
+
+        # Re-bind codesearch to the project workspace: search DEFAULTS TO and is JAILED WITHIN
+        # base_dir, never the backend process cwd (= VAF's own repo). base_dir is only defined
+        # above, so the early registration is a placeholder rebound here.
+        self.local_tools["codesearch"] = CodeSearchTool(base_dir)
 
         # Re-bind bash to the project workspace: it now runs inside a kernel-confined
         # jail (bwrap) rooted at base_dir - full workspace access (incl. host docker),
@@ -3504,6 +3509,7 @@ Complete this task: "{task}"
 - `web_search(query)`: Search web for docs, examples, or research BEFORE planning (optional).
 - `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
 - `read_file(path)`: Read existing files.
+- `codesearch(query, search_type?)`: Locate code fast — definitions/usages/patterns (search_type: text|regex|symbol). On an existing/large project, FIND where things are with this, then read the whole file, instead of reading many files blindly.
 - `run_tests(command?)`: Run the project's tests in the sandbox and get the REAL result. After writing tests, CALL THIS to verify - never claim tests pass without running them.
 - `task_done(summary)`: Mark current task complete - ONLY call after you've actually written files (and run_tests is green if you wrote tests).
 </tools>
@@ -4316,6 +4322,30 @@ Task {task_idx + 1}: {current_task}
                                 "type": "object",
                                 "properties": {"commit": {"type": "string", "description": "Version id from project_history / git_log"}},
                                 "required": ["commit"]
+                            }
+                        }
+                    },
+                    # Code navigation IN task context: locate definitions/usages/patterns fast, then
+                    # read the whole file — far better than blind read_file sweeps on a large repo.
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "codesearch",
+                            "description": (
+                                "Search the project's code to LOCATE things fast (definitions, usages, "
+                                "patterns), then read the whole file. Prefer this over reading many files "
+                                "blindly. search_type: 'text' (default), 'regex', or 'symbol' (find a "
+                                "function/class/variable definition). Returns file:line pointers."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string", "description": "Search query (text, regex, or symbol name)"},
+                                    "search_type": {"type": "string", "description": "text (default), regex, or symbol"},
+                                    "path": {"type": "string", "description": "Directory or file to search in (default: project root)"},
+                                    "max_results": {"type": "integer", "description": "Maximum results (default: 30)"}
+                                },
+                                "required": ["query"]
                             }
                         }
                     }

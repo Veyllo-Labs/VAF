@@ -55,10 +55,10 @@ Use this tool to:
 Search types:
 - 'text': Simple text search (default)
 - 'regex': Regular expression search
-- 'symbol': Find function/class/variable definitions
+- 'symbol': Find function/class/variable definitions (query = the NAME only, e.g. "process_data")
 
 Examples:
-- codesearch(query="def process_data", search_type="symbol")
+- codesearch(query="process_data", search_type="symbol")
 - codesearch(query="TODO|FIXME", search_type="regex")
 - codesearch(query="import requests", search_type="text")
 - codesearch(query="authenticate", path="src/")"""
@@ -85,19 +85,35 @@ Examples:
         },
         "required": ["query"]
     }
-    
+
+    def __init__(self, base_dir: str = None):
+        # Bound at registration (like run_tests / bash): search DEFAULTS TO and is JAILED WITHIN the
+        # project workspace, never the backend process cwd (which is VAF's own repo).
+        self.base_dir = base_dir
+
     def run(self, **kwargs) -> str:
         query = kwargs.get("query", "")
         search_type = kwargs.get("search_type", "text")
-        path = kwargs.get("path", ".")
         max_results = kwargs.get("max_results", 30)
         context_lines = kwargs.get("context_lines", 2)
-        
+
         if not query:
             return "Error: No search query provided"
-        
-        # Get search path
-        search_path = Path(path).resolve()
+
+        # Resolve + JAIL the search path to the project workspace: default to base_dir (NOT the
+        # process cwd = VAF's own repo); a relative path is taken under base_dir; any path that
+        # escapes base_dir is clamped back to it, so codesearch can never scan outside the project.
+        root = Path(self.base_dir).resolve() if getattr(self, "base_dir", None) else None
+        raw_path = kwargs.get("path") or self.base_dir or "."
+        search_path = Path(raw_path)
+        if root is not None and not search_path.is_absolute():
+            search_path = root / raw_path
+        search_path = search_path.resolve()
+        if root is not None:
+            try:
+                search_path.relative_to(root)
+            except ValueError:
+                search_path = root
         if not search_path.exists():
             return f"Error: Path not found: {search_path}"
         

@@ -516,18 +516,37 @@ def _build_file_diffs(
         return diffs
     try:
         from vaf.tools.project_git import _run_git
-        rels: List[str] = []
-        for f in (files_created or ()):
-            try:
-                rel = os.path.relpath(os.path.abspath(f), base_dir)
-            except Exception:
-                rel = os.path.basename(str(f))
-            if rel and not rel.startswith("..") and rel not in rels:
-                rels.append(rel)
+        # Derive the changed files from GIT itself (committed this run OR still uncommitted in the
+        # working tree) rather than the files_created bookkeeping, which can lag behind the actual
+        # edits - that lag is why the diff view showed nothing while the agent was editing.
+        def _is_infra(p: str) -> bool:
+            # Hide the coder's own internals (.vaf/, dotfiles) - the user wants the deliverable diff.
+            return (not p) or p.startswith(".") or "/." in p
+        names = (_run_git(["diff", "--name-only", run_start_sha], cwd=base_dir).stdout or "")
+        rels: List[str] = [ln.strip() for ln in names.splitlines() if ln.strip() and not _is_infra(ln.strip())]
+        # Include brand-new (untracked) files the agent just wrote.
+        untracked = (_run_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or "")
+        for ln in untracked.splitlines():
+            ln = ln.strip()
+            if ln and not _is_infra(ln) and ln not in rels:
+                rels.append(ln)
+        # files_created is only a last-resort hint if git reports nothing at all.
+        if not rels:
+            for f in (files_created or ()):
+                try:
+                    rel = os.path.relpath(os.path.abspath(f), base_dir)
+                except Exception:
+                    rel = os.path.basename(str(f))
+                if rel and not rel.startswith("..") and rel not in rels:
+                    rels.append(rel)
         for rel in rels[:max_files]:
             try:
                 r = _run_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir)
                 d = (r.stdout or "").strip()
+                if not d:
+                    # Untracked/new file: show it fully added (all green) so the editor still shows it.
+                    r2 = _run_git(["diff", "--no-color", "--no-index", "--", os.devnull, rel], cwd=base_dir)
+                    d = (r2.stdout or "").strip()
                 if d:
                     diffs[os.path.basename(rel)] = d[:max_chars]
             except Exception:

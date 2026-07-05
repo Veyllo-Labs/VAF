@@ -1665,6 +1665,7 @@ function VAFDashboardContent() {
             linterOk: boolean;
             projectName: string;
             projectPath: string;
+            diffs?: Record<string, string>;
         } | null;
         // Research view: streamed by the research agent as `research_state`
         research: {
@@ -3334,6 +3335,9 @@ function VAFDashboardContent() {
                             linterOk: typeof data.linterOk === 'boolean' ? data.linterOk : (prev.coder?.linterOk ?? true),
                             projectName: data.projectName ?? prev.coder?.projectName ?? '',
                             projectPath: data.projectPath ?? prev.coder?.projectPath ?? '',
+                            // Per-file red/green diff for the editor's live "what is being edited" view.
+                            // Was dropped here (built field-by-field), so the diff never reached the window.
+                            diffs: (data.diffs && typeof data.diffs === 'object') ? data.diffs : (prev.coder?.diffs ?? {}),
                         },
                     }));
                 }

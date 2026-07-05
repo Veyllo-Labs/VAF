@@ -4690,7 +4690,9 @@ function VAFDashboardContent() {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             const hasContent = input.trim() || insertedSelections.length > 0;
-            if (hasContent && !isGenerating && !isIndexing) {
+            // Chat-while-subagent-runs: Enter must send while a sub-agent is active even
+            // if isGenerating lingers (same unlock as the textarea/send-button gates).
+            if (hasContent && !(isGenerating && !isSubAgentRunning) && !isIndexing) {
                 sendMessage(undefined);
             }
             return;

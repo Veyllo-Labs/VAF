@@ -1383,9 +1383,15 @@ function VAFDashboardContent() {
     }>>([]);
 
     const workspaceSubpathRef = useRef('');
+    // The workspace currently OPEN in the viewer. It may be an orphan or another chat's
+    // workspace — NOT necessarily the active chat. Sid-less operations (drill into a subfolder,
+    // Back, Refresh, upload, delete) must target THIS, not currentSessionId; otherwise opening a
+    // subfolder of an orphan jumped to the active chat's workspace.
+    const viewedWorkspaceSidRef = useRef<string | null>(null);
     const refreshWorkspace = useCallback(async (sid?: string | null, subpath?: string, _retry: number = 0) => {
-        const id = sid ?? currentSessionId;
+        const id = sid ?? viewedWorkspaceSidRef.current ?? currentSessionId;
         if (!id) { setWorkspaceInfo(null); return; }
+        viewedWorkspaceSidRef.current = id;   // remember it so sid-less navigation stays put
         const sub = subpath ?? workspaceSubpathRef.current;
         try {
             const res = await fetch(
@@ -1420,7 +1426,8 @@ function VAFDashboardContent() {
     }, [currentSessionId, refreshWorkspace]);
 
     const uploadWorkspaceFiles = useCallback(async (files: File[]) => {
-        if (!currentSessionId || !workspaceInfo?.path) return;
+        const wsSid = viewedWorkspaceSidRef.current ?? currentSessionId;
+        if (!wsSid || !workspaceInfo?.path) return;
         setWorkspaceUploading(true);
         try {
             for (const file of files.slice(0, 10)) {
@@ -1435,7 +1442,7 @@ function VAFDashboardContent() {
                     method: 'POST', credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        sessionId: currentSessionId,
+                        sessionId: wsSid,
                         filename: file.name,
                         content_base64: base64,
                         subpath: workspaceSubpathRef.current,
@@ -1506,12 +1513,12 @@ function VAFDashboardContent() {
                     body: JSON.stringify({ sessionId: workspaceDeleteTarget.sessionId }),
                 });
                 await refreshAllWorkspaces();
-            } else if (currentSessionId) {
+            } else if (viewedWorkspaceSidRef.current ?? currentSessionId) {
                 await fetch(`${getApiBase()}/api/session/workspace/delete`, {
                     method: 'POST', credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        sessionId: currentSessionId,
+                        sessionId: viewedWorkspaceSidRef.current ?? currentSessionId,
                         name: workspaceDeleteTarget.name,
                         subpath: workspaceSubpathRef.current,
                     }),
@@ -4044,8 +4051,12 @@ function VAFDashboardContent() {
                     const sid = data.sessionId || currentSessionIdRef.current || '';
                     const activeSessionId = currentSessionIdRef.current;
                     if (!data.sessionId || data.sessionId === activeSessionId) {
-                        // Keep the workspace chip/window in sync with new files
-                        refreshWorkspace(activeSessionId);
+                        // Keep the workspace chip/window in sync with new files — but only while the
+                        // viewer is showing the active chat's workspace, so a background file event
+                        // never yanks the view away from another workspace the user is browsing.
+                        if (viewedWorkspaceSidRef.current == null || viewedWorkspaceSidRef.current === activeSessionId) {
+                            refreshWorkspace(activeSessionId);
+                        }
                         const newChip = { path: data.filePath, name: data.title || data.filePath.split('/').pop() || 'file', sessionId: sid };
                         setCreatedFiles(prev => {
                             // Avoid duplicates

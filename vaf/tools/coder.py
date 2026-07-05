@@ -498,6 +498,76 @@ def _build_file_tree(
     return tree
 
 
+def _normalize_tool_adjacency(messages):
+    """Enforce the OpenAI/DeepSeek tool-call contract on an outgoing message list.
+
+    The strict rule: an assistant message with ``tool_calls`` must be followed
+    IMMEDIATELY by exactly one ``role='tool'`` message per ``tool_call_id`` (in
+    ``tool_calls`` order), with no system/user/assistant message wedged in
+    between — otherwise the provider 400s with "insufficient tool messages
+    following tool_calls message" and the run dies.
+
+    This pass guarantees that regardless of how ``history`` was assembled. Any
+    non-tool message that ended up wedged inside a tool block (e.g. a doom-loop
+    system nudge appended mid tool-loop) is relocated to AFTER the completed
+    block. It is idempotent — running it on an already-valid history returns an
+    equivalent order — so it is safe to call before every send.
+
+    Tool responses are matched to their ``tool_call_id`` via FIFO queues, so
+    DeepSeek's positional ids (``call_0``, ``call_1`` …) that RECUR across turns
+    pair each response with the assistant that owns it, in order. Assistant
+    ``reasoning_content`` (required by DeepSeek) is preserved on every copy.
+    """
+    from collections import defaultdict, deque
+
+    # Index every tool response by tool_call_id, preserving positional order.
+    tool_q = defaultdict(deque)
+    for m in messages:
+        if m.get("role") == "tool":
+            tcid = m.get("tool_call_id")
+            if tcid is not None:
+                tool_q[tcid].append(m)
+
+    out = []
+    for m in messages:
+        role = m.get("role")
+
+        # Tool messages are re-emitted only through their owning assistant block.
+        if role == "tool":
+            continue
+
+        if role == "assistant" and m.get("tool_calls"):
+            kept_calls = []
+            block_tools = []
+            for tc in m["tool_calls"]:
+                tcid = tc.get("id") if isinstance(tc, dict) else None
+                q = tool_q.get(tcid) if tcid is not None else None
+                if q:
+                    block_tools.append(q.popleft())
+                    kept_calls.append(tc)
+                # else: no response available -> drop this dangling tool_call.
+            if not kept_calls:
+                # Every tool_call lost its response -> demote to a plain assistant
+                # so we never emit a dangling tool_calls message followed by another
+                # role. Keep all other keys (content, reasoning_content, ...).
+                demoted = {k: v for k, v in m.items() if k != "tool_calls"}
+                if demoted.get("content") or demoted.get("reasoning_content"):
+                    out.append(demoted)
+                continue
+            if len(kept_calls) != len(m["tool_calls"]):
+                m = {**m, "tool_calls": kept_calls}
+            out.append(m)
+            out.extend(block_tools)
+            continue
+
+        # system / user / plain assistant: emit in place. A message that was
+        # originally wedged inside a tool block now lands AFTER it, because the
+        # owning assistant already pulled its tool responses from the queue.
+        out.append(m)
+
+    return out
+
+
 def _build_file_diffs(
     base_dir: str,
     run_start_sha: str,
@@ -4970,6 +5040,15 @@ Task {task_idx + 1}: {current_task}
                     continue
                 clean_history.append(clean_msg)
 
+            # Enforce the assistant-tool_calls -> tool adjacency contract. The pass
+            # above strips dangling tool_calls and orphan tool results, but does NOT
+            # repair ORDER: a system/user message wedged between an assistant's
+            # tool_calls and its tool responses (e.g. a doom-loop nudge appended mid
+            # tool-loop) survives and 400s the request. Relocate any such wedge to
+            # after the tool block. Runs BEFORE the [TODO STATUS] append so that
+            # trailing system reminder stays last.
+            clean_history = _normalize_tool_adjacency(clean_history)
+
             # Inject TODO status if tasks are set
             if task_mgr.todos:
                 todo_status = task_mgr.get_todos_for_prompt()
@@ -7633,7 +7712,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 
                 if loop.detect_doom_loop():
                     tui.append_stream("Doom loop detected - trying different approach...")
-                    history.append({
+                    # This `continue` skips the canonical tool-result append below, so we
+                    # MUST answer the current tool_call here first — otherwise the assistant
+                    # message that owns `tc` is left with an unmatched tool_call and a system
+                    # message wedged after it, which 400s strict providers (DeepSeek/OpenAI):
+                    # "insufficient tool messages following tool_calls". Answer tc, THEN nudge.
+                    _history_at_dispatch.append({
+                        "role": "tool",
+                        "tool_call_id": tc['id'],
+                        "name": fn_name,
+                        "content": "⚠️ DOOM LOOP detected — this repeated action was skipped. Try a different approach or move to the next task."
+                    })
+                    _history_at_dispatch.append({
                         "role": "system",
                         "content": "⚠️ DOOM LOOP! Try a different approach or move to next task."
                     })
@@ -8271,6 +8361,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 tui.append_stream(f"Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
                                 if _maybe_start_final_retry():
+                                    # Answer the task_done tool_call in the OLD (dispatch-time)
+                                    # context before _maybe_start_final_retry switches `history`
+                                    # to a fresh one — else the old context is left with a
+                                    # dangling task_done tool_call (latent 400 if it is ever
+                                    # re-sent).
+                                    _history_at_dispatch.append({
+                                        "role": "tool",
+                                        "tool_call_id": tc['id'],
+                                        "name": fn_name,
+                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                    })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("All tasks done!")
@@ -8285,6 +8386,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # This handles the case where current_task_idx is out of bounds
                             if task_mgr.current_task_idx >= len(task_mgr.todos) and task_mgr.is_all_done():
                                 if _maybe_start_final_retry():
+                                    # Answer the task_done tool_call in the OLD (dispatch-time)
+                                    # context before _maybe_start_final_retry switches `history`
+                                    # to a fresh one — else the old context is left with a
+                                    # dangling task_done tool_call (latent 400 if it is ever
+                                    # re-sent).
+                                    _history_at_dispatch.append({
+                                        "role": "tool",
+                                        "tool_call_id": tc['id'],
+                                        "name": fn_name,
+                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                    })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("🎉 [EARLY-EXIT] All tasks completed!")
@@ -8323,6 +8435,17 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 tui.append_stream(f"➡️ Next: {next_task[:40]}")
                             elif task_mgr.is_all_done():
                                 if _maybe_start_final_retry():
+                                    # Answer the task_done tool_call in the OLD (dispatch-time)
+                                    # context before _maybe_start_final_retry switches `history`
+                                    # to a fresh one — else the old context is left with a
+                                    # dangling task_done tool_call (latent 400 if it is ever
+                                    # re-sent).
+                                    _history_at_dispatch.append({
+                                        "role": "tool",
+                                        "tool_call_id": tc['id'],
+                                        "name": fn_name,
+                                        "content": "✅ Task marked done. Starting final verification retry round."
+                                    })
                                     continue
                                 result = "🎉 ALL TASKS COMPLETED! Verify your work and say 'ALL TASKS COMPLETED'."
                                 tui.append_stream("🎉 All tasks done!")

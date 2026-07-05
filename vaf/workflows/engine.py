@@ -536,6 +536,29 @@ class WorkflowEngine:
                 prev_agent_type = os.environ.get("VAF_AGENT_TYPE")
                 prev_task_id = os.environ.get("VAF_TASK_ID")
                 prev_in_subagent_term = os.environ.get("VAF_IN_SUBAGENT_TERMINAL")
+
+                def _restore_subagent_step_env(
+                    _pa=prev_agent_type, _pt=prev_task_id, _ps=prev_in_subagent_term
+                ):
+                    """Exception-safe restore of the per-step sub-agent env vars.
+
+                    The normal restore below (after the retry loop) is NOT in a finally, so
+                    a step that raises (context-error after max retries, or any re-raise)
+                    used to skip it — leaking VAF_IN_SUBAGENT_TERMINAL=1 into this
+                    LONG-LIVED process. A leaked flag makes every later coding_agent call
+                    run IN-PROCESS inside the chat turn (coder.py checks it to detect a
+                    subagent child), serializing the whole session behind a minutes-long
+                    tool call instead of spawning the async child process.
+                    """
+                    for _k, _v in (
+                        ("VAF_AGENT_TYPE", _pa),
+                        ("VAF_TASK_ID", _pt),
+                        ("VAF_IN_SUBAGENT_TERMINAL", _ps),
+                    ):
+                        if _v is None:
+                            os.environ.pop(_k, None)
+                        else:
+                            os.environ[_k] = _v
                 prev_spawn_browser = os.environ.get("VAF_SPAWN_BROWSER_SUBAGENT")
                 subagent_step_task_id = None
                 is_subagent_tool = step.tool in ("coding_agent", "librarian_agent", "research_agent")
@@ -733,10 +756,16 @@ class WorkflowEngine:
                                 
                                 continue
                             else:
-                                # Max retries reached
+                                # Max retries reached — restore the step env BEFORE raising
+                                # (the normal restore below is skipped on an exception exit).
+                                if is_subagent_tool:
+                                    _restore_subagent_step_env()
                                 raise Exception(f"Context size error after {max_retries} retries: {e}")
                         else:
-                            # Not a context error - re-raise immediately
+                            # Not a context error - re-raise immediately (env restored first,
+                            # or VAF_IN_SUBAGENT_TERMINAL=1 leaks into the long-lived process).
+                            if is_subagent_tool:
+                                _restore_subagent_step_env()
                             raise
                 
                 # Sub-agent step end (result summary only)

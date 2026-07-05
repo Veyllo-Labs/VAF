@@ -922,6 +922,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # usage: chat_step(user_input, ...)
                 _chat_start = time.time()
                 try:
+                    # Safety net: this main-runner process must NEVER carry
+                    # VAF_IN_SUBAGENT_TERMINAL into a chat turn. A crashed workflow step
+                    # used to leak it (=1), which made every coding_agent call run
+                    # IN-PROCESS inside the turn (minutes-long blocking tool call) instead
+                    # of spawning the async child — serializing all chat behind it.
+                    if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip():
+                        os.environ.pop("VAF_IN_SUBAGENT_TERMINAL", None)
+                        try:
+                            append_domain_log_always(
+                                "headless",
+                                "[LEAK-GUARD] cleared stale VAF_IN_SUBAGENT_TERMINAL before chat turn",
+                            )
+                        except Exception:
+                            pass
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt

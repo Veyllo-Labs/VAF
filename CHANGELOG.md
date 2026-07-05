@@ -10,6 +10,40 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+### Added
+- **The coder window shows what the agent is doing, live.** The VS-Code-style sub-agent window
+  renders a red/green diff of the file being edited directly in the code pane — based on a
+  run-start snapshot, so a previous run's changes are not shown — auto-scrolls to the change, and
+  mirrors files into the editor as the agent reads them, so orientation, review, and documentation
+  phases are visibly active instead of looking stuck. A phase indicator (Planning / Building /
+  Finalizing) with a live spinner keeps file-less phases clearly ongoing.
+- **A multi-tab coder editor.** A persistent "Live" tab always streams what the agent is doing;
+  clicking a file in the Explorer opens it in its own closable tab, so browsing a file no longer
+  hides the live view.
+- **The coding agent can search the codebase while building,** not only while planning, so it can
+  locate existing code before changing it.
+- **HTML deliverables open as a rendered preview.** Clicking an `.html` file in a sub-agent window
+  opens it in the HTML viewer instead of showing raw source.
+
+### Fixed
+- **The coding agent no longer crashes on cloud providers mid-run.** A malformed message history —
+  a status nudge inserted between an assistant's tool calls and their results — made strict
+  providers (DeepSeek, OpenAI) reject the request with `400 "insufficient tool messages following
+  tool_calls"`. The history is now normalized before every request so tool results always
+  immediately follow their tool call, for all providers.
+- **A plan whose items the model sends as objects no longer crashes the coder.** `set_todos`
+  items are normalized to plain text (the description is extracted from `{"text": ...}` /
+  `{"task": ...}` shapes), so a task title is never a raw object — which otherwise crashed a
+  `title[:N]` slice on Python 3.12+ with `KeyError: slice(None, 50, None)`.
+- **The coding agent is given time to finish a long edit** instead of being cut off by a fixed
+  timeout; it runs until genuinely idle.
+- **The coder edits the intended file surgically:** `edit_file` and `write_file` are chosen by
+  intent, and an oversized whole-file "edit" is rescued into a full write instead of failing.
+- **The coder console follows the tail reliably** — the live output no longer freezes after a pause.
+- **A new coder request plans from scratch** instead of resuming a leftover task list from a
+  previous request.
+- **The workspace viewer stays on the workspace you opened,** not the active chat.
+
 ## [0.1.0a6] - 2026-07-04
 
 ### Added

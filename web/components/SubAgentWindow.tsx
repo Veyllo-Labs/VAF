@@ -552,32 +552,41 @@ export default function SubAgentWindow({
 
     // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
     const consoleScrollRef = useRef<HTMLDivElement>(null);
-    const userScrolledUpRef = useRef(false);
+    // Follow the tail by default (like a terminal / tail -f). Unpin only when the user
+    // deliberately scrolls up; re-pin when they return to the very bottom.
+    const stickToBottomRef = useRef(true);
+    // Our own scroll-to-bottom fires a scroll event too — flag it so handleConsoleScroll
+    // does not mistake it for the user scrolling up (that false positive is what froze the
+    // follow: the console would stop tracking new output after a brief pause).
+    const programmaticScrollRef = useRef(false);
 
     const scrollConsoleToBottom = () => {
-        if (consoleScrollRef.current) {
-            consoleScrollRef.current.scrollTop = consoleScrollRef.current.scrollHeight;
-        }
+        const el = consoleScrollRef.current;
+        if (!el) return;
+        programmaticScrollRef.current = true;
+        el.scrollTop = el.scrollHeight;
+        setTimeout(() => { programmaticScrollRef.current = false; }, 60);
     };
 
-    // Auto-scroll on new lines (unless user scrolled up)
+    // Follow new console lines while pinned. rAF so scrollHeight is read AFTER the new
+    // lines are laid out (otherwise we scroll to a stale, too-short height and lag behind).
     useEffect(() => {
-        if (!userScrolledUpRef.current) {
-            scrollConsoleToBottom();
-        }
+        if (stickToBottomRef.current) requestAnimationFrame(scrollConsoleToBottom);
     }, [consoleLines]);
 
-    // When a new screenshot arrives the image height may change, causing a layout shift that
-    // fires a scroll event and falsely marks userScrolledUpRef=true. Reset on every new frame.
+    // A new screenshot changes the image height (layout shift) — re-pin and follow.
     useEffect(() => {
-        userScrolledUpRef.current = false;
-        scrollConsoleToBottom();
+        stickToBottomRef.current = true;
+        requestAnimationFrame(scrollConsoleToBottom);
     }, [browserFrame]);
 
     const handleConsoleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        if (programmaticScrollRef.current) return;   // our own scroll, not the user
         const el = e.currentTarget;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        userScrolledUpRef.current = distFromBottom > 48;
+        // Unpin the instant the user scrolls up; re-pin only once they are back at the
+        // very bottom (small threshold = "all the way down").
+        stickToBottomRef.current = distFromBottom <= 24;
     };
 
     // ── VS-Code view (coding agent only) ──────────────────────────────────
@@ -2127,7 +2136,7 @@ export default function SubAgentWindow({
                                     alt="Browser live view"
                                     className="block w-full"
                                     draggable={false}
-                                    onLoad={() => { if (!userScrolledUpRef.current) scrollConsoleToBottom(); }}
+                                    onLoad={() => { if (stickToBottomRef.current) scrollConsoleToBottom(); }}
                                 />
                             </div>
                         )}
@@ -2290,7 +2299,7 @@ export default function SubAgentWindow({
                                     alt="Browser live view"
                                     className="block w-full"
                                     draggable={false}
-                                    onLoad={() => { if (!userScrolledUpRef.current) scrollConsoleToBottom(); }}
+                                    onLoad={() => { if (stickToBottomRef.current) scrollConsoleToBottom(); }}
                                 />
                             </div>
                         )}

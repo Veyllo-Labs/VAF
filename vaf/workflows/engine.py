@@ -1103,7 +1103,7 @@ class WorkflowEngine:
             return spawn_output  # ran in-process / spawn fell back → already the result
         task_id = m.group(1)
         try:
-            from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+            from vaf.core.subagent_ipc import get_ipc, get_current_session_id, mark_engine_owned
             ipc = get_ipc()
         except Exception:
             return spawn_output  # IPC unavailable — degrade to the marker text
@@ -1134,6 +1134,9 @@ class WorkflowEngine:
         _started = _time.monotonic()
         _last_status = 0.0
         while True:
+            # Claim ownership each poll so the background main runner never steals this
+            # step's result out from under this loop (see subagent_ipc.mark_engine_owned).
+            mark_engine_owned(task_id)
             try:
                 task = ipc.consume_result(task_id)
             except Exception:

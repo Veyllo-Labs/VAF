@@ -19,6 +19,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 import requests
 from vaf.core.agent import Agent
 from vaf.core.task_queue import TaskQueue
+from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import SessionManager, Session, turn_context_messages_since_last_user
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
@@ -2157,12 +2158,22 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 if worker_id != 1:
                     time.sleep(0.05)
                     continue
-                # Periodically check for sub-agent results and summarize for WebUI
+                # Check for sub-agent results and summarize for WebUI. Driven by the
+                # <ipc-notification> push (react the instant a sub-agent finishes) with the
+                # ~1s interval kept as a reliable fallback if a push was ever missed.
                 now = time.time()
-                if now - last_subagent_check >= 1.0:
+                _pushed = False
+                try:
+                    _pushed = take_result_notification()
+                except Exception:
+                    _pushed = False
+                if _pushed or (now - last_subagent_check >= 1.0):
                     last_subagent_check = now
                     try:
-                        pending_results = agent._check_subagent_results()
+                        # Drain EVERY session's results here (not just the runner's stale
+                        # "current" one) — each is routed by its own session_id below via
+                        # load_session_context, so a push for any session reacts at once.
+                        pending_results = agent._check_subagent_results(all_sessions=True)
                         if pending_results:
                             found_results_text = []
                             any_needs_retry = False

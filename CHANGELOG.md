@@ -51,6 +51,11 @@ To update an installed VAF, run `vaf update`.
   file never appeared. `python_sandbox` now blocks writes aimed at a workspace/host path and
   redirects the agent to `write_file` (which actually persists to the chat workspace); its
   description also states the sandbox filesystem is ephemeral.
+- **The main agent reacts the moment a sub-agent finishes,** instead of only when you next send a
+  message. A finished sub-agent (coder, research, document, …) now pushes an internal
+  notification that wakes the main runner immediately — with the previous periodic poll kept as a
+  fallback — and the runner drains every session's result, so a completion is never missed because
+  the runner's "current" session had moved on.
 
 ## [0.1.0a6] - 2026-07-04
 

@@ -2039,11 +2039,20 @@ class Agent:
     # SUB-AGENT IPC METHODS
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _check_subagent_results(self) -> list:
+    def _check_subagent_results(self, all_sessions: bool = False) -> list:
         """
         Check for completed sub-agent results.
         Called periodically during chat to process async results.
-        
+
+        Args:
+            all_sessions: If False (default, the in-chat caller), only the CURRENT
+                session's results are returned, since they are injected into the current
+                conversation. The background headless runner passes True: it routes each
+                result to its own session via load_session_context, so it must drain
+                EVERY session — otherwise a completion whose session is not the runner's
+                (stale) current session would be missed by the push and only surface on
+                that session's next turn.
+
         Returns:
             List of completed SubAgentTask objects
         """
@@ -2054,8 +2063,11 @@ class Agent:
             # Cleanup stale tasks (crashed sub-agents)
             ipc.cleanup_stale_active_tasks(max_age_minutes=30)
             
-            # CRITICAL: Only get results for CURRENT session (not old sessions!)
-            current_session = get_current_session_id()
+            # In-chat caller: only the CURRENT session's results (injected into the
+            # current conversation). Runner (all_sessions=True): drain every session and
+            # route each by its own session_id — the current-session value is unreliable
+            # when the runner is idle, which is exactly when a push arrives.
+            current_session = None if all_sessions else get_current_session_id()
             
             # 0. Liveness Check (Detect Crashed Sub-Agents)
             # 20s is too aggressive on some systems (e.g. browser launch / heavy tool finalization)
@@ -2065,6 +2077,12 @@ class Agent:
             ipc.check_zombies(timeout_seconds=hb_timeout)
             
             results = ipc.get_pending_results(session_id=current_session)
+            # Never drain a result an in-process workflow engine loop is actively awaiting
+            # and will consume itself (engine._await_subagent). Without this, the all-sessions
+            # runner drain would steal a step result, timing out a successful step. The engine
+            # consumes via consume_result() directly, unaffected by this filter.
+            from vaf.core.subagent_ipc import is_engine_owned
+            results = [t for t in results if not is_engine_owned(getattr(t, "task_id", None))]
             return results
         except Exception:
             return []

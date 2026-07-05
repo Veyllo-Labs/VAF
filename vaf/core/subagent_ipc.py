@@ -38,6 +38,99 @@ from enum import Enum
 
 from vaf.core.platform import Platform
 
+import threading
+
+# ─────────────────────────────────────────────────────────────────────────────
+# <ipc-notification>: an active PUSH so the main agent reacts to a finished
+# sub-agent IMMEDIATELY, instead of waiting for the headless runner's ~1s idle
+# poll (which only fires when worker 1 happens to be free). Modelled on the
+# harness <task-notification>: the producer signals on completion; the consumer
+# (headless runner) wakes at once, with the poll kept as a reliable fallback.
+#
+# In-process producers set the event directly. A sub-agent SUBPROCESS is a
+# different process, so its completion is bridged to the parent over the existing
+# HTTP channel (_post_to_parent -> /api/subagent/stream), whose handler then calls
+# notify_result_ready() in the parent (see web_server.receive_subagent_stream).
+_result_ready_event = threading.Event()
+
+
+def notify_result_ready() -> None:
+    """Emit the <ipc-notification> push: a sub-agent result is ready. Idempotent —
+    multiple completions collapse to one wake, and one consume drains ALL pending
+    results, so no signal is lost."""
+    _result_ready_event.set()
+
+
+def take_result_notification() -> bool:
+    """Non-blocking consume: return True (and clear) if a result-ready push is pending.
+
+    The flag is cleared BEFORE the caller reads results, so a completion that lands
+    during that read re-sets it and is picked up on the next pass (no missed wake-up)."""
+    if _result_ready_event.is_set():
+        _result_ready_event.clear()
+        return True
+    return False
+
+
+def _push_result_ready(task_id: str, session_id: Optional[str]) -> None:
+    """Fire the <ipc-notification> for a finished task: cross-process (POST to the
+    parent) from a sub-agent subprocess, or an in-process event set otherwise. Never
+    raises — the ~1s poll remains as the fallback path if the push cannot be delivered."""
+    try:
+        from vaf.core.web_interface import _in_subagent_subprocess
+        if _in_subagent_subprocess():
+            # Dispatch on the shared bridge pool (like every other subprocess->parent
+            # signal) so the sub-agent's final completion step never blocks up to 1.5s
+            # on a busy/unreachable parent. The ~1s poll covers a dropped POST anyway.
+            from vaf.core.web_interface import _post_to_parent, _BRIDGE_POOL
+            _BRIDGE_POOL.submit(_post_to_parent, {
+                "type": "ipc_notification",
+                "event": "subagent_result",
+                "taskId": task_id or "",
+                "sessionId": session_id or "",
+            })
+        else:
+            notify_result_ready()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ownership guard: task_ids an IN-PROCESS workflow engine loop (engine._await_subagent)
+# is actively consuming itself. The background main runner drains ALL sessions on a push,
+# so without this it could STEAL a workflow step's result out from under the engine's own
+# consume loop (timing out a successful step + replying mid-workflow). Only bites with
+# parallel_main_workers>1 (default 1 blocks the sole worker, so no idle drain runs).
+#
+# Time-stamped + TTL, so NO explicit unmark is needed: the engine refreshes the mark every
+# poll while it awaits; once it consumes the result and stops refreshing, the stamp expires
+# and the (now-gone) task is irrelevant. The engine consumes via consume_result() directly,
+# which this guard does NOT touch — it only makes _check_subagent_results skip these ids.
+_engine_owned: Dict[str, float] = {}
+_engine_owned_lock = threading.Lock()
+
+
+def mark_engine_owned(task_id: str) -> None:
+    """Claim/refresh a task_id as owned by an in-process engine await loop."""
+    if not task_id:
+        return
+    with _engine_owned_lock:
+        _engine_owned[task_id] = time.monotonic()
+
+
+def is_engine_owned(task_id: str, ttl: float = 5.0) -> bool:
+    """True if an engine loop claimed this task within `ttl` seconds (and cleans up expired)."""
+    if not task_id:
+        return False
+    with _engine_owned_lock:
+        ts = _engine_owned.get(task_id)
+        if ts is None:
+            return False
+        if time.monotonic() - ts > ttl:
+            _engine_owned.pop(task_id, None)
+            return False
+        return True
+
 
 class SubAgentStatus(Enum):
     """Status of a sub-agent task."""
@@ -457,7 +550,10 @@ class SubAgentIPC:
         # Write with retry
         self._write_json(self.active_file, active)
         self._write_json(self.results_file, results)
-    
+
+        # <ipc-notification>: wake the consumer NOW instead of waiting for its poll.
+        _push_result_ready(task_id, task_data.get('session_id'))
+
     def fail_task(self, task_id: str, error: str):
         """
         Mark a task as failed with an error message.
@@ -498,6 +594,10 @@ class SubAgentIPC:
                 task_data['error'] = error
                 results.append(task_data)
                 self._write_json(self.results_file, results)
+
+        # <ipc-notification>: wake the consumer NOW (only if a result was recorded).
+        if task_data:
+            _push_result_ready(task_id, task_data.get('session_id'))
 
     def update_heartbeat(self, task_id: str):
         """Update the last_heartbeat timestamp for a running task."""

@@ -1282,6 +1282,16 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate):
     This endpoint bridges subprocess output to WebSocket clients.
     """
     data = update.dict(exclude_none=True)
+    # <ipc-notification>: a sub-agent subprocess signalling that its result is READY.
+    # Wake the in-process headless runner so it consumes the result immediately instead
+    # of waiting for its ~1s idle poll. Internal control signal — not broadcast to the UI.
+    if data.get("type") == "ipc_notification":
+        try:
+            from vaf.core.subagent_ipc import notify_result_ready
+            notify_result_ready()
+        except Exception as e:
+            append_domain_log("webui", f"[ERROR] ipc_notification handling failed: {e}")
+        return {"status": "ok"}
     # We're in an async handler, so we can directly await without checking the loop
     try:
         if update.sessionId:

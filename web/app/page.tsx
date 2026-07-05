@@ -6513,18 +6513,6 @@ function VAFDashboardContent() {
                                                     ))}
                                                 </div>
                                             )}
-                                            {isSubAgentRunning && !isLocalProvider && (
-                                                // Chat-while-subagent-runs (API mode only): passive hint that light
-                                                // chatting is fine while the sub-agent works. Not shown on local
-                                                // (single llama server — we don't encourage parallel inference).
-                                                // Input is NOT gated either way.
-                                                <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
-                                                    <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-                                                        <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-                                                        Sub-Agent arbeitet im Hintergrund — du kannst weiter chatten. Stop bricht nur die Antwort ab, nicht den Sub-Agent.
-                                                    </span>
-                                                </div>
-                                            )}
                                             {imageViewerState.isOpen && imageMark && (
                                                 <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2 pb-1 border-b border-gray-100">
                                                     <span className="inline-flex items-center gap-1.5 rounded-full border border-yellow-300 bg-yellow-50 px-2.5 py-1 text-xs font-medium text-yellow-800">
@@ -6576,14 +6564,17 @@ function VAFDashboardContent() {
                                                     onKeyDown={handleKeyDown}
                                                     placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : input ? "" : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
-                                                    disabled={isGenerating || isIndexing}
+                                                    // Chat-while-subagent-runs: never lock typing while a sub-agent is
+                                                    // active — a lingering isGenerating (delegation turn / late events)
+                                                    // must not freeze the input for the whole run.
+                                                    disabled={(isGenerating && !isSubAgentRunning) || isIndexing}
                                                 />
                                             </div>
                                         </div>
                                         <button
                                             type="button"
                                             onClick={isRecording ? stopRecording : startRecording}
-                                            disabled={isProcessingAudio || isGenerating}
+                                            disabled={isProcessingAudio || (isGenerating && !isSubAgentRunning)}
                                             className={cn(
                                                 "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
                                                 isRecording ? "bg-red-500 text-white" :
@@ -6607,7 +6598,7 @@ function VAFDashboardContent() {
                                         {/* Mobile-only Send button (40px square, primary) — desktop submits via Enter */}
                                         <button
                                             type="submit"
-                                            disabled={isGenerating || isIndexing || !input.trim()}
+                                            disabled={(isGenerating && !isSubAgentRunning) || isIndexing || !input.trim()}
                                             aria-label="Send"
                                             className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
                                         >

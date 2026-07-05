@@ -2382,7 +2382,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             f"2. Dateiname(n) und Größe\n"
                                             f"3. Wie er/sie es öffnet oder nutzt\n"
                                             f"Erst DANACH darfst du kurz auf Qualitätsprobleme hinweisen — aber nur wenn wirklich nötig.\n"
-                                            f"Rufe KEINE Tools auf bevor du geantwortet hast. ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
+                                            f"Rufe KEINE Tools auf bevor du geantwortet hast. Wiederhole NICHT deine vorherige Nachricht - "
+                                            f"antworte NUR auf dieses Ergebnis. ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
                                         )
                                     else:
                                         instruction_prompt = (
@@ -2393,7 +2394,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             f"2. File name(s) and size\n"
                                             f"3. How to open or use it\n"
                                             f"Only AFTER that may you briefly mention quality issues — and only if truly necessary.\n"
-                                            f"Do NOT call any tools before replying. RESPOND EXCLUSIVELY IN {native_lang.upper()}."
+                                            f"Do NOT call any tools before replying. Do NOT repeat your previous message - "
+                                            f"respond ONLY to this result. RESPOND EXCLUSIVELY IN {native_lang.upper()}."
                                         )
                                 elif user_lang == "de":
                                     instruction_prompt = (
@@ -2403,7 +2405,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         "Konzentriere dich auf den Inhalt (was wurde gefunden/getan).\n"
                                         "Bleib prägnant aber informativ.\n"
                                         "Du kannst `read_file` nutzen, wenn du den Inhalt sehen musst.\n"
-                                        "ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
+                                        "Wiederhole NICHT deine vorherige Nachricht. ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
                                     )
                                 else:
                                     instruction_prompt = (
@@ -2413,7 +2415,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         "Focus on the content (what was found/done).\n"
                                         "Keep it concise but informative.\n"
                                         "You may use `read_file` if you need to see the content before summarizing.\n"
-                                        f"RESPOND EXCLUSIVELY IN {native_lang.upper()}."
+                                        f"Do NOT repeat your previous message. RESPOND EXCLUSIVELY IN {native_lang.upper()}."
                                     )
 
                                 response_parts = []
@@ -2468,6 +2470,30 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         if _result_sid:
                                             _saved_sess = session_mgr.load(_result_sid)
                                             _saved_sess.add_message(role="assistant", content=_clean_result)
+                                            session_mgr.save(_saved_sess)
+                                    except Exception:
+                                        pass
+                                else:
+                                    # DELIVERY GUARANTEE: the model produced no usable summary
+                                    # (think-only stream / rehash stripped to nothing). The result
+                                    # must NEVER be silently dropped — the user watched a stream
+                                    # that then vanished on reload and the thread never
+                                    # acknowledged the sub-agent's work. Deliver a deterministic
+                                    # message built from the raw result instead.
+                                    _fb_head = ("Der Sub-Agent ist fertig. Ergebnis:"
+                                                if user_lang == "de" else "The sub-agent finished. Result:")
+                                    _fb_body = (combined_results or "").strip()[:2000] or (
+                                        "(no textual result payload)" if user_lang != "de" else "(kein Text-Ergebnis)")
+                                    _fb_msg = f"{_fb_head}\n\n{_fb_body}"
+                                    try:
+                                        get_web_interface().emit_agent_message("assistant", _fb_msg, session_id=_result_sid)
+                                        get_web_interface().emit_message_complete(content=_fb_msg, session_id=_result_sid)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if _result_sid:
+                                            _saved_sess = session_mgr.load(_result_sid)
+                                            _saved_sess.add_message(role="assistant", content=_fb_msg)
                                             session_mgr.save(_saved_sess)
                                     except Exception:
                                         pass

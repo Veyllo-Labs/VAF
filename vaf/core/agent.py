@@ -7714,46 +7714,40 @@ class Agent:
                 if _ta_on:
                     _await_blocked, _await_labels = self._detect_premature_done_claim(full_content)
                     if _await_blocked:
-                        self._team_await_blocks += 1
-                        try:
-                            from vaf.core.config import Config as _CfgTA2
-                            _ta_max = int(_CfgTA2.get("team_await_max_blocks", 3))
-                        except Exception:
-                            _ta_max = 3
-                        if self._team_await_blocks > _ta_max:
-                            UI.event("System", "Team-await: max bounces reached — proceeding.", style="error")
-                            self._team_await_blocks = 0
-                        else:
-                            _ta_list = ", ".join(_await_labels)
-                            UI.event("System", f"Sub-agent still running ({_ta_list}) - holding 'done' (attempt {self._team_await_blocks})...", style="warning")
-                            if _emit_to_web_ui():
-                                try:
-                                    from vaf.core.web_interface import get_web_interface
-                                    from vaf.core.subagent_ipc import get_current_session_id
-                                    _ta_sid = get_current_session_id()
-                                    get_web_interface().log(
-                                        f"Sub-agent still running ({_ta_list}) - holding 'done' (attempt {self._team_await_blocks})...",
-                                        level="warning", source="System", session_id=_ta_sid,
-                                    )
-                                    self._clear_last_assistant_ui(_ta_sid)
-                                except Exception:
-                                    pass
-                            if stream_callback and hasattr(stream_callback, "clear"):
-                                try:
-                                    stream_callback.clear()
-                                except Exception:
-                                    pass
-                            self.history.append({"role": "assistant", "content": full_content})
-                            self.history.append({
-                                "role": "system",
-                                "content": (
-                                    "CORRECTION NEEDED: you indicated the task is complete, but these "
-                                    f"sub-agent(s) are still running: {_ta_list}. Do NOT declare completion "
-                                    "yet — wait for their result (it arrives via the Team status / pending "
-                                    "results) or stop them, then re-check before saying done."
-                                ),
-                            })
-                            continue
+                        # NON-DESTRUCTIVE (chat-while-subagent-runs): a streamed reply is NEVER
+                        # erased or regenerated. The old erase-and-retry bounce destroyed the
+                        # user's already-visible answer (plus its steps) whenever casual chat
+                        # about the SAME topic as the delegated work contained a completion
+                        # word — the worst possible UX. Model: the harness itself — a running
+                        # background task never deletes a reply; its result arrives later as
+                        # its own event. So: keep the reply, log the situation, and append a
+                        # history note so the NEXT turn does not build on a false "done".
+                        _ta_list = ", ".join(_await_labels)
+                        UI.event("System", f"Note: sub-agent still running ({_ta_list}) — reply kept, completion pending.", style="warning")
+                        if _emit_to_web_ui():
+                            try:
+                                from vaf.core.web_interface import get_web_interface
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                _ta_sid = get_current_session_id()
+                                get_web_interface().log(
+                                    f"Note: sub-agent still running ({_ta_list}) — the delegated work is NOT finished yet; its result arrives automatically.",
+                                    level="info", source="System", session_id=_ta_sid,
+                                )
+                            except Exception:
+                                pass
+                        # Note precedes the reply the normal flow appends right after — it
+                        # exists for the NEXT request: no overall-completion claims until the
+                        # sub-agent result actually arrived.
+                        self.history.append({
+                            "role": "system",
+                            "content": (
+                                f"NOTE: sub-agent(s) still running: {_ta_list}. The reply that follows "
+                                "was kept as-is, but the DELEGATED work is not finished. Do not state "
+                                "overall completion until the sub-agent result arrives (it is delivered "
+                                "automatically)."
+                            ),
+                        })
+                        self._team_await_blocks = 0
                     else:
                         self._team_await_blocks = 0
 

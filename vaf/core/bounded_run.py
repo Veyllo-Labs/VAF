@@ -55,11 +55,17 @@ def is_abort_sentinel(value) -> bool:
 #     run_bounded would instead *abandon* the thread, and the abandoned thread can lose the
 #     should_stop flag to clear_stop before it gets to kill the exec. Self-supervising keeps the
 #     poll loop running in the worker thread, where should_stop is still set, so the kill is prompt.
+#   - coding_agent: a real edit on a large file legitimately takes many minutes; the agentic
+#     loop governs itself (idle-based safety timeout + stuck-detection + a final_commit on every
+#     exit path) and polls TaskQueue.should_stop each iteration so the Stop button breaks it
+#     cleanly. A flat run_bounded timeout would instead ABANDON it mid-edit — leaving the file
+#     half-written and telling the user to "try a smaller task" while the coder was making progress.
 SELF_SUPERVISED_TOOLS = frozenset({
     "browser_agent",
     "create_agent_workflow",
     "execute_workflow",
     "python_sandbox",
+    "coding_agent",
 })
 
 

@@ -63,6 +63,8 @@ export type LibrarianViewState = {
 export type CoderViewState = {
     fileTree: Array<{ name: string; size: number; status: string }>;
     git: { branch: string; dirty: number; commits: Array<{ sha: string; when: string; msg: string }> };
+    /** Unified git diff per changed file (vs the run's start), for the red/green Diff view. */
+    diffs?: Record<string, string>;
     tasks: Array<{ title: string; status: string }>;
     loop: number;
     taskProgress: string;
@@ -481,6 +483,24 @@ const actionTone = (type: string) => {
     return 'bg-gray-100 text-gray-600';
 };
 
+/** Render a unified git diff with Cursor-style red/green line coloring. */
+function DiffLines({ diff }: { diff: string }) {
+    return (
+        <div className="font-mono text-[11px] leading-[1.35]">
+            {diff.split('\n').map((ln, i) => {
+                let cls = 'text-gray-500';       // context line
+                if (ln.startsWith('+') && !ln.startsWith('+++')) cls = 'bg-emerald-50 text-emerald-700';
+                else if (ln.startsWith('-') && !ln.startsWith('---')) cls = 'bg-red-50 text-red-700';
+                else if (ln.startsWith('@@')) cls = 'text-violet-500';
+                else if (ln.startsWith('diff ') || ln.startsWith('index ') || ln.startsWith('+++') || ln.startsWith('---')) cls = 'text-gray-300';
+                return (
+                    <div key={i} className={cn('whitespace-pre-wrap break-all px-3', cls)}>{ln || ' '}</div>
+                );
+            })}
+        </div>
+    );
+}
+
 export default function SubAgentWindow({
     isOpen,
     onClose,
@@ -564,7 +584,7 @@ export default function SubAgentWindow({
     const [editorDark, setEditorDark] = useState(false);
 
     // Bottom panel tabs (Console / Linter / Telemetry)
-    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry'>('console');
+    const [activeConsoleTab, setActiveConsoleTab] = useState<'console' | 'linter' | 'telemetry' | 'diff'>('console');
 
     // Explorer file viewing: click a file -> load its content as a read-only
     // tab; clicking the live file (or the same tab again) returns to the
@@ -1608,7 +1628,9 @@ export default function SubAgentWindow({
                             {/* Bottom panel: Console / Linter / Telemetry */}
                             <div className="flex h-[150px] flex-none flex-col border-t border-gray-200 bg-white">
                                 <div className="flex h-7 flex-none items-center gap-4 border-b border-gray-100 px-4">
-                                    {(['console', 'linter', 'telemetry'] as const).map(tab => (
+                                    {(['console', 'linter', 'telemetry', 'diff'] as const).map(tab => {
+                                        const diffCount = Object.keys(coder.diffs || {}).length;
+                                        return (
                                         <button
                                             key={tab}
                                             onClick={() => setActiveConsoleTab(tab)}
@@ -1619,9 +1641,10 @@ export default function SubAgentWindow({
                                                     : 'text-gray-300 hover:text-gray-500'
                                             )}
                                         >
-                                            {tab}
+                                            {tab === 'diff' && diffCount > 0 ? `diff (${diffCount})` : tab}
                                         </button>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                                 {activeConsoleTab === 'console' && (
                                     <div
@@ -1677,6 +1700,20 @@ export default function SubAgentWindow({
                                                 <span className="min-w-0 flex-1 break-all">{v}</span>
                                             </div>
                                         ))}
+                                    </div>
+                                )}
+                                {activeConsoleTab === 'diff' && (
+                                    <div className="min-h-0 flex-1 overflow-y-auto py-1 text-[11px]">
+                                        {Object.keys(coder.diffs || {}).length > 0 ? (
+                                            Object.entries(coder.diffs || {}).map(([name, diff]) => (
+                                                <div key={name} className="mb-1.5">
+                                                    <div className="sticky top-0 z-10 border-b border-gray-100 bg-white px-3 py-1 font-mono text-[10px] font-bold text-gray-500">{name}</div>
+                                                    <DiffLines diff={diff} />
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="px-4 py-2 text-gray-300">No changes yet — edits will show here as a red/green diff.</div>
+                                        )}
                                     </div>
                                 )}
                             </div>

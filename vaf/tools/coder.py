@@ -498,6 +498,45 @@ def _build_file_tree(
     return tree
 
 
+def _build_file_diffs(
+    base_dir: str,
+    run_start_sha: str,
+    files_created=(),
+    max_files: int = 8,
+    max_chars: int = 12000,
+) -> Dict[str, str]:
+    """Unified git diff per changed file (working tree vs the run's start commit), for the
+    SubAgent window's red/green diff view. Empty when there is no git baseline. Bounded (file
+    count + chars) so a huge change never bloats the coder_state payload. Modified files show
+    their hunks; brand-new files have no baseline to diff against and are surfaced as 'A' in the
+    file tree instead.
+    """
+    diffs: Dict[str, str] = {}
+    if not run_start_sha or not os.path.isdir(os.path.join(base_dir, '.git')):
+        return diffs
+    try:
+        from vaf.tools.project_git import _run_git
+        rels: List[str] = []
+        for f in (files_created or ()):
+            try:
+                rel = os.path.relpath(os.path.abspath(f), base_dir)
+            except Exception:
+                rel = os.path.basename(str(f))
+            if rel and not rel.startswith("..") and rel not in rels:
+                rels.append(rel)
+        for rel in rels[:max_files]:
+            try:
+                r = _run_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir)
+                d = (r.stdout or "").strip()
+                if d:
+                    diffs[os.path.basename(rel)] = d[:max_chars]
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return diffs
+
+
 def _build_git_state(base_dir: str, max_commits: int = 5) -> Dict[str, Any]:
     """Branch, dirty-count and recent commits for the SubAgent window."""
     state: Dict[str, Any] = {"branch": "", "dirty": 0, "commits": []}
@@ -4455,6 +4494,28 @@ Task {task_idx + 1}: {current_task}
         # ═══════════════════════════════════════════════════════════════════
         
         loop = AgenticLoop(timeout_minutes=15)
+
+        # Stop button: coding_agent is self-supervised (not run_bounded-abandoned), so it must
+        # poll the user's Stop flag itself. Resolve the session once (same session the coder emits
+        # its state on) and check it each iteration; a stop breaks the loop cleanly so the exit
+        # path (DOCUMENT + final_commit) still runs — no half-edited file, no abandoned thread.
+        try:
+            _stop_sid = os.environ.get("VAF_SESSION_ID", "").strip()
+            if not _stop_sid:
+                from vaf.core.subagent_ipc import get_current_session_id as _gsid_stop
+                _stop_sid = _gsid_stop() or ""
+        except Exception:
+            _stop_sid = ""
+
+        def _user_requested_stop() -> bool:
+            if not _stop_sid:
+                return False
+            try:
+                from vaf.core.task_queue import TaskQueue
+                return bool(TaskQueue().should_stop(_stop_sid))
+            except Exception:
+                return False
+
         files_created = list(template_files)  # Start with template files
         
         # Track files created per task (for validation)
@@ -4577,6 +4638,7 @@ Task {task_idx + 1}: {current_task}
                         base_dir, files_created, current_file, _initial_file_names
                     ),
                     "git": _build_git_state(base_dir),
+                    "diffs": _build_file_diffs(base_dir, _run_start_sha, files_created),
                     "tasks": _tasks_payload[:12],
                     "loop": loop.loop_count,
                     "taskProgress": task_mgr.get_progress() if task_mgr else "",
@@ -4701,6 +4763,17 @@ Task {task_idx + 1}: {current_task}
             # Initialize write_file tracking for this loop (will be updated if write_file is called)
             if loop.loop_count > len(recent_loop_write_files):
                 recent_loop_write_files.append(False)
+
+            # User pressed Stop → break cleanly here (the exit path still runs final_commit,
+            # so progress is preserved and the thread is never abandoned mid-edit).
+            if _user_requested_stop():
+                _trace("Loop stopped: user requested Stop")
+                try:
+                    if lg:
+                        lg.event("loop_stop", loop=loop.loop_count, reason="user_stop")
+                except Exception:
+                    pass
+                break
 
             # Check if we should continue
             should_continue, reason = loop.should_continue()

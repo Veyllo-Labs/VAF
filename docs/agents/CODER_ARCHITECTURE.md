@@ -195,6 +195,7 @@ The inactivity auto-complete (idle with files present) runs the same determinist
     *   First violation: **REJECT** with the instruction to submit exactly one task.
     *   Second violation: **AUTO-COERCE** — the supervisor replaces the plan with exactly one task derived from the original task text. No planning loop is possible.
     *   The auto-generated TODO path applies the same rule (exactly one auto task for single-file deliverables).
+*   **Title normalization (data-model invariant):** todo items must be plain strings, but models (esp. DeepSeek) sometimes send dicts like `{"text": "...", "status": "pending"}`. Titles are coerced to text at the data-model boundary — `coerce_task_title()` + `Task.__post_init__` (`vaf/core/persistence.py`) — so BOTH a fresh `set_todos` call and loading/resuming a previously-persisted plan (`ProjectState.from_dict`) get a string title. A raw dict otherwise crashes any downstream `title.lower()` / `title[:N]`; on Python 3.12+, where slices became hashable, `dict[:50]` raises `KeyError: slice(None, 50, None)` rather than a TypeError. A poisoned `tasks.json` self-heals on the next save; `coder._todo_item_text` delegates to the same helper.
 *   **Validation:** Checks if `tasks` list is valid.
 *   **Phase Check:**
     *   **IF** called during execution phase: **BLOCK** ("Cannot modify TODOs during execution").

@@ -552,24 +552,21 @@ export default function SubAgentWindow({
 
     // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
     const consoleScrollRef = useRef<HTMLDivElement>(null);
-    // Follow the tail by default (like a terminal / tail -f). Unpin only when the user
-    // deliberately scrolls up; re-pin when they return to the very bottom.
+    // Follow the tail by default (like a terminal / tail -f). Self-healing: the state is
+    // derived purely from the scroll POSITION, so it can never get "stuck" unpinned after a
+    // pause (the previous guard+timeout approach did). Our own scroll lands at the bottom, so
+    // the scroll event it fires reads distFromBottom ~= 0 and keeps it pinned; only a real
+    // user scroll-up (beyond a few lines) unpins, and returning near the bottom re-pins.
     const stickToBottomRef = useRef(true);
-    // Our own scroll-to-bottom fires a scroll event too — flag it so handleConsoleScroll
-    // does not mistake it for the user scrolling up (that false positive is what froze the
-    // follow: the console would stop tracking new output after a brief pause).
-    const programmaticScrollRef = useRef(false);
+    const NEAR_BOTTOM_PX = 60;   // within ~3 lines of the bottom still counts as "following"
 
     const scrollConsoleToBottom = () => {
         const el = consoleScrollRef.current;
-        if (!el) return;
-        programmaticScrollRef.current = true;
-        el.scrollTop = el.scrollHeight;
-        setTimeout(() => { programmaticScrollRef.current = false; }, 60);
+        if (el) el.scrollTop = el.scrollHeight;
     };
 
-    // Follow new console lines while pinned. rAF so scrollHeight is read AFTER the new
-    // lines are laid out (otherwise we scroll to a stale, too-short height and lag behind).
+    // Follow new console lines while pinned. rAF so scrollHeight is read AFTER the new lines
+    // are laid out (otherwise we scroll to a stale, too-short height and lag behind).
     useEffect(() => {
         if (stickToBottomRef.current) requestAnimationFrame(scrollConsoleToBottom);
     }, [consoleLines]);
@@ -581,12 +578,9 @@ export default function SubAgentWindow({
     }, [browserFrame]);
 
     const handleConsoleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-        if (programmaticScrollRef.current) return;   // our own scroll, not the user
         const el = e.currentTarget;
         const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Unpin the instant the user scrolls up; re-pin only once they are back at the
-        // very bottom (small threshold = "all the way down").
-        stickToBottomRef.current = distFromBottom <= 24;
+        stickToBottomRef.current = distFromBottom <= NEAR_BOTTOM_PX;
     };
 
     // ── VS-Code view (coding agent only) ──────────────────────────────────

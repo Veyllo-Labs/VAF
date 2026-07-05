@@ -568,6 +568,31 @@ def _normalize_tool_adjacency(messages):
     return out
 
 
+def _todo_item_text(item):
+    """Coerce a single set_todos item to a plain task-description string.
+
+    Models (especially DeepSeek) sometimes send todo items as dicts like
+    ``{"text": "...", "status": "..."}`` or ``{"task": "..."}`` instead of plain
+    strings. A dict left in place propagates into the task title and later crashes
+    any ``title[:N]`` slice — on Python 3.12+ ``slice`` objects became hashable, so
+    ``a_dict[:50]`` is a (failing) key lookup that raises ``KeyError: slice(None,
+    50, None)`` — besides showing raw dicts in the UI. Extract the description from
+    the common keys; fall back to a JSON string, then ``str()``.
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for _k in ("task", "text", "title", "description", "name", "content"):
+            _v = item.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                return _v
+        try:
+            return json.dumps(item, ensure_ascii=False)
+        except Exception:
+            return str(item)
+    return str(item)
+
+
 def _build_file_diffs(
     base_dir: str,
     run_start_sha: str,
@@ -1701,6 +1726,10 @@ class TaskManager:
             
         new_tasks = []
         for i, t_str in enumerate(todos):
+            # Guard the storage layer too: a non-string title propagates and crashes
+            # any downstream title[:N] slice (KeyError on Python 3.12+ for a dict).
+            if not isinstance(t_str, str):
+                t_str = str(t_str)
             new_tasks.append(Task(id=i+1, title=t_str, status="pending"))
             
         self.state.tasks = new_tasks
@@ -7756,6 +7785,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # ===== TODO MANAGEMENT TOOLS =====
                 if fn_name == "set_todos":
                     tasks = fn_args.get("tasks", [])
+                    # Normalize todo items to plain strings before ANY downstream use (the
+                    # single-file rule, set_todos, the display loop, the coder_state payload).
+                    # Models sometimes send dicts instead of strings; see _todo_item_text.
+                    if isinstance(tasks, (str, dict)):
+                        tasks = [tasks]
+                    elif not isinstance(tasks, list):
+                        tasks = [tasks] if tasks else []
+                    tasks = [_todo_item_text(_t) for _t in tasks if _t is not None]
 
                     # HARD RULE (code-enforced): single-file deliverable -> exactly 1 task.
                     # The system prompt states this, but small models ignore it; the
@@ -7862,7 +7899,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         tui.set_action(f"TODO: {len(tasks)} tasks")
                         tui.append_stream(f"Created TODO list with {len(tasks)} tasks")
                         for i, t in enumerate(tasks[:5], 1):
-                            tui.append_stream(f"   {i}. {t[:50]}")
+                            tui.append_stream(f"   {i}. {str(t)[:50]}")
                         if len(tasks) > 5:
                             tui.append_stream(f"   ... and {len(tasks)-5} more")
 

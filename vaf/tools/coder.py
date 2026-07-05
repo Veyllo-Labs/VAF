@@ -568,6 +568,33 @@ def _normalize_tool_adjacency(messages):
     return out
 
 
+def coder_api_providers() -> dict:
+    """OpenAI-COMPATIBLE endpoint + default model per API provider, for the coder's
+    direct HTTP calls (the coder talks plain OpenAI wire format, so Anthropic/Google
+    use their OpenAI-compat URLs, not their native SDK endpoints).
+
+    MUST cover every provider in vaf.core.config.PROVIDER_MODELS — enforced by
+    tests/test_coder_provider_map.py, so adding a new provider centrally without
+    updating this map turns CI red instead of silently breaking the coder. That is
+    exactly what happened with "veyllo" (added centrally 2026-06-26, missing here):
+    the coder fell into the LOCAL branch and either died with "VAF Server
+    unreachable (Port 8080)" or — with a leftover llama-server running — silently
+    generated with the LOCAL model while the user believed the API was working.
+    The run() gate errors loudly on an unknown API provider instead of falling
+    back to :8080.
+    """
+    from vaf.core.config import Config
+    return {
+        "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-v4-flash"),
+        "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
+        "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-sonnet-4.6"),
+        "anthropic":  ("https://api.anthropic.com/v1",      "claude-sonnet-4-6"),
+        "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
+        # Veyllo is OpenAI-compatible; base URL from config (staging/self-host override).
+        "veyllo":     (Config.get("veyllo_base_url", "https://api.veyllo.app/v1").rstrip("/"), "veyllo-chat"),
+    }
+
+
 def _todo_item_text(item):
     """Coerce a single set_todos item to a plain task-description string.
 
@@ -3049,18 +3076,18 @@ Thumbs.db
             or Config.get("provider", "local")
         )
         # base_url already contains /v1 (from api_backend.py); store full endpoint URLs
-        # so we never double up the /v1 path segment.
-        _API_PROVIDERS = {
-            "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-v4-flash"),
-            "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
-            "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-sonnet-4.6"),
-            "anthropic":  ("https://api.anthropic.com/v1",      "claude-sonnet-4-6"),
-            "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
-            # Veyllo is OpenAI-compatible; base URL from config (staging/self-host override).
-            # Missing here meant provider=veyllo fell into the LOCAL branch -> the coder
-            # health-checked 127.0.0.1:8080 and died with "VAF Server unreachable".
-            "veyllo":     (Config.get("veyllo_base_url", "https://api.veyllo.app/v1").rstrip("/"), "veyllo-chat"),
-        }
+        # so we never double up the /v1 path segment. Map lives in coder_api_providers()
+        # (module level, CI-guarded against drifting behind PROVIDER_MODELS).
+        _API_PROVIDERS = coder_api_providers()
+        # LOUD failure instead of the old silent local fallback: an API provider the
+        # map does not know must never route to 127.0.0.1:8080 (that either dies with
+        # "VAF Server unreachable" or silently generates with the local model).
+        if _provider != "local" and _provider not in _API_PROVIDERS:
+            return (
+                f"❌ Coder configuration error: unknown API provider '{_provider}'. "
+                "The coder's provider map (coder_api_providers) is out of sync with "
+                "PROVIDER_MODELS — this is a VAF bug; the provider must be added there."
+            )
         _is_api_mode = _provider in _API_PROVIDERS
         if _is_api_mode:
             _api_base, _llm_default_model = _API_PROVIDERS[_provider]

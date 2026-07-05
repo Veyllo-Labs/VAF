@@ -8761,6 +8761,27 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             "cannot write" in result_str.lower()
                         )
                         
+                        # WebUI live editor: when the agent READS a file, mirror it into the
+                        # editor so the view "follows" the agent during non-writing phases
+                        # (orient, review, docs — incl. reading a README) instead of looking
+                        # stuck on "Waiting for code…". Text files only, size-bounded.
+                        if fn_name == "read_file" and not is_error_result:
+                            try:
+                                _rp = fn_args.get("path", "") or ""
+                                _rp_abs = _rp if os.path.isabs(_rp) else os.path.join(base_dir, _rp)
+                                _ext = os.path.splitext(_rp_abs)[1].lower()
+                                _BIN_EXT = {
+                                    ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg",
+                                    ".gif", ".webp", ".ico", ".svgz", ".zip", ".gz", ".tar",
+                                    ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".eot",
+                                }
+                                if (_rp and _ext not in _BIN_EXT and os.path.isfile(_rp_abs)
+                                        and os.path.getsize(_rp_abs) <= 400_000):
+                                    with open(_rp_abs, "r", encoding="utf-8", errors="replace") as _rf:
+                                        _emit_live_code(os.path.basename(_rp_abs), _rf.read(), force=True)
+                            except Exception:
+                                pass
+
                         # Track created files (after execution)
                         if fn_name in ("write_file", "edit_file") and "path" in fn_args:
                             path = fn_args["path"]
@@ -8828,7 +8849,12 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
                                 # WebUI: refresh explorer with this file marked as writing
                                 _emit_coder_state(current_file=path)
-                                
+                                if fn_name == "edit_file":
+                                    # edit_file streams no new content; clear the live buffer so
+                                    # the editor falls through to this file's red/green DIFF
+                                    # instead of showing a stale read/write buffer over the top.
+                                    _emit_live_code(os.path.basename(path), "", force=True)
+
                                 tui.update_file(os.path.basename(path), "done", size)
                                 
                                 # Use append_with_context if available

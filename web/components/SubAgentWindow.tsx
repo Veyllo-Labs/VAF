@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
+import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -551,12 +551,13 @@ export default function SubAgentWindow({
     const codeLines = useMemo(() => (displayCode ? displayCode.split('\n') : []), [displayCode]);
 
     // Smart auto-scroll: stick to bottom; pause when user scrolls up; resume when near bottom again.
-    const consoleScrollRef = useRef<HTMLDivElement>(null);
+    const consoleScrollRef = useRef<HTMLDivElement | null>(null);
+    const consoleObserverRef = useRef<MutationObserver | null>(null);
     // Follow the tail by default (like a terminal / tail -f). Self-healing: the state is
     // derived purely from the scroll POSITION, so it can never get "stuck" unpinned after a
-    // pause (the previous guard+timeout approach did). Our own scroll lands at the bottom, so
-    // the scroll event it fires reads distFromBottom ~= 0 and keeps it pinned; only a real
-    // user scroll-up (beyond a few lines) unpins, and returning near the bottom re-pins.
+    // pause. Our own scroll lands at the bottom, so the scroll event it fires reads
+    // distFromBottom ~= 0 and keeps it pinned; only a real user scroll-up (beyond a few
+    // lines) unpins, and returning near the bottom re-pins.
     const stickToBottomRef = useRef(true);
     const NEAR_BOTTOM_PX = 60;   // within ~3 lines of the bottom still counts as "following"
 
@@ -565,11 +566,25 @@ export default function SubAgentWindow({
         if (el) el.scrollTop = el.scrollHeight;
     };
 
-    // Follow new console lines while pinned. rAF so scrollHeight is read AFTER the new lines
-    // are laid out (otherwise we scroll to a stale, too-short height and lag behind).
-    useEffect(() => {
-        if (stickToBottomRef.current) requestAnimationFrame(scrollConsoleToBottom);
-    }, [consoleLines]);
+    // Bulletproof tail-follow via a MutationObserver on the mounted console div.
+    // The observer fires on ANY DOM change (a new line, wrapped text, an image
+    // settling) and pins to the bottom while following — it does NOT depend on
+    // React effect timing or a single requestAnimationFrame, which the previous
+    // [consoleLines] effect kept getting wrong (scroll read a stale scrollHeight
+    // and froze). This is a callback ref so it re-attaches across the window's
+    // several render paths as the actual element mounts/unmounts.
+    const attachConsole = useCallback((el: HTMLDivElement | null) => {
+        consoleObserverRef.current?.disconnect();
+        consoleObserverRef.current = null;
+        consoleScrollRef.current = el;
+        if (!el) return;
+        const obs = new MutationObserver(() => {
+            if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+        });
+        obs.observe(el, { childList: true, subtree: true, characterData: true });
+        consoleObserverRef.current = obs;
+        if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    }, []);
 
     // A new screenshot changes the image height (layout shift) — re-pin and follow.
     useEffect(() => {
@@ -1116,7 +1131,7 @@ export default function SubAgentWindow({
                             <div className="flex min-h-0 flex-1 flex-col">
                                 <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Activity</div>
                                 <div
-                                    ref={consoleScrollRef}
+                                    ref={attachConsole}
                                     onScroll={handleConsoleScroll}
                                     className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 font-mono text-[10px] leading-relaxed text-gray-500"
                                 >
@@ -1680,7 +1695,7 @@ export default function SubAgentWindow({
                                 </div>
                                 {activeConsoleTab === 'console' && (
                                     <div
-                                        ref={consoleScrollRef}
+                                        ref={attachConsole}
                                         onScroll={handleConsoleScroll}
                                         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-2 font-mono text-[11px] text-gray-900"
                                     >
@@ -2158,7 +2173,7 @@ export default function SubAgentWindow({
                                 </div>
                             </div>
                             <div
-                                ref={consoleScrollRef}
+                                ref={attachConsole}
                                 onScroll={handleConsoleScroll}
                                 className="flex-1 overflow-y-auto overflow-x-hidden bg-white px-4 py-4 font-mono text-xs text-gray-900"
                             >
@@ -2319,7 +2334,7 @@ export default function SubAgentWindow({
                                 {currentFile ? currentFile.split('/').pop() : 'Console'}
                             </div>
                             <div
-                                ref={consoleScrollRef}
+                                ref={attachConsole}
                                 onScroll={handleConsoleScroll}
                                 className="flex-1 overflow-y-auto overflow-x-hidden"
                             >

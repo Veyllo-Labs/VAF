@@ -24,6 +24,12 @@ To update an installed VAF, run `vaf update`.
   locate existing code before changing it.
 - **HTML deliverables open as a rendered preview.** Clicking an `.html` file in a sub-agent window
   opens it in the HTML viewer instead of showing raw source.
+- **The Windows installer checks hardware virtualization first — before any WSL2/container
+  work.** It verifies that a hypervisor is running or Intel VT-x / AMD-V is enabled in the
+  firmware (no admin rights needed for the check) and stops with clear BIOS/UEFI instructions
+  when virtualization is disabled, instead of failing minutes later with the cryptic WSL error
+  0x80370102. Windows Home is fully supported — only the hypervisor platform is required, not
+  the Hyper-V role.
 
 ### Fixed
 - **The coding agent no longer crashes on cloud providers mid-run.** A malformed message history —

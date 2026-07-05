@@ -160,7 +160,79 @@ $osInfo = Get-CimInstance Win32_OperatingSystem
 Write-Info "OS: $($osInfo.Caption) ($($osInfo.OSArchitecture))"
 
 # ============================================================================
-# 0. WSL2 CHECK (before anything heavy)
+# 0a. HARDWARE VIRTUALIZATION / HYPER-V CHECK (the very first gate)
+# Everything container-related (WSL2 -> Rancher Desktop -> Docker images)
+# sits on the Windows hypervisor platform, which needs hardware
+# virtualization (Intel VT-x / AMD-V). When it is disabled in the BIOS/UEFI,
+# 'wsl --install' still SUCCEEDS and the failure only surfaces after a
+# reboot, deep in the container-runtime setup (WSL error 0x80370102 /
+# HCS_E_HYPERV_NOT_INSTALLED) - minutes of installer work too late. So gate
+# on it here, before anything else.
+#
+# HOW we check (deliberate):
+# - The usual feature queries (Get-WindowsOptionalFeature -Online, dism)
+#   require ADMIN. The CIM reads below do NOT - no UAC prompt needed for a
+#   pure status check - and return locale-independent booleans (this
+#   installer never parses localized command output).
+# - Order matters (official caveat): a RUNNING hypervisor masks the CPU
+#   virtualization flags, so Win32_Processor can read False on a machine
+#   where everything is fine. Win32_ComputerSystem.HypervisorPresent is
+#   therefore checked FIRST; the firmware flag is only consulted when no
+#   hypervisor is active yet.
+# - We check the hypervisor PLATFORM, not the full Hyper-V role: the role is
+#   Pro/Enterprise-only, but WSL2 (all VAF needs) also runs on Home - a
+#   role/feature check would wrongly fail Home machines.
+# ============================================================================
+function Test-VirtualizationReady {
+    # Returns 'hypervisor' (already running), 'firmware' (enabled in BIOS,
+    # platform not active yet), 'disabled' (off in BIOS/UEFI) or 'unknown'.
+    try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($cs.HypervisorPresent -eq $true) { return 'hypervisor' }
+    } catch { }
+    try {
+        $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($cpu.VirtualizationFirmwareEnabled -eq $true) { return 'firmware' }
+        if ($cpu.VirtualizationFirmwareEnabled -eq $false) { return 'disabled' }
+    } catch { }
+    return 'unknown'
+}
+
+if (-not $SkipDocker) {
+    Write-Step "Checking hardware virtualization (required for WSL2/containers)..."
+    switch (Test-VirtualizationReady) {
+        'hypervisor' {
+            Write-Success "A hypervisor is already running (Hyper-V platform active)."
+        }
+        'firmware' {
+            Write-Success "Virtualization is enabled in the firmware (VT-x/AMD-V)."
+        }
+        'disabled' {
+            Write-Host ""
+            Write-Warn "ACTION NEEDED: Hardware virtualization is DISABLED on this machine."
+            Write-Info "WSL2 and the container runtime cannot work without it. To fix:"
+            Write-Info "1. Reboot into the BIOS/UEFI setup (usually F2/F10/DEL at boot, or"
+            Write-Info "   Windows: Settings > Recovery > Advanced startup > UEFI Firmware Settings)."
+            Write-Info "2. Enable the virtualization option. Common names:"
+            Write-Info "     Intel: 'Intel Virtualization Technology' / 'Intel VT-x'"
+            Write-Info "     AMD:   'SVM Mode' / 'AMD-V'"
+            Write-Info "   (often under Advanced / CPU Configuration / Security)"
+            Write-Info "3. Save, boot back into Windows, and run the same install commands again."
+            Write-Info "   Finished steps are skipped; the installer continues where it stopped."
+            if ($VAF_INSTALL_LOG) { try { Stop-Transcript | Out-Null } catch { } }
+            exit 1
+        }
+        default {
+            # WMI gave no readable answer (rare OEM firmware quirks). Do not block a
+            # machine that may be fine - the WSL2 step right below still gates hard.
+            Write-Warn "Could not determine the virtualization state (WMI gave no answer) - continuing."
+            Write-Info "If WSL2 setup fails later with error 0x80370102, enable VT-x/AMD-V in the BIOS/UEFI."
+        }
+    }
+}
+
+# ============================================================================
+# 0b. WSL2 CHECK (before anything heavy)
 # The container runtime (Rancher Desktop) runs on a WSL2 engine. Without WSL2
 # its installer fails late and cryptically - after minutes of Python/Node
 # work - so verify/enable WSL2 up front. Status checks need no admin; only

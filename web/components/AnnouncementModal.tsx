@@ -25,6 +25,7 @@ const C_LIGHT = {
   // the near-black CTA button keeps its brand color in dark mode; the border is the
   // "subtle dark border polish" so it still reads against the dark card (user decision).
   buttonBorder: 'transparent',
+  buttonBg: '#111827', buttonFg: '#ffffff',
 };
 const C_DARK: typeof C_LIGHT = {
   surface: '#202020', fg: '#ececec', muted: '#8a8a8a', faint: '#6b6b6b',
@@ -34,6 +35,7 @@ const C_DARK: typeof C_LIGHT = {
   halo: 'rgba(236,236,236,.08)',
   titleGradient: 'linear-gradient(180deg,#ececec 30%,#b0b0b0)',
   buttonBorder: '#333333',
+  buttonBg: '#e6e6e6', buttonFg: '#181818',
 };
 
 const READ_SECONDS = 4;
@@ -132,7 +134,7 @@ export default function AnnouncementModal({
           <div style={{ position: 'relative', height: 78, display: 'grid', placeItems: 'center', margin: '18px 0 14px' }}>
             <span style={{
               position: 'absolute', width: 140, height: 140, borderRadius: '50%',
-              background: 'radial-gradient(circle, rgba(17,24,39,.10), transparent 62%)',
+              background: `radial-gradient(circle, ${C.halo}, transparent 62%)`,
             }} />
             {variant === 'intro' ? (
               <svg width={50} height={50} viewBox="0 0 24 24" style={{ position: 'relative', filter: 'drop-shadow(0 8px 18px rgba(16,24,40,.20))' }}>
@@ -140,8 +142,8 @@ export default function AnnouncementModal({
                   d="M10.29 3.7 2.3 17.6a2 2 0 0 0 1.73 3h15.94a2 2 0 0 0 1.73-3L13.71 3.7a2 2 0 0 0-3.42 0Z"
                   fill={C.ink} stroke={C.ink} strokeWidth={1.3} strokeLinejoin="round"
                 />
-                <line x1="12" y1="9.6" x2="12" y2="14" stroke="#fff" strokeWidth={1.9} strokeLinecap="round" />
-                <circle cx="12" cy="17" r="1.15" fill="#fff" />
+                <line x1="12" y1="9.6" x2="12" y2="14" stroke={C.inkContrast} strokeWidth={1.9} strokeLinecap="round" />
+                <circle cx="12" cy="17" r="1.15" fill={C.inkContrast} />
               </svg>
             ) : (
               <span style={{
@@ -153,7 +155,7 @@ export default function AnnouncementModal({
 
           <h1 style={{
             fontSize: 22, fontWeight: 680, letterSpacing: '-.02em', lineHeight: 1.15, margin: '0 0 8px',
-            background: 'linear-gradient(180deg,#111827 30%,#354155)', WebkitBackgroundClip: 'text',
+            background: C.titleGradient, WebkitBackgroundClip: 'text',
             backgroundClip: 'text', color: 'transparent',
           }}>
             {variant === 'intro' ? t('intro.title') : t('changelog.title', { version: entry ? `v${entry.version}` : versionDisplay })}
@@ -223,7 +225,7 @@ export default function AnnouncementModal({
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%',
               height: 46, borderRadius: 999, border: '1px solid transparent', cursor: waiting ? 'default' : 'pointer',
               fontFamily: 'inherit', fontSize: 14.5, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
-              background: waiting ? C.surface3 : '#111827', color: waiting ? C.faint : '#fff',
+              background: waiting ? C.surface3 : C.buttonBg, color: waiting ? C.faint : C.buttonFg,
               boxShadow: waiting ? 'none' : '0 6px 28px -8px rgba(16,24,40,.10)', transition: 'background-color .18s',
             }}
           >

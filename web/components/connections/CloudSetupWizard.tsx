@@ -353,7 +353,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center">
                             <Cloud className="w-5 h-5 text-white" />
                         </div>
                         <div>
@@ -403,7 +403,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                     {currentStep === 0 && (
                         <div className="space-y-6">
                             <div className="text-center py-8">
-                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 flex items-center justify-center mb-4">
+                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
                                     <Cloud className="w-10 h-10 text-white" />
                                 </div>
                                 <h3 className="text-2xl font-bold text-gray-900 mb-2">Connect Cloud Storage</h3>
@@ -638,7 +638,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                             <li key={a.account_id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
                                                 <div className="flex items-center justify-between">
                                                     <div className="flex items-center gap-3">
-                                                        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center text-white", opt?.iconColor || "bg-gray-900")}>
+                                                        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center text-white", opt?.iconColor || "bg-gray-900 dark:bg-[#2e2e2e]")}>
                                                             <Icon className="w-5 h-5" />
                                                         </div>
                                                         <div>

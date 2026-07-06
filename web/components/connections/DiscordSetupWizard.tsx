@@ -167,7 +167,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center">
                             <MessageCircle className="w-5 h-5 text-white" />
                         </div>
                         <div>
@@ -210,7 +210,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                     {currentStep === 0 && (
                         <div className="space-y-6">
                             <div className="text-center py-8">
-                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 flex items-center justify-center mb-4">
+                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
                                     <MessageCircle className="w-10 h-10 text-white" />
                                 </div>
                                 <h3 className="text-2xl font-bold text-gray-900 mb-2">Connect Discord to VAF</h3>
@@ -240,7 +240,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                             <h3 className="text-lg font-semibold text-gray-900">Create a Discord Bot</h3>
                             <ol className="space-y-4">
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">1</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">1</span>
                                     <div>
                                         <p className="text-gray-900">Go to Discord Developer Portal</p>
                                         <a
@@ -254,19 +254,19 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     </div>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">2</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">2</span>
                                     <div>
                                         <p className="text-gray-900">Click "New Application" and give it a name (e.g., "VAF Agent")</p>
                                     </div>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">3</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">3</span>
                                     <div>
                                         <p className="text-gray-900">Go to "Bot" in the sidebar and click "Add Bot"</p>
                                     </div>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">4</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">4</span>
                                     <div>
                                         <p className="text-gray-900">Under "Privileged Gateway Intents", enable:</p>
                                         <ul className="text-sm text-gray-500 mt-1 space-y-1">
@@ -276,7 +276,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     </div>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">5</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">5</span>
                                     <div>
                                         <p className="text-gray-900">Click "Reset Token" and copy the token</p>
                                         <p className="text-sm text-amber-600 mt-1">Keep this token secret!</p>

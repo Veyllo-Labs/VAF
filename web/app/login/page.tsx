@@ -700,7 +700,7 @@ export default function LoginPage() {
                             </div>
                             <div className="p-8">
                                 <div className="flex justify-center mb-5">
-                                    <div className="w-14 h-14 rounded-2xl bg-gray-900 text-white flex items-center justify-center">
+                                    <div className="w-14 h-14 rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] text-white flex items-center justify-center">
                                         <Smartphone size={26} />
                                     </div>
                                 </div>

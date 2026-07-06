@@ -255,7 +255,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col">
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center">
                             <GitHubLogo className="w-5 h-5 text-white" />
                         </div>
                         <div>
@@ -297,7 +297,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                     {currentStep === 0 && (
                         <div className="space-y-6">
                             <div className="text-center py-6">
-                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 flex items-center justify-center mb-4">
+                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
                                     <GitHubLogo className="w-10 h-10 text-white" />
                                 </div>
                                 <h3 className="text-2xl font-bold text-gray-900 mb-2">{t('connectGitHub')}</h3>

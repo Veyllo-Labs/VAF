@@ -607,7 +607,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                                     className={cn('flex gap-3 pt-4', isBot ? 'justify-start' : 'justify-end')}
                                                 >
                                                     {isBot && (
-                                                        <div className="w-9 h-9 rounded-xl bg-gray-900 flex items-center justify-center text-white shadow-sm shrink-0">
+                                                        <div className="w-9 h-9 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center text-white shadow-sm shrink-0">
                                                             <Bot className="w-[18px] h-[18px]" />
                                                         </div>
                                                     )}

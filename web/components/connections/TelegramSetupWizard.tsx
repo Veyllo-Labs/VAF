@@ -198,7 +198,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:rounded-none max-md:border-0 max-md:flex max-md:flex-col">
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center">
                             <MessageCircle className="w-5 h-5 text-white" />
                         </div>
                         <div>
@@ -239,7 +239,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                     {currentStep === 0 && (
                         <div className="space-y-6">
                             <div className="text-center py-8">
-                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 flex items-center justify-center mb-4">
+                                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
                                     <MessageCircle className="w-10 h-10 text-white" />
                                 </div>
                                 <h3 className="text-2xl font-bold text-gray-900 mb-2">Connect Telegram to VAF</h3>
@@ -268,7 +268,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                             <h3 className="text-lg font-semibold text-gray-900">Create a Telegram Bot</h3>
                             <ol className="space-y-4">
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">1</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">1</span>
                                     <div>
                                         <p className="text-gray-900">Open Telegram and search for BotFather</p>
                                         <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-gray-900 flex items-center gap-1 text-sm underline">
@@ -277,11 +277,11 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                                     </div>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">2</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">2</span>
                                     <p className="text-gray-900">Send <code className="bg-gray-100 px-1 rounded">/newbot</code> and follow the prompts (name and username)</p>
                                 </li>
                                 <li className="flex gap-3">
-                                    <span className="w-6 h-6 rounded-full bg-gray-900 text-white text-sm flex items-center justify-center flex-shrink-0">3</span>
+                                    <span className="w-6 h-6 rounded-full bg-gray-900 dark:bg-[#2e2e2e] text-white text-sm flex items-center justify-center flex-shrink-0">3</span>
                                     <p className="text-gray-900">Copy the bot token BotFather gives you (keep it secret)</p>
                                 </li>
                             </ol>

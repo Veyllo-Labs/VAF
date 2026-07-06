@@ -196,7 +196,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                 {/* Header */}
                 <div className="flex items-center justify-between px-8 py-6 border-b border-gray-100 bg-gray-50/50 max-md:px-4 max-md:py-3">
                     <div className="flex items-center gap-4 max-md:gap-3 min-w-0">
-                        <div className="w-12 h-12 rounded-2xl bg-gray-900 flex items-center justify-center shadow-lg shadow-gray-200 shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
+                        <div className="w-12 h-12 rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center shadow-lg shadow-gray-200 dark:shadow-none shrink-0 max-md:w-10 max-md:h-10 max-md:rounded-xl max-md:shadow-none">
                             <Github className="w-6 h-6 text-white max-md:w-5 max-md:h-5" />
                         </div>
                         <div className="min-w-0">

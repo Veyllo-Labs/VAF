@@ -780,7 +780,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             data: {
                 label: (
                     <div className="flex flex-col items-center px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-md shadow-gray-200/60 min-w-[150px]">
-                        <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300">
+                        <div className="w-12 h-12 bg-gray-900 dark:bg-[#2e2e2e] rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300 dark:shadow-none">
                             <Server size={24} className="text-white" />
                         </div>
                         <div className="font-bold text-gray-900 text-sm">VAF Host</div>
@@ -1030,7 +1030,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         let cancelled = false;
         const hostLabel = (
             <div className="flex flex-col items-center px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-md shadow-gray-200/60 min-w-[150px]">
-                <div className="w-12 h-12 bg-gray-900 rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300">
+                <div className="w-12 h-12 bg-gray-900 dark:bg-[#2e2e2e] rounded-xl flex items-center justify-center mb-2 shadow-lg shadow-gray-300 dark:shadow-none">
                     <Server size={24} className="text-white" />
                 </div>
                 <div className="font-bold text-gray-900 text-sm">VAF Host</div>
@@ -4877,7 +4877,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Header (DESIGN: modal header, gray palette) */}
                         <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0 bg-gray-50 z-10 max-md:p-4 max-md:gap-2">
                             <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center shrink-0 max-md:w-9 max-md:h-9">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center shrink-0 max-md:w-9 max-md:h-9">
                                     <Brain size={20} className="text-white" />
                                 </div>
                                 <div className="min-w-0">
@@ -5493,7 +5493,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {/* Header */}
                         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50">
                             <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center">
                                     <Users className="w-5 h-5 text-white" />
                                 </div>
                                 <div>
@@ -5917,7 +5917,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">{tModals('networkMap.deviceTypes')}</h4>
                                 <div className="space-y-2">
                                     <div className="flex items-center gap-2 text-sm text-gray-600">
-                                        <div className="w-6 h-6 rounded bg-gray-900 flex items-center justify-center text-white"><Server size={12} /></div>
+                                        <div className="w-6 h-6 rounded bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center text-white"><Server size={12} /></div>
                                         <span>{tModals('networkMap.vafHost')}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm text-gray-600">

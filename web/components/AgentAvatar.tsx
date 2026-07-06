@@ -323,15 +323,15 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // take the surface's opposite ink (like the showcase's var(--ink)): dark #2a3142 on the light
     // theme, brand light #e6e9ef on the dark theme (glow dimmed). The eye stays white on the dark
     // body, so it keeps dotColor/glow in both themes.
-    const overlay = isDark ? '#e6e9ef' : '#2a3142';
-    const overlayGlow = isDark ? '0 0 4px 1px rgba(230,233,239,0.28)' : '0 0 4px 1px rgba(30,36,52,0.35)';
-    const overlayRing = isDark ? 'rgba(230,233,239,0.6)' : 'rgba(30,36,52,0.6)';
+    const overlay = isDark ? '#ececec' : '#2a3142';
+    const overlayGlow = isDark ? '0 0 4px 1px rgba(236,236,236,0.28)' : '0 0 4px 1px rgba(30,36,52,0.35)';
+    const overlayRing = isDark ? 'rgba(236,236,236,0.6)' : 'rgba(30,36,52,0.6)';
     // `dim` (archived / non-latest message) mutes the figure toward the CURRENT surface: light
     // gray on light, brand dark #2a3344 on dark (the inline hexes are immune to the palette swap,
     // so without this the dim avatars render as light squares on the dark page). The judge
     // `invert` body stays light in both themes (it is deliberately the body's opposite).
-    const dimBody = isDark ? '#2a3344' : '#e5e7eb';
-    const dimDot = isDark ? '#8b93a7' : '#b0b0b0';
+    const dimBody = isDark ? '#2d2d2d' : '#e5e7eb';
+    const dimDot = isDark ? '#8a8a8a' : '#b0b0b0';
     const bodyColor = tint?.body ?? (dim ? dimBody : invert ? '#f3f4f6' : '#111827');
     // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
     // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light

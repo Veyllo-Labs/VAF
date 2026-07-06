@@ -27,13 +27,13 @@ const C_LIGHT = {
   buttonBorder: 'transparent',
 };
 const C_DARK: typeof C_LIGHT = {
-  surface: '#0f131c', fg: '#e6e9ef', muted: '#8b93a7', faint: '#6d7689',
-  line: '#1e2533', surface3: '#161c29', ink: '#e6e9ef', accent: '#3b82f6',
+  surface: '#202020', fg: '#ececec', muted: '#8a8a8a', faint: '#6b6b6b',
+  line: '#2f2f2f', surface3: '#262626', ink: '#ececec', accent: '#3b82f6',
   accentSoft: 'rgba(59,130,246,.16)',
-  inkContrast: '#0f131c',
-  halo: 'rgba(230,233,239,.08)',
-  titleGradient: 'linear-gradient(180deg,#e6e9ef 30%,#b9c0cf)',
-  buttonBorder: '#2a3344',
+  inkContrast: '#202020',
+  halo: 'rgba(236,236,236,.08)',
+  titleGradient: 'linear-gradient(180deg,#ececec 30%,#b0b0b0)',
+  buttonBorder: '#333333',
 };
 
 const READ_SECONDS = 4;

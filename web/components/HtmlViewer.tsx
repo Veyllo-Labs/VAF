@@ -153,7 +153,7 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
         ) : mode === 'preview' ? (
           <iframe
             srcDoc={content || (theme === 'dark'
-              ? '<html><body style="font-family:sans-serif;color:#8b93a7;background:#0f131c;padding:2rem;margin:0">Loading…</body></html>'
+              ? '<html><body style="font-family:sans-serif;color:#8a8a8a;background:#181818;padding:2rem;margin:0">Loading…</body></html>'
               : '<html><body style="font-family:sans-serif;color:#888;padding:2rem">Loading…</body></html>')}
             title={fileName}
             className="w-full h-full border-0 bg-white"

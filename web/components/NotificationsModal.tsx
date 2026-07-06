@@ -244,15 +244,15 @@ const PROCESS_NODE_W = 210;
 function tlColors(dark: boolean) {
   return dark
     ? {
-        bg: '#0f131c', bgLabel: '#12161f', bgRuler: '#161c29', bgAlt: '#131824',
-        panel: '#0a0c12', border: '#1e2533', borderLt: '#181e2a', borderFaint: '#161c26',
-        tickMaj: '#6b7280', tickMin: '#2a3344', tsColor: '#60a5fa',
-        dayLine: '#4b5563', dayText: '#b9c0cf', nowFill: '#ef444426',
-        flowBg: '#1e2533', node: '#161c29', cursorBar: '#c8d0e8',
-        badgeBg: '#2a3344', badgeText: '#e6e9ef', barTrack: '#2a3344', barTrackSel: '#3a4558',
-        errBg: '#241417', warnBg: '#241f10', errChrome: '#2a1416', liveChrome: '#2a1416',
-        textStrong: '#e6e9ef', textMid: '#b9c0cf', textDim: '#8b93a7', textMuted: '#8b93a7',
-        textFaint: '#6d7689', textArg: '#9aa3b5', textResult: '#9aa3b5', textLabel: '#8b93a7',
+        bg: '#202020', bgLabel: '#1c1c1c', bgRuler: '#262626', bgAlt: '#1e1e1e',
+        panel: '#181818', border: '#2f2f2f', borderLt: '#262626', borderFaint: '#242424',
+        tickMaj: '#6b6b6b', tickMin: '#383838', tsColor: '#60a5fa',
+        dayLine: '#555555', dayText: '#b0b0b0', nowFill: '#ef444426',
+        flowBg: '#262626', node: '#262626', cursorBar: '#d0d0d0',
+        badgeBg: '#333333', badgeText: '#ececec', barTrack: '#333333', barTrackSel: '#484848',
+        errBg: '#2a1414', warnBg: '#2a2410', errChrome: '#2a1416', liveChrome: '#2a1416',
+        textStrong: '#ececec', textMid: '#b0b0b0', textDim: '#8a8a8a', textMuted: '#8a8a8a',
+        textFaint: '#6b6b6b', textArg: '#9a9a9a', textResult: '#9a9a9a', textLabel: '#8a8a8a',
       }
     : {
         bg: '#ffffff', bgLabel: '#f9fafb', bgRuler: '#f3f4f6', bgAlt: '#fafafa',

@@ -171,48 +171,49 @@
 .dark {
   color-scheme: dark; /* native selects, date pickers, scrollbars */
 
-  /* Semantic shadcn tokens (body, ActiveToolsPanel, ui/card, future components) */
-  --background: 225 29% 5%;
-  --foreground: 220 22% 92%;
-  --card: 222 30% 8%;
-  --card-foreground: 220 22% 92%;
-  --popover: 222 30% 8%;
-  --popover-foreground: 220 22% 92%;
+  /* Semantic shadcn tokens — neutral gray, anchored on #181818 page / #202020 card.
+     Accent (primary/ring) stays blue; destructive stays red. */
+  --background: 0 0% 9.4%;
+  --foreground: 0 0% 92.5%;
+  --card: 0 0% 12.5%;
+  --card-foreground: 0 0% 92.5%;
+  --popover: 0 0% 12.5%;
+  --popover-foreground: 0 0% 92.5%;
   --primary: 217 91% 60%;
-  --primary-foreground: 222 30% 8%;
-  --secondary: 221 30% 12%;
-  --secondary-foreground: 220 22% 92%;
-  --muted: 221 30% 12%;
-  --muted-foreground: 223 14% 60%;
-  --accent: 221 30% 12%;
-  --accent-foreground: 220 22% 92%;
+  --primary-foreground: 0 0% 12.5%;
+  --secondary: 0 0% 16%;
+  --secondary-foreground: 0 0% 92.5%;
+  --muted: 0 0% 16%;
+  --muted-foreground: 0 0% 54%;
+  --accent: 0 0% 16%;
+  --accent-foreground: 0 0% 92.5%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 40% 98%;
-  --border: 220 26% 16%;
-  --input: 220 26% 16%;
+  --border: 0 0% 18%;
+  --input: 0 0% 18%;
   --ring: 217 91% 60%;
 
-  --chat-fog: 10 12 18; /* = --sfc-gray-50 page, matches the bg-gray-50 sidebar */
+  --chat-fog: 24 24 24; /* = --sfc-gray-50 page (#181818), matches the bg-gray-50 sidebar */
   /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
      stay untouched: brand-dark elements remain dark); text folds 400..900 to
      light (50..300 + white stay untouched: light text on dark elements). */
-  --sfc-white: 15 19 28;
-  --sfc-gray-50: 10 12 18;
-  --sfc-gray-100: 22 28 41;
-  --sfc-gray-200: 30 37 51;
-  --sfc-gray-300: 42 51 68;
-  --sfc-gray-400: 58 69 88;
-  --lin-gray-50: 24 30 42;
-  --lin-gray-100: 24 30 42;
-  --lin-gray-200: 30 37 51;
-  --lin-gray-300: 42 51 68;
-  --lin-gray-400: 58 69 88;
-  --txt-gray-400: 109 118 137;
-  --txt-gray-500: 139 147 167;
-  --txt-gray-600: 154 163 181;
-  --txt-gray-700: 185 192 207;
-  --txt-gray-800: 213 218 228;
-  --txt-gray-900: 230 233 239;
+  --sfc-white: 32 32 32;    /* #202020 card / elevated surface */
+  --sfc-gray-50: 24 24 24;   /* #181818 page */
+  --sfc-gray-100: 38 38 38;  /* #262626 hover / control fill */
+  --sfc-gray-200: 45 45 45;  /* #2d2d2d pressed / segment fill */
+  --sfc-gray-300: 56 56 56;  /* #383838 strong fill */
+  --sfc-gray-400: 72 72 72;  /* #484848 knobs / dots */
+  --lin-gray-50: 34 34 34;   /* #222222 */
+  --lin-gray-100: 38 38 38;  /* #262626 hairline */
+  --lin-gray-200: 47 47 47;  /* #2f2f2f standard border */
+  --lin-gray-300: 58 58 58;  /* #3a3a3a strong border */
+  --lin-gray-400: 74 74 74;  /* #4a4a4a focus ring */
+  --txt-gray-400: 107 107 107; /* #6b6b6b placeholder / icon */
+  --txt-gray-500: 138 138 138; /* #8a8a8a secondary text */
+  --txt-gray-600: 160 160 160; /* #a0a0a0 */
+  --txt-gray-700: 196 196 196; /* #c4c4c4 */
+  --txt-gray-800: 218 218 218; /* #dadada */
+  --txt-gray-900: 236 236 236; /* #ececec primary text */
   /* accents: 50->L12/S35, 100->L16, 200->L25; text 600/700/800 -> stock 400/300/200 */
   --acc-blue-50: 20 28 41;
   --acc-blue-100: 27 37 55;
@@ -318,11 +319,11 @@
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: #2a3344;
+  background: #333333;
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: #3a4558;
+  background: #454545;
 }
  
 @layer base {
@@ -929,30 +930,30 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    map, the memory graph and the workflow panels. Node/edge colors are set per
    graph in JS (theme-aware there); this only themes ReactFlow's own controls. */
 .dark .react-flow__controls {
-  box-shadow: 0 0 0 1px #1e2533;
+  box-shadow: 0 0 0 1px #2f2f2f;
 }
 .dark .react-flow__controls-button {
-  background: #161c29;
-  border-bottom: 1px solid #1e2533;
-  color: #e6e9ef;
-  fill: #e6e9ef;
+  background: #262626;
+  border-bottom: 1px solid #2f2f2f;
+  color: #ececec;
+  fill: #ececec;
 }
 .dark .react-flow__controls-button:hover {
-  background: #1e2533;
+  background: #2f2f2f;
 }
 .dark .react-flow__controls-button svg {
-  fill: #b9c0cf;
+  fill: #b0b0b0;
 }
 .dark .react-flow__minimap {
-  background: #0f131c;
+  background: #202020;
 }
 .dark .react-flow__attribution {
-  background: rgba(15, 19, 28, 0.7);
-  color: #6d7689;
+  background: rgba(24, 24, 24, 0.7);
+  color: #6b6b6b;
 }
 .dark .react-flow__attribution a {
-  color: #8b93a7;
+  color: #8a8a8a;
 }
 .dark .react-flow__panel {
-  color: #b9c0cf;
+  color: #b0b0b0;
 }

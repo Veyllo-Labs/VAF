@@ -534,7 +534,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <button
                                         type="button"
                                         onClick={onOpenAddWizard}
-                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         <UserPlus className="w-4 h-4" />
                                         Add account
@@ -617,8 +617,8 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                             >
                                                                 <span
                                                                     className={cn(
-                                                                        'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition translate-y-0.5 dark:bg-[#e8e8e8]',
-                                                                        (a.auto_sync_enabled ?? false) ? 'translate-x-4' : 'translate-x-0.5'
+                                                                        'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition translate-y-0.5',
+                                                                        (a.auto_sync_enabled ?? false) ? 'translate-x-4 dark:bg-[#1a1a1a]' : 'translate-x-0.5 dark:bg-[#e8e8e8]'
                                                                     )}
                                                                 />
                                                             </button>
@@ -937,7 +937,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                             <div className="shrink-0 px-5 py-4 border-t border-gray-200 bg-gray-50/80">
                                 <button
                                     type="button"
-                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Mail className="w-4 h-4" />
                                     Reply with Agent

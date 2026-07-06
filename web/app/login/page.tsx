@@ -625,7 +625,7 @@ export default function LoginPage() {
                                     <button
                                         type="submit"
                                         disabled={!username || !password || isLoading}
-                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -708,7 +708,7 @@ export default function LoginPage() {
                                 <button
                                     type="button"
                                     onClick={() => setStep('create_admin')}
-                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                 >
                                     {t('phoneYes')} <ArrowRight size={18} />
                                 </button>
@@ -770,7 +770,7 @@ export default function LoginPage() {
                                             <button
                                                 type="submit"
                                                 disabled={username.trim().length < 2}
-                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                             >
                                                 {t('continue')} <ArrowRight size={18} />
                                             </button>
@@ -827,7 +827,7 @@ export default function LoginPage() {
                                                 <button
                                                     type="submit"
                                                     disabled={!password || password !== confirmPassword || password.length < 8 || isLoading}
-                                                    className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                                    className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                                 >
                                                     {isLoading ? (
                                                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -883,7 +883,7 @@ export default function LoginPage() {
                                     <button
                                         type="submit"
                                         disabled={twoFACode.length < 6 || isLoading}
-                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -986,7 +986,7 @@ export default function LoginPage() {
                                         type="button"
                                         onClick={handleSaveVeylloKey}
                                         disabled={!veylloKey.trim() || veylloTesting}
-                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         {veylloTesting ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1073,7 +1073,7 @@ export default function LoginPage() {
                                             type="button"
                                             onClick={handleWizard2FAVerify}
                                             disabled={twoFACode.length < 6 || isLoading}
-                                            className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                            className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                         >
                                             {isLoading ? (
                                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1087,7 +1087,7 @@ export default function LoginPage() {
                                     <button
                                         type="button"
                                         onClick={() => { setBootstrapError(null); handleStartSetup2FA(); }}
-                                        className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         {t('retry')}
                                     </button>

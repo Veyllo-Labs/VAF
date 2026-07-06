@@ -268,8 +268,8 @@ export default function TTSSettings({
                     )}
                 >
                     <div className={cn(
-                        "w-5 h-5 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
-                        ttsEnabled ? "translate-x-5" : "translate-x-0.5"
+                        "w-5 h-5 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                        ttsEnabled ? "translate-x-5 dark:bg-[#1a1a1a]" : "translate-x-0.5 dark:bg-[#e8e8e8]"
                     )} />
                 </button>
             </div>
@@ -462,8 +462,8 @@ export default function TTSSettings({
                                         )}
                                     >
                                         <div className={cn(
-                                            "w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
-                                            config?.auto_detect ? "translate-x-5" : "translate-x-0.5"
+                                            "w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                                            config?.auto_detect ? "translate-x-5 dark:bg-[#1a1a1a]" : "translate-x-0.5 dark:bg-[#e8e8e8]"
                                         )} />
                                     </button>
                                 </div>
@@ -481,8 +481,8 @@ export default function TTSSettings({
                                         )}
                                     >
                                         <div className={cn(
-                                            "w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
-                                            autoSpeak ? "translate-x-5" : "translate-x-0.5"
+                                            "w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                                            autoSpeak ? "translate-x-5 dark:bg-[#1a1a1a]" : "translate-x-0.5 dark:bg-[#e8e8e8]"
                                         )} />
                                     </button>
                                 </div>

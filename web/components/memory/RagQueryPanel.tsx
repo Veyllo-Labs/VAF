@@ -94,7 +94,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                     <button
                         type="submit"
                         disabled={!localQuery.trim() || isQuerying}
-                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                     >
                         {isQuerying ? (
                             <Loader2 className="w-4 h-4 animate-spin" />

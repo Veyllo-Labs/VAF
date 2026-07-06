@@ -242,7 +242,7 @@ export default function McpServerEditor({ server, isSaving = false, backendError
           ) : <span />}
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-4 h-10 text-gray-600 hover:bg-gray-100 rounded-xl text-sm font-medium transition-colors">{t('cancel')}</button>
-            <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 h-10 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none">
+            <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 h-10 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none">
               {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} {t('save')}
             </button>
           </div>

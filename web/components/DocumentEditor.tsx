@@ -904,7 +904,7 @@ function LegacyDocumentEditor({
                 <Printer size={14} />
                 Print
             </button>
-            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none" title="Als PDF-Datei herunterladen">
+            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Als PDF-Datei herunterladen">
                 {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 PDF
             </button>
@@ -1148,7 +1148,7 @@ function LegacyDocumentEditor({
                                     <a
                                         href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                         download={displayFile}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         <Download size={14} />
                                         Download
@@ -1179,7 +1179,7 @@ function LegacyDocumentEditor({
                                     <a
                                         href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                         download={displayFile}
-                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         <Download size={16} />
                                         Datei herunterladen
@@ -1302,7 +1302,7 @@ function LegacyDocumentEditor({
                                 <a
                                     href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                     download={displayFile}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Download size={14} />
                                     Download
@@ -1333,7 +1333,7 @@ function LegacyDocumentEditor({
                                 <a
                                     href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                     download={displayFile}
-                                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Download size={18} />
                                     Datei herunterladen

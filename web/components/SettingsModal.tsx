@@ -2279,7 +2279,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         type="button"
                                                         onClick={() => { onRequestModelPreview(hfDownloadRepo); }}
                                                         disabled={!hfDownloadRepo.trim() || downloadModelStatus?.status === 'downloading'}
-                                                        className="px-3 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-black dark:hover:bg-white dark:shadow-none disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors h-10 flex items-center justify-center gap-2 min-w-[100px]"
+                                                        className="px-3 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-white dark:shadow-none disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors h-10 flex items-center justify-center gap-2 min-w-[100px]"
                                                         title={tAi('downloadModelButton')}
                                                     >
                                                         {downloadModelStatus?.status === 'downloading' ? (
@@ -2619,8 +2619,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 }`}
                                             >
                                                 <span
-                                                    className={`inline-block h-4 w-4 transform rounded-full bg-white dark:bg-[#e8e8e8] transition-transform ${
-                                                        localConfig.temperature_auto ? 'translate-x-4' : 'translate-x-1'
+                                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                        localConfig.temperature_auto ? 'translate-x-4 dark:bg-[#1a1a1a]' : 'translate-x-1 dark:bg-[#e8e8e8]'
                                                     }`}
                                                 />
                                             </button>
@@ -2777,7 +2777,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 type="button"
                                                 onClick={saveDateTimeSettings}
                                                 disabled={dateTimeSaving}
-                                                className="mt-3 px-4 py-2 bg-gray-800 dark:bg-[#e6e6e6] text-white dark:text-gray-900 rounded-lg hover:bg-gray-700 dark:hover:bg-white dark:shadow-none disabled:opacity-50 text-sm font-medium"
+                                                className="mt-3 px-4 py-2 bg-gray-800 dark:bg-[#e6e6e6] text-white dark:text-[#181818] rounded-lg hover:bg-gray-700 dark:hover:bg-white dark:shadow-none disabled:opacity-50 text-sm font-medium"
                                             >
                                                 {dateTimeSaving ? tCommon('saving') : tCommon('save')}
                                             </button>
@@ -2976,7 +2976,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                                 <button 
                                                     onClick={() => { setShowAddUserModal(true); setShowNewUserPassword(false); }}
-                                                    className="px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 font-medium rounded-lg text-sm shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2"
+                                                    className="px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] font-medium rounded-lg text-sm shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2"
                                                 >
                                                     <Plus size={16} /> {tLocalNet('add')}
                                                 </button>
@@ -3445,7 +3445,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                         <button
                                             onClick={() => setShowCreateAutomationModal(true)}
-                                            className="px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 font-medium rounded-lg text-sm transition-colors"
+                                            className="px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] font-medium rounded-lg text-sm transition-colors"
                                         >
                                             {tAutomations('createNew')}
                                         </button>
@@ -3521,7 +3521,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <div className="mt-4">
                                             <button
                                                 onClick={() => setShowCreateAutomationModal(true)}
-                                                className="w-full px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 font-medium rounded-lg text-sm transition-colors"
+                                                className="w-full px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] font-medium rounded-lg text-sm transition-colors"
                                             >
                                                 {tAutomations('createNew')}
                                             </button>
@@ -3690,7 +3690,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <button
                             onClick={handleSave}
                             disabled={!changed}
-                            className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-black dark:hover:bg-white shadow-lg shadow-gray-200 dark:shadow-none dark:ring-1 dark:ring-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+                            className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-white shadow-lg shadow-gray-200 dark:shadow-none dark:ring-1 dark:ring-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
                         >
                             <Save size={18} />
                             {tCommon('saveChanges')}
@@ -3755,7 +3755,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             onConfirmModelDownload(modelPreviewData.repo_id, filename);
                                             onCloseModelPreview?.();
                                         }}
-                                        className="px-4 py-2 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-black dark:hover:bg-white dark:shadow-none transition-colors flex items-center gap-2"
+                                        className="px-4 py-2 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-white dark:shadow-none transition-colors flex items-center gap-2"
                                     >
                                         <Download size={18} />
                                         {tAi('downloadModelButton')}
@@ -3785,7 +3785,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <button
                                         type="button"
                                         onClick={handleLogoutYes}
-                                        className="flex-1 py-2.5 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 transition-colors"
+                                        className="flex-1 py-2.5 rounded-xl font-medium bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] transition-colors"
                                     >
                                         {tCommon('yes')}
                                     </button>
@@ -4084,7 +4084,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <button
                                             onClick={() => { handleTrainTool(_name); setTrainingDashboard(_name); }}
                                             disabled={trainStatus === 'requesting'}
-                                            className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-amber-500 dark:hover:bg-white dark:shadow-none disabled:opacity-60 transition-colors"
+                                            className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500/90 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-amber-500 dark:hover:bg-white dark:shadow-none disabled:opacity-60 transition-colors"
                                         >
                                             {trainStatus === 'requesting' ? 'Requesting…' : (trainStatus || 'Train tool now')}
                                         </button>
@@ -4193,7 +4193,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         <div className="p-4 border-t border-gray-100 flex justify-end shrink-0">
                             <button
                                 onClick={() => setShowLicenseModal(false)}
-                                className="px-6 py-2 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 rounded-xl text-sm font-medium hover:bg-black dark:hover:bg-white dark:shadow-none transition-colors"
+                                className="px-6 py-2 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] rounded-xl text-sm font-medium hover:bg-black dark:hover:bg-white dark:shadow-none transition-colors"
                             >
                                 {tCommon('close')}
                             </button>
@@ -4664,7 +4664,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                 setShowCreateCategoryForm(false);
                                                             }
                                                         }}
-                                                        className="px-4 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-white transition-colors"
+                                                        className="px-4 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-gray-800 dark:hover:bg-white transition-colors"
                                                     >
                                                         {tCommon('create')}
                                                     </button>
@@ -4773,7 +4773,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                     setAddFormCategoryId(null);
                                                                 }
                                                             }}
-                                                            className="px-4 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-white transition-colors"
+                                                            className="px-4 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-gray-800 dark:hover:bg-white transition-colors"
                                                         >
                                                             {tCommon('save')}
                                                         </button>
@@ -4899,7 +4899,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <a
                                     href="/memory"
                                     target="_blank"
-                                    className="flex items-center gap-2 px-4 py-2 max-md:px-2.5 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 font-medium rounded-lg transition-colors text-sm whitespace-nowrap"
+                                    className="flex items-center gap-2 px-4 py-2 max-md:px-2.5 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] font-medium rounded-lg transition-colors text-sm whitespace-nowrap"
                                 >
                                     {tModals('memory.openFullView')}
                                     <ChevronRight size={16} className="max-md:hidden" />
@@ -4940,7 +4940,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     type="button"
                                                     onClick={fetchMemoryGraph}
                                                     disabled={memoryLoading}
-                                                    className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white disabled:opacity-50 text-white dark:text-gray-900 font-medium rounded-lg transition-colors text-sm"
+                                                    className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white disabled:opacity-50 text-white dark:text-[#181818] font-medium rounded-lg transition-colors text-sm"
                                                 >
                                                     <RefreshCw size={16} className={memoryLoading ? 'animate-spin' : ''} />
                                                     {tCommon('refresh')}
@@ -4955,7 +4955,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <a 
                                                     href="/memory"
                                                     target="_blank"
-                                                    className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 font-medium rounded-lg transition-colors text-sm"
+                                                    className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] font-medium rounded-lg transition-colors text-sm"
                                                 >
                                                     {tModals('memory.createMemory')}
                                                     <ChevronRight size={16} />
@@ -5588,8 +5588,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                 >
                                     <div className={cn(
-                                        "absolute top-1 w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow transition-transform",
-                                        newUser.createDb ? "translate-x-6" : "translate-x-1"
+                                        "absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                                        newUser.createDb ? "translate-x-6 dark:bg-[#1a1a1a]" : "translate-x-1 dark:bg-[#e8e8e8]"
                                     )} />
                                 </button>
                             </div>
@@ -5603,7 +5603,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             >
                                 {tCommon('cancel')}
                             </button>
-                            <button onClick={handleCreateUser} className="bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-gray-900 px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors">
+                            <button onClick={handleCreateUser} className="bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-white text-white dark:text-[#181818] px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors">
                                 <Plus size={18} />
                                 {tModals('addUser.createUser')}
                             </button>
@@ -5731,7 +5731,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <button onClick={() => setEditingUser(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 font-medium rounded-lg transition-colors">
                                     {tCommon('cancel')}
                                 </button>
-                                <button onClick={handleUpdateUser} className="px-6 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-black dark:hover:bg-white shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2">
+                                <button onClick={handleUpdateUser} className="px-6 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-white shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2">
                                     <Save size={16} /> {tCommon('saveChanges')}
                                 </button>
                             </div>
@@ -5845,7 +5845,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     setEditingUser(selectedUser);
                                     setSelectedUser(null);
                                 }}
-                                className="px-6 py-2.5 rounded-xl font-medium bg-blue-600 dark:bg-[#e6e6e6] text-white dark:text-gray-900 hover:bg-blue-700 dark:hover:bg-white shadow-lg shadow-blue-200 dark:shadow-none transition-all flex items-center gap-2"
+                                className="px-6 py-2.5 rounded-xl font-medium bg-blue-600 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-blue-700 dark:hover:bg-white shadow-lg shadow-blue-200 dark:shadow-none transition-all flex items-center gap-2"
                             >
                                 <Edit size={16} /> {tModals('userDetail.editUser')}
                             </button>
@@ -5968,7 +5968,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     handleChange('local_network_tls_enabled', true);
                                     setShowNetworkWarning(false);
                                 }}
-                                className="flex-1 py-2.5 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-gray-900 font-medium rounded-lg hover:bg-black dark:hover:bg-white transition-colors"
+                                className="flex-1 py-2.5 bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] font-medium rounded-lg hover:bg-black dark:hover:bg-white transition-colors"
                             >
                                 {tLocalNet('enableHosting')}
                             </button>
@@ -6303,8 +6303,8 @@ const Switch = ({ label, description, checked, onChange }: SwitchProps) => (
             )}
         >
             <div className={cn(
-                "absolute top-0.5 left-0.5 w-5 h-5 bg-white dark:bg-[#e8e8e8] rounded-full shadow-sm transition-transform duration-200",
-                checked ? "translate-x-5" : "translate-x-0"
+                "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200",
+                checked ? "translate-x-5 dark:bg-[#1a1a1a]" : "translate-x-0 dark:bg-[#e8e8e8]"
             )} />
         </button>
     </div>

@@ -157,7 +157,7 @@ function CreateMemoryModal({
                         <button
                             type="submit"
                             disabled={!content.trim() || isCreating}
-                            className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                            className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                         >
                             {isCreating ? (
                                 <>
@@ -424,7 +424,7 @@ export default function MemoryPage() {
 
                             <button
                                 onClick={() => setShowCreateModal(true)}
-                                className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                             >
                                 <Plus className="w-4 h-4" />
                                 <span className="hidden sm:inline">New Memory</span>

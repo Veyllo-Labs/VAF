@@ -513,7 +513,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                         setShowAddNotePopup(false);
                                     }
                                 }}
-                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                             >
                                 Add
                             </button>
@@ -567,7 +567,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                         setShowAddTodoPopup(false);
                                     }
                                 }}
-                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                             >
                                 Add
                             </button>

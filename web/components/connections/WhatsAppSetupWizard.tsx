@@ -282,7 +282,7 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
                         </p>
                         <button
                             onClick={() => startQrFlow(true)}
-                            className="w-full py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                            className="w-full py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                         >
                             Reset & get new QR code
                         </button>

@@ -288,7 +288,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                     <p className="text-sm text-gray-400 italic">{t('noAccounts')}</p>
                                     <button 
                                         onClick={onOpenAddWizard}
-                                        className="mt-4 px-4 py-2 bg-gray-900 text-white text-xs font-bold rounded-xl hover:bg-black transition-all dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="mt-4 px-4 py-2 bg-gray-900 text-white text-xs font-bold rounded-xl hover:bg-black transition-all dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         Connect GitHub
                                     </button>

@@ -178,7 +178,7 @@ export default function CalendarDashboard({ isOpen, onClose, onOpenAddWizard, re
                                         <button
                                             type="button"
                                             onClick={() => onOpenAddWizard()}
-                                            className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                            className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                         >
                                             {t('openEmailToConnect')}
                                         </button>

@@ -1138,7 +1138,7 @@ export default function NativeDocxEditor({
         <button type="button" onClick={printDocument} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Drucken">
           <Printer size={14} /> Drucken
         </button>
-        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none" title="Als PDF speichern">
+        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Als PDF speichern">
           {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} PDF
         </button>
       </div>

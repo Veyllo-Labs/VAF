@@ -418,7 +418,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     </div>
                                     <button
                                         onClick={handleStartVerification}
-                                        className="w-full py-3 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                        className="w-full py-3 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         Start Verification
                                     </button>
@@ -537,7 +537,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                             className={cn(
                                 "flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors",
                                 canProceed()
-                                    ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                    ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             )}
                         >

@@ -1001,8 +1001,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             )}
                                                         >
                                                             <div className={cn(
-                                                                "absolute top-1 w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow transition-transform",
-                                                                enabled ? "translate-x-6" : "translate-x-1"
+                                                                "absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                                                                enabled ? "translate-x-6 dark:bg-[#1a1a1a]" : "translate-x-1 dark:bg-[#e8e8e8]"
                                                             )} />
                                                         </button>
                                                     )}
@@ -1110,7 +1110,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors",
                                                         app.comingSoon || !app.available
                                                             ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                            : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
+                                                            : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                                     )}
                                                 >
                                                     <Plus className="w-4 h-4" />

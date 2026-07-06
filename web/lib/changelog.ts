@@ -31,6 +31,21 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a8',
+    date: '2026-07-06',
+    sections: [
+      {
+        kind: 'fixed',
+        items: [
+          'Updating VAF now works from any terminal. `vaf update` runs everywhere (on Windows, from the VAF folder: `run_vaf.bat update`), and the installer registers a real `vaf` command on your PATH.',
+          'An install made from a downloaded ZIP can now update — `vaf update` offers to convert it into a proper git checkout, then updates as usual. Your settings and build files are kept.',
+          'Updates no longer fail with “Git is not installed” when git is not on your PATH — VAF finds the portable git it downloaded itself, so you never need a separate git install.',
+          'A harmless “failed to start the run_tests tool” error no longer appears at startup.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a7',
     date: '2026-07-06',
     sections: [

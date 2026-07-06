@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a8] - 2026-07-06
+
 ### Fixed
 - **`vaf update` now works from any terminal.** The updater was reachable only through a
   shell alias (Linux/macOS, active only in a freshly-sourced interactive shell) and had
@@ -34,6 +36,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   been fetched. Git operations now resolve VAF's bundled MinGit as a fallback, and the bootstrap
   installer also persists it on the user PATH, so neither VAF nor the user needs a separate git
   install.
+- **A harmless startup error about the `run_tests` tool is gone.** The main agent tried to
+  instantiate a coder-only tool that needs a project directory, printing
+  `Failed to instantiate tool run_tests` on every start (the agent continued fine); it is now
+  correctly marked coder-only and no longer logs the error.
+
 
 ## [0.1.0a7] - 2026-07-06
 

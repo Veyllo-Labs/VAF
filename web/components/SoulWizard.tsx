@@ -152,7 +152,7 @@ ${selections.continuity}`;
                 {/* Header */}
                 <div className="h-16 border-b border-gray-100 flex items-center justify-between px-8 bg-gray-50/50 shrink-0 max-md:px-4">
                     <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center shadow-sm">
+                        <div className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center shadow-sm dark:bg-[#3a3a3a] dark:text-gray-100 dark:shadow-none">
                             <Wand2 size={18} />
                         </div>
                         <div>
@@ -170,7 +170,7 @@ ${selections.continuity}`;
                     {[1, 2, 3, 4].map(s => (
                         <div key={s} className={cn(
                             "h-full flex-1 transition-all duration-500",
-                            s <= step ? "bg-gray-900" : "bg-gray-100"
+                            s <= step ? "bg-gray-900 dark:bg-[#3a3a3a]" : "bg-gray-100"
                         )} />
                     ))}
                 </div>
@@ -208,7 +208,7 @@ ${selections.continuity}`;
                                                 className={cn(
                                                     "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
                                                     isAdded
-                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        ? "bg-gray-900 text-white border-gray-900 dark:bg-[#3a3a3a] dark:text-white"
                                                         : "bg-white border-gray-200 hover:border-gray-400"
                                                 )}
                                             >
@@ -251,7 +251,7 @@ ${selections.continuity}`;
                                                 className={cn(
                                                     "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
                                                     isAdded
-                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        ? "bg-gray-900 text-white border-gray-900 dark:bg-[#3a3a3a] dark:text-white"
                                                         : "bg-white border-gray-200 hover:border-gray-400"
                                                 )}
                                             >
@@ -294,7 +294,7 @@ ${selections.continuity}`;
                                                 className={cn(
                                                     "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
                                                     isAdded
-                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        ? "bg-gray-900 text-white border-gray-900 dark:bg-[#3a3a3a] dark:text-white"
                                                         : "bg-white border-gray-200 hover:border-gray-400"
                                                 )}
                                             >
@@ -337,7 +337,7 @@ ${selections.continuity}`;
                                                 className={cn(
                                                     "text-xs px-3 py-1.5 border rounded-lg transition-all text-gray-600",
                                                     isAdded
-                                                        ? "bg-gray-900 text-white border-gray-900"
+                                                        ? "bg-gray-900 text-white border-gray-900 dark:bg-[#3a3a3a] dark:text-white"
                                                         : "bg-white border-gray-200 hover:border-gray-400"
                                                 )}
                                             >
@@ -369,7 +369,7 @@ ${selections.continuity}`;
                     </button>
                     <button
                         onClick={handleNext}
-                        className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-sm transition-all flex items-center gap-2"
+                        className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-sm transition-all flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                     >
                         {step === 4 ? t('soulComplete') : t('soulNext')}
                         <ChevronRight size={16} />

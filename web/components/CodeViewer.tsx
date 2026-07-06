@@ -254,7 +254,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         <button
           onClick={handleSave}
           disabled={!isDirty || isSaving}
-          className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
           title="Save (Ctrl+S)"
         >
           {isSaving ? (

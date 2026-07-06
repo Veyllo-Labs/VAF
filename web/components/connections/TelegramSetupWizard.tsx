@@ -218,7 +218,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                                 <div className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
                                     idx < currentStep ? "bg-green-500 text-white" :
-                                    idx === currentStep ? "bg-gray-900 text-white" :
+                                    idx === currentStep ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white" :
                                     "bg-gray-200 text-gray-500"
                                 )}>
                                     {idx < currentStep ? <Check className="w-4 h-4" /> : idx + 1}
@@ -343,7 +343,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                                     </ol>
                                     <button
                                         onClick={handleStartVerification}
-                                        className="w-full py-3 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors"
+                                        className="w-full py-3 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         Start Verification
                                     </button>
@@ -417,7 +417,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                                         <button
                                             onClick={handleAddToWhitelist}
                                             disabled={isAddingWhitelist}
-                                            className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white font-medium disabled:opacity-50"
+                                            className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white font-medium disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                         >
                                             {isAddingWhitelist ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
                                             Add to whitelist
@@ -473,7 +473,7 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                             className={cn(
                                 "flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors",
                                 (currentStep === 4 ? whitelistAdded : canProceed())
-                                    ? "bg-gray-900 hover:bg-gray-800 text-white"
+                                    ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             )}
                         >

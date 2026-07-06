@@ -534,7 +534,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <button
                                         type="button"
                                         onClick={onOpenAddWizard}
-                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors"
+                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         <UserPlus className="w-4 h-4" />
                                         Add account
@@ -611,13 +611,13 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                                                 aria-checked={a.auto_sync_enabled ?? false}
                                                                 className={cn(
                                                                     'relative inline-flex h-5 w-9 shrink-0 rounded-full border transition-colors',
-                                                                    (a.auto_sync_enabled ?? false) ? 'bg-gray-900 border-gray-900' : 'bg-gray-200 border-gray-200'
+                                                                    (a.auto_sync_enabled ?? false) ? 'bg-gray-900 border-gray-900 dark:bg-[#d9d9d9] dark:border-[#d9d9d9]' : 'bg-gray-200 border-gray-200 dark:bg-[#333333] dark:border-[#333333]'
                                                                 )}
                                                                 onClick={() => handleAutoSyncToggle(id, !(a.auto_sync_enabled ?? false))}
                                                             >
                                                                 <span
                                                                     className={cn(
-                                                                        'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition translate-y-0.5',
+                                                                        'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition translate-y-0.5 dark:bg-[#e8e8e8]',
                                                                         (a.auto_sync_enabled ?? false) ? 'translate-x-4' : 'translate-x-0.5'
                                                                     )}
                                                                 />
@@ -722,7 +722,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         onClick={() => { setSelectedCategory('all'); setMessagesOffset(0); }}
                                         className={cn(
                                             'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                                            selectedCategory === 'all' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                                            selectedCategory === 'all' ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-600 hover:bg-gray-100'
                                         )}
                                     >
                                         All
@@ -734,7 +734,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                             onClick={() => { setSelectedCategory(cat); setMessagesOffset(0); }}
                                             className={cn(
                                                 'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                                                selectedCategory === cat ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                                                selectedCategory === cat ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-600 hover:bg-gray-100'
                                             )}
                                         >
                                             {categoryDisplay(cat)}
@@ -896,7 +896,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                         className={cn(
                                             'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
                                             (selectedMessage.category || 'primary') === cat
-                                                ? 'bg-gray-900 text-white'
+                                                ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white'
                                                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                                         )}
                                     >
@@ -937,7 +937,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                             <div className="shrink-0 px-5 py-4 border-t border-gray-200 bg-gray-50/80">
                                 <button
                                     type="button"
-                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2"
+                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Mail className="w-4 h-4" />
                                     Reply with Agent

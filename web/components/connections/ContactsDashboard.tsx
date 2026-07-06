@@ -290,7 +290,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                 <button
                                     type="button"
                                     onClick={openCreate}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors text-sm"
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors text-sm dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Plus className="w-4 h-4" />
                                     Add contact
@@ -557,12 +557,12 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                             onClick={() => setForm(f => ({ ...f, allow_as_assistant_user: !(f.allow_as_assistant_user ?? false) }))}
                                             className={cn(
                                                 'relative w-11 h-6 rounded-full transition-colors',
-                                                (form.allow_as_assistant_user ?? false) ? 'bg-gray-800' : 'bg-gray-300'
+                                                (form.allow_as_assistant_user ?? false) ? 'bg-gray-800 dark:bg-[#d9d9d9]' : 'bg-gray-300 dark:bg-[#333333]'
                                             )}
                                         >
                                             <div
                                                 className={cn(
-                                                    'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform',
+                                                    'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform dark:bg-[#e8e8e8]',
                                                     (form.allow_as_assistant_user ?? false) ? 'translate-x-6' : 'translate-x-1'
                                                 )}
                                             />
@@ -587,7 +587,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                 type="button"
                                 onClick={handleSave}
                                 disabled={saving || !(form.name ?? '').trim()}
-                                className="bg-gray-900 hover:bg-gray-800 disabled:bg-gray-100 disabled:text-gray-400 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed"
+                                className="bg-gray-900 hover:bg-gray-800 disabled:bg-gray-100 disabled:text-gray-400 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 {saving ? 'Saving…' : 'Save'}
                             </button>

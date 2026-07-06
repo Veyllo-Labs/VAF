@@ -881,7 +881,7 @@ export default function DocumentViewer({
                 >
                     <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-6">
                         <div className="flex items-center gap-3 min-w-0">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm dark:bg-[#3a3a3a] dark:text-gray-100 dark:shadow-none">
                                 <FileText size={18} />
                             </div>
                             <div className="min-w-0">

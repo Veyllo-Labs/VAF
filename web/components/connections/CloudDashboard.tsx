@@ -301,7 +301,7 @@ export default function CloudDashboard({ isOpen, onClose, onOpenAddWizard, refre
                                 type="button"
                                 onClick={handleSearchAll}
                                 disabled={searchLoading || !searchQuery.trim()}
-                                className="shrink-0 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="shrink-0 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 {searchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                             </button>
@@ -327,7 +327,7 @@ export default function CloudDashboard({ isOpen, onClose, onOpenAddWizard, refre
                             ) : accounts.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center py-8 text-center">
                                     <p className="text-sm text-gray-600">No cloud accounts yet</p>
-                                    <button type="button" onClick={() => onOpenAddWizard()} className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800">
+                                    <button type="button" onClick={() => onOpenAddWizard()} className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none">
                                         <UserPlus className="w-4 h-4" /> Add account
                                     </button>
                                 </div>

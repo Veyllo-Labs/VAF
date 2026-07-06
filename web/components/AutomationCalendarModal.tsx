@@ -284,7 +284,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                     onClick={() => setAutomationCalendarViewDate(d => new Date(d.getFullYear(), i))}
                                     className={cn(
                                         'px-3.5 py-2 rounded-lg text-xs font-medium transition-colors shrink-0',
-                                        isSelected ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
+                                        isSelected ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
                                         isActualMonth && 'ring-2 ring-red-500'
                                     )}
                                 >
@@ -407,7 +407,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                                                     tabIndex={0}
                                                                     onClick={(e) => { e.stopPropagation(); onEditAutomation?.(auto); }}
                                                                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onEditAutomation?.(auto); } }}
-                                                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-800 text-white text-xs font-medium truncate max-w-[180px] cursor-pointer hover:bg-gray-700 transition-colors"
+                                                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-800 text-white text-xs font-medium truncate max-w-[180px] cursor-pointer hover:bg-gray-700 transition-colors dark:bg-[#3a3a3a] dark:text-gray-100"
                                                                     title={t('editSlotTooltip', { name: auto.name })}
                                                                 >
                                                                     <Zap className="w-3 h-3 shrink-0" />
@@ -513,7 +513,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                         setShowAddNotePopup(false);
                                     }
                                 }}
-                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700"
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 Add
                             </button>
@@ -567,7 +567,7 @@ export default function AutomationCalendarModal({ isOpen, onClose, currentUser, 
                                         setShowAddTodoPopup(false);
                                     }
                                 }}
-                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700"
+                                className="px-3 py-1.5 text-sm font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-700 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 Add
                             </button>

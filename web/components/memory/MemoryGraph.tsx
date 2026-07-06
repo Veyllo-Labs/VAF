@@ -830,7 +830,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
                                 type="button"
                                 onClick={() => fetchGraph()}
                                 disabled={isLoading}
-                                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
                                 Refresh

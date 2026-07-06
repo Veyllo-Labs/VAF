@@ -904,7 +904,7 @@ function LegacyDocumentEditor({
                 <Printer size={14} />
                 Print
             </button>
-            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50" title="Als PDF-Datei herunterladen">
+            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none" title="Als PDF-Datei herunterladen">
                 {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 PDF
             </button>
@@ -1148,7 +1148,7 @@ function LegacyDocumentEditor({
                                     <a
                                         href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                         download={displayFile}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors"
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         <Download size={14} />
                                         Download
@@ -1179,7 +1179,7 @@ function LegacyDocumentEditor({
                                     <a
                                         href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                         download={displayFile}
-                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         <Download size={16} />
                                         Datei herunterladen
@@ -1279,7 +1279,7 @@ function LegacyDocumentEditor({
                     {/* Header */}
                     <div className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6 gap-2 min-w-0">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm dark:bg-[#3a3a3a] dark:text-gray-100 dark:shadow-none">
                                 <FileText size={18} />
                             </div>
                             <div className="min-w-0 flex-1 flex flex-col">
@@ -1302,7 +1302,7 @@ function LegacyDocumentEditor({
                                 <a
                                     href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                     download={displayFile}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Download size={14} />
                                     Download
@@ -1333,7 +1333,7 @@ function LegacyDocumentEditor({
                                 <a
                                     href={`${getApiBase()}/api/file?path=${encodeURIComponent(filePath)}`}
                                     download={displayFile}
-                                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors"
+                                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Download size={18} />
                                     Datei herunterladen

@@ -997,11 +997,11 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             onClick={() => handleToggleConnection(app.id, !enabled)}
                                                             className={cn(
                                                                 "relative w-11 h-6 rounded-full transition-colors",
-                                                                enabled ? "bg-gray-800" : "bg-gray-300"
+                                                                enabled ? "bg-gray-800 dark:bg-[#d9d9d9]" : "bg-gray-300 dark:bg-[#333333]"
                                                             )}
                                                         >
                                                             <div className={cn(
-                                                                "absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform",
+                                                                "absolute top-1 w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow transition-transform",
                                                                 enabled ? "translate-x-6" : "translate-x-1"
                                                             )} />
                                                         </button>
@@ -1110,7 +1110,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors",
                                                         app.comingSoon || !app.available
                                                             ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                            : "bg-gray-900 hover:bg-gray-800 text-white"
+                                                            : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                                     )}
                                                 >
                                                     <Plus className="w-4 h-4" />

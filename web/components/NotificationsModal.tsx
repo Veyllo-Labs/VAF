@@ -1461,7 +1461,7 @@ export default function NotificationsModal({
                 onClick={() => setSelectedSource('timeline')}
                 className={cn(
                   'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors text-left',
-                  selectedSource === 'timeline' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-200'
+                  selectedSource === 'timeline' ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
                 )}
               >
                 <svg width="13" height="13" viewBox="0 0 14 14" fill="none" className="shrink-0">
@@ -1482,7 +1482,7 @@ export default function NotificationsModal({
                 onClick={() => setSelectedSource('tooluse')}
                 className={cn(
                   'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors text-left',
-                  selectedSource === 'tooluse' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-200'
+                  selectedSource === 'tooluse' ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
                 )}
               >
                 <GitBranch size={13} className="shrink-0" />
@@ -1504,7 +1504,7 @@ export default function NotificationsModal({
                 onClick={() => setSelectedSource('activity')}
                 className={cn(
                   'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors text-left',
-                  selectedSource === 'activity' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-200'
+                  selectedSource === 'activity' ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
                 )}
               >
                 <Activity size={13} className="shrink-0" />
@@ -1547,7 +1547,7 @@ export default function NotificationsModal({
                         onClick={() => setSelectedSource(file.filename)}
                         className={cn(
                           'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors text-left',
-                          isSelected ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-200'
+                          isSelected ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
                         )}
                       >
                         <span className={cn('w-2 h-2 rounded-full shrink-0', DOMAIN_COLOR[domain] ?? 'bg-gray-400')} />

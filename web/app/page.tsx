@@ -5168,7 +5168,7 @@ function VAFDashboardContent() {
                 <button
                     type="button"
                     onClick={() => { setAuthError(null); setAuthChecking(true); setAuthRetryKey((k) => k + 1); }}
-                    className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800"
+                    className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                 >
                     {tAuth('retry')}
                 </button>
@@ -6234,7 +6234,7 @@ function VAFDashboardContent() {
                                                     className={cn(
                                                         "px-4 py-3 cursor-pointer flex items-center gap-3 transition-colors border-b border-gray-50 last:border-0",
                                                         idx === selectedSuggestionIndex
-                                                            ? "bg-gray-900 text-white"
+                                                            ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white"
                                                             : "hover:bg-gray-100 text-gray-700"
                                                     )}
                                                     onClick={() => handleSuggestionClick(item)}
@@ -6509,7 +6509,7 @@ function VAFDashboardContent() {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => setAttachedImages(prev => prev.filter(i => i.id !== img.id))}
-                                                                className="absolute -top-1.5 -right-1.5 bg-gray-800 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                className="absolute -top-1.5 -right-1.5 bg-gray-800 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100 transition-opacity dark:bg-[#e6e6e6] dark:text-gray-900"
                                                             >✕</button>
                                                         </div>
                                                     ))}
@@ -6602,7 +6602,7 @@ function VAFDashboardContent() {
                                             type="submit"
                                             disabled={(isGenerating && !isSubAgentRunning) || isIndexing || !input.trim()}
                                             aria-label="Send"
-                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
+                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                         >
                                             <Send size={18} />
                                         </button>
@@ -6616,7 +6616,7 @@ function VAFDashboardContent() {
                         <button
                             type="button"
                             onClick={() => setSubAgentSheetOpen(true)}
-                            className="lg:hidden fixed left-1/2 -translate-x-1/2 bottom-[92px] z-[55] flex items-center gap-2 max-w-[88%] pl-2 pr-2.5 py-1.5 rounded-full bg-gray-900 text-white shadow-lg active:bg-black"
+                            className="lg:hidden fixed left-1/2 -translate-x-1/2 bottom-[92px] z-[55] flex items-center gap-2 max-w-[88%] pl-2 pr-2.5 py-1.5 rounded-full bg-gray-900 text-white shadow-lg active:bg-black dark:bg-[#e6e6e6] dark:text-gray-900 dark:shadow-none"
                         >
                             <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center shrink-0"><Bot size={14} /></span>
                             <span className="text-xs font-medium truncate">{subAgentState.agentName || 'Agent-Fenster'}{subAgentState.status ? ` · ${subAgentState.status}` : ''}</span>
@@ -6873,7 +6873,7 @@ function VAFDashboardContent() {
                             <button
                                 onClick={() => workspaceFileInputRef.current?.click()}
                                 disabled={workspaceUploading}
-                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-50"
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 {workspaceUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                                 {workspaceUploading ? 'Uploading…' : 'Upload'}
@@ -7699,7 +7699,7 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
-                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors"
+                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 Always Allow
                             </button>

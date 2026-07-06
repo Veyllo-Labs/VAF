@@ -234,7 +234,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                         disabled={updating === acc.account_id}
                                         className={cn(
                                             "px-2.5 py-1 text-[10px] font-bold transition-colors",
-                                            !acc.allow_write ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
+                                            !acc.allow_write ? "bg-blue-100 text-blue-700 dark:bg-[#3a3a3a] dark:text-gray-100" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
                                             updating === acc.account_id && "opacity-50"
                                         )}
                                     >
@@ -245,7 +245,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                         disabled={updating === acc.account_id}
                                         className={cn(
                                             "px-2.5 py-1 text-[10px] font-bold transition-colors",
-                                            acc.allow_write ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
+                                            acc.allow_write ? "bg-amber-100 text-amber-700 dark:bg-[#3a3a3a] dark:text-gray-100" : "bg-gray-100 text-gray-500 hover:bg-gray-200",
                                             updating === acc.account_id && "opacity-50"
                                         )}
                                     >
@@ -288,7 +288,7 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                     <p className="text-sm text-gray-400 italic">{t('noAccounts')}</p>
                                     <button 
                                         onClick={onOpenAddWizard}
-                                        className="mt-4 px-4 py-2 bg-gray-900 text-white text-xs font-bold rounded-xl hover:bg-black transition-all"
+                                        className="mt-4 px-4 py-2 bg-gray-900 text-white text-xs font-bold rounded-xl hover:bg-black transition-all dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         Connect GitHub
                                     </button>
@@ -338,9 +338,9 @@ export default function GitHubDashboard({ isOpen, onClose, onOpenAddWizard, refr
                                                     disabled={updating === acc.account_id}
                                                     className={cn(
                                                         "px-3 py-1 rounded-lg text-[10px] font-bold transition-all",
-                                                        acc.allow_write 
-                                                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100" 
-                                                            : "bg-blue-50 text-blue-700 hover:bg-blue-100",
+                                                        acc.allow_write
+                                                            ? "bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-[#3a3a3a] dark:text-gray-100"
+                                                            : "bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-[#3a3a3a] dark:text-gray-100",
                                                         updating === acc.account_id && "opacity-50 cursor-not-allowed"
                                                     )}
                                                 >

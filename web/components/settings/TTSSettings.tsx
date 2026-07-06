@@ -264,11 +264,11 @@ export default function TTSSettings({
                     onClick={() => onTtsEnabledChange(!ttsEnabled)}
                     className={cn(
                         "w-11 h-6 rounded-full transition-colors relative",
-                        ttsEnabled ? "bg-gray-800" : "bg-gray-300"
+                        ttsEnabled ? "bg-gray-800 dark:bg-[#d9d9d9]" : "bg-gray-300 dark:bg-[#333333]"
                     )}
                 >
                     <div className={cn(
-                        "w-5 h-5 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                        "w-5 h-5 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
                         ttsEnabled ? "translate-x-5" : "translate-x-0.5"
                     )} />
                 </button>
@@ -458,11 +458,11 @@ export default function TTSSettings({
                                         onClick={() => updateConfig({ auto_detect: !config?.auto_detect })}
                                         className={cn(
                                             "w-10 h-5 rounded-full transition-colors relative",
-                                            config?.auto_detect ? "bg-gray-800" : "bg-gray-300"
+                                            config?.auto_detect ? "bg-gray-800 dark:bg-[#d9d9d9]" : "bg-gray-300 dark:bg-[#333333]"
                                         )}
                                     >
                                         <div className={cn(
-                                            "w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                                            "w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
                                             config?.auto_detect ? "translate-x-5" : "translate-x-0.5"
                                         )} />
                                     </button>
@@ -477,11 +477,11 @@ export default function TTSSettings({
                                         onClick={() => onAutoSpeakChange(!autoSpeak)}
                                         className={cn(
                                             "w-10 h-5 rounded-full transition-colors relative",
-                                            autoSpeak ? "bg-gray-800" : "bg-gray-300"
+                                            autoSpeak ? "bg-gray-800 dark:bg-[#d9d9d9]" : "bg-gray-300 dark:bg-[#333333]"
                                         )}
                                     >
                                         <div className={cn(
-                                            "w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-transform",
+                                            "w-4 h-4 rounded-full bg-white dark:bg-[#e8e8e8] shadow absolute top-0.5 transition-transform",
                                             autoSpeak ? "translate-x-5" : "translate-x-0.5"
                                         )} />
                                     </button>

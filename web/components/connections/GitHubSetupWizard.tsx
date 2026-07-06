@@ -274,7 +274,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                             <React.Fragment key={idx}>
                                 <div className={cn(
                                     'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all',
-                                    idx < currentStep ? 'bg-green-500 text-white' : idx === currentStep ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-500'
+                                    idx < currentStep ? 'bg-green-500 text-white' : idx === currentStep ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'bg-gray-200 text-gray-500'
                                 )}>
                                     {idx < currentStep ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
                                 </div>
@@ -348,7 +348,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                         <button
                                             onClick={handleSaveAdminOAuth}
                                             disabled={adminSaveStatus === 'saving' || !clientId.trim()}
-                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50"
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                         >
                                             {adminSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
                                             {adminSaveStatus === 'ok' ? t('saved') : adminSaveStatus === 'fail' ? t('saveFailed') : t('saveOAuthSettings')}
@@ -394,7 +394,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                     <button
                                         onClick={handleConnectOAuth}
                                         disabled={loading || !!deviceFlow || !oauthConfigured}
-                                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+                                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                     >
                                         {loading && !deviceFlow ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                                         {t('connectWithGitHub')}
@@ -476,7 +476,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                         <button
                                             onClick={handleConnectToken}
                                             disabled={tokenLoading || !token.trim()}
-                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-700 text-white text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-700 text-white text-sm font-medium hover:bg-gray-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                                         >
                                             {tokenLoading && <Loader2 className="w-4 h-4 animate-spin" />}
                                             {t('connectWithToken')}
@@ -498,7 +498,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                         {currentStep === 0 && (
                             <button
                                 onClick={() => setCurrentStep(1)}
-                                className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800"
+                                className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 {t('next')}
                                 <ChevronRight className="w-4 h-4" />

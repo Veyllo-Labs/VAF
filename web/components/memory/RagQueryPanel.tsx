@@ -94,7 +94,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                     <button
                         type="submit"
                         disabled={!localQuery.trim() || isQuerying}
-                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                     >
                         {isQuerying ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
@@ -168,7 +168,7 @@ export default function RagQueryPanel({ className, onSourceClick }: RagQueryPane
                                                 {Math.round(source.score * 100)}%
                                             </span>
                                             {source.metadata?.tags && source.metadata.tags.length > 0 && source.metadata.tags.slice(0, 3).map((tag: string) => (
-                                                <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">
+                                                <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded dark:bg-[#3a3a3a] dark:text-gray-100">
                                                     #{tag}
                                                 </span>
                                             ))}

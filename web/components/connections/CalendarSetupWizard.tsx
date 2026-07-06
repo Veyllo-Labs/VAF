@@ -138,7 +138,7 @@ export default function CalendarSetupWizard({ isOpen, onClose, onComplete, initi
                             <button
                                 type="button"
                                 onClick={handleDone}
-                                className="w-full py-2.5 px-4 rounded-lg font-medium bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                                className="w-full py-2.5 px-4 rounded-lg font-medium bg-gray-900 hover:bg-gray-800 text-white transition-colors dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none"
                             >
                                 Done
                             </button>

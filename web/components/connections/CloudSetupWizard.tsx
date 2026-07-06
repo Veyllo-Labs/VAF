@@ -374,7 +374,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                 <div className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
                                     idx < currentStep ? "bg-green-500 text-white" :
-                                    idx === currentStep ? "bg-gray-900 text-white" :
+                                    idx === currentStep ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white" :
                                     "bg-gray-200 text-gray-500"
                                 )}>
                                     {idx < currentStep ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
@@ -438,7 +438,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                         When done, click the button below to refresh.
                                     </p>
                                     <a href={authUrl} target="_blank" rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800">
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none">
                                         <ExternalLink className="w-4 h-4" />
                                         Open sign-in page
                                     </a>
@@ -520,7 +520,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                                     </div>
                                     <div className="flex items-center gap-2 flex-wrap">
                                         <button onClick={handleSaveAdminOAuth} disabled={adminSaveStatus === 'saving'}
-                                            className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50">
+                                            className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none">
                                             {adminSaveStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Save'}
                                         </button>
                                         {adminSaveStatus === 'ok' && (
@@ -696,7 +696,7 @@ export default function CloudSetupWizard({ isOpen, onClose, onComplete, initialP
                             disabled={isNextDisabled}
                             className={cn(
                                 "flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors",
-                                !isNextDisabled ? "bg-gray-900 hover:bg-gray-800 text-white" : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                                !isNextDisabled ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-gray-900 dark:hover:bg-white dark:shadow-none" : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             )}>
                             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                             {currentStep === 1 && provider === 'nextcloud' ? 'Connect' :

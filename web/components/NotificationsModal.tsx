@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useThemeStore } from '@/lib/themeStore';
 import { getApiBase } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import ReactFlow, {
@@ -235,10 +236,44 @@ function ChainVisualization({ events, chainOk }: { events: TimelineEvent[]; chai
 
 const PROCESS_NODE_W = 210;
 
+// Theme-aware color tokens for the Logs/observation window. The tailwind palette
+// swap cannot reach this component — its timeline/canvas draw with raw inline hex —
+// so the theme is resolved explicitly. LIGHT values are byte-identical to the
+// pre-dark-mode literals; category hues (lane colors, error red, running amber,
+// success green) are intentionally shared across both themes.
+function tlColors(dark: boolean) {
+  return dark
+    ? {
+        bg: '#0f131c', bgLabel: '#12161f', bgRuler: '#161c29', bgAlt: '#131824',
+        panel: '#0a0c12', border: '#1e2533', borderLt: '#181e2a', borderFaint: '#161c26',
+        tickMaj: '#6b7280', tickMin: '#2a3344', tsColor: '#60a5fa',
+        dayLine: '#4b5563', dayText: '#b9c0cf', nowFill: '#ef444426',
+        flowBg: '#1e2533', node: '#161c29', cursorBar: '#c8d0e8',
+        badgeBg: '#2a3344', badgeText: '#e6e9ef', barTrack: '#2a3344', barTrackSel: '#3a4558',
+        errBg: '#241417', warnBg: '#241f10', errChrome: '#2a1416', liveChrome: '#2a1416',
+        textStrong: '#e6e9ef', textMid: '#b9c0cf', textDim: '#8b93a7', textMuted: '#8b93a7',
+        textFaint: '#6d7689', textArg: '#9aa3b5', textResult: '#9aa3b5', textLabel: '#8b93a7',
+      }
+    : {
+        bg: '#ffffff', bgLabel: '#f9fafb', bgRuler: '#f3f4f6', bgAlt: '#fafafa',
+        panel: '#f8fafc', border: '#e5e7eb', borderLt: '#f3f4f6', borderFaint: '#f1f5f9',
+        tickMaj: '#9ca3af', tickMin: '#d1d5db', tsColor: '#3b82f6',
+        dayLine: '#9ca3af', dayText: '#374151', nowFill: '#ef444418',
+        flowBg: '#edf2f7', node: '#ffffff', cursorBar: '#1e293b',
+        badgeBg: '#1e293b', badgeText: '#ffffff', barTrack: '#f1f5f9', barTrackSel: '#334155',
+        errBg: '#fff5f5', warnBg: '#fffbeb', errChrome: '#fff1f2', liveChrome: '#fef2f2',
+        textStrong: '#111827', textMid: '#374151', textDim: '#94a3b8', textMuted: '#9ca3af',
+        textFaint: '#d1d5db', textArg: '#64748b', textResult: '#475569', textLabel: '#6b7280',
+      };
+}
+
+
+
 const ProcessNode = memo(({ data }: { data: {
   tool?: string; evType: string; status: string; duration_s?: number;
   color: string; selected: boolean; args?: string; session?: string;
 }}) => {
+  const C = tlColors(useThemeStore((st) => st.theme) === 'dark');
   const isErr = data.status === 'error';
   const isRun = data.status === 'running';
   const accent = isErr ? '#ef4444' : isRun ? '#f59e0b' : data.color;
@@ -246,7 +281,7 @@ const ProcessNode = memo(({ data }: { data: {
   return (
     <div style={{
       width: PROCESS_NODE_W,
-      background: data.selected ? accent + '0d' : '#ffffff',
+      background: data.selected ? accent + '0d' : C.node,
       borderRadius: 10,
       border: `1.5px solid ${data.selected ? accent : accent + '35'}`,
       borderLeft: `4px solid ${accent}`,
@@ -273,7 +308,7 @@ const ProcessNode = memo(({ data }: { data: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: accent, flexShrink: 0,
             animation: isRun ? 'pNodePulse 1.2s ease-in-out infinite' : undefined }} />
-          <span style={{ fontWeight: 700, fontSize: 11, color: '#111827',
+          <span style={{ fontWeight: 700, fontSize: 11, color: C.textStrong,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {data.tool ?? data.evType}
           </span>
@@ -287,12 +322,12 @@ const ProcessNode = memo(({ data }: { data: {
         {/* Duration + session */}
         <div style={{ display: 'flex', gap: 8, marginTop: 3, alignItems: 'center' }}>
           {data.duration_s != null && (
-            <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#9ca3af' }}>
+            <span style={{ fontSize: 9, fontFamily: 'monospace', color: C.textMuted }}>
               {data.duration_s < 1 ? `${Math.round(data.duration_s * 1000)}ms` : `${data.duration_s.toFixed(2)}s`}
             </span>
           )}
           {data.session && (
-            <span style={{ fontSize: 8, fontFamily: 'monospace', color: '#d1d5db',
+            <span style={{ fontSize: 8, fontFamily: 'monospace', color: C.textFaint,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
               {data.session.slice(0, 12)}
             </span>
@@ -301,7 +336,7 @@ const ProcessNode = memo(({ data }: { data: {
 
         {/* Duration bar */}
         {data.duration_s != null && (
-          <div style={{ marginTop: 5, height: 2, borderRadius: 1, background: data.selected ? '#334155' : '#f1f5f9', overflow: 'hidden' }}>
+          <div style={{ marginTop: 5, height: 2, borderRadius: 1, background: data.selected ? C.barTrackSel : C.barTrack, overflow: 'hidden' }}>
             <div style={{ height: '100%', borderRadius: 1, background: accent,
               width: `${Math.min((data.duration_s / 60) * 100, 100)}%`,
               animation: 'pNodeBar 0.5s ease-out' }} />
@@ -310,9 +345,9 @@ const ProcessNode = memo(({ data }: { data: {
 
         {/* Args snippet */}
         {data.args && (
-          <div style={{ marginTop: 4, fontSize: 9, color: '#6b7280',
+          <div style={{ marginTop: 4, fontSize: 9, color: C.textLabel,
             fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <span style={{ color: '#d1d5db' }}>→ </span>
+            <span style={{ color: C.textFaint }}>→ </span>
             {data.args.slice(0, 30)}
           </div>
         )}
@@ -348,6 +383,7 @@ function EventGraphContent({
   onNodeClick: (id: string) => void;
   onDeselect: () => void;
 }) {
+  const C = tlColors(useThemeStore((st) => st.theme) === 'dark');
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(nodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(edges);
 
@@ -366,7 +402,7 @@ function EventGraphContent({
       onPaneClick={onDeselect}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="#edf2f7" gap={32} />
+      <Background color={C.flowBg} gap={32} />
       <Controls showInteractive={false} style={{ bottom: 8, right: 8, left: 'auto', top: 'auto' }} />
     </ReactFlow>
   );
@@ -398,6 +434,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
   events: TimelineEvent[]; date: string; hour12?: boolean;
   i18n?: { activityTitle: string; clickHint: string; canvasHint: string };
 }) {
+  const C = tlColors(useThemeStore((st) => st.theme) === 'dark');
   const scrollRef      = useRef<HTMLDivElement>(null);
   const [hovered,      setHovered]      = useState<{ ev: TimelineEvent; mx: number; my: number } | null>(null);
   const [containerW,      setContainerW]      = useState(800);
@@ -599,18 +636,18 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
     : null;
 
   // ── Color tokens ──
-  const BG        = '#ffffff';
-  const BG_LABEL  = '#f9fafb';
-  const BG_RULER  = '#f3f4f6';
-  const BORDER    = '#e5e7eb';
-  const BORDER_LT = '#f3f4f6';
-  const TICK_MAJ  = '#9ca3af';
-  const TICK_MIN  = '#d1d5db';
-  const TS_COLOR  = '#3b82f6';
-  const DAY_LINE  = '#9ca3af';
-  const DAY_TEXT  = '#374151';
+  const BG        = C.bg;
+  const BG_LABEL  = C.bgLabel;
+  const BG_RULER  = C.bgRuler;
+  const BORDER    = C.border;
+  const BORDER_LT = C.borderLt;
+  const TICK_MAJ  = C.tickMaj;
+  const TICK_MIN  = C.tickMin;
+  const TS_COLOR  = C.tsColor;
+  const DAY_LINE  = C.dayLine;
+  const DAY_TEXT  = C.dayText;
   const NOW_LINE  = '#ef4444';
-  const NOW_FILL  = '#ef444418';
+  const NOW_FILL  = C.nowFill;
 
   if (events.length === 0) {
     return (
@@ -631,17 +668,17 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', flex: 1, minHeight: 0, borderBottom: `1px solid ${BORDER}` }}>
 
         {/* ── LEFT (2): Activity / detail panel ── */}
-        <div style={{ flex: 2, minWidth: 0, minHeight: isMobile ? 160 : 0, display: 'flex', flexDirection: 'column', borderRight: isMobile ? 'none' : `1px solid ${BORDER}`, borderBottom: isMobile ? `1px solid ${BORDER}` : 'none', background: '#fff', position: 'relative' }}>
+        <div style={{ flex: 2, minWidth: 0, minHeight: isMobile ? 160 : 0, display: 'flex', flexDirection: 'column', borderRight: isMobile ? 'none' : `1px solid ${BORDER}`, borderBottom: isMobile ? `1px solid ${BORDER}` : 'none', background: C.bg, position: 'relative' }}>
           {/* Header */}
           <div style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: `1px solid ${BORDER}`, background: BG_LABEL }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: cursorTs !== null ? '#6366f1' : '#d1d5db' }} />
-            <span style={{ fontSize: 10, fontWeight: 700, color: '#374151', letterSpacing: 0.3 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: cursorTs !== null ? '#6366f1' : C.tickMin }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.textMid, letterSpacing: 0.3 }}>
               {cursorTs !== null
                 ? new Date(cursorTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: isHour12 })
                 : (i18n?.activityTitle ?? 'Activity')}
             </span>
             {cursorTs !== null && (
-              <span style={{ fontSize: 9, color: '#94a3b8', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 9, color: C.textDim, marginLeft: 'auto' }}>
                 {activeAtCursor.length} event{activeAtCursor.length !== 1 ? 's' : ''}
               </span>
             )}
@@ -656,7 +693,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
             return (
               <div style={{
                 position: 'absolute', inset: 8, zIndex: 20,
-                background: '#ffffff',
+                background: C.bg,
                 border: `1.5px solid ${accent}50`,
                 borderLeft: `4px solid ${accent}`,
                 borderRadius: 10,
@@ -667,22 +704,22 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: accent + '0d', borderBottom: `1px solid ${accent}20`, flexShrink: 0 }}>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: accent }} />
-                  <span style={{ fontWeight: 700, fontSize: 12, color: '#111827', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontWeight: 700, fontSize: 12, color: C.textStrong, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {detailEvent.tool ?? detailEvent.type}
                   </span>
-                  <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#94a3b8', flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, fontFamily: 'monospace', color: C.textDim, flexShrink: 0 }}>
                     {formatTime(detailEvent.ts, isHour12)}
                   </span>
                   <button
                     onClick={() => { setDetailEvent(null); setSelectedCallId(null); }}
-                    style={{ width: 20, height: 20, borderRadius: 5, border: '1.5px solid #fca5a5', background: '#fff1f2', color: '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, lineHeight: 1 }}
+                    style={{ width: 20, height: 20, borderRadius: 5, border: '1.5px solid #fca5a5', background: C.errChrome, color: '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, lineHeight: 1 }}
                     title="Close"
                   >✕</button>
                 </div>
                 {/* Meta row */}
-                <div style={{ display: 'flex', gap: 12, padding: '6px 10px', borderBottom: `1px solid #f1f5f9`, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 12, padding: '6px 10px', borderBottom: `1px solid ${C.borderFaint}`, flexShrink: 0 }}>
                   {detailEvent.duration_s != null && (
-                    <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#64748b' }}>
+                    <span style={{ fontSize: 9, fontFamily: 'monospace', color: C.textArg }}>
                       ⏱ {detailEvent.duration_s < 1 ? `${Math.round(detailEvent.duration_s * 1000)}ms` : `${detailEvent.duration_s.toFixed(2)}s`}
                     </span>
                   )}
@@ -690,19 +727,19 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                     {detailEvent.status ?? 'ok'}
                   </span>
                   {detailEvent.session && (
-                    <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#d1d5db', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    <span style={{ fontSize: 9, fontFamily: 'monospace', color: C.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                       {detailEvent.session}
                     </span>
                   )}
                 </div>
                 {/* Scrollable log content — white background */}
-                <div style={{ flex: 1, overflowY: 'auto', background: '#ffffff', borderTop: '1px solid #f1f5f9' }}>
+                <div style={{ flex: 1, overflowY: 'auto', background: C.bg, borderTop: `1px solid ${C.borderFaint}` }}>
                   {loadingDetailLogs ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 10px', color: '#94a3b8', fontSize: 10, fontFamily: 'monospace' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 10px', color: C.textDim, fontSize: 10, fontFamily: 'monospace' }}>
                       <Loader2 size={12} className="animate-spin" />loading logs…
                     </div>
                   ) : detailLogs.length === 0 ? (
-                    <div style={{ padding: '12px 10px', color: '#94a3b8', fontSize: 10, fontFamily: 'monospace', textAlign: 'center' }}>
+                    <div style={{ padding: '12px 10px', color: C.textDim, fontSize: 10, fontFamily: 'monospace', textAlign: 'center' }}>
                       No log lines found within ±60s
                     </div>
                   ) : (
@@ -711,11 +748,11 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                         const isTimeline = entry.file.startsWith('timeline_');
                         const isErr  = /error/i.test(entry.line);
                         const isWarn = /warn/i.test(entry.line);
-                        const lineColor = isErr ? '#ef4444' : isWarn ? '#f59e0b' : isTimeline ? '#3b82f6' : '#374151';
-                        const bgColor   = isErr ? '#fff5f5' : isWarn ? '#fffbeb' : i % 2 === 0 ? '#ffffff' : '#f9fafb';
+                        const lineColor = isErr ? '#ef4444' : isWarn ? '#f59e0b' : isTimeline ? '#3b82f6' : C.textMid;
+                        const bgColor   = isErr ? C.errBg : isWarn ? C.warnBg : i % 2 === 0 ? C.bg : C.bgLabel;
                         return (
-                          <div key={i} style={{ display: 'flex', gap: 8, padding: (entry as any).block ? '6px 10px' : '2px 10px', fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, borderBottom: '1px solid #f3f4f6', background: bgColor }}>
-                            <span style={{ color: '#94a3b8', flexShrink: 0, minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 10 }}>
+                          <div key={i} style={{ display: 'flex', gap: 8, padding: (entry as any).block ? '6px 10px' : '2px 10px', fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, borderBottom: `1px solid ${C.borderLt}`, background: bgColor }}>
+                            <span style={{ color: C.textDim, flexShrink: 0, minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, fontSize: 10 }}>
                               {entry.file.replace(/_\d{4}-\d{2}-\d{2}/, '').replace(/\.log$|\.jsonl$/, '')}
                             </span>
                             <span style={{ color: lineColor, wordBreak: 'break-word', flex: 1, whiteSpace: (entry as any).block ? 'pre-wrap' : 'normal' }}>
@@ -734,11 +771,11 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
           {/* Content */}
           {cursorTs === null ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 16 }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.5">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={C.textFaint} strokeWidth="1.5">
                 <line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/>
-                <circle cx="12" cy="12" r="3" fill="#d1d5db"/>
+                <circle cx="12" cy="12" r="3" fill={C.textFaint}/>
               </svg>
-              <span style={{ fontSize: 10, color: '#9ca3af', fontFamily: 'monospace', textAlign: 'center' }}>
+              <span style={{ fontSize: 10, color: C.textMuted, fontFamily: 'monospace', textAlign: 'center' }}>
                 {(i18n?.clickHint ?? 'Click on the timeline\nto inspect that moment').split('\n').map((l, i) => <span key={i}>{l}{i === 0 && <br/>}</span>)}
               </span>
             </div>
@@ -749,26 +786,26 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                 const color = TL_LANES.find(l => l.key === cat)?.color ?? '#9ca3af';
                 const isErr = ev.status === 'error';
                 return (
-                  <div key={i} style={{ display: 'flex', gap: 10, padding: '7px 12px', borderBottom: `1px solid #f8fafc`, alignItems: 'flex-start' }}>
+                  <div key={i} style={{ display: 'flex', gap: 10, padding: '7px 12px', borderBottom: `1px solid ${C.panel}`, alignItems: 'flex-start' }}>
                     <div style={{ width: 3, borderRadius: 2, background: isErr ? '#ef4444' : color, flexShrink: 0, alignSelf: 'stretch', minHeight: 16 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: '#111827' }}>{ev.tool ?? ev.type}</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: C.textStrong }}>{ev.tool ?? ev.type}</span>
                         {ev.duration_s != null && (
-                          <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>
+                          <span style={{ fontSize: 11, fontFamily: 'monospace', color: C.textDim }}>
                             {ev.duration_s < 1 ? `${Math.round(ev.duration_s * 1000)}ms` : `${ev.duration_s.toFixed(2)}s`}
                           </span>
                         )}
                         <span style={{ fontSize: 11, color: isErr ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{ev.status ?? 'ok'}</span>
                       </div>
                       {ev.args && (
-                        <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', marginTop: 3, wordBreak: 'break-all', lineHeight: 1.5, maxHeight: 56, overflow: 'hidden' }}>
-                          <span style={{ color: '#94a3b8' }}>→ </span>{ev.args.slice(0, 200)}
+                        <div style={{ fontSize: 11, color: C.textArg, fontFamily: 'monospace', marginTop: 3, wordBreak: 'break-all', lineHeight: 1.5, maxHeight: 56, overflow: 'hidden' }}>
+                          <span style={{ color: C.textDim }}>→ </span>{ev.args.slice(0, 200)}
                         </div>
                       )}
                       {ev.result && (
-                        <div style={{ fontSize: 11, color: '#475569', fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-all', lineHeight: 1.5, maxHeight: 56, overflow: 'hidden' }}>
-                          <span style={{ color: '#94a3b8' }}>← </span>{ev.result.slice(0, 200)}
+                        <div style={{ fontSize: 11, color: C.textResult, fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-all', lineHeight: 1.5, maxHeight: 56, overflow: 'hidden' }}>
+                          <span style={{ color: C.textDim }}>← </span>{ev.result.slice(0, 200)}
                         </div>
                       )}
                     </div>
@@ -780,10 +817,10 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
         </div>
 
         {/* ── RIGHT (3): ReactFlow canvas ── */}
-        <div style={{ flex: 3, minWidth: 0, minHeight: isMobile ? 200 : 0, position: 'relative', background: '#f8fafc' }}>
+        <div style={{ flex: 3, minWidth: 0, minHeight: isMobile ? 200 : 0, position: 'relative', background: C.panel }}>
           {cursorTs === null ? (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <span style={{ fontSize: 10, color: '#d1d5db', fontFamily: 'monospace' }}>{i18n?.canvasHint ?? 'Flow'}</span>
+              <span style={{ fontSize: 10, color: C.textFaint, fontFamily: 'monospace' }}>{i18n?.canvasHint ?? 'Flow'}</span>
             </div>
           ) : (
             <EventGraph
@@ -813,7 +850,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
           {activeLanes.map(lane => (
             <div key={lane.key} style={{ height: LANE_H, borderBottom: `1px solid ${BORDER_LT}`, display: 'flex', alignItems: 'center', paddingLeft: 10, gap: 6, flexShrink: 0 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: lane.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: 10, color: C.textLabel, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {lane.label}
               </span>
             </div>
@@ -825,11 +862,11 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
 
           {/* Zoom buttons — sticky top-right, outside scroll area */}
           <div style={{ position: 'absolute', top: 4, right: 6, zIndex: 30, display: 'flex', alignItems: 'center', gap: 2, pointerEvents: 'auto' }}>
-            <button onClick={zoomOut} title="Zoom out (Ctrl+scroll)" style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', fontSize: 14, lineHeight: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>−</button>
-            <span style={{ fontSize: 9, fontFamily: 'monospace', color: '#6b7280', minWidth: 26, textAlign: 'center', userSelect: 'none' }}>
+            <button onClick={zoomOut} title="Zoom out (Ctrl+scroll)" style={{ width: 20, height: 20, borderRadius: 4, border: `1px solid ${C.tickMin}`, background: C.bgLabel, color: C.textMid, fontSize: 14, lineHeight: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>−</button>
+            <span style={{ fontSize: 9, fontFamily: 'monospace', color: C.textLabel, minWidth: 26, textAlign: 'center', userSelect: 'none' }}>
               {zoom < 1 ? `${(zoom * 100).toFixed(0)}%` : `${zoom.toFixed(1)}×`}
             </span>
-            <button onClick={zoomIn}  title="Zoom in (Ctrl+scroll)"  style={{ width: 20, height: 20, borderRadius: 4, border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', fontSize: 14, lineHeight: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>+</button>
+            <button onClick={zoomIn}  title="Zoom in (Ctrl+scroll)"  style={{ width: 20, height: 20, borderRadius: 4, border: `1px solid ${C.tickMin}`, background: C.bgLabel, color: C.textMid, fontSize: 14, lineHeight: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>+</button>
             {!autoScroll && (
               <button
                 onClick={() => {
@@ -838,7 +875,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                   if (scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
                 }}
                 title="Jump to now"
-                style={{ height: 20, padding: '0 5px', borderRadius: 4, border: '1px solid #fca5a5', background: '#fef2f2', color: '#ef4444', fontSize: 9, fontFamily: 'monospace', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ height: 20, padding: '0 5px', borderRadius: 4, border: '1px solid #fca5a5', background: C.liveChrome, color: '#ef4444', fontSize: 9, fontFamily: 'monospace', cursor: 'pointer', whiteSpace: 'nowrap' }}
               >▶ live</button>
             )}
           </div>
@@ -892,9 +929,9 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                 {/* Cursor marker in ruler — thick black line with time badge */}
                 {cursorTs !== null && (
                   <div style={{ position: 'absolute', left: toX(cursorTs), top: 0, bottom: 0, pointerEvents: 'none', zIndex: 25 }}>
-                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: -1, width: 3, background: '#1e293b' }} />
-                    <div style={{ position: 'absolute', bottom: -1, left: -5, width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: '8px solid #1e293b' }} />
-                    <span style={{ position: 'absolute', top: 3, left: 6, fontSize: 9, color: '#fff', fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', background: '#1e293b', padding: '1px 4px', borderRadius: 3 }}>
+                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: -1, width: 3, background: C.cursorBar }} />
+                    <div style={{ position: 'absolute', bottom: -1, left: -5, width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: `8px solid ${C.cursorBar}` }} />
+                    <span style={{ position: 'absolute', top: 3, left: 6, fontSize: 9, color: C.badgeText, fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', background: C.badgeBg, padding: '1px 4px', borderRadius: 3 }}>
                       {new Date(cursorTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: isHour12 })}
                     </span>
                   </div>
@@ -902,9 +939,9 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
                 {/* Playhead in ruler */}
                 {playheadX !== null && playheadTs && (
                   <div style={{ position: 'absolute', left: playheadX, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 20 }}>
-                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 1, borderLeft: '1px dashed #374151', opacity: 0.5 }} />
-                    <div style={{ position: 'absolute', bottom: -1, left: -4, width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '6px solid #374151' }} />
-                    <span style={{ position: 'absolute', top: 3, left: 5, fontSize: 9, color: '#1f2937', fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', background: 'white', padding: '1px 3px', borderRadius: 3, border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 1, borderLeft: `1px dashed ${C.textMid}`, opacity: 0.5 }} />
+                    <div style={{ position: 'absolute', bottom: -1, left: -4, width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: `6px solid ${C.textMid}` }} />
+                    <span style={{ position: 'absolute', top: 3, left: 5, fontSize: 9, color: C.textStrong, fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', background: C.bg, padding: '1px 3px', borderRadius: 3, border: `1px solid ${C.border}`, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                       {playheadTs}
                     </span>
                   </div>
@@ -913,13 +950,13 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
 
               {/* Lane rows */}
               {activeLanes.map((lane, li) => (
-                <div key={lane.key} style={{ height: LANE_H, position: 'relative', borderBottom: `1px solid ${BORDER_LT}`, overflow: 'hidden', background: li % 2 === 0 ? BG : '#fafafa' }}>
+                <div key={lane.key} style={{ height: LANE_H, position: 'relative', borderBottom: `1px solid ${BORDER_LT}`, overflow: 'hidden', background: li % 2 === 0 ? BG : C.bgAlt }}>
                   {ticks.map(tick => <div key={tick} style={{ position: 'absolute', left: toX(tick), top: 0, bottom: 0, width: 1, background: BORDER_LT }} />)}
                   {dayBounds.map(db => <div key={db} style={{ position: 'absolute', left: toX(db), top: 0, bottom: 0, width: 1, background: BORDER }} />)}
                   {isToday && <div style={{ position: 'absolute', left: toX(now), top: 0, bottom: 0, width: 1, background: NOW_FILL }} />}
-                  {playheadX !== null && <div style={{ position: 'absolute', left: playheadX, top: 0, bottom: 0, width: 1, borderLeft: '1px dashed #37415166', pointerEvents: 'none', zIndex: 5 }} />}
+                  {playheadX !== null && <div style={{ position: 'absolute', left: playheadX, top: 0, bottom: 0, width: 1, borderLeft: `1px dashed ${C.textMid}66`, pointerEvents: 'none', zIndex: 5 }} />}
                   {/* Thick cursor line — marks the clicked position */}
-                  {cursorTs !== null && <div style={{ position: 'absolute', left: toX(cursorTs) - 1, top: 0, bottom: 0, width: 3, background: '#1e293b', opacity: 0.85, pointerEvents: 'none', zIndex: 10 }} />}
+                  {cursorTs !== null && <div style={{ position: 'absolute', left: toX(cursorTs) - 1, top: 0, bottom: 0, width: 3, background: C.cursorBar, opacity: 0.85, pointerEvents: 'none', zIndex: 10 }} />}
                   {/* Events */}
                   {(byLane.get(lane.key) ?? []).map((ev, i) => {
                     const evTs  = new Date(ev.ts).getTime();

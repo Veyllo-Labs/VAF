@@ -920,3 +920,37 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .vaf-netmap .react-flow__edge-path {
   stroke-linecap: round;
 }
+
+/* ReactFlow v11 has no colorMode prop, so its chrome (controls, minimap,
+   attribution, panels) renders light on every theme. Dark overrides here cover
+   every ReactFlow surface in the app: the Logs/observation window, the network
+   map, the memory graph and the workflow panels. Node/edge colors are set per
+   graph in JS (theme-aware there); this only themes ReactFlow's own controls. */
+.dark .react-flow__controls {
+  box-shadow: 0 0 0 1px #1e2533;
+}
+.dark .react-flow__controls-button {
+  background: #161c29;
+  border-bottom: 1px solid #1e2533;
+  color: #e6e9ef;
+  fill: #e6e9ef;
+}
+.dark .react-flow__controls-button:hover {
+  background: #1e2533;
+}
+.dark .react-flow__controls-button svg {
+  fill: #b9c0cf;
+}
+.dark .react-flow__minimap {
+  background: #0f131c;
+}
+.dark .react-flow__attribution {
+  background: rgba(15, 19, 28, 0.7);
+  color: #6d7689;
+}
+.dark .react-flow__attribution a {
+  color: #8b93a7;
+}
+.dark .react-flow__panel {
+  color: #b9c0cf;
+}

@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import { useThemeStore } from '@/lib/themeStore';
 
 // Monaco is heavy — load it only on client side
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -30,6 +31,7 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
   const [content, setContent] = useState(initialContent ?? '');
   const [loadError, setLoadError] = useState<string | null>(null);
   const fileName = title ?? filePath?.split('/').pop() ?? 'file.html';
+  const theme = useThemeStore((s) => s.theme);
 
   // ── Fetch file from backend ─────────────────────────────────────────────────
   const fetchContent = useCallback(async () => {
@@ -150,7 +152,9 @@ export default function HtmlViewer({ isOpen, filePath, title, initialContent, on
           </div>
         ) : mode === 'preview' ? (
           <iframe
-            srcDoc={content || '<html><body style="font-family:sans-serif;color:#888;padding:2rem">Loading…</body></html>'}
+            srcDoc={content || (theme === 'dark'
+              ? '<html><body style="font-family:sans-serif;color:#8b93a7;background:#0f131c;padding:2rem;margin:0">Loading…</body></html>'
+              : '<html><body style="font-family:sans-serif;color:#888;padding:2rem">Loading…</body></html>')}
             title={fileName}
             className="w-full h-full border-0 bg-white"
             sandbox="allow-same-origin allow-scripts allow-forms"

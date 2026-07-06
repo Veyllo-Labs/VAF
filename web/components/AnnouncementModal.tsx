@@ -6,12 +6,34 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import type { ChangelogEntry, ChangeKind } from '@/lib/changelog';
+import { useThemeStore } from '@/lib/themeStore';
 
 // Veyllo design tokens (the app's Tailwind lacks these exact ones, so inline like NotificationsModal).
-const C = {
+// This whole modal is styled through this JS palette, which the Tailwind dark-palette swap cannot
+// see — so it carries its own dark variant, selected via the theme store. C_LIGHT keeps the
+// original values byte-for-byte (light mode stays pixel-identical); C_DARK maps onto the brand
+// dark tokens (panel #0f131c, control #161c29, text #e6e9ef, dim #8b93a7, borders #1e2533/#2a3344).
+const C_LIGHT = {
   surface: '#ffffff', fg: '#111827', muted: '#5b6472', faint: '#9aa3b2',
   line: '#e7e9ee', surface3: '#f1f4f8', ink: '#2a3142', accent: '#1d4ed8',
   accentSoft: 'rgba(29,78,216,.08)',
+  // ink glyph details drawn ON the ink shape (exclamation mark / orb interior)
+  inkContrast: '#ffffff',
+  // soft radial halo behind the icon
+  halo: 'rgba(17,24,39,.10)',
+  titleGradient: 'linear-gradient(180deg,#111827 30%,#354155)',
+  // the near-black CTA button keeps its brand color in dark mode; the border is the
+  // "subtle dark border polish" so it still reads against the dark card (user decision).
+  buttonBorder: 'transparent',
+};
+const C_DARK: typeof C_LIGHT = {
+  surface: '#0f131c', fg: '#e6e9ef', muted: '#8b93a7', faint: '#6d7689',
+  line: '#1e2533', surface3: '#161c29', ink: '#e6e9ef', accent: '#3b82f6',
+  accentSoft: 'rgba(59,130,246,.16)',
+  inkContrast: '#0f131c',
+  halo: 'rgba(230,233,239,.08)',
+  titleGradient: 'linear-gradient(180deg,#e6e9ef 30%,#b9c0cf)',
+  buttonBorder: '#2a3344',
 };
 
 const READ_SECONDS = 4;
@@ -47,6 +69,9 @@ export default function AnnouncementModal({
     }, 1000);
     return () => clearInterval(id);
   }, [isOpen, variant]);
+
+  // Pick the palette for the active theme (hook must run before the early return).
+  const C = useThemeStore((s) => s.theme) === 'dark' ? C_DARK : C_LIGHT;
 
   if (!isOpen) return null;
 

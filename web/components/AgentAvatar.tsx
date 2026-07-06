@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useThemeStore } from '@/lib/themeStore';
 
 // ── Agent Avatar: the living dot, as a character ──
 // Keyframes (agentAvatar* + emo* + body* + wink + activity b*/e*/i*) live in globals.css.
@@ -201,6 +202,9 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const [shown, setShown] = React.useState<AvatarMode>(mode);
     const [settling, setSettling] = React.useState(false);
     const isMobile = useIsMobile();  // mobile: reserve the scene width as the avatar's footprint instead of the desktop leftward lean
+    // Dark mode flips only the SURROUNDING inks (overlays, dim/outline tones) — the brand body
+    // (#111827 square) and its white dot are identity and stay UNCHANGED in both themes.
+    const isDark = useThemeStore((s) => s.theme === 'dark');
     // Settle-to-neutral, but STARVATION-PROOF. One in-flight 200ms timer always lands on the LATEST
     // requested mode; subsequent rapid changes do NOT restart it. The old code cleared+rescheduled the
     // timeout on every mode change, so a burst of flips faster than 200ms (e.g. thinking<->web_search
@@ -315,16 +319,26 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const dotColor = invert ? '#111827' : '#ffffff';
     const glow = invert ? '0 0 10px 3px rgba(17,24,39,0.35)' : '0 0 10px 3px rgba(255,255,255,0.35)';
     const ringColor = invert ? 'rgba(17,24,39,0.85)' : 'rgba(255,255,255,0.85)';
-    // The app surface is light (no dark mode), so overlay glyphs that sit OVER it — orbs, rings,
-    // halo, check, bang, satellite — must be DARK to be visible (like the showcase's var(--ink)
-    // on light). The eye stays white on the dark body, so it keeps dotColor/glow.
-    const overlay = '#2a3142';
-    const overlayGlow = '0 0 4px 1px rgba(30,36,52,0.35)';
-    const overlayRing = 'rgba(30,36,52,0.6)';
-    const bodyColor = tint?.body ?? (dim ? '#e5e7eb' : invert ? '#f3f4f6' : '#111827');
+    // Overlay glyphs that sit OVER the app surface — orbs, rings, halo, check, bang, satellite —
+    // take the surface's opposite ink (like the showcase's var(--ink)): dark #2a3142 on the light
+    // theme, brand light #e6e9ef on the dark theme (glow dimmed). The eye stays white on the dark
+    // body, so it keeps dotColor/glow in both themes.
+    const overlay = isDark ? '#e6e9ef' : '#2a3142';
+    const overlayGlow = isDark ? '0 0 4px 1px rgba(230,233,239,0.28)' : '0 0 4px 1px rgba(30,36,52,0.35)';
+    const overlayRing = isDark ? 'rgba(230,233,239,0.6)' : 'rgba(30,36,52,0.6)';
+    // `dim` (archived / non-latest message) mutes the figure toward the CURRENT surface: light
+    // gray on light, brand dark #2a3344 on dark (the inline hexes are immune to the palette swap,
+    // so without this the dim avatars render as light squares on the dark page). The judge
+    // `invert` body stays light in both themes (it is deliberately the body's opposite).
+    const dimBody = isDark ? '#2a3344' : '#e5e7eb';
+    const dimDot = isDark ? '#8b93a7' : '#b0b0b0';
+    const bodyColor = tint?.body ?? (dim ? dimBody : invert ? '#f3f4f6' : '#111827');
     // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
-    // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light mode.
+    // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light
+    // mode. On dark the dim body is dark-on-dark instead, so the lift becomes a faint LIGHT inset
+    // outline (invisible on the still-light invert body, so one value serves both).
     const lightBody = dim || invert;
+    const lightBodyLift = isDark ? 'inset 0 0 0 1px rgba(255,255,255,0.08)' : '0 1px 4px rgba(0,0,0,0.08)';
 
     const bodyAnimation = dim ? 'none' : (act ? (B_ACT[shown] ?? 'none') : (BODY_ANIM[shown] ?? 'none'));
     const eyeAnimation = dim ? 'none'
@@ -501,7 +515,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         }}>
                             <div style={{
                                 position: 'absolute', inset: 0, borderRadius: 6, backgroundColor: '#111827',
-                                boxShadow: '0 3px 8px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)',
+                                boxShadow: `0 3px 8px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,${isDark ? '0.08' : '0.05'})`,
                             }}>
                                 <span style={{
                                     position: 'absolute', left: '50%', top: '50%', width: 8, height: 8, marginLeft: -4, marginTop: -4,
@@ -552,8 +566,8 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                     <div style={{
                         position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: bodyColor,
                         boxShadow: (shown === 'blocked' || shown === 'delegate')
-                            ? '0 5px 14px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)'
-                            : (lightBody ? '0 1px 4px rgba(0,0,0,0.08)' : 'none'),
+                            ? `0 5px 14px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,${isDark ? '0.08' : '0.05'})`
+                            : (lightBody ? lightBodyLift : 'none'),
                         transformOrigin: act ? 'center' : 'center bottom',
                         animation: settling ? 'none' : bodyAnimation,
                         transition: 'transform 0.2s ease',
@@ -561,7 +575,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         <span style={{
                             position: 'absolute', left: '50%', top: '50%', width: eyeSize, height: eyeSize,
                             marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2), borderRadius: '50%',
-                            backgroundColor: tint?.dot ?? (dim ? '#b0b0b0' : dotColor),
+                            backgroundColor: tint?.dot ?? (dim ? dimDot : dotColor),
                             boxShadow: (active && !dim) ? glow : 'none',
                             transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
                             animation: settling ? 'none' : eyeAnimation,

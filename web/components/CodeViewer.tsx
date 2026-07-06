@@ -26,7 +26,7 @@ function MarkdownPreview({ source }: { source: string }) {
           ol: (p) => <ol className="list-decimal pl-6 my-2.5 space-y-1" {...p} />,
           a: (p) => <a className="text-blue-400 underline hover:text-blue-300" target="_blank" rel="noopener noreferrer" {...p} />,
           strong: (p) => <strong className="font-semibold text-white" {...p} />,
-          blockquote: (p) => <blockquote className="border-l-4 border-[#4e4e4e] pl-4 my-3 text-gray-400 italic" {...p} />,
+          blockquote: (p) => <blockquote className="border-l-4 border-[#4e4e4e] pl-4 my-3 text-[#9ca3af] italic" {...p} />,
           hr: () => <hr className="my-5 border-[#3e3e3e]" />,
           code: ({ className, children, ...rest }) => {
             const inline = !String(className || '').includes('language-');
@@ -209,7 +209,10 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2 bg-[#2d2d2d] border-b border-[#3e3e3e] shrink-0">
         {/* Language icon / badge */}
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#3e3e3e] text-gray-400 uppercase shrink-0">
+        {/* Always-dark viewer shell: gray text pinned to literal hex so the folding
+            dark-mode text ramp (text-gray-400/500 -> dim) cannot change it — the
+            viewer must render byte-identical in light and dark. */}
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#3e3e3e] text-[#9ca3af] uppercase shrink-0">
           {language}
         </span>
 
@@ -284,7 +287,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         {/* Refresh button */}
         <button
           onClick={() => fetchContent()}
-          className="p-1 rounded hover:bg-[#3e3e3e] text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+          className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 transition-colors shrink-0"
           title="Reload from disk"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -293,7 +296,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
         {/* Close button */}
         <button
           onClick={onClose}
-          className="p-1 rounded hover:bg-[#3e3e3e] text-gray-400 hover:text-gray-200 transition-colors shrink-0"
+          className="p-1 rounded hover:bg-[#3e3e3e] text-[#9ca3af] hover:text-gray-200 transition-colors shrink-0"
           title="Close"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -303,7 +306,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
       {/* ── Editor area ────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">
         {loadError ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400">
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-[#9ca3af]">
             <svg className="w-8 h-8 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             <p className="text-sm">{loadError}</p>
             <button onClick={() => fetchContent()} className="text-xs px-3 py-1.5 rounded bg-[#3e3e3e] hover:bg-[#4e4e4e] transition-colors">Retry</button>
@@ -339,7 +342,7 @@ export default function CodeViewer({ isOpen, filePath, title, initialContent, li
       </div>
 
       {/* ── Footer ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-3 py-1 bg-[#2d2d2d] border-t border-[#3e3e3e] text-[10px] text-gray-500 shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1 bg-[#2d2d2d] border-t border-[#3e3e3e] text-[10px] text-[#6b7280] shrink-0">
         <span className="flex-1 truncate font-mono">{filePath}</span>
         {lastFetched && (
           <span>Updated {lastFetched.toLocaleTimeString()}</span>

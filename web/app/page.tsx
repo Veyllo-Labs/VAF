@@ -615,7 +615,7 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
 
     return (
         <div className={cn(
-            "relative w-full max-w-[95%] overflow-hidden rounded-[13px] border bg-gradient-to-b from-[#fcfcfd] to-[#f8fafc] dark:from-[#202020] dark:to-[#1c1c1c] transition-colors",
+            "relative w-full max-w-[95%] overflow-hidden rounded-[13px] border bg-gradient-to-b from-[#fcfcfd] to-[#f8fafc] dark:from-[#1e1e1e] dark:to-[#1e1e1e] transition-colors",
             !isComplete ? "border-[#ede9fe] dark:border-[#2f2f2f]" : "border-gray-200"
         )}>
             {!isComplete && <span className="chat-shimmer-overlay" aria-hidden />}
@@ -5252,7 +5252,7 @@ function VAFDashboardContent() {
                 <aside
                     data-editing={editingId ? 'true' : undefined}
                     className={cn(
-                    "group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 transition-[width,transform] duration-300 shadow-lg overflow-hidden",
+                    "group flex flex-col min-h-0 h-full bg-white border-r border-gray-200 transition-[width,transform] duration-300 shadow-lg dark:shadow-none overflow-hidden",
                     // While renaming a chat, pin the sidebar open (it only expands on hover otherwise)
                     // so the rename input never collapses out from under the user. The data-editing
                     // attribute reveals the labels via group-data-[editing=true]:opacity-100.

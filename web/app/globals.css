@@ -193,7 +193,7 @@
   --input: 0 0% 18%;
   --ring: 217 91% 60%;
 
-  --chat-fog: 24 24 24; /* = --sfc-gray-50 page (#181818), matches the bg-gray-50 sidebar */
+  --chat-fog: 32 32 32; /* #202020 = the bg-white sidebar tone (fog must match it, not the page) */
   /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
      stay untouched: brand-dark elements remain dark); text folds 400..900 to
      light (50..300 + white stay untouched: light text on dark elements). */

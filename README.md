@@ -1,4 +1,4 @@
-# VAF — Veyllo Agentic Framework
+# VAF - Veyllo Agentic Framework
 
 ```
 O))         O))       O))))))))
@@ -10,13 +10,13 @@ O))         O))       O))))))))
       O))          O))O))     (OO )
 ```
 
-An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface — on Windows, macOS, and Linux.
+An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 
 [![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)
 
-**Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft — `legal@veyllo.io`.
+**Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
 
-**Requires:** Git to clone, and a container runtime — VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. All three installers set the engine up for you: Windows installs the free Rancher Desktop, macOS auto-installs the free Colima (or uses Docker Desktop if present), and Linux auto-installs your distro's Docker (systemd + `docker` group). The installer also provisions Python and Node itself.
+**Requires:** Git to clone, and a container runtime. VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. All three installers set the engine up for you: Windows installs the free Rancher Desktop, macOS auto-installs the free Colima (or uses Docker Desktop if present), and Linux auto-installs your distro's Docker (systemd + `docker` group). The installer also provisions Python and Node itself.
 
 ---
 
@@ -48,14 +48,14 @@ git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
 chmod +x install.sh && ./install.sh
 ```
 
-The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), sets up a container engine for you (Rancher Desktop on Windows, Colima on macOS, your distro's Docker on Linux — or uses an existing one if present), and adds the `vaf` command to your shell.
+The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), sets up a container engine for you (Rancher Desktop on Windows, Colima on macOS, your distro's Docker on Linux, or uses an existing one if present), and adds the `vaf` command to your shell.
 
-> New to this, or never used `git`/a terminal? Follow the step-by-step [Installation Guide](docs/setup/INSTALLATION_GUIDE.md) — it covers installing git, where to put the folder, running the installer without admin, and troubleshooting.
+> New to this, or never used `git`/a terminal? Follow the step-by-step [Installation Guide](docs/setup/INSTALLATION_GUIDE.md). It covers installing git, where to put the folder, running the installer without admin, and troubleshooting.
 
-**Installation mode** — on **Linux**, the installer asks once (macOS and Windows always install Desktop mode):
+On **Linux**, the installer asks once which **installation mode** to use (macOS and Windows always install Desktop mode):
 ```
-[1] Desktop  — personal use, local only, system tray (default)
-[2] Server   — always-on service, LAN accessible via HTTPS, starts at boot
+[1] Desktop  - personal use, local only, system tray (default)
+[2] Server   - always-on service, LAN accessible via HTTPS, starts at boot
 ```
 Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) for details.
 
@@ -92,7 +92,7 @@ VAF runs in three modes depending on your use case.
 
 ### Desktop (recommended for personal use)
 
-The desktop app — system-tray icon + agent window, web UI at `http://localhost:3000`. Easiest start: double-click the **VAF Agent** shortcut the installer created, or run:
+The desktop app: system-tray icon + agent window, web UI at `http://localhost:3000`. Easiest start: double-click the **VAF Agent** shortcut the installer created, or run:
 
 ```bash
 vaf tray       # Start the desktop app (tray + web UI)
@@ -116,7 +116,7 @@ vaf server status  # Show active URLs
 
 ### Server (always-on, starts at boot)
 
-Installed via the **[2] Server** option. VAF runs as a systemd user service — use the same commands:
+Installed via the **[2] Server** option. VAF runs as a systemd user service. Use the same commands:
 
 ```bash
 vaf start      # systemctl --user start vaf
@@ -198,8 +198,8 @@ Switch provider or model at runtime: press `C` in the chat, or use `/model <name
 - GitHub
 
 **Developer**
-- Plugin system: drop a `BaseTool` subclass into `vaf/tools/` — auto-discovered at startup
-- Custom workflows: place a `WORKFLOW` dict in `~/.vaf/workflows/*.py` — auto-loaded
+- Plugin system: drop a `BaseTool` subclass into `vaf/tools/`, auto-discovered at startup
+- Custom workflows: place a `WORKFLOW` dict in `~/.vaf/workflows/*.py`, auto-loaded
 - MCP (Model Context Protocol) client support
 
 ---
@@ -267,7 +267,7 @@ Key config options (`config.json`):
 
 ## Extending VAF
 
-**Custom tool** — create `vaf/tools/my_tool.py`:
+**Custom tool** - create `vaf/tools/my_tool.py`:
 ```python
 from vaf.tools.base import BaseTool
 
@@ -286,7 +286,7 @@ class MyTool(BaseTool):
         return f"result for {kwargs['query']}"
 ```
 
-**Custom workflow** — create `~/.vaf/workflows/my_workflow.py`:
+**Custom workflow** - create `~/.vaf/workflows/my_workflow.py`:
 ```python
 WORKFLOW = {
     "name": "My Workflow",
@@ -299,7 +299,7 @@ WORKFLOW = {
 }
 ```
 
-Both are auto-discovered at startup — no registration needed.
+Both are auto-discovered at startup, no registration needed.
 
 ---
 
@@ -339,14 +339,11 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## Star History
 
-<a href="https://www.star-history.com/?type=date&repos=Veyllo-Labs/VAF">
+<a href="https://www.star-history.com/?repos=Veyllo-Labs%2FVAF&type=date&legend=top-left">
  <picture>
-   <!-- The `repos` value MUST be lowercase here: api.star-history.com 301-redirects a
-        mixed-case path to lowercase, and GitHub's image proxy (Camo) does not follow the
-        redirect, so a mixed-case URL renders as an empty chart. Do not "fix" the case. -->
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=veyllo-labs/vaf&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Veyllo-Labs/VAF&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Veyllo-Labs/VAF&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Veyllo-Labs/VAF&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -358,7 +355,7 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 VAF is **dual-licensed**:
 
-- **Open source — [GNU AGPL-3.0-or-later](LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use — even commercial — triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
+- **Open source - [GNU AGPL-3.0-or-later](LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use (even commercial) triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
 - **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](COMMERCIAL.md)**.
 
 See **[LICENSING.md](LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.

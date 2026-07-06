@@ -261,6 +261,7 @@ class RunTestsTool(BaseTool):
     """Coder tool: run the project's tests in the isolated sandbox and return the real result."""
 
     name = "run_tests"
+    coder_only = True              # coder-only: the main agent delegates via a coding_agent task
     permission_level = "read"      # reads the host project; executes only inside the sandbox
     side_effect_class = "none"     # never modifies the host project
     description = (
@@ -279,7 +280,9 @@ class RunTestsTool(BaseTool):
         "required": [],
     }
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str = "."):
+        # base_dir defaults so the main agent's tool loader can instantiate the class (obj()) without
+        # crashing; it is then excluded via coder_only. The coder passes the real project dir.
         self.base_dir = base_dir
 
     def run(self, **kwargs) -> str:

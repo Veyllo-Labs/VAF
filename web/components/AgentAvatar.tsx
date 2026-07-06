@@ -330,12 +330,14 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // gray on light, brand dark #2a3344 on dark (the inline hexes are immune to the palette swap,
     // so without this the dim avatars render as light squares on the dark page). The judge
     // `invert` body stays light in both themes (it is deliberately the body's opposite).
-    const dimBody = isDark ? '#2d2d2d' : '#e5e7eb';
+    // Dim (archived) body is a bit DARKER than the active body so the two are clearly
+    // distinguishable at a glance; its eye stays dimmed too.
+    const dimBody = isDark ? '#1e1e1e' : '#e5e7eb';
     const dimDot = isDark ? '#8a8a8a' : '#b0b0b0';
-    // Brand body: near-black #111827 on light. On the dark page (#181818) that is DARKER than
-    // the background and vanishes, so in dark mode the body becomes a strong blue-gray that reads
-    // clearly as the agent's square (the white dot stays white on top).
-    const brandBody = isDark ? '#333c4c' : '#111827';
+    // Active brand body: near-black #111827 on light. On the dark page (#181818) that vanishes,
+    // so in dark mode the body is a NEUTRAL dark gray (#2d2d2d, no blue tint) that reads clearly
+    // as the agent's square; the white dot stays white on top.
+    const brandBody = isDark ? '#2d2d2d' : '#111827';
     const bodyColor = tint?.body ?? (dim ? dimBody : invert ? '#f3f4f6' : brandBody);
     // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
     // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light

@@ -29,6 +29,7 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 224.3 76.3% 48%;
     --radius: 0.75rem;
+    --planbox-ink: #111827; /* plan-step box ink (border + filled) — light theme */
     /* Safe-area insets (notch / home indicator) — usable as var(--safe-bottom) etc.
        Resolve to 0 on devices/browsers without insets. Requires viewportFit:"cover". */
     --safe-top: env(safe-area-inset-top, 0px);
@@ -192,6 +193,7 @@
   --border: 0 0% 18%;
   --input: 0 0% 18%;
   --ring: 217 91% 60%;
+  --planbox-ink: #ececec; /* plan-step box ink goes light in dark mode */
 
   --chat-fog: 32 32 32; /* #202020 = the bg-white sidebar tone (fog must match it, not the page) */
   /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
@@ -887,7 +889,28 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 /* Setup/plan live indicator (the ▢–▢–▢ steps next to the agent). Boxes light up in sequence via
    OPACITY only (leak-safe); borders/links are static. currentColor = the line's text colour. */
-.planbox { display:block; width:8px; height:8px; border:1.3px solid #111827; background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }
+.planbox { display:block; width:8px; height:8px; border:1.3px solid var(--planbox-ink); background-color:transparent; border-radius:3px; transition: border-color .45s ease, background-color .45s ease, transform .45s ease, opacity .45s ease; }
+
+/* ── Dark mode: agent ANIMATION effects glow LIGHT. Only colors change here — the
+   geometry, timing and animation of every effect are untouched. The scene body square
+   stays the neutral avatar body (#2d2d2d); the thinking glyph stream, particles, lens,
+   terminal, globe (all via var(--ink)) and the plan boxes switch to a light ink. ── */
+.dark .tsc, .dark .asc {
+  --ink: #ececec;
+  --ink-soft: rgba(236, 236, 239, 0.60);
+  --ink-fill: rgba(236, 236, 239, 0.08);
+  --ink-faint: rgba(236, 236, 239, 0.16);
+  --line: rgba(236, 236, 239, 0.22);
+  --glow: rgba(236, 236, 239, 0.22);
+  --paper: #202020;
+  --paper-edge: rgba(236, 236, 239, 0.22);
+}
+.dark .tsc .bd, .dark .asc .bd { background: #2d2d2d; }
+.dark .tsc.search .pt.dark { background: #ececec; }
+.dark .tgly { color: #ececec; }
+.dark .tgly.circle, .dark .tgly.square, .dark .tgly.diamond { background: #ececec; }
+.dark .tgly.ring { border-color: #ececec; }
+.dark .tgly.tri { border-bottom-color: #ececec; }
 /* hover: pause the pulse so it's fully opaque, fill strongly with the colour, pop a touch. */
 /* hover colour is set inline by the PlanBox React component (no CSS vars); the transition above eases it. */
 .planlnk { display:block; width:5px; height:1.3px; background:#9ca3af; border-radius:1px; opacity:.5; }

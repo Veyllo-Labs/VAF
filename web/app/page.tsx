@@ -902,7 +902,7 @@ const PlanBox = ({ active, filled }: { active: boolean; filled: boolean }) => (
             // Monochrome (no colours): active = bigger & fully opaque, RANDOMLY black-filled OR just a
             // crisp bigger outline; idle = small, faint, hollow. transform/opacity = compositor and the
             // fill toggles per sequence tick (event-driven, not per frame), so it stays leak-safe.
-            backgroundColor: active && filled ? '#111827' : 'transparent',
+            backgroundColor: active && filled ? 'var(--planbox-ink)' : 'transparent',
             transform: active ? 'scale(1.28)' : 'scale(0.82)',
             opacity: active ? 1 : 0.4,
         }}

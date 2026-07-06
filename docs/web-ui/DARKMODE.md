@@ -104,6 +104,13 @@ The avatar is a rounded square **body** with a white **dot** (eye). See
 | Step dots — pending | faint near-bg ring `#4a4a4a` |
 | Expanded-dot halo | `hsl(var(--background))` = `#181818` (was a white glow) |
 
+All the animation **effects glow light** in dark mode — only colors change, never the
+geometry or timing. The scene effects run on an `--ink` variable system (`.tsc`/`.asc`
+in `globals.css`); under `.dark` it is redefined to a light ink so the thinking glyph
+stream (`.tgly`), particles, lens/terminal/globe, and the plan-step boxes (`.planbox`,
+driven by `--planbox-ink`) all render light (`#ececec` / soft white glow). The scene's
+own body square stays the neutral avatar body (`#2d2d2d`).
+
 ## Special surfaces
 
 | Surface | Dark-mode value |

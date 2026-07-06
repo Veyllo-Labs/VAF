@@ -127,6 +127,8 @@ A proactive backend message can carry a `kind` tag: `emit_agent_message_append(c
 Under **Settings → Interface** you can set:
 
 - **Language** — UI language (e.g. German, English). Stored in the browser only (`localStorage`). See [I18N.md](../platform/I18N.md) for how translations and new languages are managed.
+- **Appearance → Dark mode** — a neutral `#181818` dark theme (default off/light). Stored in the browser only (`localStorage.vaf_theme`). For the exact colors of every surface, control and the agent avatar in each theme, see [LIGHTMODE.md](LIGHTMODE.md) and [DARKMODE.md](DARKMODE.md) (design tokens in [DESIGN.md](DESIGN.md)).
+- **Custom cursor** — VAF's custom dot cursor vs. the system pointer.
 - **Date & Time** — Timezone, date format, and time format (24h/12h). Stored in your user identity and used in the system prompt and when the agent shows dates and times.
 
 **Settings → AI & Model:** the main provider and model, the optional Vision model, and — grouped with them as model/provider settings — **Sub-Agents** (run in separate terminals, provider, the **Tool / Workflow model**, timeout) and **Thinker (background)**. For both you can pick a separate provider; the model is a dropdown of that provider's models that defaults to "same as main chat" (for the Thinker the model picker shows only when a non-inherit provider is selected). See [Thinking-Mode.md](../agents/Thinking-Mode.md).
@@ -669,5 +671,4 @@ Potential improvements:
 - Persistent WebSocket reconnection
 - Message search and filtering
 - Export conversation history
-- Dark mode toggle
 - Mobile-responsive design improvements

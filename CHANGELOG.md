@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update`.
 ## [Unreleased]
 
 ### Added
+- **Dark mode.** A neutral `#181818` dark theme for the whole web UI, toggled under
+  Settings → Interface → Appearance (default light; stored per-browser). It uses a
+  folding Tailwind palette swap so light mode stays byte-identical, with a consistent
+  light-neutral for active/emphasis controls (no blue or amber accent) and status
+  colors kept semantic. The exact per-theme colors of every surface, control and the
+  agent avatar are documented in `docs/web-ui/LIGHTMODE.md` and
+  `docs/web-ui/DARKMODE.md`.
 - **The coder window shows what the agent is doing, live.** The VS-Code-style sub-agent window
   renders a red/green diff of the file being edited directly in the code pane — based on a
   run-start snapshot, so a previous run's changes are not shown — auto-scrolls to the change, and

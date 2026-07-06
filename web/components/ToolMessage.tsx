@@ -314,7 +314,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     )}>
                         {headerStatus === 'running' && (
                             <span data-agent-tool-dot className="rounded-full"
-                                style={{ width: 7, height: 7, backgroundColor: '#000000', animation: 'agentDotPulse 1.2s ease-in-out infinite' }} />
+                                style={{ width: 7, height: 7, backgroundColor: 'hsl(var(--foreground))', animation: 'agentDotPulse 1.2s ease-in-out infinite' }} />
                         )}
                         {headerStatus === 'completed' && (
                             <span className="absolute inset-0 flex items-center justify-center rounded-full bg-green-500"

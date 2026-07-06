@@ -390,14 +390,14 @@ function wrapDocxAsDocument(bodyHtml: string): string {
         .docx-page u,.docx-placeholder{text-decoration:underline;text-underline-offset:1px;}
     `;
     if (blocks.length === 0) {
-        return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc"><div class="docx-page-wrap"><span class="docx-page-label">Seite 1 von 1</span><div class="docx-page"><p></p></div></div></div></body></html>`;
+        return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc"><div class="docx-page-wrap"><span class="docx-page-label">Page 1 of 1</span><div class="docx-page"><p></p></div></div></div></body></html>`;
     }
     const pageCount = Math.max(1, Math.ceil(blocks.length / DOCX_BLOCKS_PER_PAGE));
     const pages: string[] = [];
     for (let p = 0; p < pageCount; p++) {
         let chunk = blocks.slice(p * DOCX_BLOCKS_PER_PAGE, (p + 1) * DOCX_BLOCKS_PER_PAGE).join('');
         chunk = chunk.replace(/\[([^\]]+)\]/g, '<u class="docx-placeholder">[$1]</u>');
-        pages.push(`<div class="docx-page-wrap"><span class="docx-page-label">Seite ${p + 1} von ${pageCount}</span><div class="docx-page">${chunk}</div></div>`);
+        pages.push(`<div class="docx-page-wrap"><span class="docx-page-label">Page ${p + 1} of ${pageCount}</span><div class="docx-page">${chunk}</div></div>`);
     }
     return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${style}</style></head><body><div class="docx-doc">${pages.join('')}</div></body></html>`;
 }
@@ -427,7 +427,7 @@ function DocxMammothViewer({
         }
         if (!doc.data) {
             setLoading(false);
-            setError('Keine Dateidaten');
+            setError('No file data');
             return;
         }
         let cancelled = false;
@@ -447,7 +447,7 @@ function DocxMammothViewer({
             })
             .catch((err) => {
                 if (cancelled) return;
-                setError(err?.message || 'Konvertierung fehlgeschlagen');
+                setError(err?.message || 'Conversion failed');
                 setLoading(false);
                 setHtmlContent(null);
             });
@@ -458,14 +458,14 @@ function DocxMammothViewer({
         return (
             <div className="flex flex-1 min-h-[300px] items-center justify-center gap-2 text-gray-500">
                 <Loader2 size={20} className="animate-spin" />
-                <span className="text-sm">Dokument wird geladen…</span>
+                <span className="text-sm">Loading document…</span>
             </div>
         );
     }
     if (error || !htmlContent) {
         return (
             <div className="flex flex-1 min-h-[200px] items-center justify-center text-sm text-amber-600">
-                {error || '(Kein Textinhalt)'}
+                {error || '(No text content)'}
             </div>
         );
     }
@@ -552,7 +552,7 @@ export default function DocumentViewer({
 
     const getContentWithHighlightsForDoc = React.useCallback(
         (doc: DocumentViewerDocument) => {
-            const content = doc.content ?? '(Kein Textinhalt)';
+            const content = doc.content ?? '(No text content)';
             const rangesForDoc = insertedSelections
                 .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
                 .filter((s) => s.documentId === doc.id)
@@ -593,9 +593,9 @@ export default function DocumentViewer({
         : indexStatus === 'error' ? 'text-red-600'
             : indexStatus === 'ready' ? 'text-green-600'
                 : '';
-    const idxLabel = indexStatus === 'indexing' ? 'Indexiere…'
-        : indexStatus === 'error' ? 'Fehler'
-            : indexStatus === 'ready' ? 'Bereit'
+    const idxLabel = indexStatus === 'indexing' ? 'Indexing…'
+        : indexStatus === 'error' ? 'Error'
+            : indexStatus === 'ready' ? 'Ready'
                 : 'Ready';
 
     if (!isOpen && mode === 'overlay') return null;
@@ -626,7 +626,7 @@ export default function DocumentViewer({
                                     <div className="flex items-center gap-2 text-[10px] text-gray-500 flex-wrap">
                                         <span
                                             className="relative flex h-1.5 w-1.5 shrink-0"
-                                            title={indexStatus === 'indexing' ? 'Anhänge werden für die Suche aufbereitet' : undefined}
+                                            title={indexStatus === 'indexing' ? 'Attachments are being prepared for search' : undefined}
                                         >
                                             {indexStatus === 'indexing' && (
                                                 <span className="absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75 animate-ping" />
@@ -636,14 +636,14 @@ export default function DocumentViewer({
                                         <span className={cn('uppercase', idxLabelClass)}>{idxLabel}</span>
                                         <span className="text-gray-300">·</span>
                                         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500 shrink-0">
-                                            Anhänge
+                                            Attachments
                                         </span>
                                         <span className="truncate font-mono text-[11px] text-gray-600">
                                             {documents.length === 0
-                                                ? 'Kein Dokument'
+                                                ? 'No document'
                                                 : documents.length === 1
                                                     ? documents[0].name
-                                                    : `${documents.length} Dokumente (durchscrollen)`}
+                                                    : `${documents.length} documents (scroll through)`}
                                         </span>
                                     </div>
                                 </div>
@@ -651,7 +651,7 @@ export default function DocumentViewer({
                             <button
                                 onClick={() => { if (canClose) onClose(); }}
                                 disabled={!canClose}
-                                title={canClose ? undefined : (indexStatus === 'indexing' ? 'Anhänge werden indexiert – bitte warten oder Stopp drücken' : undefined)}
+                                title={canClose ? undefined : (indexStatus === 'indexing' ? 'Attachments are being indexed - please wait or press Stop' : undefined)}
                                 className={cn(
                                     "rounded-full p-1 shrink-0 transition",
                                     canClose
@@ -672,8 +672,8 @@ export default function DocumentViewer({
                                 {!hasDocuments ? (
                                     <div className="flex flex-col items-center justify-center h-full min-h-[200px] gap-2 text-gray-400 text-sm">
                                         <FileText size={32} className="opacity-50" />
-                                        <p>Keine Dokumente. Klicke auf &quot;Dokument hinzufügen&quot;, um Anhänge zu öffnen.</p>
-                                        <p className="text-xs">Der Assistent kann dann auf deren Inhalt antworten.</p>
+                                        <p>No documents. Click &quot;Add document&quot; to open attachments.</p>
+                                        <p className="text-xs">The assistant can then respond based on their content.</p>
                                     </div>
                                 ) : (
                                     <div className="min-h-full flex flex-col items-center py-4 px-2 gap-6">
@@ -714,7 +714,7 @@ export default function DocumentViewer({
                                                         <div className="text-[10px] text-gray-400 font-mono mb-2 shrink-0 flex items-center justify-between gap-2">
                                                             <span>{doc.name}</span>
                                                             {onInsertSelection && (
-                                                                <span className="text-[9px] text-gray-400" title="Text markieren → farbiger Anhang an Chat">Markieren → Anhang</span>
+                                                                <span className="text-[9px] text-gray-400" title="Select text → colored attachment to chat">Select → Attachment</span>
                                                             )}
                                                         </div>
                                                         {isImg ? (
@@ -755,7 +755,7 @@ export default function DocumentViewer({
                                                                     INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
                                                                 )}
                                                             >
-                                                                {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(Kein Textinhalt)')}
+                                                                {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(No text content)')}
                                                             </pre>
                                                         )}
                                                     </div>
@@ -779,14 +779,14 @@ export default function DocumentViewer({
                             <>
                                 <div className="flex h-12 items-center justify-between border-b border-gray-100 px-4 shrink-0">
                                     <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        Dokumentliste
+                                        Document list
                                     </span>
                                     <button
                                         type="button"
                                         onClick={() => setListExpanded(false)}
                                         className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
-                                        title="Liste zuklappen"
-                                        aria-label="Liste zuklappen"
+                                        title="Collapse list"
+                                        aria-label="Collapse list"
                                     >
                                         <ChevronRight size={16} />
                                     </button>
@@ -798,7 +798,7 @@ export default function DocumentViewer({
                                         className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-left text-[13px] font-medium text-gray-700 hover:border-blue-200 hover:bg-blue-50/50 transition"
                                     >
                                         <Plus size={14} />
-                                        Dokument hinzufügen
+                                        Add document
                                     </button>
                                     <input
                                         ref={fileInputRef}
@@ -848,13 +848,13 @@ export default function DocumentViewer({
                                     type="button"
                                     onClick={() => setListExpanded(true)}
                                     className="flex flex-col items-center gap-1.5 rounded-lg p-2 text-gray-600 hover:bg-gray-300 hover:text-gray-800 transition w-full"
-                                    title="Dokumentliste einblenden"
-                                    aria-label="Dokumentliste einblenden"
+                                    title="Show document list"
+                                    aria-label="Show document list"
                                 >
                                     <ChevronLeft size={18} />
                                     <List size={16} />
                                     <span className="text-[9px] font-medium uppercase tracking-wider" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
-                                        Liste
+                                        List
                                     </span>
                                 </button>
                                 {documents.length > 0 && (
@@ -890,10 +890,10 @@ export default function DocumentViewer({
                                     <span>Ready</span>
                                     <span className="text-gray-300">·</span>
                                     <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-                                        Anhänge
+                                        Attachments
                                     </span>
                                     <span className="truncate font-mono text-gray-600">
-                                        {documents.length === 0 ? '—' : documents.length === 1 ? documents[0].name : `${documents.length} Dokumente (durchscrollen)`}
+                                        {documents.length === 0 ? '—' : documents.length === 1 ? documents[0].name : `${documents.length} documents (scroll through)`}
                                     </span>
                                 </div>
                             </div>
@@ -901,7 +901,7 @@ export default function DocumentViewer({
                         <button
                             onClick={() => { if (canClose) onClose(); }}
                             disabled={!canClose}
-                            title={canClose ? undefined : (indexStatus === 'indexing' ? 'Anhänge werden indexiert – bitte warten oder Stopp drücken' : undefined)}
+                            title={canClose ? undefined : (indexStatus === 'indexing' ? 'Attachments are being indexed - please wait or press Stop' : undefined)}
                             className={cn(
                                 "rounded-full p-2 shrink-0 transition",
                                 canClose
@@ -922,7 +922,7 @@ export default function DocumentViewer({
                             {!hasDocuments ? (
                                 <div className="flex flex-col items-center justify-center h-full min-h-[280px] gap-2 text-gray-400 text-sm">
                                     <FileText size={40} className="opacity-50" />
-                                    <p>Keine Dokumente. Dokument hinzufügen, um Anhänge zu öffnen.</p>
+                                    <p>No documents. Add a document to open attachments.</p>
                                 </div>
                             ) : (
                                 <div className="min-h-full flex flex-col items-center py-6 px-4 gap-6">
@@ -996,7 +996,7 @@ export default function DocumentViewer({
                                                                 INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
                                                             )}
                                                         >
-                                                            {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(Kein Textinhalt)')}
+                                                            {getContentWithHighlightsForDoc(doc) ?? (doc.content ?? '(No text content)')}
                                                         </pre>
                                                     )}
                                                 </div>
@@ -1018,13 +1018,13 @@ export default function DocumentViewer({
                     {listExpanded ? (
                         <>
                             <div className="flex h-14 items-center justify-between border-b border-gray-100 px-5 shrink-0">
-                                <span className="text-sm font-semibold text-gray-700">Dokumentliste</span>
+                                <span className="text-sm font-semibold text-gray-700">Document list</span>
                                 <button
                                     type="button"
                                     onClick={() => setListExpanded(false)}
                                     className="rounded p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                                    title="Liste zuklappen"
-                                    aria-label="Liste zuklappen"
+                                    title="Collapse list"
+                                    aria-label="Collapse list"
                                 >
                                     <ChevronRight size={18} />
                                 </button>
@@ -1040,7 +1040,7 @@ export default function DocumentViewer({
                                     className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-left text-sm font-medium text-gray-700 hover:border-blue-200 hover:bg-blue-50/50 transition"
                                 >
                                     <Plus size={16} />
-                                    Dokument hinzufügen
+                                    Add document
                                 </button>
                                 <input
                                     ref={fileInputRef}
@@ -1086,13 +1086,13 @@ export default function DocumentViewer({
                                 type="button"
                                 onClick={() => setListExpanded(true)}
                                 className="flex flex-col items-center gap-2 rounded-lg p-2 text-gray-600 hover:bg-gray-300 hover:text-gray-800 transition w-full"
-                                title="Dokumentliste einblenden"
-                                aria-label="Dokumentliste einblenden"
+                                title="Show document list"
+                                aria-label="Show document list"
                             >
                                 <ChevronLeft size={20} />
                                 <List size={18} />
                                 <span className="text-[10px] font-medium uppercase tracking-wider" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
-                                    Liste
+                                    List
                                 </span>
                             </button>
                             {documents.length > 0 && (

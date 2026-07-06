@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 // Load the pdf.js worker from the app's OWN origin (a copy of the bundled pdfjs 5.x worker in
 // public/), not a CDN. The CDN ("//unpkg.com/...") fails in the desktop app: it needs the network,
 // and the protocol-relative "//" resolves to mixed content (http://unpkg) from the http://127.0.0.1
-// origin -- so the worker never loads and every PDF shows "PDF konnte nicht geladen werden".
+// origin -- so the worker never loads and every PDF shows "Failed to load PDF.".
 // NOTE: keep public/pdf.worker.min.mjs in sync with the installed pdfjs-dist version on upgrades.
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
@@ -301,18 +301,18 @@ const PdfWithHighlightsInner = function PdfWithHighlights({
                 onLoadError={(err) => console.error('[PDF] document load error:', err)}
                 onSourceError={(err) => console.error('[PDF] document source error:', err)}
                 loading={
-                    <div className="flex items-center justify-center py-12 text-gray-500 text-sm">PDF wird geladen…</div>
+                    <div className="flex items-center justify-center py-12 text-gray-500 text-sm">Loading PDF…</div>
                 }
                 error={
                     <div className="flex items-center justify-center py-12 text-red-500 text-sm">
-                        PDF konnte nicht geladen werden.
+                        Failed to load PDF.
                     </div>
                 }
             >
                 {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => (
                     <div key={pageNum} data-pdf-page-container={pageNum} className="mb-10 flex flex-col items-center">
                         <div className="mb-2 self-start text-xs font-medium text-gray-500">
-                            Seite {pageNum} von {numPages}
+                            Page {pageNum} of {numPages}
                         </div>
                         <div className="rounded-sm bg-white shadow-md overflow-hidden">
                             <Page

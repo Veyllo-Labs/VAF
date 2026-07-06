@@ -99,11 +99,11 @@ function TagDetailsView({
                 <div className="flex items-center gap-2 pb-3 border-b border-red-200">
                     <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
                     <p className="text-sm font-medium text-red-700">
-                        Wähle Memories zum Löschen aus
+                        Select memories to delete
                     </p>
                 </div>
                 <p className="text-xs text-gray-500">
-                    Abgewählte Memories behalten — ihr Tag <span className="font-mono">#{tagNode.data.tag}</span> wird entfernt.
+                    Deselected memories are kept — their tag <span className="font-mono">#{tagNode.data.tag}</span> will be removed.
                 </p>
 
                 {/* Select all */}
@@ -111,7 +111,7 @@ function TagDetailsView({
                     {selected.size === connectedMemories.length
                         ? <CheckSquare className="w-4 h-4 text-red-500" />
                         : <Square className="w-4 h-4" />}
-                    Alle auswählen ({selected.size}/{connectedMemories.length})
+                    Select all ({selected.size}/{connectedMemories.length})
                 </button>
 
                 {/* Grouped list */}
@@ -141,13 +141,13 @@ function TagDetailsView({
                         disabled={selected.size === 0 || isDoing}
                         className="flex-1 px-3 py-2 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-40 transition-colors"
                     >
-                        {isDoing ? 'Läuft...' : `${selected.size} löschen`}
+                        {isDoing ? 'Working...' : `Delete ${selected.size}`}
                     </button>
                     <button
                         onClick={() => { setDeleteMode(false); setSelected(new Set()); }}
                         className="px-3 py-2 text-xs font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                     >
-                        Abbrechen
+                        Cancel
                     </button>
                 </div>
             </div>
@@ -172,7 +172,7 @@ function TagDetailsView({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
                 >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Tag löschen
+                    Delete tag
                 </button>
             </div>
 

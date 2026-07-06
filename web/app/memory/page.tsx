@@ -452,12 +452,12 @@ export default function MemoryPage() {
                 </div>
             )}
             
-            {/* Main Content: Graph links, Memory Search komplett rechts */}
+            {/* Main Content: Graph on the left, Memory Search on the right */}
             <main className="flex-1 w-full p-4 overflow-hidden">
                 <div className="flex flex-col lg:flex-row gap-4 h-full">
-                    {/* Graph – nimmt restlichen Platz. Auf Mobile (< lg) ausgeblendet: dort ist die
-                        Such-/Detail-Ansicht die Hauptansicht (sehen + editieren), und zwei h-full-Spalten
-                        gestapelt würden sich überlappen/abschneiden. */}
+                    {/* Graph – takes the remaining space. Hidden on mobile (< lg): there the
+                        search/detail view is the main view (view + edit), and two stacked h-full
+                        columns would overlap or get cut off. */}
                     <div className="flex-1 min-w-0 h-full max-lg:hidden">
                         <MemoryGraph
                             className="h-full"
@@ -468,7 +468,7 @@ export default function MemoryPage() {
                         />
                     </div>
                     
-                    {/* Right Panel – feste Breite, am rechten Rand */}
+                    {/* Right Panel – fixed width, anchored to the right edge */}
                     <div className="lg:w-[420px] lg:flex-shrink-0 flex flex-col gap-4 h-full overflow-hidden">
                         <RagQueryPanel 
                             className="flex-1 min-h-0"

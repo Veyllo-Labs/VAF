@@ -19,7 +19,7 @@ Order within `chat_step()`:
 3. **Context Compression:**
    - **Condition:** `context_manager.should_compress(self.history)` must be `True`.
    - If **yes:** call `compress()`, then append the context glue to `new_prompt` and overwrite the system prompt in `history[0]` with this `new_prompt` (including the glue and, if present, PROJECT CONTEXT).
-   - If **no:** nothing happens to the history; a `new_prompt` built earlier is **not** written into `history[0]` (known bug).
+   - If **no:** nothing happens to the history; a `new_prompt` built earlier is **not** written into `history[0]` (it is applied only when compression runs this turn).
 
 ---
 
@@ -102,7 +102,7 @@ This keeps intent and state up to date **before** the old messages are discarded
   - **Project state:** created/modified/read files,
   - **Errors,** key decisions,
   - **Primary goal** from the intent.
-- Format: Markdown with headings such as `### 📝 RECENT SUMMARY`, `### 📁 PROJECT STATE`, etc.
+- Format: Markdown with headings such as `RECENT SUMMARY`, `PROJECT STATE`, etc.
 
 ### 4.7 Step 6: Assemble the new history
 
@@ -125,7 +125,7 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
 
 1. **Add the context glue:**
    `context_glue = self.context_manager._build_context_summary()` is built **again** and appended to **`new_prompt`** (`new_prompt += ...`).
-   Note: `new_prompt` only exists if the "Dynamic Context" block ran during **this** turn (i.e. `user_input` and `prompt_manager` were present). Otherwise `new_prompt` would be undefined here (potential bug).
+   Note: `new_prompt` only exists if the "Dynamic Context" block ran during **this** turn (i.e. `user_input` and `prompt_manager` were present). Otherwise `new_prompt` is not defined in this branch.
 
 2. **Preserve PROJECT CONTEXT:**
    If `self.history[0]["content"]` contains the `## PROJECT CONTEXT` section, that part is extracted and appended to `new_prompt`.
@@ -158,9 +158,9 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
 
 ---
 
-## 8. Known issues
+## 8. Edge cases and safeguards
 
-Historical references to a `new_prompt` `NameError` during compression without user input are no longer the relevant main failure path in current builds. If new bugs appear here, please check against the current `agent.py` logs/code instead of carrying over older bug descriptions.
+An earlier `new_prompt` `NameError` on compression without user input has been resolved and is no longer a live failure path. When investigating behavior in this area, verify against the current `agent.py` rather than relying on older descriptions.
 
 ### Dangling `tool_calls` after compression
 

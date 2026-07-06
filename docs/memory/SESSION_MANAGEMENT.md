@@ -217,13 +217,13 @@ Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
     "created_at": "2026-01-27T05:30:00.000Z",
     "updated_at": "2026-01-27T05:45:00.000Z",
     "model": "gpt-4o",
-    "project_path": "/home/mert/Documents/VAF_Projects/Webseite Portfolio",
+    "project_path": "/home/user/Documents/VAF_Projects/My Website",
     "messages": [
         {"role": "user", "content": "Hey", "timestamp": "..."},
         {"role": "assistant", "content": "Hello!", "timestamp": "..."}
     ],
     "runtime_state": {
-        "last_project_path": "/home/mert/Documents/VAF_Projects/Webseite Portfolio"
+        "last_project_path": "/home/user/Documents/VAF_Projects/My Website"
     }
 }
 ```
@@ -250,14 +250,14 @@ Example of a tool turn as stored:
 Rules:
 - Only set for paths inside `~/Documents/VAF_Projects/` — temporary files and one-off outputs are excluded.
 - New projects are created per chat: `VAF_Projects/<uid[:8]>/<session_id>/<ProjectName>` (the session level applies whenever a session id is available).
-- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event — except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; poisoned legacy sessions self-heal).
+- `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event — except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; legacy sessions holding such paths are corrected automatically on load).
 - **Image attachments** uploaded in a chat are stored as files under `VAF_Projects/<uid[:8]>/<session_id>/attachments/` (`get_session_attachments_dir()`); `Message.metadata["images"]` holds only `{name, mime_type, path, base_description}`, not inline base64. The agent reads them by path (`analyze_image` / `read_file`); the Web UI serves them via `GET /api/file`. See the vision section in `docs/llm/API_INTEGRATION.md`.
 
 At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:
 
 ```
-[SESSION WORKSPACE] All files for this chat are stored in: /home/mert/Documents/VAF_Projects/Webseite Portfolio
-[ACTIVE PROJECT] Most recently created/edited: /home/mert/Documents/VAF_Projects/Webseite Portfolio
+[SESSION WORKSPACE] All files for this chat are stored in: /home/user/Documents/VAF_Projects/My Website
+[ACTIVE PROJECT] Most recently created/edited: /home/user/Documents/VAF_Projects/My Website
 To edit or modify: coding_agent(task="...", project_path="...")
 ```
 
@@ -277,7 +277,7 @@ print(f"[WebUI] Update: {data.get('type')} (sess: {session_id})")
 
 ```typescript
 // web/app/page.tsx (line 280)
-console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
+console.log(`[FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
 ```
 
 ---

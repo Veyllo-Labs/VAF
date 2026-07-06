@@ -79,8 +79,8 @@ def _resolve_folder_alias(path_str: str) -> str:
     path_lower = path_str.lower()
     home = Path.home()
 
-    # LLMs often hallucinate /home/user/ as the home directory.
-    # Remap it to the actual home so writes don't silently fail.
+    # LLMs sometimes emit /home/user/ as the home directory.
+    # Remap it to the actual home so writes land in the right place.
     import re as _re
     # Use a function replacement so the home path is inserted literally. On
     # Windows str(home) is e.g. "C:\\Users\\me"; passing it as a plain
@@ -621,11 +621,11 @@ class WriteFileTool(BaseTool):
 
         # Reroute writes that would land loose in the home directory into
         # Documents/VAF, so the agent neither creates arbitrary home-level dirs
-        # (e.g. ~/my_project/) nor litters the home root with a cwd-relative bare
-        # filename (a workflow write_file step with path="draft" run from a tray
-        # process whose cwd is the home dir - the 2026-07-03 incident). An EXPLICIT
-        # absolute or ~-anchored target is the user's deliberate choice (e.g.
-        # read-modify-write of ~/.bashrc) and is written in place.
+        # (e.g. ~/my_project/) nor leaves a cwd-relative bare filename at the home
+        # root (e.g. a workflow write_file step with path="draft" run from a
+        # process whose cwd is the home dir). An EXPLICIT absolute or ~-anchored
+        # target is the user's deliberate choice (e.g. read-modify-write of
+        # ~/.bashrc) and is written in place.
         _explicit_target = os.path.isabs(os.path.expanduser(path or ""))
         try:
             from vaf.core.platform import Platform as _Plat
@@ -643,21 +643,21 @@ class WriteFileTool(BaseTool):
             }
             _out = _Plat.get_vaf_output_dir()
             if _first and _first not in _known_home_dirs and not (_home / _first).exists():
-                # New home-level target. A hallucinated multi-segment home dir is always
+                # New home-level target. An unrecognized multi-segment home dir is always
                 # rerouted; an explicit single new file (e.g. "create ~/.vimrc") is the
                 # user's choice and written in place.
                 if _multi_segment or not _explicit_target:
                     res = str(_out / _rel)
             elif len(_rel.parts) == 1 and _first not in _known_home_dirs and not _explicit_target:
                 # Existing bare file at the home root reached via a cwd-relative name
-                # (the workflow-cwd incident) - reroute so it lands in a servable root.
+                # - reroute so it lands in a servable root.
                 # An explicit ~/x or /home/x overwrite happens in place.
                 res = str(_out / _rel)
         except ValueError:
             pass  # not under home - keep the resolved path
         except Exception as _guard_err:
-            # This guard was silently dead for months (a shadowed import made it raise
-            # on every call, swallowed here). Never swallow silently again.
+            # Log if the home-reroute guard fails instead of swallowing the error,
+            # so unexpected failures stay visible.
             import logging
             logging.getLogger(__name__).warning("write_file home-reroute guard skipped: %s", _guard_err)
 

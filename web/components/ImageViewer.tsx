@@ -35,7 +35,7 @@ interface ImageViewerProps {
   descriptionLoading?: boolean;
   /** Called when the user draws/clears a yellow marking. null = cleared. */
   onMark?: (mark: ImageMark | null) => void;
-  /** Bump this number from the parent to clear the current marking (e.g. the chip ✕). */
+  /** Bump this number from the parent to clear the current marking (e.g. the chip's clear button). */
   clearMarkToken?: number;
   onClose: () => void;
 }
@@ -74,7 +74,7 @@ export default function ImageViewer({
     onMark?.(null);
   }, [filePath, onMark]);
 
-  // Parent asked to clear (chip ✕).
+  // Parent asked to clear (chip's clear button).
   useEffect(() => {
     if (clearMarkToken === undefined) return;
     setRect(null);
@@ -171,10 +171,10 @@ export default function ImageViewer({
               <ImageIcon size={14} />
             </div>
             <div className="min-w-0">
-              <div className="text-xs font-semibold text-gray-900">Bildbetrachter</div>
+              <div className="text-xs font-semibold text-gray-900">Image viewer</div>
               <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
                 <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500">
-                  Bild
+                  Image
                 </span>
                 <span className="truncate font-mono text-[11px] text-gray-600" title={filePath ?? fileName}>
                   {fileName}
@@ -186,7 +186,7 @@ export default function ImageViewer({
             <button
               onClick={() => setMarkMode(m => !m)}
               className={`rounded-full p-1.5 transition ${markMode ? 'bg-yellow-100 text-yellow-700' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'}`}
-              title={markMode ? 'Markier-Modus aus' : 'Bereich markieren und dazu fragen'}
+              title={markMode ? 'Exit marking mode' : 'Mark a region and ask about it'}
             >
               <Highlighter size={15} />
             </button>
@@ -194,7 +194,7 @@ export default function ImageViewer({
               <button
                 onClick={clearMark}
                 className="rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
-                title="Markierung löschen"
+                title="Clear marking"
               >
                 <Eraser size={15} />
               </button>
@@ -203,14 +203,14 @@ export default function ImageViewer({
               onClick={handleDownload}
               disabled={!src}
               className="rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40"
-              title="Bild herunterladen"
+              title="Download image"
             >
               <Download size={15} />
             </button>
             <button
               onClick={onClose}
               className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
-              title="Schließen"
+              title="Close"
             >
               <X size={16} />
             </button>
@@ -219,7 +219,7 @@ export default function ImageViewer({
 
         {markMode && (
           <div className="shrink-0 bg-yellow-50 px-4 py-1 text-[11px] text-yellow-800">
-            Ziehe ein Rechteck über den Bereich, den du genauer wissen willst — dann frag im Chat dazu.
+            Drag a rectangle over the area you want to know more about, then ask about it in the chat.
           </div>
         )}
 
@@ -252,7 +252,7 @@ export default function ImageViewer({
               )}
             </div>
           ) : (
-            <span className="text-sm text-gray-400">Kein Bild</span>
+            <span className="text-sm text-gray-400">No image</span>
           )}
         </div>
 
@@ -264,19 +264,19 @@ export default function ImageViewer({
               type="button"
               onClick={() => setDescOpen(o => !o)}
               className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-500 transition hover:bg-gray-50"
-              title={descOpen ? 'Beschreibung einklappen' : 'Beschreibung anzeigen'}
+              title={descOpen ? 'Collapse description' : 'Show description'}
             >
               <ChevronDown size={12} className={`shrink-0 transition-transform ${descOpen ? '' : '-rotate-90'}`} />
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-              Vision-Beschreibung
-              {descriptionLoading && <span className="ml-1 font-normal normal-case text-gray-400">· wird erzeugt…</span>}
+              Vision description
+              {descriptionLoading && <span className="ml-1 font-normal normal-case text-gray-400">· generating…</span>}
               {!descOpen && !descriptionLoading && description && (
                 <span className="ml-auto max-w-[55%] truncate font-normal normal-case text-gray-400">{description}</span>
               )}
             </button>
             {descOpen && (
               <div className="max-h-48 select-text overflow-auto whitespace-pre-wrap px-4 pb-3 pt-0 text-xs leading-relaxed text-gray-700">
-                {descriptionLoading ? 'Beschreibung wird erzeugt…' : description}
+                {descriptionLoading ? 'Generating description…' : description}
               </div>
             )}
           </div>

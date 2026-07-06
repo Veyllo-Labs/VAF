@@ -1881,7 +1881,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         )})
                     )}
 
-                    {/* Connection-Indikator – über dem Trennstrich */}
+                    {/* Connection indicator - above the divider */}
                     <div
                         className={cn(
                             "flex items-center gap-3 px-3 py-2 rounded-lg w-full transition-all mt-auto max-md:hidden",
@@ -1905,7 +1905,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         </span>
                     </div>
 
-                    {/* Trennstrich, darunter Log out */}
+                    {/* Divider, with Log out below */}
                     <div className="pt-2 border-t border-gray-200 max-md:border-t-0 max-md:pt-0 max-md:shrink-0">
                         {currentUser && (
                             <button
@@ -5220,7 +5220,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     value={userIdentityDraft.preferred_language}
                                                     onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, preferred_language: e.target.value })}
                                                     className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                    placeholder="z.B. de, en, tr"
+                                                    placeholder="e.g. de, en, tr"
                                                 />
                                             </div>
                                             <div className="grid grid-cols-2 gap-3">
@@ -5231,7 +5231,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         value={userIdentityDraft.city}
                                                         onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, city: e.target.value })}
                                                         className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                        placeholder="z.B. Berlin, München"
+                                                        placeholder="e.g. Berlin, Munich"
                                                     />
                                                 </div>
                                                 <div>
@@ -5241,7 +5241,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         value={userIdentityDraft.country}
                                                         onChange={(e) => setUserIdentityDraft({ ...userIdentityDraft, country: e.target.value })}
                                                         className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent text-sm"
-                                                        placeholder="z.B. Deutschland, DE"
+                                                        placeholder="e.g. Germany, DE"
                                                     />
                                                 </div>
                                             </div>
@@ -5418,7 +5418,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <p className="text-gray-500 text-sm">{tModals('userIdentity.noDataYet')}</p>
                                 )}
                             </div>
-                            {/* Right: Timeline (change_log) – schmal, scrollbar bei vielen Einträgen */}
+                            {/* Right: Timeline (change_log) - narrow, scrollable when there are many entries */}
                             <div className="w-80 shrink-0 min-h-0 flex flex-col border-l border-gray-100 max-md:w-full max-md:border-l-0 max-md:border-t max-md:max-h-[40vh]">
                                 <h3 className="text-sm font-semibold text-gray-700 mb-3 shrink-0 p-4 pb-0">{tModals('userIdentity.timeline')}</h3>
                                 {personaData?.user_identity?.change_log?.length > 0 ? (

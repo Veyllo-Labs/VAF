@@ -2339,7 +2339,7 @@ function VAFDashboardContent() {
         ws?.send(JSON.stringify({ type: 'load_session', id }));
     };
 
-    // Gewählten Chat in der Sidebar sichtbar halten (nicht nach oben springen)
+    // Keep the selected chat visible in the sidebar (don't jump to the top)
     useEffect(() => {
         if (!currentSessionId || !sidebarListRef.current) return;
         const el = sidebarListRef.current.querySelector(`[data-session-id="${currentSessionId}"]`);
@@ -5269,7 +5269,7 @@ function VAFDashboardContent() {
                         <span className="font-bold text-gray-800 whitespace-nowrap opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity delay-100 duration-300 overflow-hidden">{tMain('veylloAgenticFramework')}</span>
                     </div>
 
-                    {/* Session-Liste: äußere Box overflow-hidden = feste Höhe, innere Box scrollt */}
+                    {/* Session list: outer box overflow-hidden = fixed height, inner box scrolls */}
                     <div className="flex-1 min-h-0 relative overflow-hidden">
                         <div
                             ref={sidebarListRef}
@@ -5360,7 +5360,7 @@ function VAFDashboardContent() {
                             ))}
                             <div className="h-28 shrink-0" aria-hidden />
                         </div>
-                        {/* Nebel: weißer Fade (statt grau), letzter sichtbarer Chat „verschwindet“ */}
+                        {/* Fade: white fade (instead of gray), so the last visible chat fades out */}
                         <div
                             className="absolute bottom-0 left-0 right-0 h-28 pointer-events-none"
                             style={{
@@ -6036,7 +6036,7 @@ function VAFDashboardContent() {
                                                                 </div>
                                                             )}
 
-                                                            {/* Unauffällige Uhrzeit unter der Blase (Messenger-Stil) */}
+                                                            {/* Subtle timestamp below the bubble (messenger style) */}
                                                             {(msg.role === 'user' || msg.role === 'assistant') && (
                                                                 <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
                                                                     <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
@@ -6524,7 +6524,7 @@ function VAFDashboardContent() {
                                                             type="button"
                                                             onClick={clearImageMark}
                                                             className="ml-0.5 rounded-full px-1 leading-none text-yellow-700 hover:bg-yellow-200"
-                                                            title="Markierung löschen"
+                                                            title="Clear marking"
                                                         >✕</button>
                                                     </span>
                                                 </div>
@@ -6619,8 +6619,8 @@ function VAFDashboardContent() {
                             className="lg:hidden fixed left-1/2 -translate-x-1/2 bottom-[92px] z-[55] flex items-center gap-2 max-w-[88%] pl-2 pr-2.5 py-1.5 rounded-full bg-gray-900 text-white shadow-lg active:bg-black dark:bg-[#e6e6e6] dark:text-[#181818] dark:shadow-none"
                         >
                             <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center shrink-0"><Bot size={14} /></span>
-                            <span className="text-xs font-medium truncate">{subAgentState.agentName || 'Agent-Fenster'}{subAgentState.status ? ` · ${subAgentState.status}` : ''}</span>
-                            <span className="text-[11px] font-semibold shrink-0 px-2 py-0.5 rounded-full bg-white/15">Öffnen</span>
+                            <span className="text-xs font-medium truncate">{subAgentState.agentName || 'Agent window'}{subAgentState.status ? ` · ${subAgentState.status}` : ''}</span>
+                            <span className="text-[11px] font-semibold shrink-0 px-2 py-0.5 rounded-full bg-white/15">Open</span>
                         </button>
                     )}
                     {/* Right Panel: CodeViewer, DocumentViewer, DocumentEditor, or SubAgentWindow (dock mode) */}
@@ -6771,7 +6771,7 @@ function VAFDashboardContent() {
                 />
             )}
 
-            {/* Right-click selected text → copy + brief "Kopiert" toast */}
+            {/* Right-click selected text → copy + brief confirmation toast */}
             <CopyOnRightClick />
 
             {/* Stop-button ripple portal — rendered at document.body level to bypass all overflow:hidden parents */}

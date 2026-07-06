@@ -200,9 +200,9 @@ The Discord configuration is stored locally in your VAF config:
 
 ### Session storage and memory compaction (15-message rule)
 
-- **Verlauf:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard “Session-Verlauf” popup reads from this.
+- **History:** Telegram chat history is stored in the same place as Web UI sessions: `~/.vaf/sessions/`. Each Telegram user has one session file: `telegram_<user_id>.json`. The dashboard “Session History” popup reads from this.
 - **Order in dashboard:** In the Telegram session history popup, messages are shown **newest first** (latest message at the top).
-- **Nach-15-Nachrichten-Regel:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into RAG. The prompt includes only **user and assistant messages** (no system or tool content). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. Reply length: `memory_compaction_max_tokens` (default 4000). See [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md#session-compaction-background).
+- **After-15-messages rule:** The same **session compaction** as in the Web UI applies: every N **main-user** turns (default 15, configurable via `memory_compaction_interval`), the model is prompted to write durable memories into RAG. The prompt includes only **user and assistant messages** (no system or tool content). The count is **cumulative** (e.g. 4 today + 5 tomorrow = 9; at 15 total, compaction runs). Only role **user** (main user of that session) is counted; other participants (relay contacts, other bot users) have separate sessions. Memories are stored under the whitelist user’s `user_scope_id`, so they appear in the same Memory graph and are used in later Web and Telegram chats. Reply length: `memory_compaction_max_tokens` (default 4000). See [MEMORY_SYSTEM.md](../memory/MEMORY_SYSTEM.md#session-compaction-background).
 - **Bounded history after compaction:** After each Telegram Memory Learning run, session history is trimmed to keep only the most recent user-turn window (aligned with `memory_compaction_interval`, default 15). This keeps dashboard history bounded and avoids unbounded growth of Telegram session files.
 - **Progress display:** The dashboard counter reflects the **current cycle progress** (resets to `0 / interval` after each Memory Learning) while still showing the last compaction checkpoint turn.
 
@@ -258,7 +258,7 @@ For full technical documentation (architecture, voice flow, configuration, troub
 - **Whitelist**: Only configured phone numbers (E.164) can send messages **and** receive replies. Each whitelist entry maps a phone number to a VAF user. In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for WhatsApp, so contacts must be explicitly paired in WhatsApp whitelist.
 - **Read-only for everyone else**: The bot replies only to numbers in your whitelist (config or contact whitelist). It does not message other contacts or react to messages from non-whitelisted numbers.
 - **Node.js required**: Uses Baileys via a Node subprocess. Run `npm install` in `vaf/whatsapp_node/` before first use.
-- **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice (Sprachnachricht), or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
+- **Agent tools**: `whatsapp_inbox`, `find_whatsapp_messages`, `read_whatsapp_chat` list/search/read chats. **`send_whatsapp`** sends text, voice messages, or **documents (PDF, etc.)** to the user – WhatsApp as a channel where the bot can send the user content. `whatsapp_call` is a placeholder (not implemented).
 - **Voice (TTS/STT)**: Incoming voice messages are downloaded, transcribed via Whisper STT (speech_stt_docker_url, default localhost:5003), and passed as text to the agent. When the user sends a voice message, replies can automatically be sent as voice (TTS) in the detected language. The agent can also explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")`.
 
 #### WhatsApp as send-only channel (optional)
@@ -314,7 +314,7 @@ The WhatsApp dashboard (Settings → Connections → Dashboard) shows:
 
 ### Troubleshooting
 
-- **QR/Link debugging**: Wa-bridge stderr (including all `connection.update` events) is logged to `logs/whatsapp_qr.log`. After QR scan: WhatsApp disconnects with 515/516 → wa-bridge creates a new socket with stored credentials → `open`. If „logging in“ stays stuck on the phone, it's often the computer (network/firewall).
+- **QR/Link debugging**: Wa-bridge stderr (including all `connection.update` events) is logged to `logs/whatsapp_qr.log`. After QR scan: WhatsApp disconnects with 515/516 → wa-bridge creates a new socket with stored credentials → `open`. If "logging in" stays stuck on the phone, it's often the computer (network/firewall).
 - **"Node.js not found"**: Install Node.js 18+ and ensure it is in your PATH.
 - **"wa-bridge.js not found"**: Run `npm install` in `vaf/whatsapp_node/`.
 - **Black terminal / no QR code**: Install Node.js 18+, run `npm install` in `vaf/whatsapp_node/`, restart VAF.

@@ -375,9 +375,9 @@ class RagPipeline:
                 )
             )
 
-        # USER ISOLATION: the scope is mandatory and this fails CLOSED. An empty scope used to mean
-        # "search ALL memories (no filter)", which returned one user's chunks/tags to another (the
-        # reported cross-user leak). Refuse instead. A deliberate shared/global corpus must be modelled
+        # USER ISOLATION: the scope is mandatory and this fails CLOSED. An empty scope must never be
+        # treated as "search ALL memories (no filter)", which would return one user's chunks/tags to
+        # another. Refuse instead. A deliberate shared/global corpus must be modelled
         # with an explicit sentinel scope + opt-in flag, never an implicit unscoped query.
         if not user_scope_id:
             logger.warning("RagPipeline.search called without user_scope_id - returning no results (fail-closed isolation)")
@@ -1023,8 +1023,8 @@ async def auto_capture_memory(
 
 def _strip_think_reply(text: str) -> str:
     """Remove reasoning-model <think>...</think> blocks before parsing MEMORY: lines. Without this, a
-    reasoning model (e.g. deepseek-v4-pro) drafts MEMORY: lines INSIDE its <think> trace and the raw
-    reasoning itself gets persisted as a memory (observed: 27 '<think>We are asked...' chunks in the DB).
+    reasoning model can draft MEMORY: lines inside its <think> trace, so the raw reasoning would be
+    persisted as a memory instead of the intended fact.
     Mirrors vaf/tools/learn_document._strip_think (the document path already does this); inlined here to
     avoid a tools->memory import cycle. If an unclosed <think> remains (truncated output), drop from it on."""
     t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
@@ -1139,7 +1139,7 @@ def _build_compaction_conversation_excerpt(agent: Any, max_chars: int = 12000) -
 def _is_contact_session(session_id: str) -> bool:
     """
     True if this session is a chat with a contact (Telegram/WhatsApp/Discord), not the main user.
-    NOTE: This is a FALLBACK safety check only. The primary DSGVO filter is in headless_runner
+    NOTE: This is a FALLBACK safety check only. The primary GDPR filter is in headless_runner
     which checks task.metadata["from_contact"]. Main-user Telegram/WhatsApp/Discord sessions
     (where the user themselves chats) are NOT contact sessions and SHOULD be compacted.
     """
@@ -1208,7 +1208,7 @@ def run_session_compaction_sync(
     Run session compaction if interval reached: inject prompt, parse MEMORY:/NO_REPLY, ingest to RAG.
     Does not append compaction reply to chat history or UI.
     Runs for main user sessions (Web, Telegram, WhatsApp, Discord).
-    DSGVO: Contact chats are filtered upstream in headless_runner (from_contact metadata).
+    GDPR: Contact chats are filtered upstream in headless_runner (from_contact metadata).
     """
     if not Config.get("memory_enabled", True) or not Config.get("memory_compaction_enabled", True):
         return
@@ -1408,28 +1408,25 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # RAG MEMORY-SAFETY CHARTER  —  read this before adding ANY new embedding/ingest lane
 #
-# (Why isn't the fancy semantic search over channel history here yet? Current official
-#  reason: skill issue. Real translation: get the leak story right first. — PS, Mert Elsner)
-#
-# WHY THIS EXISTS: this subsystem has a real memory-leak history. Rapid, repeated
-# embedding/ingest churn caused multi-GB RSS runaways. The defenses you see across
-# the memory stack are scar tissue from exactly that, NOT premature optimization:
+# WHY THIS EXISTS: this subsystem is sensitive to memory growth. Rapid, repeated
+# embedding/ingest churn can drive large RSS growth. The defenses across the memory
+# stack exist to prevent that and are intentional, not premature optimization:
 #   - the process-global singleton embedding model (never reloaded per item),
 #   - the attachment lane's `attachment_rag_safe_mode` lexical fallback (bypasses
 #     the vector/embedding lane entirely),
-#   - the RSS "killer", per-window index rate-limiting and burst coalescing,
+#   - the RSS guard, per-window index rate-limiting and burst coalescing,
 #   - the main-loop AUTO-CAPTURE QUEUE below.
-# These leaks are a DIFFERENT subsystem from the frontend QtWebEngine/GPU renderer
-# leak, and they came first. The frontend leak_diag / renderer auto-recovery cannot
-# see a backend embedding leak — there is currently no automatic backend RSS watchdog.
+# This is a separate concern from the frontend QtWebEngine/GPU renderer memory
+# behavior. The frontend leak_diag / renderer auto-recovery cannot observe backend
+# embedding memory use — there is currently no automatic backend RSS watchdog.
 #
 # RULE for any NEW RAG/embedding lane — e.g. a "semantic search over channel history"
 # indexer over Telegram/Discord/WhatsApp messages (intentionally deferred for now):
 #   1. Reuse the singleton model via get_embedding_service(); never construct an
 #      embedding model per item.
 #   2. Run ingest ONLY on the main event loop (enqueue here / drain in the main loop).
-#      NEVER daemon-thread + asyncio.run() — that combo + ONNX + asyncpg is the 20GB
-#      leak documented just below.
+#      NEVER daemon-thread + asyncio.run() — that combination with ONNX and asyncpg is
+#      the memory-growth pattern documented just below.
 #   3. Index incrementally: embed only NEW or content-changed items, keyed on a STABLE
 #      content hash (not a positional message id). Never embed inside a full
 #      delete + re-insert chat rewrite (it would re-embed the entire history).
@@ -1441,14 +1438,15 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AUTO-CAPTURE QUEUE SYSTEM (Memory-Leak-Safe)
+# AUTO-CAPTURE QUEUE SYSTEM (memory-safe)
 #
-# PROBLEM: Daemon threads + asyncio.run() + ONNX + asyncpg = 20GB+ memory leaks
+# BACKGROUND: Daemon threads + asyncio.run() + ONNX + asyncpg can cause large,
+# unbounded memory growth:
 # - ONNX Runtime doesn't release memory properly when sessions aren't closed
-# - asyncpg connection pools leak in daemon thread event loops
+# - asyncpg connection pools are not cleaned up in daemon thread event loops
 # - asyncio.run() in daemon threads creates orphaned resources
 #
-# SOLUTION: Queue-based approach that processes in the MAIN event loop
+# APPROACH: Queue-based processing that runs in the MAIN event loop
 # - No daemon threads for async work
 # - Reuses main event loop (no orphaned loops)
 # - ONNX model is singleton with proper session management
@@ -1477,8 +1475,8 @@ def run_auto_capture_sync(
     """
     Queue auto-capture for later processing in the main event loop.
 
-    This is MEMORY-LEAK SAFE because:
-    - No daemon threads (which leak with asyncio.run() + ONNX + asyncpg)
+    This is memory-safe because:
+    - No daemon threads (which can grow memory unbounded with asyncio.run() + ONNX + asyncpg)
     - Tasks are processed in the main event loop via process_auto_capture_queue()
     - ONNX model and DB connections are reused from main thread
 
@@ -1612,7 +1610,7 @@ def run_memory_search_sync(
         return ""
 
     # USER ISOLATION: resolve a concrete scope before any retrieval; never search unscoped.
-    # A missing scope previously fell through to a fail-open "search ALL memories" query that leaked
+    # A missing scope must never fall through to a "search ALL memories" query, which would expose
     # other users' snippets/tags. Policy:
     #   - server/multi-user mode + no scope -> DENY (we cannot assume the caller is the admin);
     #   - genuine single-user/local mode + no scope -> fall back to the local-admin scope (the bootstrap
@@ -1638,7 +1636,7 @@ def run_memory_search_sync(
         append_domain_log("rag", f"SEARCH_DENIED caller={caller or 'unknown'} reason=invalid_user_scope")
         return ""
 
-    # Truncate at entry so we never pass long strings to encoder (avoids 10GB+ RAM spike)
+    # Truncate at entry so we never pass long strings to encoder (avoids a large RAM spike)
     # Also strip <think> blocks to prevent recursive loops
     from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
     import re

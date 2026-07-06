@@ -130,10 +130,10 @@ function workflowBadge(args: string | undefined): { label: string; color: string
         const obj = JSON.parse(args) as Record<string, unknown>;
         if (!('action' in obj)) return null;
         switch (obj.action) {
-            case 'run_temp':  return { label: 'Temporär',            color: 'bg-blue-100 text-blue-700 border-blue-200' };
-            case 'create':    return { label: 'Persistenter Workflow', color: 'bg-green-100 text-green-700 border-green-200' };
-            case 'delete':    return { label: 'Löschen',              color: 'bg-red-100 text-red-700 border-red-200' };
-            case 'list':      return { label: 'Liste',                color: 'bg-gray-100 text-gray-600 border-gray-200' };
+            case 'run_temp':  return { label: 'Temporary',            color: 'bg-blue-100 text-blue-700 border-blue-200' };
+            case 'create':    return { label: 'Persistent Workflow',  color: 'bg-green-100 text-green-700 border-green-200' };
+            case 'delete':    return { label: 'Delete',               color: 'bg-red-100 text-red-700 border-red-200' };
+            case 'list':      return { label: 'List',                 color: 'bg-gray-100 text-gray-600 border-gray-200' };
             default:          return null;
         }
     } catch { return null; }
@@ -258,13 +258,13 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     // reads as completed, but the actual work is still going).
     const headerStatus: 'running' | 'completed' | 'error' = liveUnit ? 'running' : visualStatus;
 
-    // Right-aligned status/result label (mockup ".stat"): "läuft…" while running, the sub-agent
+    // Right-aligned status/result label (mockup ".stat"): "running…" while running, the sub-agent
     // runtime, or a result counter once done. Keeps the existing duration logic, just presented
     // like the mockup instead of a "(0.0s)" subtitle.
     const rt = liveUnit?.runtime_s ?? lastRuntimeRef.current ?? (endTime && startTime ? (endTime - startTime) / 1000 : null);
     const statText =
-        headerStatus === 'running'   ? (rt != null ? `läuft… ${fmtDuration(rt)}` : 'läuft…')
-        : headerStatus === 'error'   ? 'Fehler'
+        headerStatus === 'running'   ? (rt != null ? `running… ${fmtDuration(rt)}` : 'running…')
+        : headerStatus === 'error'   ? 'Error'
         : (isSubAgent && rt != null  ? fmtDuration(rt) : resultStat(result));
 
     return (
@@ -401,7 +401,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 )}
                                             />
                                             <span className="text-[11px] text-foreground">
-                                                {liveUnit.stale ? 'Kein Heartbeat — hängt evtl.' : 'Aktiv'}
+                                                {liveUnit.stale ? 'No heartbeat — may be stuck' : 'Active'}
                                                 {liveUnit.runtime_s != null && (
                                                     <span className="text-muted-foreground"> · {fmtDuration(liveUnit.runtime_s)}</span>
                                                 )}

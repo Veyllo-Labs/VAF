@@ -728,7 +728,7 @@ export default function SubAgentWindow({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [document?.sectionsHtml?.length]);
 
-    // Follow the work: scroll the Sektionen list to the section being written and the
+    // Follow the work: scroll the sections list to the section being written and the
     // Activity feed to the newest line whenever the document state advances.
     const documentOutlineRef = useRef<HTMLDivElement>(null);
     const documentActivityRef = useRef<HTMLDivElement>(null);
@@ -799,7 +799,7 @@ export default function SubAgentWindow({
             memory: { cls: 'bg-teal-100 text-teal-700', label: 'Memory' },
             chat: { cls: 'bg-blue-100 text-blue-700', label: 'Chat' },
             auto: { cls: 'bg-amber-100 text-amber-700', label: 'Auto' },
-        }[source] ?? { cls: 'bg-gray-100 text-gray-400', label: 'offen' });
+        }[source] ?? { cls: 'bg-gray-100 text-gray-400', label: 'Open' });
         const N = document.sections.length;
         // Activity feed derived from the live document state, so it advances with each
         // section (the raw sub-agent stdout goes quiet during long LLM generation).
@@ -883,9 +883,9 @@ export default function SubAgentWindow({
                             {/* Sections */}
                             <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
                                 <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
-                                    Sektionen
+                                    Sections
                                     <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
-                                        {doneCount}/{document.sections.length} fertig
+                                        {doneCount}/{document.sections.length} done
                                     </span>
                                 </div>
                                 <div ref={documentOutlineRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-2">
@@ -919,9 +919,9 @@ export default function SubAgentWindow({
                                                             style={{ width: `${Math.min(100, (s.words / Math.max(1, s.targetWords)) * 100)}%` }}
                                                         />
                                                     </span>
-                                                    {s.status === 'done' ? `${s.words} Wörter`
-                                                        : s.status === 'writing' ? 'schreibt…'
-                                                        : 'geplant'}
+                                                    {s.status === 'done' ? `${s.words} words`
+                                                        : s.status === 'writing' ? 'writing…'
+                                                        : 'planned'}
                                                 </span>
                                             </span>
                                         </div>
@@ -932,14 +932,14 @@ export default function SubAgentWindow({
                             {/* Placeholders */}
                             <div className="flex min-h-0 flex-[1.5] flex-col border-b border-gray-100">
                                 <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">
-                                    Platzhalter
+                                    Placeholders
                                     <span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">
-                                        {filledCount}/{document.placeholders.length} gefüllt
+                                        {filledCount}/{document.placeholders.length} filled
                                     </span>
                                 </div>
                                 <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2">
                                     {document.placeholders.length === 0 && (
-                                        <div className="px-2 py-3 text-[10px] text-gray-300">Noch keine Platzhalter.</div>
+                                        <div className="px-2 py-3 text-[10px] text-gray-300">No placeholders yet.</div>
                                     )}
                                     {document.placeholders.map((p, i) => {
                                         const chip = phChip(p.source);
@@ -952,7 +952,7 @@ export default function SubAgentWindow({
                                             >
                                                 <span className="flex-none font-mono text-[10px] text-teal-700">{`{{${p.name}}}`}</span>
                                                 <span className={cn('min-w-0 flex-1 truncate text-[11px]', open ? 'italic text-gray-400' : 'text-gray-800')}>
-                                                    {open ? 'im Chat ergänzen' : p.value}
+                                                    {open ? 'add in chat' : p.value}
                                                 </span>
                                                 <span className={cn('flex-none rounded px-1.5 py-px text-[8.5px] font-bold uppercase tracking-wide', chip.cls)}>{chip.label}</span>
                                             </div>
@@ -987,9 +987,9 @@ export default function SubAgentWindow({
                         <div className="flex h-full items-center px-2.5">Section {Math.min(doneCount + (writingSec ? 1 : 0), document.sections.length)}/{document.sections.length}</div>
                         <div className="flex h-full items-center gap-1.5 px-2.5">
                             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                            {wordsTotal.toLocaleString()} Wörter
+                            {wordsTotal.toLocaleString()} words
                         </div>
-                        <div className="flex h-full items-center px-2.5">{filledCount}/{document.placeholders.length} gefüllt</div>
+                        <div className="flex h-full items-center px-2.5">{filledCount}/{document.placeholders.length} filled</div>
                         {document.savePath && (
                             <div className="ml-auto flex h-full max-w-[40%] items-center truncate px-2.5 font-mono text-[9px] text-[#8b93b0]" title={document.savePath}>{document.savePath}</div>
                         )}
@@ -1240,7 +1240,7 @@ export default function SubAgentWindow({
             exe: { bg: 'bg-slate-100', fg: 'text-slate-600', bar: 'bg-slate-500' },
             txt: { bg: 'bg-gray-100', fg: 'text-gray-500', bar: 'bg-gray-400' },
         };
-        const TYPE_LABEL: Record<string, string> = { folder: 'Ordner', pdf: 'PDF', image: 'Bilder', video: 'Video', doc: 'Docs', data: 'Daten', arch: 'Archiv', exe: 'Apps', txt: 'Text' };
+        const TYPE_LABEL: Record<string, string> = { folder: 'Folders', pdf: 'PDF', image: 'Images', video: 'Video', doc: 'Docs', data: 'Data', arch: 'Archive', exe: 'Apps', txt: 'Text' };
         const iconFor = (t: string, isDir: boolean) => isDir ? Folder : t === 'image' ? ImageIcon : t === 'video' ? Film : t === 'arch' ? Archive : FileText;
         const styleFor = (t: string) => TYPE_STYLE[t] ?? TYPE_STYLE.txt;
         const crumbs = cf.path.split(/[\\/]/).filter(Boolean);
@@ -1264,7 +1264,7 @@ export default function SubAgentWindow({
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
                                     <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
-                                    <span className="truncate">{query ? <>Durchsucht: <span className="font-mono">{cf.name}</span> nach <span className="font-mono">{query}</span></> : <>Öffnet: <span className="font-mono">{cf.name}</span></>}</span>
+                                    <span className="truncate">{query ? <>Searching: <span className="font-mono">{cf.name}</span> for <span className="font-mono">{query}</span></> : <>Opening: <span className="font-mono">{cf.name}</span></>}</span>
                                 </div>
                             </div>
                         </div>
@@ -1272,7 +1272,7 @@ export default function SubAgentWindow({
                             <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
                             <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
                                 {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {lib.stage === 'done' ? 'Fertig' : (query ? 'Searching' : 'Liest')}{query ? ` · ${hitCount} Treffer` : ''}
+                                {lib.stage === 'done' ? 'Done' : (query ? 'Searching' : 'Reading')}{query ? ` · ${hitCount} hits` : ''}
                             </span>
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
@@ -1283,7 +1283,7 @@ export default function SubAgentWindow({
                         <div className="flex min-w-0 flex-1 flex-col bg-[#e9eaee]">
                             {/* toolbar: back + breadcrumb + search */}
                             <div className="flex h-10 flex-none items-center gap-2 border-b border-gray-200 bg-[#f7f8fa] px-3.5">
-                                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Übersicht"><ChevronLeft size={13} /></span>
+                                <span className="flex h-6 w-6 flex-none items-center justify-center rounded-md border border-gray-200 bg-white text-gray-400" title="Overview"><ChevronLeft size={13} /></span>
                                 <div className="flex min-w-0 items-center gap-1 text-[11.5px] text-gray-500">
                                     <span className="rounded px-1.5 py-0.5">~</span>
                                     {crumbs.slice(-3).map((c, i, arr) => (
@@ -1308,17 +1308,17 @@ export default function SubAgentWindow({
                                 <div className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-orange-50 text-orange-700"><FolderOpen size={15} /></div>
                                 <div className="min-w-0">
                                     <div className="text-[14px] font-bold text-gray-900">{cf.name}</div>
-                                    <div className="text-[10.5px] text-gray-400">{cf.fileCount.toLocaleString('de-DE')} Dateien · {cf.folderCount} Unterordner · {fmtBytes(cf.totalSize)}</div>
+                                    <div className="text-[10.5px] text-gray-400">{cf.fileCount.toLocaleString('en-US')} files · {cf.folderCount} subfolders · {fmtBytes(cf.totalSize)}</div>
                                 </div>
                                 <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
                                     {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
-                                    {lib.stage === 'done' ? 'gelesen' : 'liest Ordner'}
+                                    {lib.stage === 'done' ? 'read' : 'reading folder'}
                                 </div>
                             </div>
                             {/* file listing */}
                             <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
                                 <div className="sticky top-0 flex items-center gap-3 border-b border-gray-200 bg-[#e9eaee] px-3 pb-1.5 pt-1 text-[9px] font-bold uppercase tracking-wider text-gray-400">
-                                    <span className="flex-1">Name</span><span className="w-[74px] text-right">Größe</span><span className="w-[88px] text-right">Geändert</span>
+                                    <span className="flex-1">Name</span><span className="w-[74px] text-right">Size</span><span className="w-[88px] text-right">Modified</span>
                                 </div>
                                 {cf.entries.map((e, i) => {
                                     const Icon = iconFor(e.type, e.isDir);
@@ -1327,7 +1327,7 @@ export default function SubAgentWindow({
                                         <div key={`${e.name}-${i}`} className={cn("flex items-center gap-3 border-b border-[#e0e1e6] px-3 py-1.5", e.match && "bg-orange-50/70 shadow-[inset_3px_0_0_#ea580c]")}>
                                             <span className={cn("flex h-5 w-5 flex-none items-center justify-center rounded-md", ts.bg, ts.fg)}><Icon size={12} /></span>
                                             <span className={cn("min-w-0 flex-1 truncate text-[12.5px] text-gray-800", e.isDir && "font-semibold")}>{e.name}</span>
-                                            {e.match && <span className="flex-none rounded bg-orange-100 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-orange-700">Treffer</span>}
+                                            {e.match && <span className="flex-none rounded bg-orange-100 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-orange-700">Match</span>}
                                             <span className="w-[74px] flex-none text-right text-[11px] tabular-nums text-gray-600">{e.isDir ? (e.items != null ? `${e.items} El.` : '—') : fmtBytes(e.sizeBytes)}</span>
                                             <span className="w-[88px] flex-none text-right text-[10.5px] tabular-nums text-gray-400">{e.modified}</span>
                                         </div>
@@ -1339,13 +1339,13 @@ export default function SubAgentWindow({
                         {/* ── Sidebar: current folder / matches / activity ── */}
                         <div className="flex w-[33%] min-w-[300px] max-w-[380px] flex-none flex-col border-l border-gray-200 bg-white">
                             <div className="flex flex-none flex-col border-b border-gray-100">
-                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aktueller Ordner</div>
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Current Folder</div>
                                 <div className="px-3.5 pb-3 pt-0.5">
                                     <div className="mb-2 break-all font-mono text-[11px] text-orange-700">{cf.path}</div>
                                     <div className="mb-2.5 flex gap-4">
-                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.fileCount.toLocaleString('de-DE')}</div><div className="text-[9px] text-gray-400">Dateien</div></div>
-                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.folderCount}</div><div className="text-[9px] text-gray-400">Unterordner</div></div>
-                                        <div><div className="text-[16px] font-bold text-gray-900">{fmtBytes(cf.totalSize)}</div><div className="text-[9px] text-gray-400">Größe</div></div>
+                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.fileCount.toLocaleString('en-US')}</div><div className="text-[9px] text-gray-400">Files</div></div>
+                                        <div><div className="text-[16px] font-bold text-gray-900">{cf.folderCount}</div><div className="text-[9px] text-gray-400">Subfolders</div></div>
+                                        <div><div className="text-[16px] font-bold text-gray-900">{fmtBytes(cf.totalSize)}</div><div className="text-[9px] text-gray-400">Size</div></div>
                                     </div>
                                     <div className="flex flex-col gap-1.5">
                                         {cf.types.map((t, i) => (
@@ -1359,10 +1359,10 @@ export default function SubAgentWindow({
                                 </div>
                             </div>
                             <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
-                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Treffer{query && <span className="ml-1.5 font-mono lowercase tracking-normal text-orange-700">{query}</span>}<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{matches.length}</span></div>
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Matches{query && <span className="ml-1.5 font-mono lowercase tracking-normal text-orange-700">{query}</span>}<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{matches.length}</span></div>
                                 <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3 pt-0.5">
                                     {matches.length === 0
-                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">{query ? 'Noch keine Treffer in diesem Ordner.' : 'Keine aktive Suche.'}</div>
+                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">{query ? 'No matches in this folder yet.' : 'No active search.'}</div>
                                         : matches.map((m, i) => {
                                             const Icon = iconFor(m.type, false); const ts = styleFor(m.type);
                                             return (
@@ -1389,10 +1389,10 @@ export default function SubAgentWindow({
                     {/* Statusbar */}
                     <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
                         <div className="flex h-full items-center gap-1.5 bg-orange-600 px-2.5 font-bold text-white">VAF</div>
-                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> NUR LESEN</div>
+                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> READ ONLY</div>
                         <div className="flex h-full items-center gap-1.5 px-2.5 font-mono">{cf.path}</div>
-                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{cf.fileCount.toLocaleString('de-DE')} Dateien</div>
-                        {query && <div className="flex h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 font-semibold text-[#fcd9b6]">{hitCount} Treffer</div>}
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{cf.fileCount.toLocaleString('en-US')} files</div>
+                        {query && <div className="flex h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 font-semibold text-[#fcd9b6]">{hitCount} hits</div>}
                     </div>
                 </div>
             </div>
@@ -1433,7 +1433,7 @@ export default function SubAgentWindow({
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Librarian Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
                                     <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
-                                    <span className="truncate">Analysiert: Speicher &amp; Dateien · <span className="font-mono">{lib.root || '~'}</span></span>
+                                    <span className="truncate">Analyzing: storage &amp; files · <span className="font-mono">{lib.root || '~'}</span></span>
                                 </div>
                             </div>
                         </div>
@@ -1441,7 +1441,7 @@ export default function SubAgentWindow({
                             <span className="flex items-center gap-1.5 rounded-md bg-orange-50 px-2 py-1 text-[9px] font-extrabold tracking-wider text-orange-700"><Lock size={9} /> READ-ONLY</span>
                             <span className="flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-orange-700">
                                 {isLive && lib.stage !== 'done' && <Loader2 size={9} className="animate-spin" />}
-                                {lib.stage === 'done' ? 'Fertig' : 'Scanning'}{lib.totalFiles ? ` · ${lib.totalFiles.toLocaleString('de-DE')} Dateien` : ''}
+                                {lib.stage === 'done' ? 'Done' : 'Scanning'}{lib.totalFiles ? ` · ${lib.totalFiles.toLocaleString('en-US')} files` : ''}
                             </span>
                             <button onClick={onClose} className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600" aria-label="Close"><X size={14} /></button>
                         </div>
@@ -1457,17 +1457,17 @@ export default function SubAgentWindow({
                                     <span className="ml-auto flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700">
                                         <Search size={11} className="text-gray-400" />
                                         <span className="font-mono text-orange-700">{lib.search.query}</span>
-                                        {typeof lib.search.hits === 'number' && <span className="text-[10px] text-gray-400">{lib.search.hits} Treffer</span>}
+                                        {typeof lib.search.hits === 'number' && <span className="text-[10px] text-gray-400">{lib.search.hits} hits</span>}
                                     </span>
                                 )}
                             </div>
                             <div ref={librarianViewerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
                                 <div className="mb-2.5 flex items-baseline gap-2.5">
                                     <div className="text-[22px] font-bold text-gray-900">{fmtBytes(lib.totalSize)}</div>
-                                    <div className="text-[11px] text-gray-400">{lib.totalFiles.toLocaleString('de-DE')} Dateien · {lib.totalFolders.toLocaleString('de-DE')} Ordner gescannt</div>
+                                    <div className="text-[11px] text-gray-400">{lib.totalFiles.toLocaleString('en-US')} files · {lib.totalFolders.toLocaleString('en-US')} folders scanned</div>
                                     <div className="ml-auto flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-orange-700">
                                         {lib.stage === 'done' ? <CheckCircle2 size={11} className="text-emerald-500" /> : <Loader2 size={11} className="animate-spin" />}
-                                        {lib.stage === 'done' ? 'Map bereit' : 'Map wird aufgebaut'}
+                                        {lib.stage === 'done' ? 'Map ready' : 'Building map'}
                                     </div>
                                 </div>
                                 <div className="flex flex-col gap-[3px]">
@@ -1478,7 +1478,7 @@ export default function SubAgentWindow({
                                                 <span className="flex h-5 w-5 flex-none items-center justify-center rounded-md bg-orange-50 text-orange-700"><Folder size={12} /></span>
                                                 <span className="truncate text-[12.5px] font-semibold text-gray-800">{e.name}</span>
                                                 {e.gd && <span className="flex-none rounded bg-blue-50 px-1.5 py-px text-[8px] font-extrabold uppercase tracking-wide text-blue-600">Drive</span>}
-                                                {typeof e.items === 'number' && <span className="flex-none text-[10px] text-gray-400">{e.items.toLocaleString('de-DE')} Dateien</span>}
+                                                {typeof e.items === 'number' && <span className="flex-none text-[10px] text-gray-400">{e.items.toLocaleString('en-US')} files</span>}
                                                 <span className="flex-1" />
                                                 <span className="h-[5px] w-40 flex-none overflow-hidden rounded-full bg-gray-100"><span className="block h-full rounded-full bg-orange-500" style={{ width: `${Math.round((e.sizeBytes || 0) / maxEntry * 100)}%` }} /></span>
                                                 <span className="w-16 flex-none text-right text-[11.5px] font-bold tabular-nums text-gray-700">{fmtBytes(e.sizeBytes)}</span>
@@ -1492,7 +1492,7 @@ export default function SubAgentWindow({
                         {/* ── Sidebar: drives / biggest folders / activity ── */}
                         <div className="flex w-[34%] min-w-[300px] max-w-[400px] flex-none flex-col border-l border-gray-200 bg-white">
                             <div className="flex flex-none flex-col border-b border-gray-100">
-                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Datenträger &amp; Cloud<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{lib.drives.length} Quellen</span></div>
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Drives &amp; Cloud<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{lib.drives.length} sources</span></div>
                                 <div className="flex flex-col gap-2.5 px-3.5 pb-3 pt-1">
                                     {lib.drives.map((d, i) => {
                                         const pct = d.totalBytes > 0 ? Math.round(d.usedBytes / d.totalBytes * 100) : 0;
@@ -1504,13 +1504,13 @@ export default function SubAgentWindow({
                                                 <div className="mb-1 flex items-baseline gap-2">
                                                     <span className="flex items-center gap-1.5 text-[11.5px] font-semibold text-gray-800"><Icon size={12} className={d.kind === 'cloud' ? 'text-blue-500' : 'text-gray-500'} />{d.name}</span>
                                                     {cloudNoQuota
-                                                        ? <span className="ml-auto text-[10px] text-emerald-600">verbunden</span>
-                                                        : <span className="ml-auto text-[10px] text-gray-400">{fmtBytes(Math.max(0, d.totalBytes - d.usedBytes))} frei</span>}
+                                                        ? <span className="ml-auto text-[10px] text-emerald-600">connected</span>
+                                                        : <span className="ml-auto text-[10px] text-gray-400">{fmtBytes(Math.max(0, d.totalBytes - d.usedBytes))} free</span>}
                                                 </div>
                                                 {!cloudNoQuota && (
                                                     <>
                                                         <span className="block h-[7px] overflow-hidden rounded-full bg-gray-100"><span className={cn("block h-full rounded-full", tone)} style={{ width: `${pct}%` }} /></span>
-                                                        <div className="mt-1 text-[10.5px] tabular-nums text-gray-500">{fmtBytes(d.usedBytes)} / {fmtBytes(d.totalBytes)} · {pct}% belegt</div>
+                                                        <div className="mt-1 text-[10.5px] tabular-nums text-gray-500">{fmtBytes(d.usedBytes)} / {fmtBytes(d.totalBytes)} · {pct}% used</div>
                                                     </>
                                                 )}
                                             </div>
@@ -1519,7 +1519,7 @@ export default function SubAgentWindow({
                                 </div>
                             </div>
                             <div className="flex min-h-0 flex-1 flex-col border-b border-gray-100">
-                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Größte Ordner<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">Top {lib.topFolders.length}</span></div>
+                                <div className="flex h-8 flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Largest Folders<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">Top {lib.topFolders.length}</span></div>
                                 <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3 pt-0.5">
                                     {lib.topFolders.map((f, i) => (
                                         <div key={`${f.name}-${i}`} className="flex items-center gap-2.5 rounded-lg border border-gray-100 px-2.5 py-1.5">
@@ -1547,11 +1547,11 @@ export default function SubAgentWindow({
                     {/* Statusbar */}
                     <div className="flex h-6 flex-none items-center bg-[#1f2335] text-[10.5px] text-[#c8d0e8]">
                         <div className="flex h-full items-center gap-1.5 bg-orange-600 px-2.5 font-bold text-white">VAF</div>
-                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> NUR LESEN</div>
-                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{lib.totalFiles.toLocaleString('de-DE')} Dateien · {lib.totalFolders.toLocaleString('de-DE')} Ordner</div>
+                        <div className="flex h-full items-center gap-1.5 bg-[#3a2f25] px-2.5 font-bold tracking-wide text-[#fcd9b6]"><Lock size={9} /> READ ONLY</div>
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{lib.totalFiles.toLocaleString('en-US')} files · {lib.totalFolders.toLocaleString('en-US')} folders</div>
                         <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {fmtBytes(lib.totalSize)}</div>
-                        <div className="hidden h-full items-center gap-1.5 px-2.5 md:flex">Lokal{hasCloud ? ' · Google Drive' : ''}</div>
-                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5 font-mono">{lib.root || '~'} (lesend)</div>
+                        <div className="hidden h-full items-center gap-1.5 px-2.5 md:flex">Local{hasCloud ? ' · Google Drive' : ''}</div>
+                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5 font-mono">{lib.root || '~'} (reading)</div>
                     </div>
                 </div>
             </div>
@@ -1969,7 +1969,7 @@ export default function SubAgentWindow({
                                         </div>
                                     ))}
                                     <div className="mx-1 mt-2 rounded-lg border border-dashed border-gray-200 px-2.5 py-1.5 text-[9px] leading-relaxed text-gray-400">
-                                        Rollback: einfach im Chat sagen — &quot;rollback auf &lt;id&gt;&quot;
+                                        Rollback: just say in chat — &quot;rollback to &lt;id&gt;&quot;
                                     </div>
                                 </div>
                             </div>
@@ -2010,7 +2010,7 @@ export default function SubAgentWindow({
         const verbStyle: Record<string, string> = { nav: 'bg-sky-50 text-sky-700', click: 'bg-amber-50 text-amber-700', type: 'bg-indigo-50 text-indigo-700', read: 'bg-teal-50 text-teal-700', scroll: 'bg-gray-100 text-gray-500' };
         const activeAction = b?.actions?.find(a => a.status === 'active') || (b?.actions?.length ? b.actions[b.actions.length - 1] : null);
         const url = browserUrl || b?.url || '';
-        const stepTxt = b && b.maxSteps ? `Schritt ${b.step}/${b.maxSteps}` : (b?.step ? `Schritt ${b.step}` : '');
+        const stepTxt = b && b.maxSteps ? `Step ${b.step}/${b.maxSteps}` : (b?.step ? `Step ${b.step}` : '');
         const shortUrl = (u: string) => (u || 'about:blank').replace(/^https?:\/\//, '');
         return (
             <div
@@ -2030,7 +2030,7 @@ export default function SubAgentWindow({
                                 <div className="text-xs font-semibold text-gray-900">{agentName && agentName !== 'Sub-Agent' ? agentName : 'Browser Agent'}</div>
                                 <div className="flex items-center gap-2 text-[10px] text-gray-500">
                                     <span className={cn("h-1.5 w-1.5 flex-none rounded-full", presenceTone)} />
-                                    <span className="truncate">{b?.task ? `Surft autonom: ${b.task}` : (displayStatus || 'Browser')}</span>
+                                    <span className="truncate">{b?.task ? `Browsing autonomously: ${b.task}` : (displayStatus || 'Browser')}</span>
                                 </div>
                             </div>
                         </div>
@@ -2067,19 +2067,19 @@ export default function SubAgentWindow({
                             </div>
                         </div>
 
-                        {/* Bottom dock: Aufgabe · Aktionen · Verlauf · Activity */}
+                        {/* Bottom dock: Task · Actions · History · Activity */}
                         <div className="flex h-[266px] flex-none border-t border-gray-200 bg-white">
                             <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.15 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aufgabe</div>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Task</div>
                                 <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-                                    <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-sky-900"><span className="mb-1 block text-[8.5px] font-extrabold uppercase tracking-wider text-sky-600">Ziel</span>{b?.task || '—'}</div>
+                                    <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-sky-900"><span className="mb-1 block text-[8.5px] font-extrabold uppercase tracking-wider text-sky-600">Goal</span>{b?.task || '—'}</div>
                                 </div>
                             </div>
                             <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.75 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Aktionen<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.maxSteps ? `${b.step}/${b.maxSteps}` : (b?.actions?.length ?? 0)}</span></div>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Actions<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.maxSteps ? `${b.step}/${b.maxSteps}` : (b?.actions?.length ?? 0)}</span></div>
                                 <div ref={browserActionsRef} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2.5 pb-3">
                                     {(b?.actions ?? []).length === 0
-                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">Wartet auf den ersten Schritt…</div>
+                                        ? <div className="px-1 py-1 text-[9.5px] text-gray-400">Waiting for the first step…</div>
                                         : b!.actions.map((a, i) => (
                                             <div key={i} className={cn("flex items-start gap-2 rounded-lg border px-2 py-1.5", a.status === 'active' ? "border-sky-200 bg-sky-50/60" : "border-gray-100")}>
                                                 <span className={cn("mt-px flex h-4 w-4 flex-none items-center justify-center rounded-full", a.status === 'active' ? "bg-sky-100 text-sky-700" : "bg-emerald-50 text-emerald-600")}>{a.status === 'active' ? <Loader2 size={9} className="animate-spin" /> : <CheckCircle2 size={10} />}</span>
@@ -2092,7 +2092,7 @@ export default function SubAgentWindow({
                                 </div>
                             </div>
                             <div className="flex min-w-0 flex-col border-r border-gray-100" style={{ flex: 1.1 }}>
-                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">Verlauf<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.history?.length ?? 0}</span></div>
+                                <div className="flex h-[30px] flex-none items-center px-3.5 text-[9px] font-bold uppercase tracking-widest text-gray-400">History<span className="ml-auto rounded-full bg-gray-100 px-2 py-px text-[8px] font-semibold text-gray-400">{b?.history?.length ?? 0}</span></div>
                                 <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-3">
                                     {(b?.history ?? []).length === 0
                                         ? <div className="px-1 py-1 text-[9.5px] text-gray-400">—</div>
@@ -2120,7 +2120,7 @@ export default function SubAgentWindow({
                         {stepTxt && <div className="hidden h-full items-center gap-1.5 px-2.5 sm:flex">{stepTxt}</div>}
                         {activeAction && <div className="flex h-full items-center gap-1.5 px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {verbLabel[activeAction.verb] ?? activeAction.verb}</div>}
                         <div className="hidden h-full items-center gap-1.5 bg-[#2a2f45] px-2.5 text-[#bfe3ff] md:flex">Vision: {b?.vision ?? 'auto'}</div>
-                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">{b?.status === 'done' ? 'fertig' : 'läuft'}</div>
+                        <div className="ml-auto flex h-full items-center gap-1.5 px-2.5">{b?.status === 'done' ? 'done' : 'running'}</div>
                     </div>
                 </div>
             </div>

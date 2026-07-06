@@ -86,7 +86,7 @@ The integrated HTTPS proxy relays WebSocket traffic to the backend with `max_siz
 
 The `server_user_scope_id` is then passed into `run_agent_step()` and propagated to all downstream services (memory, tools, automations).
 
-**Token before localhost short-circuit.** `AuthMiddleware` now extracts and honors a presented access JWT **before** any localhost short-circuit, so a valid token always establishes the real identity regardless of peer IP. A tokenless localhost request leaves `request.state.user` unset (internal IPC / single-user desktop). This is the linchpin that lets a LAN user proxied over loopback by the integrated HTTPS proxy get **their** scope instead of the local admin's: the old behavior returned early on the localhost branch before reading the token, which leaked the local-admin identity onto remote users coming in over the loopback proxy.
+**Token before localhost short-circuit.** `AuthMiddleware` extracts and honors a presented access JWT **before** any localhost short-circuit, so a valid token always establishes the real identity regardless of peer IP. A tokenless localhost request leaves `request.state.user` unset (internal IPC / single-user desktop). This is what lets a LAN user proxied over loopback by the integrated HTTPS proxy get **their** scope instead of the local admin's: because the token is read before the localhost branch, a remote user arriving over the loopback proxy is identified by their own token rather than inheriting the local-admin identity.
 
 ### Local mode fallback
 
@@ -122,7 +122,7 @@ The memory system is the most data-sensitive component. Every memory operation i
 
 ### Fail-closed scope resolution
 
-Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes — a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well. This replaces a prior fail-open path where a missing scope could return every user's memories.
+Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes — a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well, so a missing or malformed scope yields no results rather than searching across all users.
 
 ### CRUD Operations (`vaf/memory/rag.py`)
 
@@ -255,7 +255,7 @@ The local admin's data remains at the legacy root paths (`~/.vaf/email_sync.db`,
 
 Each user also has a username-based directory tree. This is the legacy layout, preserved for backward compatibility. New features should prefer scope-based paths above.
 
-Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) — **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed — a cross-user leak, even though the memory database itself stays correctly scope-isolated.
+Because this tree is keyed by the **username** string, a background run must bind the user's **real** account username. Thinking Mode and scheduled Automations resolve the username from `local_users` by `user_scope_id` (and fall back to a synthetic `scope_<8hex>` on an unknown scope) — **never** the literal `"admin"`. Handing a non-admin run the username `"admin"` would make `get_user_workspace("admin")` read `~/.vaf/users/admin/user_identity.json` and inject the admin's personal identity/profile (name, preferences, dos/don'ts, timezone) into that user's system prompt and RAG query seed — exposing the admin's data to that user, even though the memory database itself stays correctly scope-isolated.
 
 ```
 ~/.vaf/users/<username>/
@@ -280,9 +280,9 @@ When the Coding Agent creates a new project (website, script, document, etc.), i
 ~/Documents/VAF_Projects/
 ├── <user_scope_id[:8]>/         # per-user subdirectory (authenticated users)
 │   └── <session_id>/            # per-chat subdirectory (e.g. green432633)
-│       ├── Webseite Portfolio/  # project created in this chat
+│       ├── My Website/          # project created in this chat
 │       └── Game Space Shooter/
-└── Webseite Demo/               # legacy path (local/admin, no session context)
+└── Demo Website/                # legacy path (local/admin, no session context)
 ```
 
 - **Authenticated users** (`user_scope_id` present in session metadata): projects are placed under `VAF_Projects/<first-8-chars-of-uuid>/<session_id>/`.
@@ -318,7 +318,7 @@ The `librarian_agent` reads the local filesystem to answer "find / list / summar
 
 Each `AutomationManager` instance can be created with a `user_scope_id`; tasks are stored in `automations/` (global) or `automations/<user_scope_id>/` (per-user). Tasks carry `user_scope_id` so that when an automation runs (prompt-based or workflow-based), the agent and workflow engine use that scope: RAG/memory, calendar, messaging, contacts, mail, and automation notes/todos all run with the owner's credentials and data. The agent injects `user_scope_id` into automation tools (`create_automation`, `list_automations`, etc.) so new tasks are stored in the correct user directory. The CLI/scheduler uses an aggregated manager that loads from all scope dirs and saves/deletes/restores via the task's scope path.
 
-**Background-run live-emit isolation.** A scheduled automation runs silently and must not surface in another user's live session. With `VAF_IN_AUTOMATION=1`, `_emit_to_web_ui()` is `False` (no status/context/retry emits). Tool start/end updates are not gated by that env (a concurrent real user's tool updates must keep flowing), so they were a separate leak: the automation agent has no own web session, and the tool emit fell back to the process-wide "current session" — broadcasting its tool bubbles into whoever was the **active** web user (a real cross-user leak seen on a LAN client). The fix is a per-agent flag, `agent._background_run = True` (set in `run_task`), checked at both `emit_tool_update` sites so a background run broadcasts no tool bubbles. The flag is per-instance and therefore race-free; gating on the process-wide env would also suppress a concurrent real user's updates.
+**Background-run live-emit isolation.** A scheduled automation runs silently and must not surface in another user's live session. With `VAF_IN_AUTOMATION=1`, `_emit_to_web_ui()` is `False` (no status/context/retry emits). Tool start/end updates are not gated by that env, because a concurrent real user's tool updates must keep flowing. Since a background automation agent has no web session of its own, a naive tool emit would fall back to the process-wide "current session" and could surface in whichever user's web session is currently active. To prevent this, a per-agent flag `agent._background_run = True` (set in `run_task`) is checked at both `emit_tool_update` sites so a background run broadcasts no tool bubbles. The flag is per-instance and therefore race-free; gating on the process-wide env would also suppress a concurrent real user's updates.
 
 **Handoff bundle isolation.** When a background automation must ask the user something it cannot decide, it stores its full working history as a *handoff bundle* under `Platform.vaf_dir() / "handoff_bundles" / <user_scope_id> /<id>.json`, keyed by the raw scope id (aligned with `thinking_requests`). The linked tracked request and the bundle are written under the same resolved scope (`user_scope_id or local_admin_scope_id`), so only the **same** user's main agent — finding the request under its own scope — can load the bundle and continue the task; a bundle written for user A is unreadable for user B. See [AUTOMATIONS.md](../platform/AUTOMATIONS.md#silent-background-execution--context-handoff).
 

@@ -391,7 +391,7 @@ function LegacyDocumentEditor({
             onClose();
             return;
         }
-        const message = 'Möchten Sie den Dokument-Editor wirklich schließen? Ungespeicherte Änderungen können verloren gehen.';
+        const message = 'Do you really want to close the document editor? Unsaved changes may be lost.';
         if (window.confirm(message)) {
             onClose();
         }
@@ -429,7 +429,7 @@ function LegacyDocumentEditor({
     const attachmentDisplayContent = selectedAttachment?.content ?? '';
     const isAttachmentImage = selectedAttachment?.mimeType?.startsWith('image/');
     const attachmentContentWithHighlights = useMemo(() => {
-        const text = attachmentDisplayContent || '(Kein Textinhalt)';
+        const text = attachmentDisplayContent || '(No text content)';
         const rangesForDoc = insertedSelections
             .map((s, i) => ({ start: s.start, end: s.end, colorIndex: i, documentId: s.documentId }))
             .filter((s) => s.documentId === selectedAttachment?.id)
@@ -694,7 +694,7 @@ function LegacyDocumentEditor({
                 body: JSON.stringify({ path: filePath, content }),
             });
             if (!response.ok) throw new Error('Failed to save document');
-            setSaveMessage(filePath || 'Gespeichert.');
+            setSaveMessage(filePath || 'Saved.');
             setTimeout(() => setSaveMessage(null), 5000);
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to save document');
@@ -854,16 +854,16 @@ function LegacyDocumentEditor({
             className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0"
             onMouseDown={saveSelectionFromIframe}
         >
-            <button type="button" onClick={() => execEditorCommand('bold')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.bold && "bg-gray-300")} title="Fett"><Bold size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('italic')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.italic && "bg-gray-300")} title="Kursiv"><Italic size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('underline')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.underline && "bg-gray-300")} title="Unterstrichen"><Underline size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('bold')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.bold && "bg-gray-300")} title="Bold"><Bold size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('italic')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.italic && "bg-gray-300")} title="Italic"><Italic size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('underline')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.underline && "bg-gray-300")} title="Underline"><Underline size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
             <select
                 className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white min-w-[4rem]"
                 value={selectionFormat.fontSize}
                 onChange={(e) => execEditorCommand('fontSize', e.target.value)}
                 onMouseDown={saveSelectionFromIframe}
-                title="Schriftgröße"
+                title="Font size"
             >
                 {FONT_SIZES.map(([val, label]) => <option key={val} value={val}>{label}</option>)}
             </select>
@@ -872,7 +872,7 @@ function LegacyDocumentEditor({
                 value={selectionFormat.fontName}
                 onChange={(e) => execEditorCommand('fontName', e.target.value)}
                 onMouseDown={saveSelectionFromIframe}
-                title="Schriftart"
+                title="Font family"
             >
                 {FONT_FAMILIES.map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
@@ -883,37 +883,37 @@ function LegacyDocumentEditor({
                 value={selectionFormat.foreColor}
                 onMouseDown={saveSelectionFromIframe}
                 onChange={(e) => execEditorCommand('foreColor', e.target.value)}
-                title="Schriftfarbe"
+                title="Font color"
             />
-            <button type="button" onClick={() => execEditorCommand('backColor', '#ffff00')} className="p-1.5 rounded hover:bg-gray-200" title="Markieren"><Highlighter size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('backColor', '#ffff00')} className="p-1.5 rounded hover:bg-gray-200" title="Highlight"><Highlighter size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={() => execEditorCommand('justifyLeft')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyLeft && "bg-gray-300")} title="Links"><AlignLeft size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('justifyCenter')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyCenter && "bg-gray-300")} title="Zentriert"><AlignCenter size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('justifyRight')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyRight && "bg-gray-300")} title="Rechts"><AlignRight size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyLeft')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyLeft && "bg-gray-300")} title="Align left"><AlignLeft size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyCenter')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyCenter && "bg-gray-300")} title="Center"><AlignCenter size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('justifyRight')} className={cn("p-1.5 rounded hover:bg-gray-200", selectionFormat.justifyRight && "bg-gray-300")} title="Align right"><AlignRight size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={() => execEditorCommand('insertUnorderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Aufzählung"><List size={16} /></button>
-            <button type="button" onClick={() => execEditorCommand('insertOrderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Nummerierung"><ListOrdered size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('insertUnorderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Bulleted list"><List size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('insertOrderedList')} className="p-1.5 rounded hover:bg-gray-200" title="Numbered list"><ListOrdered size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={() => execEditorCommand('removeFormat')} className="p-1.5 rounded hover:bg-gray-200" title="Formatierung entfernen"><Eraser size={16} /></button>
+            <button type="button" onClick={() => execEditorCommand('removeFormat')} className="p-1.5 rounded hover:bg-gray-200" title="Clear formatting"><Eraser size={16} /></button>
             <span className="w-px h-5 bg-gray-300 mx-0.5" />
-            <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Speichern">
+            <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
                 {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 Save
             </button>
-            <button type="button" onClick={openPrintDialog} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Drucken (Browser-Dialog)">
+            <button type="button" onClick={openPrintDialog} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Print (browser dialog)">
                 <Printer size={14} />
                 Print
             </button>
-            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Als PDF-Datei herunterladen">
+            <button type="button" onClick={exportAsPDF} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Download as PDF file">
                 {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 PDF
             </button>
-            <button type="button" onClick={downloadHTML} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Als HTML herunterladen">
+            <button type="button" onClick={downloadHTML} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Download as HTML">
                 <Download size={14} />
                 Download
             </button>
             {saveMessage && (
-                <span className="text-[10px] text-emerald-600 font-mono ml-1 truncate max-w-[200px]" title={saveMessage}>Gespeichert: {saveMessage}</span>
+                <span className="text-[10px] text-emerald-600 font-mono ml-1 truncate max-w-[200px]" title={saveMessage}>Saved: {saveMessage}</span>
             )}
         </div>
     );
@@ -946,13 +946,13 @@ function LegacyDocumentEditor({
                                     </div>
                                 </div>
                                 <div className="relative flex items-center gap-1">
-                                    <span className="text-[10px] text-gray-500 uppercase tracking-wide shrink-0">Anhänge</span>
+                                    <span className="text-[10px] text-gray-500 uppercase tracking-wide shrink-0">Attachments</span>
                                     <button
                                         type="button"
                                         onClick={() => setAttachmentsDropdownOpen((o) => !o)}
                                         className="flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 min-w-0 max-w-[180px]"
                                     >
-                                        <span className="truncate">{selectedAttachment?.name ?? 'Kein Dokument'}</span>
+                                        <span className="truncate">{selectedAttachment?.name ?? 'No document'}</span>
                                         <ChevronDown size={12} className="shrink-0" />
                                     </button>
                                     {attachmentsDropdownOpen && (
@@ -965,7 +965,7 @@ function LegacyDocumentEditor({
                                                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-blue-50"
                                                 >
                                                     <Plus size={14} />
-                                                    Dokument hinzufügen
+                                                    Add document
                                                 </button>
                                                 <input
                                                     ref={fileInputRef}
@@ -1016,7 +1016,7 @@ function LegacyDocumentEditor({
                             </button>
                         </div>
                         <div className="flex h-9 items-center gap-2 border-b border-gray-100 bg-white/80 px-4 text-xs text-gray-500 shrink-0">
-                            <span className="truncate font-mono text-[11px]">{selectedAttachment?.name ?? 'Kein Dokument ausgewählt'}</span>
+                            <span className="truncate font-mono text-[11px]">{selectedAttachment?.name ?? 'No document selected'}</span>
                         </div>
                         <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-4 flex flex-col">
                             <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -1028,11 +1028,11 @@ function LegacyDocumentEditor({
                                     {!hasDocuments ? (
                                         <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-400 text-sm">
                                             <FileText size={32} className="opacity-50" />
-                                            <p>Keine Dokumente. Klicke auf &quot;Dokument hinzufügen&quot;, um Anhänge zu öffnen.</p>
-                                            <p className="text-xs">Der Assistent kann dann auf deren Inhalt antworten.</p>
+                                            <p>No documents. Click &quot;Add document&quot; to open attachments.</p>
+                                            <p className="text-xs">The assistant can then respond to their content.</p>
                                         </div>
                                     ) : !selectedAttachment ? (
-                                        <div className="text-gray-400 text-sm">Dokument auswählen.</div>
+                                        <div className="text-gray-400 text-sm">Select a document.</div>
                                     ) : isAttachmentImage && selectedAttachment.content?.startsWith('data:') ? (
                                         <img src={selectedAttachment.content} alt={selectedAttachment.name} className="max-w-full h-auto" />
                                     ) : isPdfWithData(selectedAttachment) ? (
@@ -1053,7 +1053,7 @@ function LegacyDocumentEditor({
                                                 INSERTION_COLOR_CLASSES[insertedSelectionsCount % INSERTION_COLOR_CLASSES.length]
                                             )}
                                         >
-                                            {attachmentContentWithHighlights ?? (attachmentDisplayContent || '(Kein Textinhalt)')}
+                                            {attachmentContentWithHighlights ?? (attachmentDisplayContent || '(No text content)')}
                                         </pre>
                                     )}
                                 </div>
@@ -1170,10 +1170,10 @@ function LegacyDocumentEditor({
                                 <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center bg-white">
                                     <FileText size={48} className="text-gray-300" />
                                     <p className="text-sm text-gray-600 max-w-md">
-                                        PDF-Dateien können hier nicht bearbeitet werden.
+                                        PDF files cannot be edited here.
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                        Word (.docx), Excel (.xlsx), PowerPoint (.pptx) und HTML (.html, .htm) werden im Editor als HTML geladen und bearbeitet.
+                                        Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and HTML (.html, .htm) are loaded and edited as HTML in the editor.
                                     </p>
                                     <p className="font-mono text-[11px] text-gray-400 break-all px-2">{filePath}</p>
                                     <a
@@ -1182,7 +1182,7 @@ function LegacyDocumentEditor({
                                         className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                     >
                                         <Download size={16} />
-                                        Datei herunterladen
+                                        Download file
                                     </a>
                                 </div>
                             ) : isLoading ? (
@@ -1324,10 +1324,10 @@ function LegacyDocumentEditor({
                             <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center bg-white">
                                 <FileText size={56} className="text-gray-300" />
                                 <p className="text-sm text-gray-600 max-w-md">
-                                    PDF-Dateien können hier nicht bearbeitet werden.
+                                    PDF files cannot be edited here.
                                 </p>
                                 <p className="text-xs text-gray-500">
-                                    Word (.docx), Excel (.xlsx), PowerPoint (.pptx) und HTML (.html, .htm) werden im Editor als HTML geladen und bearbeitet.
+                                    Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and HTML (.html, .htm) are loaded and edited as HTML in the editor.
                                 </p>
                                 <p className="font-mono text-xs text-gray-400 break-all px-2">{filePath}</p>
                                 <a
@@ -1336,7 +1336,7 @@ function LegacyDocumentEditor({
                                     className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
                                 >
                                     <Download size={18} />
-                                    Datei herunterladen
+                                    Download file
                                 </a>
                             </div>
                         ) : isLoading ? (

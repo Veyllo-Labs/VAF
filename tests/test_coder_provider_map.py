@@ -3,12 +3,10 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """The coder's provider map must never drift behind the central provider list.
 
-Regression cover for the Veyllo gap: the provider was added centrally (config
-PROVIDER_MODELS + api_backend, 2026-06-26) but the coder's private endpoint map
-was not updated. With provider=veyllo the coder fell into the LOCAL branch and
-either died with "VAF Server unreachable (Port 8080)" or — with a leftover
-llama-server running — silently generated with the local model. This test turns
-the next such drift into a red CI instead of a silent runtime failure.
+Every provider in config PROVIDER_MODELS must also appear in the coder's endpoint
+map (coder_api_providers); otherwise a cloud provider would fall back to the local
+branch instead of using its API. This test turns any such drift into a red CI
+check instead of a silent runtime fallback.
 """
 from vaf.core.config import PROVIDER_MODELS
 from vaf.tools.coder import coder_api_providers

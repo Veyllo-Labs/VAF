@@ -5,9 +5,9 @@
 
 DeepSeek (v4) intermittently emits a real tool call as assistant CONTENT wrapped in its
 special tokens (``<｜｜DSML｜｜invoke name="read_file">…``) instead of the structured
-tool_calls field, so the coder used to show the raw markup to the user and never run the
-call. _extract_xml_tool_call recovers it (and the plain Claude-style XML shape) so the
-coder's existing fallback chain dispatches it. These tests pin that recovery.
+tool_calls field. _extract_xml_tool_call recovers such a tool call (and the plain
+Claude-style XML shape) so the coder's existing fallback chain can dispatch it instead of
+surfacing the raw markup. These tests pin that recovery.
 """
 import json
 
@@ -16,13 +16,13 @@ from vaf.tools.coder import _extract_xml_tool_call  # thin wrapper, must delegat
 
 
 def test_deepseek_dsml_leak_is_recovered():
-    # The exact shape observed in the 2026-07-04 incident.
+    # A representative DSML-wrapped tool call as emitted by DeepSeek v4.
     content = (
         "<think>Now let me find the App component.</think>\n\n"
         "<｜｜DSML｜｜tool_calls>\n"
         '<｜｜DSML｜｜invoke name="read_file">\n'
         '<｜｜DSML｜｜parameter name="end_line" string="false">740</｜｜DSML｜｜parameter>\n'
-        '<｜｜DSML｜｜parameter name="path" string="true">/home/mert/Documents/VAF_Projects/x/finance-dashboard.html</｜｜DSML｜｜parameter>\n'
+        '<｜｜DSML｜｜parameter name="path" string="true">/home/user/Documents/VAF_Projects/x/finance-dashboard.html</｜｜DSML｜｜parameter>\n'
         '<｜｜DSML｜｜parameter name="start_line" string="false">660</｜｜DSML｜｜parameter>\n'
         "</｜｜DSML｜｜invoke>\n"
         "</｜｜DSML｜｜tool_calls>"
@@ -31,7 +31,7 @@ def test_deepseek_dsml_leak_is_recovered():
     assert tc is not None
     assert tc["function"]["name"] == "read_file"
     args = json.loads(tc["function"]["arguments"])
-    assert args["path"] == "/home/mert/Documents/VAF_Projects/x/finance-dashboard.html"
+    assert args["path"] == "/home/user/Documents/VAF_Projects/x/finance-dashboard.html"
     assert args["start_line"] == 660 and args["end_line"] == 740   # coerced from text to int
     assert isinstance(args["start_line"], int)
 

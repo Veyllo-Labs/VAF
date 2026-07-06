@@ -85,8 +85,8 @@ class ConfigUpdateRequest(BaseModel):
 
 class LidAssignRequest(BaseModel):
     """Assign a LID JID to an E.164 number (contact/whitelist). So the bridge accepts messages from that @lid."""
-    lid_jid: str  # e.g. "491702345678@lid"
-    phone_number: str  # E.164, e.g. "+491703456789"
+    lid_jid: str  # e.g. "491701234567@lid"
+    phone_number: str  # E.164, e.g. "+491701234567"
 
 
 @router.get("/dashboard/debug")
@@ -380,7 +380,7 @@ async def get_whatsapp_dashboard(request: Request):
         sid_lid = f"whatsapp_{username}_{lid_digits}"
         if canonical in sessions_by_chat:
             sessions_by_chat[canonical]["session_id"] = sid_lid
-    # Merge LID rows into E.164 so the same contact (baba, Alice) appears only once
+    # Merge LID rows into E.164 so the same contact (Bob, Alice) appears only once
     for key in list(sessions_by_chat.keys()):
         if not str(key).endswith("@lid"):
             continue
@@ -448,7 +448,7 @@ async def get_whatsapp_dashboard(request: Request):
     except Exception:
         pass
     now_ts = int(_time.time())
-    # Clamp last_ts to now so UI never shows future dates (e.g. bad Baileys timestamp for baba)
+    # Clamp last_ts to now so UI never shows future dates (e.g. bad Baileys timestamp for a chat)
     for rec in sessions_by_chat.values():
         lt = rec.get("last_ts") or 0
         if lt > now_ts:
@@ -998,11 +998,11 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
 
 @router.post("/lid-assign")
 async def assign_lid_to_number(request: Request, body: LidAssignRequest):
-    """Assign a LID (e.g. 491702345678@lid) to an E.164 number so the bridge accepts messages from that chat. The number must be in whitelist or a Front Office contact."""
+    """Assign a LID (e.g. 491701234567@lid) to an E.164 number so the bridge accepts messages from that chat. The number must be in whitelist or a Front Office contact."""
     lid_jid = (body.lid_jid or "").strip()
     phone = (body.phone_number or "").strip()
     if not lid_jid or "@lid" not in lid_jid:
-        raise HTTPException(status_code=400, detail="lid_jid required (e.g. 491702345678@lid)")
+        raise HTTPException(status_code=400, detail="lid_jid required (e.g. 491701234567@lid)")
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required (E.164)")
     if not phone.startswith("+"):

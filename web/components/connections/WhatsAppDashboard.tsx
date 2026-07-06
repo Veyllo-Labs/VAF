@@ -314,7 +314,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                 onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
                                 disabled={loading}
                                 className="p-1.5 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
-                                title={data?.connected ? 'Alle Chats von WhatsApp laden & Aktualisieren' : 'Aktualisieren; startet Bridge falls nötig'}
+                                title={data?.connected ? 'Load all chats from WhatsApp & refresh' : 'Refresh; starts bridge if needed'}
                             >
                                 <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
                             </button>
@@ -361,7 +361,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                                 </button>
                                                 {showAssign && (
                                                     <p className="px-3 py-0.5 text-[10px] text-gray-500 leading-none">
-                                                        LID-Chat: Die Linked-Device-API liefert oft keine Nummer (auch bei gespeichertem Kontakt auf dem Handy). Nur Lesen. Für Agent-Antwort: whatsapp_config.lid_to_e164 in der Config.
+                                                        LID chat: The linked-device API often does not return a phone number (even for a contact saved on the phone). Read-only. For agent replies, set whatsapp_config.lid_to_e164 in the config.
                                                     </p>
                                                 )}
                                             </div>
@@ -410,7 +410,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                             {/* Line chart: messages per 4-hour interval */}
                             <MessagesChart buckets={data?.stats_4h ?? []} chartId="whatsapp-messages-chart" />
 
-                            {/* Activity: all or for selected session; when a chat is selected, whole block opens same DIN A4 Verlauf popup on click */}
+                            {/* Activity: all or for selected session; when a chat is selected, the whole block opens the same history popup on click */}
                             <div
                                 role={selectedChatId ? 'button' : undefined}
                                 tabIndex={selectedChatId ? 0 : undefined}
@@ -548,7 +548,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             </div>
         </div>
 
-        {/* Session-Verlauf als eigenständiges Popup (Portal auf document.body), größer/höher als das Dashboard */}
+        {/* Session history as a standalone popup (portal on document.body), larger/taller than the dashboard */}
         {typeof document !== 'undefined' &&
             sessionHistoryPopoutChatId &&
             selectedSession &&
@@ -573,27 +573,27 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                 <X className="w-4 h-4 text-gray-500" />
                             </button>
                         </div>
-                        {/* Memory Learning: X/Y bis nächstes, letztes Mal */}
+                        {/* Memory Learning: X/Y until next, and last time */}
                         {historyCompaction && (
                             <div className="shrink-0 px-4 py-2 bg-violet-50/80 border-b border-violet-100 text-xs text-gray-700 flex flex-wrap items-center gap-x-4 gap-y-1">
                                 <span>
                                     <span className="font-medium text-violet-700">{Math.max(0, historyCompaction.user_turn_count - historyCompaction.last_compaction_at_turn)}</span>
                                     <span className="text-gray-500"> / </span>
                                     <span className="font-medium">{historyCompaction.compaction_interval}</span>
-                                    {' '}Nachrichten bis Memory Learning
+                                    {' '}messages until Memory Learning
                                 </span>
                                 <span className="text-gray-500">
                                     {historyCompaction.last_compaction_at_turn === 0
-                                        ? 'Letztes Memory Learning: noch keins'
-                                        : `Letztes Memory Learning: nach Turn ${historyCompaction.last_compaction_at_turn}`}
+                                        ? 'Last Memory Learning: none yet'
+                                        : `Last Memory Learning: after turn ${historyCompaction.last_compaction_at_turn}`}
                                 </span>
                             </div>
                         )}
                         <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50/50">
                             {historyLoading ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">Lade Verlauf…</p>
+                                <p className="text-sm text-gray-500 py-4 text-center">Loading history…</p>
                             ) : sessionHistory.length === 0 ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">Noch keine Nachrichten in dieser Session.</p>
+                                <p className="text-sm text-gray-500 py-4 text-center">No messages in this session yet.</p>
                             ) : (
                                 <div className="space-y-2 max-w-2xl mx-auto">
                                     {sessionHistory

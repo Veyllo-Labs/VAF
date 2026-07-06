@@ -157,11 +157,11 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                         </div>
                     ) : data ? (
                         <>
-                            {/* Oben nebeneinander: Bot, Bridge status, Admin */}
+                            {/* Top row side by side: Bot, Bridge status, Admin */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 {/* Bot / Developer Portal */}
                                 <div className="rounded-lg border border-gray-200 p-4">
-                                    <p className="text-sm font-medium text-gray-700 mb-2">Bot &amp; Einstellungen</p>
+                                    <p className="text-sm font-medium text-gray-700 mb-2">Bot &amp; Settings</p>
                                     <a
                                         href="https://discord.com/developers/applications/"
                                         target="_blank"
@@ -172,7 +172,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                                         Discord Developer Portal
                                     </a>
                                     <p className="text-xs text-gray-500 mt-1">
-                                        Bot verwalten, Token zurücksetzen oder Einladungs-URL anpassen.
+                                        Manage the bot, reset the token, or adjust the invite URL.
                                     </p>
                                 </div>
 
@@ -223,7 +223,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                                 </div>
                             </div>
 
-                            {/* Letzte Aktivitäten ganz unten: max 7 sichtbar, max 20 gespeichert, neueste oben */}
+                            {/* Recent activity at the bottom: max 7 visible, max 20 stored, newest first */}
                             <div
                                 role="button"
                                 tabIndex={0}
@@ -231,10 +231,10 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); data?.admin_user_id && setHistoryPopoutOpen(true); } }}
                                 className="cursor-pointer hover:bg-gray-50/80 rounded-lg transition-colors -m-1 p-1 mt-2"
                             >
-                                <p className="text-sm font-medium text-gray-700 mb-2">Letzte Aktivitäten</p>
+                                <p className="text-sm font-medium text-gray-700 mb-2">Recent activity</p>
                                 <div className="rounded-lg border border-gray-200 bg-gray-50/50 max-h-[11rem] overflow-y-auto">
                                     {(data.activity?.length ?? 0) === 0 ? (
-                                        <p className="text-sm text-gray-500 p-3">Noch keine Aktivität.</p>
+                                        <p className="text-sm text-gray-500 p-3">No activity yet.</p>
                                     ) : (
                                         <ul className="divide-y divide-gray-200">
                                             {[...(data.activity ?? [])]
@@ -245,13 +245,13 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                                                         <MessageCircle className="w-4 h-4 text-gray-400 shrink-0" />
                                                         <span>{formatActivityTime(a.ts)}</span>
                                                         <span className="text-gray-400">·</span>
-                                                        <span>{a.direction === 'in' ? 'Eingehend' : 'Ausgehend'}</span>
+                                                        <span>{a.direction === 'in' ? 'Incoming' : 'Outgoing'}</span>
                                                     </li>
                                                 ))}
                                         </ul>
                                     )}
                                 </div>
-                                <p className="text-xs text-gray-500 mt-1">Klicken für Chat-Verlauf (max. 7 von 20 Ereignissen)</p>
+                                <p className="text-xs text-gray-500 mt-1">Click for chat history (max. 7 of 20 events)</p>
                             </div>
                         </>
                     ) : (
@@ -261,7 +261,7 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
             </div>
         </div>
 
-        {/* Verlauf-Popup (wie Telegram) */}
+        {/* History popup (same as Telegram) */}
         {typeof document !== 'undefined' &&
             historyPopoutOpen &&
             data?.admin_username &&
@@ -290,20 +290,20 @@ export default function DiscordDashboard({ isOpen, onClose, config, onConfigChan
                                     <span className="font-medium text-violet-700">{Math.max(0, historyCompaction.user_turn_count - historyCompaction.last_compaction_at_turn)}</span>
                                     <span className="text-gray-500"> / </span>
                                     <span className="font-medium">{historyCompaction.compaction_interval}</span>
-                                    {' '}Nachrichten bis Memory Learning
+                                    {' '}messages until Memory Learning
                                 </span>
                                 <span className="text-gray-500">
                                     {historyCompaction.last_compaction_at_turn === 0
-                                        ? 'Letztes Memory Learning: noch keins'
-                                        : `Letztes Memory Learning: nach Turn ${historyCompaction.last_compaction_at_turn}`}
+                                        ? 'Last Memory Learning: none yet'
+                                        : `Last Memory Learning: after turn ${historyCompaction.last_compaction_at_turn}`}
                                 </span>
                             </div>
                         )}
                         <div className="flex-1 min-h-0 overflow-y-auto p-4 bg-gray-50/50">
                             {historyLoading ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">Lade Verlauf…</p>
+                                <p className="text-sm text-gray-500 py-4 text-center">Loading history…</p>
                             ) : sessionHistory.length === 0 ? (
-                                <p className="text-sm text-gray-500 py-4 text-center">Noch keine Nachrichten in dieser Session.</p>
+                                <p className="text-sm text-gray-500 py-4 text-center">No messages in this session yet.</p>
                             ) : (
                                 <div className="space-y-2 max-w-2xl mx-auto">
                                     {sessionHistory

@@ -449,7 +449,7 @@ const TagNodeComponent = React.memo(({ data, selected }: NodeProps) => {
             )}
             style={{ opacity: isFaded ? 0.4 : 1 }}
         >
-            {/* All 4 sides: memory ↔ tag (add tag to memory) – für übersichtlichere Verbindungen */}
+            {/* All 4 sides: memory ↔ tag (add tag to memory) – for clearer connections */}
             <Handle
                 type="target"
                 position={Position.Top}
@@ -656,7 +656,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         return nodes;
     }, [storeNodes, selectedNodeId, connectedNodeIds]);
 
-    // Convert store edges to ReactFlow format. Nur Memory↔Tag; keine Memory↔Memory.
+    // Convert store edges to ReactFlow format. Only Memory↔Tag; no Memory↔Memory.
     const initialEdges: Edge[] = useMemo(() => {
         if (!showTagConnections) return [];
 
@@ -748,7 +748,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
         onNodeSelect?.(null);
     }, [setSelectedNodeId, selectMemory, onNodeSelect]);
 
-    // Nur memory ↔ tag. Must be before early returns (Rules of Hooks).
+    // Only memory ↔ tag. Must be before early returns (Rules of Hooks).
     const isValidConnection = useCallback(
         (conn: Connection) => {
             if (!conn.source || !conn.target) return false;
@@ -896,7 +896,7 @@ export default function MemoryGraph({ className, onNodeSelect, showTagConnection
             {/* Connection Hint + Legend */}
             <div className="absolute top-2 left-2 flex flex-col gap-2 z-10">
                 <div className="px-3 py-1.5 bg-white/90 rounded-lg shadow text-xs text-gray-500">
-                    <span className="font-medium text-purple-600">Tip:</span> Memory ↔ Tag. Tag: alle 4 Seiten für Verbindungen.
+                    <span className="font-medium text-purple-600">Tip:</span> Memory ↔ Tag. Tag: all 4 sides for connections.
                 </div>
                 <div className="px-3 py-2 bg-white/90 rounded-lg shadow text-xs text-gray-500 max-w-[280px]">
                     <div className="font-medium text-gray-600 mb-1.5">Legend</div>

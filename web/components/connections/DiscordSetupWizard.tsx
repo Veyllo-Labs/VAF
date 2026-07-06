@@ -490,16 +490,16 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                     <Shield className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
                                     <div>
                                         <p className="text-sm font-semibold text-amber-900 mb-1">
-                                            Empfehlung: Bot auf &quot;Private&quot; stellen
+                                            Recommendation: Set the bot to &quot;Private&quot;
                                         </p>
                                         <p className="text-sm text-amber-800 mb-2">
-                                            Dein Bot ist aktuell öffentlich — jeder könnte ihn mit einem OAuth-Link in seinen Server einladen.
-                                            Da er nur für dich gedacht ist, solltest du ihn auf <strong>Private</strong> stellen.
+                                            Your bot is currently public — anyone could invite it to their server with an OAuth link.
+                                            Since it is meant only for you, you should set it to <strong>Private</strong>.
                                         </p>
                                         <ol className="text-sm text-amber-700 space-y-1 mb-3">
-                                            <li>1. Developer Portal → deine App → Tab <strong>Bot</strong></li>
-                                            <li>2. Abschnitt <strong>&quot;Authorization Flow&quot;</strong></li>
-                                            <li>3. <strong>&quot;Public Bot&quot;</strong> deaktivieren → Save</li>
+                                            <li>1. Developer Portal → your app → <strong>Bot</strong> tab</li>
+                                            <li>2. <strong>&quot;Authorization Flow&quot;</strong> section</li>
+                                            <li>3. Disable <strong>&quot;Public Bot&quot;</strong> → Save</li>
                                         </ol>
                                         <a
                                             href="https://discord.com/developers/applications"
@@ -507,7 +507,7 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                                             rel="noopener noreferrer"
                                             className="inline-flex items-center gap-1 text-sm text-amber-700 hover:text-amber-900 underline font-medium"
                                         >
-                                            Zum Discord Developer Portal <ExternalLink className="w-3 h-3" />
+                                            Open the Discord Developer Portal <ExternalLink className="w-3 h-3" />
                                         </a>
                                     </div>
                                 </div>

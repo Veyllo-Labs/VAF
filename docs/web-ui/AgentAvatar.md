@@ -25,8 +25,8 @@ Like a facial expression, but abstract.
 
 > **Performance note (do not regress):** The idle state must NOT animate `border-radius`,
 > `filter`/`blur` or `box-shadow`, and the aura stays static. The app runs in QtWebEngine
-> with the GPU in-process, where a continuously *repainting* idle animation leaks GPU memory
-> (renderer RSS once climbed to several GB across the visible avatars). Idle animation is
+> with the GPU in-process, where a continuously *repainting* idle animation drives sustained
+> GPU memory growth. Idle animation is
 > therefore **compositor-only** (`transform`/`opacity`). The organic **blob-morph** (animated
 > `border-radius` via `agentAvatarMorph`) is intentionally limited to the transient active
 > states below (thinking / talking / waiting). See `web/app/globals.css` and

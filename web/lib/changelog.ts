@@ -72,7 +72,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       {
         kind: 'fixed',
         items: [
-          'The coding agent works on the Veyllo API again — it was wrongly failing with “Port 8080 unreachable”, or silently using the local model.',
+          'The coding agent works on the Veyllo API again — it was incorrectly failing with “Port 8080 unreachable” or falling back to the local model.',
           'The coding agent no longer crashes mid-run on cloud providers (DeepSeek, OpenAI).',
           'A plan whose steps arrive as objects no longer crashes the coder.',
           'Chat messages no longer queue for minutes behind a coding run.',

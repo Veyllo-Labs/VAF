@@ -80,11 +80,10 @@ class UpdateIntentTool(BaseTool):
         if not intent:
             return "Error: Intent content is required."
 
-        # A background thinking run must NEVER overwrite the session North Star. user_intent is the MAIN
-        # chat's goal; a background run that writes it creates a self-reinforcing directive loop (it once
-        # wrote 'Propose automating Mert's daily Mutivation routines' from a distorted memory, then read it
-        # back as an order every run). The existing intent-locks (agent.py) only guard the auto-write of
-        # user input, not this tool path — so guard it here too.
+        # A background thinking run must not overwrite the session goal. user_intent is the MAIN
+        # chat's goal; if a background run writes it, that can create a self-reinforcing directive loop
+        # (a written intent gets read back as an instruction on the next run). The existing intent-locks
+        # (agent.py) only guard the auto-write of user input, not this tool path — so guard it here too.
         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
             return "Noted (intent not changed: a background run does not modify the main chat's user intent)."
 
@@ -268,7 +267,7 @@ class UpdateWorkingMemoryTool(BaseTool):
                 nudge = ""
 
             # Informative result so the model sees what actually changed (a silent no-op on a
-            # duplicate add_task otherwise invites a confused retry — observed: 5x re-add).
+            # duplicate add_task otherwise invites a confused retry).
             post_tasks = mpm.get_working_memory().get("tasks", [])
             info = ""
             if mark_all_done:
@@ -278,11 +277,11 @@ class UpdateWorkingMemoryTool(BaseTool):
                 info = " (That task was already in the list — not re-added.)"
 
             # Robust mark_task_done feedback (warn + redirect; NEVER auto-change status here). Marking an
-            # index that is ALREADY done — or out of range — is a silent no-op; returning "✅ updated" gave
-            # the agent no signal that it marked the WRONG step. That is exactly how it got stuck repeating
-            # a real-money purchase: it called mark_task_done(0) (already done) while step [1] (the buy)
-            # stayed pending, so the rendered "CURRENT STEP" header kept pushing the re-buy. Point it at the
-            # real open step instead — same rule (_current_step) that renders the header, so the index matches.
+            # index that is ALREADY done — or out of range — is a silent no-op; returning a plain "updated"
+            # gives the agent no signal that it marked the WRONG step, which can leave the true open step
+            # pending while the rendered "CURRENT STEP" header keeps pushing it (risky for actions such as a
+            # purchase). Point it at the real open step instead — same rule (_current_step) that renders the
+            # header, so the index matches.
             if mark_task_done is not None:
                 try:
                     mt = int(mark_task_done)
@@ -455,7 +454,7 @@ class MemorySearchTool(BaseTool):
     side_effect_class = "none"
     description = (
         "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations. "
-        "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'was hast du über mich gespeichert?', 'what have I told you?'. "
+        "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'what have you saved about me?', 'what have I told you?'. "
         "This is like searching a personal knowledge base - it retrieves previously saved information. "
         "Returns matching snippets from the vector database. If nothing found, tell user you have no stored info yet."
     )
@@ -520,7 +519,7 @@ class MemorySaveTool(BaseTool):
     side_effect_class = "irreversible"
     description = (
         "💾 SAVE new information to your long-term memory database (RAG). "
-        "USE THIS when user explicitly asks: 'remember that...', 'merke dir...', 'save this...', 'speichere...'. "
+        "USE THIS when user explicitly asks: 'remember that...', 'make a note of...', 'save this...', 'store this...'. "
         "This stores facts, preferences, notes permanently in the vector database for future retrieval. "
         "Do NOT use for lookups - use memory_search to retrieve stored information."
     )

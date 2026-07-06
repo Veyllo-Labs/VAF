@@ -508,8 +508,8 @@ def _normalize_tool_adjacency(messages):
     following tool_calls message" and the run dies.
 
     This pass guarantees that regardless of how ``history`` was assembled. Any
-    non-tool message that ended up wedged inside a tool block (e.g. a doom-loop
-    system nudge appended mid tool-loop) is relocated to AFTER the completed
+    non-tool message that ended up wedged inside a tool block (e.g. a
+    loop-recovery system nudge appended mid tool-loop) is relocated to AFTER the completed
     block. It is idempotent — running it on an already-valid history returns an
     equivalent order — so it is safe to call before every send.
 
@@ -575,13 +575,11 @@ def coder_api_providers() -> dict:
 
     MUST cover every provider in vaf.core.config.PROVIDER_MODELS — enforced by
     tests/test_coder_provider_map.py, so adding a new provider centrally without
-    updating this map turns CI red instead of silently breaking the coder. That is
-    exactly what happened with "veyllo" (added centrally 2026-06-26, missing here):
-    the coder fell into the LOCAL branch and either died with "VAF Server
-    unreachable (Port 8080)" or — with a leftover llama-server running — silently
-    generated with the LOCAL model while the user believed the API was working.
-    The run() gate errors loudly on an unknown API provider instead of falling
-    back to :8080.
+    updating this map fails CI instead of leaving the coder without an endpoint.
+    Without an entry here a provider would fall into the LOCAL branch and route to
+    the local server rather than the intended API. To prevent that, the run() gate
+    raises a clear error on an unknown API provider instead of falling back to the
+    local endpoint.
     """
     from vaf.core.config import Config
     return {
@@ -2532,7 +2530,7 @@ class CodingAgentTool(BaseTool):
     def _generate_project_directory(self, task: str) -> str:
         """Generate a user-friendly project directory name based on task. OS-independent."""
         # Strip embedded file paths before keyword extraction so path components
-        # (e.g. "Webseite Erstelle Professionelle" inside a path string) don't
+        # (e.g. project-type or verb words inside a path string) don't
         # pollute the project name.
         task_for_naming = re.sub(r'/[^\s]+', ' ', task)   # Unix paths
         task_for_naming = re.sub(r'[A-Za-z]:\\[^\s]+', ' ', task_for_naming)  # Windows paths
@@ -2540,7 +2538,7 @@ class CodingAgentTool(BaseTool):
         task_lower = task_for_naming.lower()
 
         # Detect project type
-        # Note: check 'html' before 'script' so <script>-Tag in HTML tasks doesn't misclassify
+        # Note: check 'html' before 'script' so a <script> tag in HTML tasks doesn't misclassify
         if any(kw in task_lower for kw in ['game', 'spiel ', 'spiel,', 'spiel.']):
             prefix = "Game"
         elif any(kw in task_lower for kw in ['website', 'webseite', 'homepage', 'landing page', 'seite', '.html', 'index.html', 'html datei', 'html-datei', 'html file']):
@@ -2548,7 +2546,7 @@ class CodingAgentTool(BaseTool):
         elif any(kw in task_lower for kw in ['webapp', 'web app', 'application', 'anwendung']):
             prefix = "Webapp"
         elif any(kw in task_lower for kw in ['python script', 'python skript', '.py script', 'bash script', 'shell script']):
-            # Narrow match: only explicit "python/bash script", NOT bare "script" which also appears in <script>-Tag HTML
+            # Narrow match: only explicit "python/bash script", NOT bare "script" which also appears in <script> tags in HTML
             prefix = "Script"
         elif any(kw in task_lower for kw in ['project', 'projekt']):
             prefix = "Projekt"
@@ -3079,9 +3077,9 @@ Thumbs.db
         # so we never double up the /v1 path segment. Map lives in coder_api_providers()
         # (module level, CI-guarded against drifting behind PROVIDER_MODELS).
         _API_PROVIDERS = coder_api_providers()
-        # LOUD failure instead of the old silent local fallback: an API provider the
-        # map does not know must never route to 127.0.0.1:8080 (that either dies with
-        # "VAF Server unreachable" or silently generates with the local model).
+        # Fail loudly on an unknown API provider: one the map does not know must never
+        # route to 127.0.0.1:8080, which would either be unreachable or generate with
+        # the local model instead of the intended API.
         if _provider != "local" and _provider not in _API_PROVIDERS:
             return (
                 f"❌ Coder configuration error: unknown API provider '{_provider}'. "
@@ -3225,7 +3223,7 @@ Thumbs.db
                         os.path.expanduser(_m.group(1).rstrip('.,)/\\'))
                     )
                     # A bare path mentioned in the task may include the filename
-                    # (".../index.html in /home/mert") or point to an unsafe dir.
+                    # (".../index.html in /home/user") or point to an unsafe dir.
                     if _explicit_path and is_unsafe_project_dir(_explicit_path):
                         _explicit_path = None
             except Exception:
@@ -3473,27 +3471,21 @@ Thumbs.db
                     time.sleep(0.1)  # Give time to render
         
         # ═══════════════════════════════════════════════════════════════════
-        # FIX: Template-Auswahl TUI-Anzeige (2024)
+        # Template-selection messages during blocking LLM calls
         # ═══════════════════════════════════════════════════════════════════
-        # PROBLEM: Template-Auswahl-Meldungen wurden nicht in der TUI angezeigt,
-        # weil die blockierende LLM-Anfrage (detect_template_type_with_llm) den
-        # Hauptthread blockierte, bevor die Meldungen gerendert werden konnten.
-        #
-        # LÖSUNG:
-        # 1. Flag-basierte Updates: Statt direkter live.update() Aufrufe (die
-        #    Deadlocks verursachen können), setzen wir tui._needs_update = True
-        #    und lassen den Animation Thread die Updates übernehmen.
-        # 2. Animation Thread startet JETZT direkt nach live.start() (Zeile 1494),
-        #    nicht erst nach der Template-Auswahl. Das stellt sicher, dass die
-        #    Animation auch während blockierender Operationen läuft.
-        # 3. Längere Wartezeiten (0.2-0.3s) geben dem Animation Thread Zeit,
-        #    die Meldungen zu rendern, bevor die nächste blockierende Operation
-        #    startet.
-        # 4. Alle Template-Auswahl-Meldungen werden mit append_stream() hinzugefügt
-        #    und bleiben im stream_buffer, auch wenn die LLM-Anfrage blockiert.
-        #
-        # ERGEBNIS: Template-Auswahl-Meldungen sind jetzt in der TUI sichtbar,
-        #           auch während der blockierenden LLM-Anfrage.
+        # The blocking LLM request (detect_template_type_with_llm) holds the main
+        # thread, so template-selection messages must be rendered by the animation
+        # thread rather than directly, to keep them visible during that call:
+        # 1. Flag-based updates: instead of direct live.update() calls (which can
+        #    deadlock), set tui._needs_update = True and let the animation thread
+        #    apply the updates.
+        # 2. The animation thread starts right after live.start(), not only after
+        #    template selection, so the animation keeps running during blocking
+        #    operations.
+        # 3. Short waits (0.2-0.3s) give the animation thread time to render the
+        #    messages before the next blocking operation begins.
+        # 4. All template-selection messages are added via append_stream() and stay
+        #    in stream_buffer even while the LLM request blocks.
         # ═══════════════════════════════════════════════════════════════════
         
         if template_type:
@@ -3685,8 +3677,8 @@ The following template files exist as a starting point:
 """
         
         # ORIENT phase: deterministic pre-planning scan (no LLM). Injected into the planner
-        # <context> below so the planner sees an existing project's files/docs - the measured
-        # cause of the existing-project doom-loop. Fresh projects get a short no-op notice.
+        # <context> below so the planner sees an existing project's files/docs, which prevents
+        # repeated no-progress cycles when editing an existing project. Fresh projects get a short no-op notice.
         # Injected as its own variable (not via existing_files_info) so template/guided mode
         # is unaffected.
         orientation_summary = "" if skip_template else _build_orientation_summary(base_dir)
@@ -5093,7 +5085,7 @@ Task {task_idx + 1}: {current_task}
             # Enforce the assistant-tool_calls -> tool adjacency contract. The pass
             # above strips dangling tool_calls and orphan tool results, but does NOT
             # repair ORDER: a system/user message wedged between an assistant's
-            # tool_calls and its tool responses (e.g. a doom-loop nudge appended mid
+            # tool_calls and its tool responses (e.g. a loop-recovery nudge appended mid
             # tool-loop) survives and 400s the request. Relocate any such wedge to
             # after the tool block. Runs BEFORE the [TODO STATUS] append so that
             # trailing system reminder stays last.
@@ -9571,74 +9563,54 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# VAF CODER DEVELOPMENT & STABILITY LOG - THE "MASTER FIX" REFERENCE
+# VAF CODER STABILITY NOTES
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# OVERVIEW:
-# Today's development session focused on transforming the Coding Sub-Agent from 
-# an experimental tool into a production-grade autonomous powerhouse. 
-# We solved critical issues ranging from UI glitches to deep logic loops.
+# Reference for the main stability guards in the coding sub-agent and why they
+# exist. Each entry describes what the code does now.
 #
-#  MAJOR FIXES & ARCHITECTURAL IMPROVEMENTS:
+# 1.  SINGLE ACTIVE TUI INSTANCE
+#    - A Singleton-like pattern using `_instance_lock` and `_active_instance`
+#      ensures only one TUI is active. When a new `run()` starts, it stops the
+#      previous instance's `Live` context and thread, so concurrent UI threads do
+#      not contend for `stdout`.
 #
-# 1.  ZOMBIE HEADERS & DOUBLE TUI FIX
-#    - PROBLEM: Multiple "Collaboration Mode" boxes piling up in terminal.
-#    - SOLUTION: Implemented a strict Singleton-like Pattern using `_instance_lock` 
-#      and `_active_instance`. When a new `run()` starts, it explicitly stops 
-#      the previous instance's `Live` context and thread.
-#    - REASONING: Prevented concurrent UI threads from fighting over `stdout`.
+# 2.  INITIALIZATION RENDER
+#    - Rendering uses Rich's native `refresh_per_second` + `__rich__` method
+#      instead of a manual animation thread, avoiding lock contention on the TUI's
+#      `RLock` during startup logging. Small `time.sleep(0.05)` pauses during init
+#      give the render thread time to draw.
 #
-# 2.  THE "LOOP 0" INITIALIZATION HANG
-#    - PROBLEM: Agent stuck at "Creating project..." forever.
-#    - CAUSE: Deadlock between the manual `animation_thread` and Main Thread 
-#      competing for the TUI's `RLock` during heavy startup logging.
-#    - SOLUTION: Removed the manual animation thread. Replaced with Rich's native 
-#      `refresh_per_second` + `__rich__` method. Added small `time.sleep(0.05)` 
-#      pauses during init to give the render thread air.
+# 3.  AGENTIC LOOP STABILITY
+#    - To avoid repeated empty responses, the main agent uses an adaptive
+#      temperature sweep: retries oscillate the sampling temperature
+#      (0.1, 0.5, 0.2, 0.6...) to break deterministic stuck states. The coder's
+#      `is_effectively_empty` filter also allows shorter affirmations from smaller
+#      models.
 #
-# 3.  AGENTIC LOOP STABILITY (THE "LOOTTO LOOP")
-#    - PROBLEM: Model stuck in "Empty response -> Reset -> Empty response" loops.
-#    - SOLUTION A (Main Agent): Implemented "Adaptive Temperature Sweep". 
-#      Retries now oscillate creativity (0.1, 0.5, 0.2, 0.6...) to break 
-#      deterministic "stuck" states.
-#    - SOLUTION B (Coder): Relaxed the `is_effectively_empty` filter to allow 
-#      shorter affirmations from smaller models (like VQ-1).
+# 4.  TASK-COMPLETION VALIDATION
+#    - A validation check guards `task_done`: if a task implies creation (create,
+#      generate, write) but `files_created` is empty, `task_done` is rejected with
+#      a high-priority system message.
 #
-# 4.  ANTI-HALLUCINATION GUARD
-#    - PROBLEM: Agent calling `task_done` without actually writing any code.
-#    - SOLUTION: Implemented a strict validation check. If a task implies creation 
-#      (create, generate, write) but `files_created` is empty, `task_done` is 
-#      rejected with a high-priority "CRITICAL ERROR" system message.
-#
-# 5.  VISUAL TRANSPARENCY (THE "PREVIEW" PANEL)
-#    - PROBLEM: User felt "blind" during long generation phases.
-#    - SOLUTION A: Added a top-level `Code Preview` panel.
-#    - SOLUTION B: Implemented Live Stream Detection. Regex scans the stream 
-#      for unclosed ` ``` ` blocks and updates the preview in real-time.
-#    - SOLUTION C: Diff View. Using `difflib.unified_diff`, the agent now shows 
-#      red/green +/- changes when overwriting existing files.
+# 5.  VISIBLE PROGRESS DURING GENERATION
+#    - A top-level `Code Preview` panel plus live stream detection (regex scans the
+#      stream for unclosed code fences) updates the preview in real time. A diff
+#      view via `difflib.unified_diff` shows +/- changes when overwriting files.
 #
 # 6.  RECURSION BLOCK
-#    - PROBLEM: Coding Agent trying to call `coding_agent` tool inside itself.
-#    - SOLUTION: Hard-coded intercept in the tool execution loop. Returns a 
-#      System Error to the model explaining it is already the Coding Agent.
+#    - A hard-coded intercept in the tool execution loop prevents the coder from
+#      calling the `coding_agent` tool inside itself, returning a system message
+#      that it is already the coding agent.
 #
-# 7.  OPTIMIZED PATHS
-#    - PROBLEM: Slow file system checks causing perceived hangs.
-#    - SOLUTION: Converted project path generation to O(1) by using short 
-#      timestamps instead of incremental `while os.path.exists` loops.
+# 7.  PROJECT PATH GENERATION
+#    - Project path generation is O(1) using short timestamps instead of
+#      incremental `while os.path.exists` loops.
 #
-# 8.  STDOUT LEAK PROTECTION (Main Agent Silence)
-#    - PROBLEM: Main Agent "Thinking" text leaking into the Coder TUI.
-#    - SOLUTION: Patched `vaf/cli/cmd/run.py` and `vaf/cli/tui.py` to suppress 
-#      all `UI.event` and `stream_callback` output if an active Coder instance 
-#      is detected.
-#
-# FINAL RESULT: 
-# A rock-solid, transparent, and persistent coding environment that handles 
-# failures autonomously and keeps the user informed at every millisecond.
-#
-# Date: Sonntag, 28. Dezember 2025
+# 8.  STDOUT ISOLATION
+#    - `vaf/cli/cmd/run.py` and `vaf/cli/tui.py` suppress `UI.event` and
+#      `stream_callback` output while an active Coder instance is detected, so main
+#      agent output does not leak into the Coder TUI.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 #   - Stop previous instance when new one starts

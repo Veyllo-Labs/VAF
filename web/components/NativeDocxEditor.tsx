@@ -920,7 +920,7 @@ export default function NativeDocxEditor({
       const desktop = getDesktopApi();
       if (desktop?.render_pdf) {
         const res = (await desktop.render_pdf(html, name, mode)) as { ok?: boolean; error?: string } | undefined;
-        if (res && res.ok === false) setError(res.error || 'PDF/Druck nicht verfügbar');
+        if (res && res.ok === false) setError(res.error || 'PDF/print unavailable');
         return;
       }
 
@@ -939,7 +939,7 @@ export default function NativeDocxEditor({
       }, 300);
     } catch (e) {
       console.error('[NativeDocxEditor] PDF/print failed:', e);
-      setError(e instanceof Error ? `PDF/Druck fehlgeschlagen: ${e.message}` : 'PDF/Druck fehlgeschlagen');
+      setError(e instanceof Error ? `PDF/print failed: ${e.message}` : 'PDF/print failed');
     } finally {
       if (mode === 'pdf') setIsExportingPdf(false);
     }
@@ -1102,43 +1102,43 @@ export default function NativeDocxEditor({
       {/* Toolbar — global formatting (applies to the selected paragraph) + actions, all at
           the top like Word / the A4 editor. Click a paragraph to select it, then format here. */}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-gray-50 px-2 py-1 shrink-0">
-        <ToggleBtn active={!!selRun?.bold} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, bold: !r.bold }))} title="Fett"><Bold size={16} /></ToggleBtn>
-        <ToggleBtn active={!!selRun?.italic} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, italic: !r.italic }))} title="Kursiv"><Italic size={16} /></ToggleBtn>
-        <ToggleBtn active={!!selRun?.underline} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, underline: !r.underline }))} title="Unterstrichen"><Underline size={16} /></ToggleBtn>
+        <ToggleBtn active={!!selRun?.bold} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, bold: !r.bold }))} title="Bold"><Bold size={16} /></ToggleBtn>
+        <ToggleBtn active={!!selRun?.italic} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, italic: !r.italic }))} title="Italic"><Italic size={16} /></ToggleBtn>
+        <ToggleBtn active={!!selRun?.underline} disabled={!selectedParagraph} onClick={() => setSelRun((r) => ({ ...r, underline: !r.underline }))} title="Underline"><Underline size={16} /></ToggleBtn>
         <Sep />
-        <ToggleBtn active={selPara?.alignment === 'left'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'left' })} title="Links"><AlignLeft size={16} /></ToggleBtn>
-        <ToggleBtn active={selPara?.alignment === 'center'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'center' })} title="Zentriert"><AlignCenter size={16} /></ToggleBtn>
-        <ToggleBtn active={selPara?.alignment === 'right'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'right' })} title="Rechts"><AlignRight size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.alignment === 'left'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'left' })} title="Left"><AlignLeft size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.alignment === 'center'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'center' })} title="Center"><AlignCenter size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.alignment === 'right'} disabled={!selectedParagraph} onClick={() => setSelPara({ alignment: 'right' })} title="Right"><AlignRight size={16} /></ToggleBtn>
         <Sep />
-        <ToggleBtn active={selPara?.list_kind === 'bullet'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'bullet' ? 'none' : 'bullet' })} title="Aufzählung"><List size={16} /></ToggleBtn>
-        <ToggleBtn active={selPara?.list_kind === 'numbered'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'numbered' ? 'none' : 'numbered' })} title="Nummerierung"><ListOrdered size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.list_kind === 'bullet'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'bullet' ? 'none' : 'bullet' })} title="Bulleted list"><List size={16} /></ToggleBtn>
+        <ToggleBtn active={selPara?.list_kind === 'numbered'} disabled={!selectedParagraph} onClick={() => setSelPara({ list_kind: selPara?.list_kind === 'numbered' ? 'none' : 'numbered' })} title="Numbered list"><ListOrdered size={16} /></ToggleBtn>
         <Sep />
-        <select value={selPara?.style_name ?? 'Normal'} disabled={!selectedParagraph} onChange={(e) => setSelPara({ style_name: e.target.value })} className="h-7 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Absatzstil">
+        <select value={selPara?.style_name ?? 'Normal'} disabled={!selectedParagraph} onChange={(e) => setSelPara({ style_name: e.target.value })} className="h-7 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Paragraph style">
           <option value="Normal">Normal</option>
           <option value="Title">Title</option>
           <option value="Heading 1">Heading 1</option>
           <option value="Heading 2">Heading 2</option>
           <option value="Heading 3">Heading 3</option>
         </select>
-        <select value={String(selRun?.font_size_pt ?? 11)} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_size_pt: normalizeFontSize(e.target.value) }))} className="h-7 w-14 rounded border border-gray-200 bg-white px-1 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Schriftgröße">
+        <select value={String(selRun?.font_size_pt ?? 11)} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_size_pt: normalizeFontSize(e.target.value) }))} className="h-7 w-14 rounded border border-gray-200 bg-white px-1 text-xs text-gray-700 focus:outline-none disabled:opacity-40" title="Font size">
           {FONT_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <input value={selRun?.font_name || 'Arial'} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_name: e.target.value }))} className="h-7 w-24 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" placeholder="Schriftart" title="Schriftart" />
+        <input value={selRun?.font_name || 'Arial'} disabled={!selectedParagraph} onChange={(e) => setSelRun((r) => ({ ...r, font_name: e.target.value }))} className="h-7 w-24 rounded border border-gray-200 bg-white px-1.5 text-xs text-gray-700 focus:outline-none disabled:opacity-40" placeholder="Font" title="Font family" />
         <Sep />
-        <button type="button" disabled={!selectedBlock || selectedBlock.kind !== 'block'} onClick={deleteSelectedBlock} className="rounded border border-gray-200 bg-white p-1.5 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-white" title="Block löschen"><Trash2 size={16} /></button>
-        {onInsertSelection && <button type="button" disabled={!selectedParagraph} onClick={insertSelectedBlockIntoChat} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title="In den Chat"><MessageSquare size={16} /></button>}
+        <button type="button" disabled={!selectedBlock || selectedBlock.kind !== 'block'} onClick={deleteSelectedBlock} className="rounded border border-gray-200 bg-white p-1.5 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-white" title="Delete block"><Trash2 size={16} /></button>
+        {onInsertSelection && <button type="button" disabled={!selectedParagraph} onClick={insertSelectedBlockIntoChat} className="rounded border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-white" title="To chat"><MessageSquare size={16} /></button>}
         <Sep />
-        <button type="button" onClick={() => addBlock('paragraph')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200 inline-flex items-center gap-1" title="Absatz hinzufügen"><Plus size={14} />Absatz</button>
-        <button type="button" onClick={() => addBlock('table')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Tabelle hinzufügen">Tabelle</button>
-        <button type="button" onClick={() => addBlock('page_break')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Seitenumbruch">Umbruch</button>
+        <button type="button" onClick={() => addBlock('paragraph')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200 inline-flex items-center gap-1" title="Add paragraph"><Plus size={14} />Paragraph</button>
+        <button type="button" onClick={() => addBlock('table')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Add table">Table</button>
+        <button type="button" onClick={() => addBlock('page_break')} className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-200" title="Page break">Break</button>
         <span className="ml-auto" />
-        <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Speichern">
+        <button type="button" onClick={saveDocument} disabled={isSaving} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100 disabled:opacity-50" title="Save">
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
         </button>
-        <button type="button" onClick={printDocument} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Drucken">
-          <Printer size={14} /> Drucken
+        <button type="button" onClick={printDocument} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:bg-gray-100" title="Print">
+          <Printer size={14} /> Print
         </button>
-        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Als PDF speichern">
+        <button type="button" onClick={exportPdf} disabled={isExportingPdf} className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" title="Save as PDF">
           {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} PDF
         </button>
       </div>

@@ -54,7 +54,7 @@ When the current channel is **Telegram**, **WhatsApp**, **Discord**, or **CLI**,
 - The user does **not** have access to the Web UI on this channel.
 - They cannot view documents, attachment lists, or pages in a browser.
 - Provide all relevant information **directly in the answer** – extract and quote content.
-- **Never** tell the user to "look at" something (e.g. "Schau dir die Seiten an", "Look at the document in the attachments").
+- **Never** tell the user to "look at" something (e.g. "Look at the pages", "Look at the document in the attachments").
 
 This prevents the model from giving unhelpful responses such as "The document is in the attachments – look at the pages" when the user is on Telegram or Discord and has no Web UI.
 
@@ -95,7 +95,7 @@ If the user asks to keep attachment knowledge for future chats, the agent should
 
 ## User isolation
 
-The store is **per user**: each user has their own last-interaction entry. User Max never sees Susanne’s last interaction, and the other way around.
+The store is **per user**: each user has their own last-interaction entry. User Alice never sees Bob’s last interaction, and the other way around.
 
 - **Write:** The headless runner passes `user_scope_id` from the task metadata (from WebUI connection or Telegram whitelist). The store key is that scope (or `"default"` when there is no scope). So each user’s message updates only their own key.
 - **Read:** When building the system prompt, the agent passes its current `_current_user_scope_id` (set from the same session/task). So we only load the last interaction for the user who is chatting right now.
@@ -110,7 +110,7 @@ So the `last_interaction` / `current_channel` lines inside `<context>` always re
   - `source`: `"web"` | `"telegram"` | `"whatsapp"` | `"cli"` | `"discord"`
   - `preview`: sanitized, truncated preview of the user message (max 80 chars, single line)
 
-Example with two users (Max and Susanne each have their own key):
+Example with two users (Alice and Bob each have their own key):
 
 ```json
 {
@@ -139,7 +139,7 @@ No previous interaction is stored yet. Only the current channel is known (e.g. W
 ```
 <context>
 Today is Thursday, 2026-05-28 10:03:09.
-os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
 current_channel: WebUI
 </context>
 ```
@@ -152,7 +152,7 @@ The user had sent one message a few minutes ago in the WebUI; the current messag
 ```
 <context>
 Today is Thursday, 2026-05-28 10:03:09.
-os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
 last_interaction: Alex 3 min ago via WebUI
 current_channel: WebUI
 </context>
@@ -166,7 +166,7 @@ The last interaction was on Telegram (with a short preview); the current one is 
 ```
 <context>
 Today is Thursday, 2026-05-28 10:03:09.
-os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
+os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
 last_interaction: Alex 10 min ago via Telegram
 prior_topic: "Can you check the deployment status?" (previous chat — current message may be unrelated)
 current_channel: WebUI
@@ -181,8 +181,8 @@ Same idea as Example 3, but the prompt language is German, so relative time is i
 ```
 <context>
 Heute ist Donnerstag, 28.05.2026 10:03:09.
-os: linux | home: /home/mert | new projects: /home/mert/Documents/VAF_Projects/
-last_interaction: Mert vor 10 Min. via Telegram
+os: linux | home: /home/user | new projects: /home/user/Documents/VAF_Projects/
+last_interaction: Alex vor 10 Min. via Telegram
 prior_topic: "Kannst du den Deployment-Status prüfen?" (previous chat — current message may be unrelated)
 current_channel: WebUI
 </context>
@@ -194,7 +194,7 @@ current_channel: WebUI
 
 ## 3d. Thinking-mode reply context injection
 
-When the agent reaches out to the user during a background **Thinking Mode** pass (e.g. "Hey Mert, bist du da?") and waits for a reply, the question text is stored via `set_waiting_for_reply(question_text=...)` in `vaf/core/thinking_mode.py`.
+When the agent reaches out to the user during a background **Thinking Mode** pass (e.g. "Hey Alex, are you there?") and waits for a reply, the question text is stored via `set_waiting_for_reply(question_text=...)` in `vaf/core/thinking_mode.py`.
 
 When the user replies, `chat_step()` reads this stored question and stashes it on `self._thinking_reply_context`. Then `_prepare_messages()` injects it as a `role:system` message **directly before the final user message** in the list sent to the LLM — so the model knows what it originally asked.
 

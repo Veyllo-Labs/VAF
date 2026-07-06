@@ -325,7 +325,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                         {headerStatus === 'error' && <AlertCircle className="h-[15px] w-[15px] text-destructive" />}
                     </span>
 
-                    <span className="shrink-0 text-[12.5px] font-semibold leading-none text-[#2b303b]">{name}</span>
+                    <span className="shrink-0 text-[12.5px] font-semibold leading-none text-[#2b303b] dark:text-gray-100">{name}</span>
                     {wfBadge && (
                         <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${wfBadge.color}`}>
                             {wfBadge.label}

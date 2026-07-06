@@ -615,8 +615,8 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
 
     return (
         <div className={cn(
-            "relative w-full max-w-[95%] overflow-hidden rounded-[13px] border bg-gradient-to-b from-[#fcfcfd] to-[#f8fafc] transition-colors",
-            !isComplete ? "border-[#ede9fe]" : "border-gray-200"
+            "relative w-full max-w-[95%] overflow-hidden rounded-[13px] border bg-gradient-to-b from-[#fcfcfd] to-[#f8fafc] dark:from-[#202020] dark:to-[#1c1c1c] transition-colors",
+            !isComplete ? "border-[#ede9fe] dark:border-[#2f2f2f]" : "border-gray-200"
         )}>
             {!isComplete && <span className="chat-shimmer-overlay" aria-hidden />}
             <button
@@ -632,7 +632,7 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
                     }
                     setIsOpen(next);
                 }}
-                className="relative flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-[#3b3f4a] transition-colors hover:bg-black/[0.03]"
+                className="relative flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-[#3b3f4a] dark:text-gray-300 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
             >
                 {!isComplete ? (
                     <>

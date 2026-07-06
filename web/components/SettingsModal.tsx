@@ -1871,7 +1871,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 className={cn(
                                     "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all max-md:shrink-0 max-md:whitespace-nowrap",
                                     activeTab === cat.id
-                                        ? "bg-gray-900 text-white shadow-md"
+                                        ? "bg-gray-900 dark:bg-[#3a3a3a] text-white shadow-md"
                                         : "text-gray-600 hover:bg-gray-200/50"
                                 )}
                             >
@@ -6299,11 +6299,11 @@ const Switch = ({ label, description, checked, onChange }: SwitchProps) => (
             onClick={() => onChange(!checked)}
             className={cn(
                 "w-11 h-6 rounded-full transition-colors relative shrink-0",
-                checked ? "bg-gray-800" : "bg-gray-200"
+                checked ? "bg-gray-800 dark:bg-amber-500" : "bg-gray-200"
             )}
         >
             <div className={cn(
-                "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200",
+                "absolute top-0.5 left-0.5 w-5 h-5 bg-white dark:bg-[#e8e8e8] rounded-full shadow-sm transition-transform duration-200",
                 checked ? "translate-x-5" : "translate-x-0"
             )} />
         </button>

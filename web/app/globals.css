@@ -37,6 +37,291 @@
     --safe-right: env(safe-area-inset-right, 0px);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK MODE — folding palette-swap variables (see tailwind.config.ts).
+   :root values are the EXACT stock Tailwind palette: with the toggle off the
+   compiled colors are byte-identical to the pre-dark-mode build. The .dark
+   values are anchored on the brand showcases in docs/animations/agent_avatar
+   (page #0a0c12, panel #0f131c, control #161c29, border #1e2533/#2a3344,
+   text #e6e9ef/#8b93a7). Bare RGB triplets so <alpha-value> keeps working
+   for every bg-white/80-style utility.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* SURFACE ramp (backgroundColor + gradient stops) */
+  --sfc-white: 255 255 255;
+  --sfc-gray-50: 249 250 251;
+  --sfc-gray-100: 243 244 246;
+  --sfc-gray-200: 229 231 235;
+  --sfc-gray-300: 209 213 219;
+  --sfc-gray-400: 156 163 175;
+  /* LINE ramp (border/divide/ring) */
+  --lin-gray-50: 249 250 251;
+  --lin-gray-100: 243 244 246;
+  --lin-gray-200: 229 231 235;
+  --lin-gray-300: 209 213 219;
+  --lin-gray-400: 156 163 175;
+  /* TEXT ramp (text/placeholder) */
+  --txt-gray-400: 156 163 175;
+  --txt-gray-500: 107 114 128;
+  --txt-gray-600: 75 85 99;
+  --txt-gray-700: 55 65 81;
+  --txt-gray-800: 31 41 55;
+  --txt-gray-900: 17 24 39;
+  /* ACCENT chip surfaces + borders + text (per family) */
+  --acc-blue-50: 239 246 255;
+  --acc-blue-100: 219 234 254;
+  --acc-blue-200: 191 219 254;
+  --acc-blue-600t: 37 99 235;
+  --acc-blue-700t: 29 78 216;
+  --acc-blue-800t: 30 64 175;
+  --acc-red-50: 254 242 242;
+  --acc-red-100: 254 226 226;
+  --acc-red-200: 254 202 202;
+  --acc-red-600t: 220 38 38;
+  --acc-red-700t: 185 28 28;
+  --acc-red-800t: 153 27 27;
+  --acc-amber-50: 255 251 235;
+  --acc-amber-100: 254 243 199;
+  --acc-amber-200: 253 230 138;
+  --acc-amber-600t: 217 119 6;
+  --acc-amber-700t: 180 83 9;
+  --acc-amber-800t: 146 64 14;
+  --acc-green-50: 240 253 244;
+  --acc-green-100: 220 252 231;
+  --acc-green-200: 187 247 208;
+  --acc-green-600t: 22 163 74;
+  --acc-green-700t: 21 128 61;
+  --acc-green-800t: 22 101 52;
+  --acc-emerald-50: 236 253 245;
+  --acc-emerald-100: 209 250 229;
+  --acc-emerald-200: 167 243 208;
+  --acc-emerald-600t: 5 150 105;
+  --acc-emerald-700t: 4 120 87;
+  --acc-emerald-800t: 6 95 70;
+  --acc-violet-50: 245 243 255;
+  --acc-violet-100: 237 233 254;
+  --acc-violet-200: 221 214 254;
+  --acc-violet-600t: 124 58 237;
+  --acc-violet-700t: 109 40 217;
+  --acc-violet-800t: 91 33 182;
+  --acc-purple-50: 250 245 255;
+  --acc-purple-100: 243 232 255;
+  --acc-purple-200: 233 213 255;
+  --acc-purple-600t: 147 51 234;
+  --acc-purple-700t: 126 34 206;
+  --acc-purple-800t: 107 33 168;
+  --acc-yellow-50: 254 252 232;
+  --acc-yellow-100: 254 249 195;
+  --acc-yellow-200: 254 240 138;
+  --acc-yellow-600t: 202 138 4;
+  --acc-yellow-700t: 161 98 7;
+  --acc-yellow-800t: 133 77 14;
+  --acc-orange-50: 255 247 237;
+  --acc-orange-100: 255 237 213;
+  --acc-orange-200: 254 215 170;
+  --acc-orange-600t: 234 88 12;
+  --acc-orange-700t: 194 65 12;
+  --acc-orange-800t: 154 52 18;
+  --acc-indigo-50: 238 242 255;
+  --acc-indigo-100: 224 231 255;
+  --acc-indigo-200: 199 210 254;
+  --acc-indigo-600t: 79 70 229;
+  --acc-indigo-700t: 67 56 202;
+  --acc-indigo-800t: 55 48 163;
+  --acc-sky-50: 240 249 255;
+  --acc-sky-100: 224 242 254;
+  --acc-sky-200: 186 230 253;
+  --acc-sky-600t: 2 132 199;
+  --acc-sky-700t: 3 105 161;
+  --acc-sky-800t: 7 89 133;
+  --acc-teal-50: 240 253 250;
+  --acc-teal-100: 204 251 241;
+  --acc-teal-200: 153 246 228;
+  --acc-teal-600t: 13 148 136;
+  --acc-teal-700t: 15 118 110;
+  --acc-teal-800t: 17 94 89;
+  --acc-pink-50: 253 242 248;
+  --acc-pink-100: 252 231 243;
+  --acc-pink-200: 251 207 232;
+  --acc-pink-600t: 219 39 119;
+  --acc-pink-700t: 190 24 93;
+  --acc-pink-800t: 157 23 77;
+  --acc-rose-50: 255 241 242;
+  --acc-rose-100: 255 228 230;
+  --acc-rose-200: 254 205 211;
+  --acc-rose-600t: 225 29 72;
+  --acc-rose-700t: 190 18 60;
+  --acc-rose-800t: 159 18 57;
+  --acc-cyan-50: 236 254 255;
+  --acc-cyan-100: 207 250 254;
+  --acc-cyan-200: 165 243 252;
+  --acc-cyan-600t: 8 145 178;
+  --acc-cyan-700t: 14 116 144;
+  --acc-cyan-800t: 21 94 117;
+  --acc-slate-50: 248 250 252;
+  --acc-slate-100: 241 245 249;
+  --acc-slate-200: 226 232 240;
+  --acc-slate-600t: 71 85 105;
+  --acc-slate-700t: 51 65 85;
+  --acc-slate-800t: 30 41 59;
+}
+
+.dark {
+  color-scheme: dark; /* native selects, date pickers, scrollbars */
+
+  /* Semantic shadcn tokens (body, ActiveToolsPanel, ui/card, future components) */
+  --background: 225 29% 5%;
+  --foreground: 220 22% 92%;
+  --card: 222 30% 8%;
+  --card-foreground: 220 22% 92%;
+  --popover: 222 30% 8%;
+  --popover-foreground: 220 22% 92%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 30% 8%;
+  --secondary: 221 30% 12%;
+  --secondary-foreground: 220 22% 92%;
+  --muted: 221 30% 12%;
+  --muted-foreground: 223 14% 60%;
+  --accent: 221 30% 12%;
+  --accent-foreground: 220 22% 92%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 220 26% 16%;
+  --input: 220 26% 16%;
+  --ring: 217 91% 60%;
+
+  /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
+     stay untouched: brand-dark elements remain dark); text folds 400..900 to
+     light (50..300 + white stay untouched: light text on dark elements). */
+  --sfc-white: 15 19 28;
+  --sfc-gray-50: 10 12 18;
+  --sfc-gray-100: 22 28 41;
+  --sfc-gray-200: 30 37 51;
+  --sfc-gray-300: 42 51 68;
+  --sfc-gray-400: 58 69 88;
+  --lin-gray-50: 24 30 42;
+  --lin-gray-100: 24 30 42;
+  --lin-gray-200: 30 37 51;
+  --lin-gray-300: 42 51 68;
+  --lin-gray-400: 58 69 88;
+  --txt-gray-400: 109 118 137;
+  --txt-gray-500: 139 147 167;
+  --txt-gray-600: 154 163 181;
+  --txt-gray-700: 185 192 207;
+  --txt-gray-800: 213 218 228;
+  --txt-gray-900: 230 233 239;
+  /* accents: 50->L12/S35, 100->L16, 200->L25; text 600/700/800 -> stock 400/300/200 */
+  --acc-blue-50: 20 28 41;
+  --acc-blue-100: 27 37 55;
+  --acc-blue-200: 41 58 86;
+  --acc-blue-600t: 96 165 250;
+  --acc-blue-700t: 147 197 253;
+  --acc-blue-800t: 191 219 254;
+  --acc-red-50: 41 20 20;
+  --acc-red-100: 55 27 27;
+  --acc-red-200: 86 41 41;
+  --acc-red-600t: 248 113 113;
+  --acc-red-700t: 252 165 165;
+  --acc-red-800t: 254 202 202;
+  --acc-amber-50: 41 33 20;
+  --acc-amber-100: 55 44 27;
+  --acc-amber-200: 86 69 41;
+  --acc-amber-600t: 251 191 36;
+  --acc-amber-700t: 252 211 77;
+  --acc-amber-800t: 253 230 138;
+  --acc-green-50: 20 41 28;
+  --acc-green-100: 27 55 37;
+  --acc-green-200: 41 86 58;
+  --acc-green-600t: 74 222 128;
+  --acc-green-700t: 134 239 172;
+  --acc-green-800t: 187 247 208;
+  --acc-emerald-50: 20 41 34;
+  --acc-emerald-100: 27 55 46;
+  --acc-emerald-200: 41 86 71;
+  --acc-emerald-600t: 52 211 153;
+  --acc-emerald-700t: 110 231 183;
+  --acc-emerald-800t: 167 243 208;
+  --acc-violet-50: 26 20 41;
+  --acc-violet-100: 35 27 55;
+  --acc-violet-200: 55 41 86;
+  --acc-violet-600t: 167 139 250;
+  --acc-violet-700t: 196 181 253;
+  --acc-violet-800t: 221 214 254;
+  --acc-purple-50: 31 20 41;
+  --acc-purple-100: 41 27 55;
+  --acc-purple-200: 64 41 86;
+  --acc-purple-600t: 192 132 252;
+  --acc-purple-700t: 216 180 254;
+  --acc-purple-800t: 233 213 255;
+  --acc-yellow-50: 41 36 20;
+  --acc-yellow-100: 55 48 27;
+  --acc-yellow-200: 86 75 41;
+  --acc-yellow-600t: 250 204 21;
+  --acc-yellow-700t: 253 224 71;
+  --acc-yellow-800t: 254 240 138;
+  --acc-orange-50: 41 29 20;
+  --acc-orange-100: 55 38 27;
+  --acc-orange-200: 86 60 41;
+  --acc-orange-600t: 251 146 60;
+  --acc-orange-700t: 253 186 116;
+  --acc-orange-800t: 254 215 170;
+  --acc-indigo-50: 20 20 41;
+  --acc-indigo-100: 27 27 55;
+  --acc-indigo-200: 41 42 86;
+  --acc-indigo-600t: 129 140 248;
+  --acc-indigo-700t: 165 180 252;
+  --acc-indigo-800t: 199 210 254;
+  --acc-sky-50: 20 35 41;
+  --acc-sky-100: 27 46 55;
+  --acc-sky-200: 41 72 86;
+  --acc-sky-600t: 56 189 248;
+  --acc-sky-700t: 125 211 252;
+  --acc-sky-800t: 186 230 253;
+  --acc-teal-50: 20 41 39;
+  --acc-teal-100: 27 55 52;
+  --acc-teal-200: 41 86 81;
+  --acc-teal-600t: 45 212 191;
+  --acc-teal-700t: 94 234 212;
+  --acc-teal-800t: 153 246 228;
+  --acc-pink-50: 41 20 30;
+  --acc-pink-100: 55 27 41;
+  --acc-pink-200: 86 41 63;
+  --acc-pink-600t: 244 114 182;
+  --acc-pink-700t: 249 168 212;
+  --acc-pink-800t: 251 207 232;
+  --acc-rose-50: 41 20 24;
+  --acc-rose-100: 55 27 31;
+  --acc-rose-200: 86 41 49;
+  --acc-rose-600t: 251 113 133;
+  --acc-rose-700t: 253 164 175;
+  --acc-rose-800t: 254 205 211;
+  --acc-cyan-50: 20 38 41;
+  --acc-cyan-100: 27 51 55;
+  --acc-cyan-200: 41 80 86;
+  --acc-cyan-600t: 34 211 238;
+  --acc-cyan-700t: 103 232 249;
+  --acc-cyan-800t: 165 243 252;
+  --acc-slate-50: 20 29 41;
+  --acc-slate-100: 27 38 55;
+  --acc-slate-200: 41 60 86;
+  --acc-slate-600t: 148 163 184;
+  --acc-slate-700t: 203 213 225;
+  --acc-slate-800t: 226 232 240;
+}
+
+.dark ::selection {
+  background-color: #3b82f6;
+  color: #ffffff;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #2a3344;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3a4558;
+}
  
 @layer base {
   * {

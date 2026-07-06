@@ -331,6 +331,8 @@
       "language": "Sprache",
       "preferredLanguage": "Bevorzugte Sprache",
       "appearance": "Darstellung",
+      "darkMode": "Dark Mode",
+      "darkModeDesc": "Schaltet die gesamte Oberfl\u00e4che auf das dunkle Design um.",
       "customCursor": "Eigener Cursor",
       "customCursorDesc": "VAFs eigenen Cursor am Desktop verwenden statt des System-Mauszeigers.",
       "dateTime": "Datum & Uhrzeit",

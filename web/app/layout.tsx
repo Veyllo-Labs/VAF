@@ -29,6 +29,17 @@ export default function RootLayout({
   return (
     <html lang="de" className="light" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-background text-foreground">
+        {/* Theme pre-paint: stamp the persisted dark class BEFORE first paint.
+            Parser-blocking on purpose — globals.css applies a global
+            transition-colors, so a post-hydration class change would visibly
+            fade light->dark on every load. App Router forbids a custom <head>,
+            so this runs as the first child of <body> (next-themes pattern). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('vaf_theme')==='dark'){var c=document.documentElement.classList;c.remove('light');c.add('dark')}}catch(e){}",
+          }}
+        />
         <CustomCursor />
         <HostnameNormalizer />
         <IntlProviderWrapper>

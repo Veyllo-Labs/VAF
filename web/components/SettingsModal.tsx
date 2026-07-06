@@ -125,6 +125,7 @@ import { cn } from '@/lib/utils';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
+import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
@@ -562,6 +563,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const setUiLocale = useLocaleStore((s) => s.setLocale);
     const customCursorOn = useCursorStore((s) => s.enabled);
     const setCustomCursorOn = useCursorStore((s) => s.setEnabled);
+    const uiTheme = useThemeStore((s) => s.theme);
+    const setUiTheme = useThemeStore((s) => s.setTheme);
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [appVersion, setAppVersion] = useState<string>('');
     const [activeTab, setActiveTab] = useState('general');
@@ -2730,6 +2733,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </select>
                                 </Section>
                                 <Section title={tInterface('appearance')}>
+                                    {/* Dark mode sits ABOVE Custom Cursor by design (user requirement). */}
+                                    <Switch
+                                        label={tInterface('darkMode')}
+                                        description={tInterface('darkModeDesc')}
+                                        checked={uiTheme === 'dark'}
+                                        onChange={(v: boolean) => setUiTheme(v ? 'dark' : 'light')}
+                                    />
                                     <Switch
                                         label={tInterface('customCursor')}
                                         description={tInterface('customCursorDesc')}

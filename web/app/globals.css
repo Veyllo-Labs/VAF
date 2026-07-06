@@ -50,6 +50,7 @@
 :root {
   /* SURFACE ramp (backgroundColor + gradient stops) */
   --sfc-white: 255 255 255;
+  --chat-fog: 255 255 255; /* sidebar chat-list fog fade endpoint (matches sidebar bg) */
   --sfc-gray-50: 249 250 251;
   --sfc-gray-100: 243 244 246;
   --sfc-gray-200: 229 231 235;
@@ -191,6 +192,7 @@
   --input: 220 26% 16%;
   --ring: 217 91% 60%;
 
+  --chat-fog: 10 12 18; /* = --sfc-gray-50 page, matches the bg-gray-50 sidebar */
   /* Folding ramps — surfaces/lines flip only the light end (500..950 + black
      stay untouched: brand-dark elements remain dark); text folds 400..900 to
      light (50..300 + white stay untouched: light text on dark elements). */

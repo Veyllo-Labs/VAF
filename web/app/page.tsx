@@ -5365,7 +5365,7 @@ function VAFDashboardContent() {
                             className="absolute bottom-0 left-0 right-0 h-28 pointer-events-none"
                             style={{
                                 zIndex: 50,
-                                background: 'linear-gradient(to top, #ffffff 0%, rgba(255,255,255,0.92) 35%, rgba(255,255,255,0.5) 65%, transparent 100%)',
+                                background: 'linear-gradient(to top, rgb(var(--chat-fog)) 0%, rgb(var(--chat-fog) / 0.92) 35%, rgb(var(--chat-fog) / 0.5) 65%, transparent 100%)',
                             }}
                         />
                     </div>

@@ -28,6 +28,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `git reset --hard`) and continues the normal update. Your settings (`~/.vaf`) and build
   artifacts (venv, `web/.next`, `node_modules`) are left untouched — only tracked source is
   reset to the release. After that, future updates work normally.
+- **`vaf update` finds VAF's own git when git is not on PATH.** The Windows installer downloads
+  portable MinGit but did not persist it to PATH, so `vaf update` (and any git operation) failed
+  with "Git is not installed." on machines without system git — even though a usable git had just
+  been fetched. Git operations now resolve VAF's bundled MinGit as a fallback, and the bootstrap
+  installer also persists it on the user PATH, so neither VAF nor the user needs a separate git
+  install.
 
 ## [0.1.0a7] - 2026-07-06
 

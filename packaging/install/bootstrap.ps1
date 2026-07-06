@@ -57,7 +57,17 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         if (Test-Path $gitDir) { Remove-Item -Recurse -Force $gitDir }
         Expand-Archive -Path $zip -DestinationPath $gitDir -Force
         $gitExe = Join-Path $gitDir "cmd\git.exe"
-        $env:Path = "$(Join-Path $gitDir 'cmd');$env:Path"
+        $cmdDir = Join-Path $gitDir 'cmd'
+        $env:Path = "$cmdDir;$env:Path"
+        # Persist portable git on the USER PATH so `git` (and `vaf update`) work in future terminals,
+        # not just this install process. VAF also finds this git without PATH (git.py _resolve_git).
+        try {
+            $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            if ($null -eq $userPath) { $userPath = "" }
+            if (($userPath -split ';') -notcontains $cmdDir) {
+                [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(';') + ';' + $cmdDir), "User")
+            }
+        } catch { }
         Ok "portable git ready ($gitExe)"
     } catch {
         Warn "portable git failed: $_"

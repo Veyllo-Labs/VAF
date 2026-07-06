@@ -747,6 +747,16 @@ else
     print_success "Shell alias added to $SHELL_CONFIG"
 fi
 
+# Also install a real `vaf` launcher in ~/.local/bin (already on PATH, see step 0). Unlike the
+# shell alias, this works in EVERY shell and in non-interactive contexts, so `vaf update` is
+# always available - the alias alone only exists in a freshly-sourced interactive shell.
+mkdir -p "$HOME/.local/bin" 2>/dev/null || true
+if [[ -d "$HOME/.local/bin" ]]; then
+    printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$RUN_SCRIPT" > "$HOME/.local/bin/vaf" 2>/dev/null \
+        && chmod +x "$HOME/.local/bin/vaf" 2>/dev/null \
+        && print_success "'vaf' command installed to ~/.local/bin (works in any terminal)"
+fi
+
 # Create application bundle (macOS)
 if [[ "$OS_TYPE" == "macos" ]]; then
     print_info "Creating macOS application bundle..."

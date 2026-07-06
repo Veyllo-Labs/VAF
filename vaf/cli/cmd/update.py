@@ -42,6 +42,19 @@ class _UpdateError(Exception):
     """A recoverable failure during an update; triggers rollback."""
 
 
+def _update_command() -> str:
+    """The platform-correct command to apply an update.
+
+    `vaf` is a console-script/alias/shim that is not always on PATH (esp. on Windows,
+    where the installer ships `vaf.bat` and adds it to PATH, but a NEW terminal is needed
+    for that to take effect). Point users at a command that always works regardless:
+    the shipped run script in the install directory, which forwards its args to the CLI.
+    """
+    if os.name == "nt":
+        return "run_vaf.bat update"
+    return "vaf update"
+
+
 # ── version / release helpers ────────────────────────────────────────────────
 
 def _eligible_prereleases(include_prereleases: "bool | None" = None) -> bool:
@@ -174,7 +187,7 @@ def maybe_notify_update() -> None:
             return
         info = _cached_or_fetch_latest()
         if info and info.get("relevant") and info.get("version"):
-            UI.event("Update", f"Update available: {__version__} -> {info['version']}. Run `vaf update`.")
+            UI.event("Update", f"Update available: {__version__} -> {info['version']}. Run `{_update_command()}`.")
     except Exception:
         pass
 
@@ -545,7 +558,7 @@ def check(
         UI.event("Update", f"Update available: {__version__} -> {latest}")
         if rel.get("html_url"):
             UI.print(f"Release notes: {rel['html_url']}")
-        UI.print("Run `vaf update` to install it.")
+        UI.print(f"Run `{_update_command()}` to install it.")
     elif cmp == 0:
         UI.event("Update", f"VAF is up to date ({__version__}).")
     else:

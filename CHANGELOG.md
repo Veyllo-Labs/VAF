@@ -6,9 +6,21 @@ All notable changes to VAF are documented here. The format follows
 prerelease suffixes such as `a0` / `b1` / `rc1`).
 
 Each released version has a matching git tag `v<version>` and a GitHub Release.
-To update an installed VAF, run `vaf update`.
+To update an installed VAF, run `vaf update` (on Windows, from the install folder:
+`run_vaf.bat update`).
 
 ## [Unreleased]
+
+### Fixed
+- **`vaf update` now works from any terminal.** The updater was reachable only through a
+  shell alias (Linux/macOS, active only in a freshly-sourced interactive shell) and had
+  no `vaf` command at all on Windows — so `vaf update` reported "command not found" and
+  users could not self-update. The installer now registers a real `vaf` command:
+  `~/.local/bin/vaf` on Linux/macOS (on PATH, works in every shell) and a shipped
+  `vaf.bat` added to the user PATH on Windows. Until the installer is re-run, the
+  always-available fallback is the shipped run script — `run_vaf.bat update` on Windows,
+  `./run_vaf.sh update` on Linux/macOS — and the in-app "update available" hint now shows
+  the platform-correct command.
 
 ## [0.1.0a7] - 2026-07-06
 

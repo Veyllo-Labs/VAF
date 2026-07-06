@@ -1132,7 +1132,7 @@ if (-not $SkipDocker) {
 # ============================================================================
 if (-not $SkipShortcuts) {
     Write-Step "Creating Desktop Shortcuts..."
-    
+
     $shortcutOutput = & python scripts\create_app_shortcut.py 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Shortcuts created"
@@ -1140,6 +1140,28 @@ if (-not $SkipShortcuts) {
         Write-Warn "Could not create shortcuts (details below):"
         $shortcutOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     }
+}
+
+# Register the 'vaf' command: put the install directory (which ships vaf.bat) on the
+# USER PATH so `vaf update`, `vaf`, etc. work from any terminal. Without this there is no
+# `vaf` command on Windows and users cannot self-update. Idempotent, User scope (no admin).
+try {
+    $vafBat = Join-Path $PSScriptRoot "vaf.bat"
+    if (Test-Path $vafBat) {
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($null -eq $userPath) { $userPath = "" }
+        $entries = $userPath -split ";" | Where-Object { $_ -ne "" }
+        $already = $entries | Where-Object { $_.TrimEnd("\") -ieq $PSScriptRoot.TrimEnd("\") }
+        if (-not $already) {
+            $newPath = if ($userPath.TrimEnd(";") -eq "") { $PSScriptRoot } else { $userPath.TrimEnd(";") + ";" + $PSScriptRoot }
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Success "'vaf' command registered on PATH (open a NEW terminal to use it)."
+        } else {
+            Write-Success "'vaf' command already on PATH."
+        }
+    }
+} catch {
+    Write-Warn "Could not add VAF to PATH automatically; run VAF via .\run_vaf.bat instead."
 }
 
 # ============================================================================

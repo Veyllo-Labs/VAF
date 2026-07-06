@@ -21,6 +21,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   always-available fallback is the shipped run script — `run_vaf.bat update` on Windows,
   `./run_vaf.sh update` on Linux/macOS — and the in-app "update available" hint now shows
   the platform-correct command.
+- **`vaf update` self-heals a non-git install.** An install created from a downloaded ZIP
+  (no `.git`) previously failed with "not a git checkout; re-install from git" and could
+  never update. `vaf update` now offers to convert such a folder into a git checkout of the
+  official repo in place (git init + origin remote, then adopt the release with
+  `git reset --hard`) and continues the normal update. Your settings (`~/.vaf`) and build
+  artifacts (venv, `web/.next`, `node_modules`) are left untouched — only tracked source is
+  reset to the release. After that, future updates work normally.
 
 ## [0.1.0a7] - 2026-07-06
 

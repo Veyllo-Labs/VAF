@@ -32,6 +32,7 @@ from vaf.cli.ui import UI
 app = typer.Typer(help="Check for and apply VAF updates")
 
 GITHUB_REPO = "Veyllo-Labs/VAF"
+_REPO_URL = f"https://github.com/{GITHUB_REPO}.git"
 # The LIST endpoint (newest first) — unlike /releases/latest it INCLUDES prereleases, so an alpha
 # build (e.g. 0.1.0aN, published as a GitHub prerelease) is visible to the updater. Eligibility is
 # then decided in code (_eligible_prereleases) rather than by the endpoint.
@@ -369,12 +370,44 @@ def _rollback(root: Path, anchor: str) -> bool:
 
 # ── apply ─────────────────────────────────────────────────────────────────────
 
+def _convert_to_git_checkout(root: Path, assume_yes: bool) -> bool:
+    """Turn a NON-git VAF install (e.g. a downloaded ZIP) into a git checkout of the official
+    repo, in place, so it can self-update now and in the future. State (~/.vaf) and gitignored
+    build artifacts (venv, web/.next, node_modules) are NOT touched — only tracked source is
+    reset to the release (done by the caller's `git reset --hard`). Prompts unless assume_yes.
+    Returns True to proceed, False if the user declined or setup failed.
+    """
+    UI.warning(f"VAF at {root} is not a git checkout, so it cannot self-update.")
+    UI.print("This usually means VAF was installed from a downloaded ZIP instead of `git clone`.")
+    UI.print("VAF can convert this folder into a git checkout of the official repo so that updates")
+    UI.print("work now and in the future. Your settings (~/.vaf) and build artifacts stay untouched;")
+    UI.print("only tracked source files are reset to the release.")
+    if not assume_yes:
+        ans = UI.prompt("Convert this install to a git checkout now? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            UI.event("Update", "Cancelled. To update, re-install with `git clone` or the official "
+                     "installer (see the README).")
+            return False
+    code, _, err = _git(root, "init")
+    if code != 0:
+        UI.error(f"git init failed: {err or 'unknown error'} (is git installed?)")
+        return False
+    # Point origin at the official repo (add, or fix an existing wrong URL).
+    code, _, _ = _git(root, "remote", "get-url", "origin")
+    if code == 0:
+        _git(root, "remote", "set-url", "origin", _REPO_URL)
+    else:
+        _git(root, "remote", "add", "origin", _REPO_URL)
+    return True
+
+
 def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
            include_prereleases: "bool | None" = None) -> None:
     root = _repo_root()
-    if not is_git_repo(str(root)):
-        UI.error(f"VAF at {root} is not a git checkout; `vaf update` needs one. Re-install from git.")
-        raise typer.Exit(1)
+    # A non-git install (downloaded ZIP) has no history to fetch/checkout. Rather than refuse, we
+    # offer to convert it into a git checkout (below, after the target is known) and then adopt the
+    # tree at the target tag via `git reset --hard`.
+    non_git = not is_git_repo(str(root))
 
     # Resolve the target tag/version.
     if target_tag:
@@ -401,15 +434,19 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             UI.event("Update", f"Already up to date ({__version__}).")
             raise typer.Exit(0)
 
-    # Clean-tree pre-check (untracked files are fine — build artifacts are gitignored).
-    code, dirty, _ = _git(root, "status", "--porcelain", "--untracked-files=no")
-    if code != 0:
-        UI.error("git status failed; cannot update safely.")
-        raise typer.Exit(1)
-    tree_dirty = bool(dirty)
+    if non_git:
+        # Nothing is tracked yet (conversion happens below); no clean-tree check, no rollback anchor.
+        dirty, tree_dirty, cur_sha, cur_branch = "", False, "", ""
+    else:
+        # Clean-tree pre-check (untracked files are fine — build artifacts are gitignored).
+        code, dirty, _ = _git(root, "status", "--porcelain", "--untracked-files=no")
+        if code != 0:
+            UI.error("git status failed; cannot update safely.")
+            raise typer.Exit(1)
+        tree_dirty = bool(dirty)
 
-    code, cur_sha, _ = _git(root, "rev-parse", "HEAD")
-    _, cur_branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+        code, cur_sha, _ = _git(root, "rev-parse", "HEAD")
+        _, cur_branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
 
     UI.event("Update", f"Update: {__version__} -> {target_version}  (tag {target})")
     if notes_url:
@@ -417,10 +454,16 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
 
     if dry_run:
         UI.event("Update", "Dry run — nothing will be changed. Planned steps:")
+        checkout_steps = (
+            ["convert to a git checkout (git init + remote origin -> the official repo)",
+             "git fetch origin --tags",
+             f"git reset --hard {target}"]
+            if non_git else
+            ["git fetch origin --tags", f"git checkout {target}"]
+        )
         for s in [
             "stop the VAF service",
-            "git fetch origin --tags",
-            f"git checkout {target}",
+            *checkout_steps,
             "pip install -e .  +  pip install -r requirements.txt",
             "npm install in web/ (only if frontend deps changed)",
             "invalidate web/.next (lazy rebuild on next start)",
@@ -429,7 +472,10 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             f"verify `vaf --version` == {target_version}",
         ]:
             UI.print(f"  - {s}")
-        UI.print(f"Rollback anchor: {cur_sha[:12]} ({cur_branch}).")
+        if non_git:
+            UI.print("Rollback anchor: none (converting a non-git install).")
+        else:
+            UI.print(f"Rollback anchor: {cur_sha[:12]} ({cur_branch}).")
         if tree_dirty:
             UI.warning("Your checkout has local changes to tracked files; a real update would abort until they are committed/stashed.")
         raise typer.Exit(0)
@@ -441,7 +487,11 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         UI.print("Commit or `git stash` them, then re-run `vaf update`.")
         raise typer.Exit(1)
 
-    if not assume_yes:
+    if non_git:
+        # The conversion prompt (with its own explanation) stands in for the normal confirm.
+        if not _convert_to_git_checkout(root, assume_yes):
+            raise typer.Exit(0)
+    elif not assume_yes:
         ans = UI.prompt(f"Update VAF {__version__} -> {target_version}? [y/N] ").strip().lower()
         if ans not in ("y", "yes"):
             UI.event("Update", "Cancelled.")
@@ -460,17 +510,29 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         _stop_service()
 
         UI.info(f"Fetching and checking out {target}...")
-        code, _, err = _git(root, "fetch", "origin", "--tags")
+        if non_git:
+            # Shallow-fetch only the target tag — a full history fetch of a fresh repo would be slow.
+            code, _, err = _git(root, "fetch", "--depth", "1", "origin", "tag", target)
+        else:
+            code, _, err = _git(root, "fetch", "origin", "--tags")
         if code != 0:
             raise _UpdateError(f"git fetch failed: {err}")
-        code, _, err = _git(root, "checkout", target)
-        if code != 0:
-            if "untracked working tree files would be overwritten" in (err or "").lower():
-                raise _UpdateError(
-                    f"checkout of {target} was blocked by local files that the new version now tracks:\n"
-                    f"{err}\nMove or remove the listed file(s), then re-run `vaf update`."
-                )
-            raise _UpdateError(f"git checkout {target} failed: {err}")
+        if non_git:
+            # Adopt the existing files as a checkout of the target tag. reset --hard only rewrites
+            # TRACKED files; gitignored build artifacts (venv, web/.next, node_modules) and ~/.vaf
+            # state are left in place. `-f` was not needed for checkout because there is no prior HEAD.
+            code, _, err = _git(root, "reset", "--hard", target)
+            if code != 0:
+                raise _UpdateError(f"git reset --hard {target} failed: {err}")
+        else:
+            code, _, err = _git(root, "checkout", target)
+            if code != 0:
+                if "untracked working tree files would be overwritten" in (err or "").lower():
+                    raise _UpdateError(
+                        f"checkout of {target} was blocked by local files that the new version now tracks:\n"
+                        f"{err}\nMove or remove the listed file(s), then re-run `vaf update`."
+                    )
+                raise _UpdateError(f"git checkout {target} failed: {err}")
 
         _install_python_deps(root)
         _install_web_deps(root, cur_sha)
@@ -487,7 +549,14 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             UI.print(f"Release notes: {notes_url}")
     except Exception as e:
         UI.error(f"Update failed: {e}")
-        if _rollback(root, cur_sha or cur_branch or "HEAD"):
+        if non_git:
+            # There is no prior commit to roll back to (this install was just being converted from a
+            # non-git ZIP). The folder is now a git checkout, so simply re-running `vaf update` will
+            # retry cleanly.
+            UI.error("The install was being converted to a git checkout when this failed; it is now a "
+                     "git checkout, so re-run `vaf update` to retry.")
+            _clear_breadcrumb()
+        elif _rollback(root, cur_sha or cur_branch or "HEAD"):
             _clear_breadcrumb()
         else:
             UI.error("Automatic rollback did not complete — the update breadcrumb is kept. "

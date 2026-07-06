@@ -79,6 +79,31 @@ def test_apply_happy_path(patched):
     assert not patched.breadcrumb.exists()  # cleared on success
 
 
+def test_apply_non_git_converts_and_resets(patched, monkeypatch):
+    # A non-git (ZIP) install must be converted into a git checkout in place — git init + an origin
+    # remote pointing at the official repo — and adopt the target tag via `git reset --hard`
+    # (not `git checkout`, since there is no prior HEAD).
+    monkeypatch.setattr(upd, "is_git_repo", lambda p: False)
+    upd._apply(dry_run=False, assume_yes=True, target_tag=None)
+    calls = patched.git.calls
+    heads = [c[0] for c in calls]
+    assert "init" in heads                                   # converted to a git checkout
+    assert any(c[0] == "remote" and upd._REPO_URL in c for c in calls)  # origin -> official repo
+    assert ["reset", "--hard", "v9.9.9"] in calls            # adopts the tag
+    assert "checkout" not in heads                           # never uses checkout in the non-git path
+    assert patched.events["stopped"] == 1 and patched.events["started"] == 1
+    assert not patched.breadcrumb.exists()                   # cleared on success
+
+
+def test_apply_non_git_dry_run_changes_nothing(patched, monkeypatch):
+    monkeypatch.setattr(upd, "is_git_repo", lambda p: False)
+    with pytest.raises(typer.Exit):
+        upd._apply(dry_run=True, assume_yes=True, target_tag=None)
+    heads = [c[0] for c in patched.git.calls]
+    assert "init" not in heads and "reset" not in heads and "fetch" not in heads
+    assert patched.events["stopped"] == 0 and patched.events["started"] == 0
+
+
 def test_apply_dirty_tree_aborts_without_touching_service(patched):
     patched.git.dirty = " M vaf/core/agent.py"
     with pytest.raises(typer.Exit) as ei:

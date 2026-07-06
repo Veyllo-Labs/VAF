@@ -31,6 +31,46 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a7',
+    date: '2026-07-06',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Dark mode — a full dark theme for the whole app. Turn it on under Settings → Interface → Appearance; light mode stays exactly as before.',
+          'The coder window shows what the agent is doing live: a red/green diff of the file being edited, the files it reads, and a Planning / Building / Finalizing phase indicator so it never looks stuck.',
+          'A multi-tab coder editor — a persistent “Live” tab always streams the agent’s work, and clicking a file in the Explorer opens it in its own closable tab.',
+          'The coding agent can search your codebase while building, not just while planning, so it finds existing code before changing it.',
+          'HTML files from a sub-agent open as a rendered preview instead of raw source.',
+          'You can keep chatting while a sub-agent works (in API mode) — the main agent stays light-touch, won’t redo the same task, and typing stays unlocked the whole time.',
+          'The Windows installer checks hardware virtualization first and gives clear BIOS/UEFI steps if it’s disabled, instead of failing later with a cryptic WSL error. Windows Home is fully supported.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'The coding agent is given time to finish a long edit instead of being cut off by a timeout.',
+          'The coder picks the right change for the job — a small fix stays a small edit, and an oversized “edit” is rescued into a full write.',
+          'The main agent reacts the moment a sub-agent finishes, instead of only when you next send a message.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The coding agent works on the Veyllo API again — it was wrongly failing with “Port 8080 unreachable”, or silently using the local model.',
+          'The coding agent no longer crashes mid-run on cloud providers (DeepSeek, OpenAI).',
+          'A plan whose steps arrive as objects no longer crashes the coder.',
+          'Chat messages no longer queue for minutes behind a coding run.',
+          'The coder console follows the live output reliably — no more freeze after a pause.',
+          'A new coding request plans from scratch instead of resuming a leftover task list.',
+          'The workspace viewer stays on the workspace you opened.',
+          'A file the agent “saved” with the Python sandbox no longer silently vanishes.',
+          'While a sub-agent runs, a streamed reply is never erased; pressing Stop stops only the reply, not the sub-agent.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a6',
     date: '2026-07-04',
     sections: [

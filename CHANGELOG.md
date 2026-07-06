@@ -10,6 +10,8 @@ To update an installed VAF, run `vaf update`.
 
 ## [Unreleased]
 
+## [0.1.0a7] - 2026-07-06
+
 ### Added
 - **Dark mode.** A neutral `#181818` dark theme for the whole web UI, toggled under
   Settings → Interface → Appearance (default light; stored per-browser). It uses a

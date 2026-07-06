@@ -5920,7 +5920,7 @@ function VAFDashboardContent() {
                                                                     })() : (
                                                                         <div className="relative group flex items-end">
                                                                             <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
-                                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 text-white rounded-tr-none")}>
+                                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 dark:bg-[#242424] text-white rounded-tr-none")}>
                                                                                 {!isBot && displayAnswer.length > 1169 ? (
                                                                                     <>
                                                                                         <div className="chat-markdown">

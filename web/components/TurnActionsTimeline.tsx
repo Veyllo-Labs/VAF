@@ -94,11 +94,14 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
     // error, and fills solid gray once it completes successfully. An intermediate spoken line ('say' —
     // the agent talks between tool calls) is a hollow black ring: in the agent's own "black" voice
     // family like think, but distinct from think (solid) and from a running tool (gray ring).
+    // Dark mode: gray-900 (#111827) and bg-white (flips to #202020) both vanish on the #181818
+    // page, so the step dots get explicit dark: variants — active/content steps go BRIGHT, done
+    // stays a clear mid-gray, pending is a faint near-bg ring.
     const circleClass = (a: TimelineAction) =>
-        a.kind === 'think' ? 'bg-gray-900 border-gray-900'
-            : a.kind === 'say' ? 'bg-white border-gray-900'
-                : a.state === 'done' ? 'bg-gray-400 border-gray-400'
-                    : 'bg-transparent border-gray-400';
+        a.kind === 'think' ? 'bg-gray-900 border-gray-900 dark:bg-[#e6e6e6] dark:border-[#e6e6e6]'
+            : a.kind === 'say' ? 'bg-white border-gray-900 dark:bg-transparent dark:border-[#e6e6e6]'
+                : a.state === 'done' ? 'bg-gray-400 border-gray-400 dark:bg-[#6b6b6b] dark:border-[#6b6b6b]'
+                    : 'bg-transparent border-gray-400 dark:border-[#4a4a4a]';
 
     const label = `${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
 
@@ -162,7 +165,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                                                 'absolute left-[-21px] top-[13px] z-[1] h-[11px] w-[11px] rounded-full border-2 transition-colors duration-300',
                                                 circleClass(a),
                                             )}
-                                            style={{ boxShadow: '0 0 0 3px white' }}
+                                            style={{ boxShadow: '0 0 0 3px hsl(var(--background))' }}
                                         />
                                         {a.node}
                                     </div>

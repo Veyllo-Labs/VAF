@@ -332,7 +332,11 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     // `invert` body stays light in both themes (it is deliberately the body's opposite).
     const dimBody = isDark ? '#2d2d2d' : '#e5e7eb';
     const dimDot = isDark ? '#8a8a8a' : '#b0b0b0';
-    const bodyColor = tint?.body ?? (dim ? dimBody : invert ? '#f3f4f6' : '#111827');
+    // Brand body: near-black #111827 on light. On the dark page (#181818) that is DARKER than
+    // the background and vanishes, so in dark mode the body becomes a strong blue-gray that reads
+    // clearly as the agent's square (the white dot stays white on top).
+    const brandBody = isDark ? '#333c4c' : '#111827';
+    const bodyColor = tint?.body ?? (dim ? dimBody : invert ? '#f3f4f6' : brandBody);
     // A light square (judge `invert`, or `dim` archive) is invisible on a light background — give
     // it a subtle LIFT (soft drop shadow only, no hard outline) so it stays delineated in light
     // mode. On dark the dim body is dark-on-dark instead, so the lift becomes a faint LIGHT inset
@@ -514,7 +518,7 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                             transformOrigin: 'center', animation: 'iSpawnIn 0.6s ease-out both',
                         }}>
                             <div style={{
-                                position: 'absolute', inset: 0, borderRadius: 6, backgroundColor: '#111827',
+                                position: 'absolute', inset: 0, borderRadius: 6, backgroundColor: brandBody,
                                 boxShadow: `0 3px 8px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,${isDark ? '0.08' : '0.05'})`,
                             }}>
                                 <span style={{

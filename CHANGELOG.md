@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Choose light or dark mode during first-run setup.** A new step right after the language
+  picker lets you pick Light or Dark; the choice applies live (onboarding switches immediately)
+  and carries into the app. Light stays the default.
+
+### Changed
+- **The WhatsApp connection is temporarily marked "Coming Soon".** In Settings > Connections it
+  now shows greyed out with a disabled, non-clickable card, like the other not-yet-available
+  integrations. This is a UI gate only (the backend is unchanged) and is easily reverted.
+
+### Fixed
+- **Dark-mode buttons stay readable on hover.** Emphasis buttons (e.g. "Save Changes",
+  "Connect") turned dark on hover in dark mode while their text stayed dark, making the label
+  unreadable; they now brighten slightly on hover so the text stays readable. Applied
+  consistently across the whole UI.
+
 ## [0.1.0a8] - 2026-07-06
 
 ### Fixed

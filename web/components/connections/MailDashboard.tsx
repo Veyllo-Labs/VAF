@@ -534,7 +534,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                                     <button
                                         type="button"
                                         onClick={onOpenAddWizard}
-                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         <UserPlus className="w-4 h-4" />
                                         Add account
@@ -937,7 +937,7 @@ export default function MailDashboard({ isOpen, onClose, onOpenAddWizard, refres
                             <div className="shrink-0 px-5 py-4 border-t border-gray-200 bg-gray-50/80">
                                 <button
                                     type="button"
-                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                    className="w-full py-3 px-4 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                 >
                                     <Mail className="w-4 h-4" />
                                     Reply with Agent

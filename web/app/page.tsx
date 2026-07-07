@@ -5168,7 +5168,7 @@ function VAFDashboardContent() {
                 <button
                     type="button"
                     onClick={() => { setAuthError(null); setAuthChecking(true); setAuthRetryKey((k) => k + 1); }}
-                    className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                    className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                 >
                     {tAuth('retry')}
                 </button>
@@ -6602,7 +6602,7 @@ function VAFDashboardContent() {
                                             type="submit"
                                             disabled={(isGenerating && !isSubAgentRunning) || isIndexing || !input.trim()}
                                             aria-label="Send"
-                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 hidden max-md:flex items-center justify-center rounded-xl bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                         >
                                             <Send size={18} />
                                         </button>
@@ -6873,7 +6873,7 @@ function VAFDashboardContent() {
                             <button
                                 onClick={() => workspaceFileInputRef.current?.click()}
                                 disabled={workspaceUploading}
-                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 {workspaceUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                                 {workspaceUploading ? 'Uploading…' : 'Upload'}
@@ -7699,7 +7699,7 @@ function VAFDashboardContent() {
                             </button>
                             <button
                                 onClick={() => { ws?.send(JSON.stringify({ type: 'gate_response', decision: 'allow_always' })); setGateRequest(null); }}
-                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                className="flex-1 px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium transition-colors dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 Always Allow
                             </button>

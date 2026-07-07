@@ -528,7 +528,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                                     type="button"
                                                     onClick={handleSaveAdminOAuth}
                                                     disabled={adminSaveStatus === 'saving'}
-                                                    className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                                    className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                                 >
                                                     {adminSaveStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Save'}
                                                 </button>
@@ -569,7 +569,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                 href={authUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 <ExternalLink className="w-4 h-4" />
                                 Open sign-in page
@@ -715,7 +715,7 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                             disabled={isNextDisabled}
                             className={cn(
                                 "flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors",
-                                !isNextDisabled ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none" : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                                !isNextDisabled ? "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none" : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             )}
                         >
                             {currentStep === 2 && provider === 'imap' && loading && <Loader2 className="w-4 h-4 animate-spin" />}

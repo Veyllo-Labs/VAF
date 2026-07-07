@@ -348,7 +348,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                         <button
                                             onClick={handleSaveAdminOAuth}
                                             disabled={adminSaveStatus === 'saving' || !clientId.trim()}
-                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                         >
                                             {adminSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
                                             {adminSaveStatus === 'ok' ? t('saved') : adminSaveStatus === 'fail' ? t('saveFailed') : t('saveOAuthSettings')}
@@ -394,7 +394,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                     <button
                                         onClick={handleConnectOAuth}
                                         disabled={loading || !!deviceFlow || !oauthConfigured}
-                                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         {loading && !deviceFlow ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                                         {t('connectWithGitHub')}
@@ -476,7 +476,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                                         <button
                                             onClick={handleConnectToken}
                                             disabled={tokenLoading || !token.trim()}
-                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-700 text-white text-sm font-medium hover:bg-gray-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-700 text-white text-sm font-medium hover:bg-gray-600 disabled:opacity-50 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                         >
                                             {tokenLoading && <Loader2 className="w-4 h-4 animate-spin" />}
                                             {t('connectWithToken')}
@@ -498,7 +498,7 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                         {currentStep === 0 && (
                             <button
                                 onClick={() => setCurrentStep(1)}
-                                className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                className="inline-flex items-center gap-1 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 {t('next')}
                                 <ChevronRight className="w-4 h-4" />

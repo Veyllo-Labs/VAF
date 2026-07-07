@@ -369,7 +369,7 @@ ${selections.continuity}`;
                     </button>
                     <button
                         onClick={handleNext}
-                        className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-sm transition-all flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                        className="px-8 py-2.5 rounded-xl font-medium bg-gray-900 text-white hover:bg-black shadow-sm transition-all flex items-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                     >
                         {step === 4 ? t('soulComplete') : t('soulNext')}
                         <ChevronRight size={16} />

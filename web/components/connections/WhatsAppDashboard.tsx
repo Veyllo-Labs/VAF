@@ -531,7 +531,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                                             type="button"
                                             onClick={handleRelayAdd}
                                             disabled={!relayAddId.trim()}
-                                            className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                            className="px-3 py-1.5 rounded bg-gray-900 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                         >
                                             Add
                                         </button>

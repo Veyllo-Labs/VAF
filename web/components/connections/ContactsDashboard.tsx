@@ -290,7 +290,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                 <button
                                     type="button"
                                     onClick={openCreate}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors text-sm dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-medium transition-colors text-sm dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                 >
                                     <Plus className="w-4 h-4" />
                                     Add contact
@@ -587,7 +587,7 @@ export default function ContactsDashboard({ isOpen, onClose }: ContactsDashboard
                                 type="button"
                                 onClick={handleSave}
                                 disabled={saving || !(form.name ?? '').trim()}
-                                className="bg-gray-900 hover:bg-gray-800 disabled:bg-gray-100 disabled:text-gray-400 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                className="bg-gray-900 hover:bg-gray-800 disabled:bg-gray-100 disabled:text-gray-400 text-white px-6 py-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                             >
                                 {saving ? 'Saving…' : 'Save'}
                             </button>

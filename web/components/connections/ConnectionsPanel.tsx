@@ -1112,7 +1112,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors",
                                                         app.comingSoon || !app.available
                                                             ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                            : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                                            : "bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                                     )}
                                                 >
                                                     <Plus className="w-4 h-4" />

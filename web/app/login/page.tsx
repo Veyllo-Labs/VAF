@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
     Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink,
-    Zap, Cpu, HardDrive
+    Zap, Cpu, HardDrive, Sun, Moon, SunMoon
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import SoulWizard from '@/components/SoulWizard';
@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
+import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
 
 // On the 2FA step, the agent "wakes up" (materialises + the eye opens) where the logo would be, then
@@ -40,7 +41,7 @@ const VEYLLO_CREATE_URL = 'https://veyllo.app';
 export default function LoginPage() {
     const router = useRouter();
     // Default to login; only show wizard when API explicitly says needs_setup: true (no admin yet)
-    const [step, setStep] = useState<'login' | '2fa' | 'language' | 'phone_notice' | 'create_admin' | 'soul_wizard' | 'veyllo_api' | 'setup_2fa'>('login');
+    const [step, setStep] = useState<'login' | '2fa' | 'language' | 'theme' | 'phone_notice' | 'create_admin' | 'soul_wizard' | 'veyllo_api' | 'setup_2fa'>('login');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -67,6 +68,10 @@ export default function LoginPage() {
     const t = useTranslations('onboarding');
     const setLocale = useLocaleStore((s) => s.setLocale);
     const currentLocale = useLocaleStore((s) => s.locale);
+    const theme = useThemeStore((s) => s.theme);
+    const setTheme = useThemeStore((s) => s.setTheme);
+    const initTheme = useThemeStore((s) => s.init);
+    useEffect(() => { initTheme(); }, [initTheme]);
 
     // If network TLS/proxy mode is active, avoid showing login on :3000.
     // Redirect to HTTPS access port so login/session use the correct origin.
@@ -88,20 +93,6 @@ export default function LoginPage() {
     }, []);
 
     useEffect(() => {
-        // ── Test/preview hook (DEV ONLY) ────────────────────────────────────────────
-        // /login?preview=veyllo_api  (also: language | phone_notice | create_admin | soul_wizard | 2fa | setup_2fa)
-        // forces the REAL onboarding step to render on demand — no admin reset, no backend mutation —
-        // so the setup wizard's layout can be verified without a real first run. Gated to the dev build
-        // (npm run dev); in a production build NODE_ENV is 'production' so this is inert.
-        if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
-            const preview = new URLSearchParams(window.location.search).get('preview');
-            const PREVIEW_STEPS = ['login', '2fa', 'language', 'phone_notice', 'create_admin', 'soul_wizard', 'veyllo_api', 'setup_2fa'];
-            if (preview && PREVIEW_STEPS.includes(preview)) {
-                setStep(preview as typeof step);
-                setCheckingSetup(false);
-                return;
-            }
-        }
         // Empty string = same-origin /api via Next proxy or HTTPS proxy (e.g. https://localhost:8443).
         const apiPrefix = getApiBase() || '';
         setBackendUnreachable(false);
@@ -625,7 +616,7 @@ export default function LoginPage() {
                                     <button
                                         type="submit"
                                         disabled={!username || !password || isLoading}
-                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -669,7 +660,7 @@ export default function LoginPage() {
                                                 // animation. Chromium (Windows/Linux) is unaffected by the 1-frame
                                                 // difference.
                                                 setLocale(lang.code);
-                                                requestAnimationFrame(() => setStep('phone_notice'));
+                                                requestAnimationFrame(() => setStep('theme'));
                                             }}
                                             className={cn(
                                                 'w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all',
@@ -682,6 +673,60 @@ export default function LoginPage() {
                                         </button>
                                     ))}
                                 </div>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {!checkingSetup && step === 'theme' && (
+                    <motion.div
+                        key="theme"
+                        {...stepAnim}
+                        className="w-full max-w-md"
+                    >
+                        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="bg-gray-50 px-8 py-3 flex items-center gap-2 border-b border-gray-100">
+                                <SunMoon size={18} className="text-gray-700" />
+                                <span className="text-sm font-medium text-gray-700">{t('themeTitle')}</span>
+                            </div>
+                            <div className="p-8">
+                                <p className="text-sm text-gray-500 mb-5">{t('themeSubtitle')}</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {([
+                                        { id: 'light' as const, icon: Sun, label: t('themeLight'), swatch: 'bg-[#f3f4f6] text-[#4b5563]' },
+                                        { id: 'dark' as const, icon: Moon, label: t('themeDark'), swatch: 'bg-[#181818] text-[#ececec]' },
+                                    ]).map((opt) => {
+                                        const OptIcon = opt.icon;
+                                        const selected = theme === opt.id;
+                                        return (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => setTheme(opt.id)}
+                                                aria-pressed={selected}
+                                                className={cn(
+                                                    'relative flex flex-col items-center gap-3 px-4 py-6 rounded-xl border-2 transition-all',
+                                                    selected
+                                                        ? 'border-gray-900 bg-gray-50 dark:border-[#e6e6e6]'
+                                                        : 'border-gray-200 hover:bg-gray-50'
+                                                )}
+                                            >
+                                                {selected && <Check className="w-4 h-4 text-gray-900 absolute top-2 right-2" />}
+                                                <span className={cn('w-12 h-12 rounded-xl flex items-center justify-center', opt.swatch)}>
+                                                    <OptIcon size={22} />
+                                                </span>
+                                                <span className="font-medium text-gray-900">{opt.label}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => requestAnimationFrame(() => setStep('phone_notice'))}
+                                    className="w-full mt-6 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
+                                >
+                                    {t('themeContinue')} <ArrowRight size={18} />
+                                </button>
                             </div>
                         </div>
                     </motion.div>
@@ -708,7 +753,7 @@ export default function LoginPage() {
                                 <button
                                     type="button"
                                     onClick={() => setStep('create_admin')}
-                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                    className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                 >
                                     {t('phoneYes')} <ArrowRight size={18} />
                                 </button>
@@ -770,7 +815,7 @@ export default function LoginPage() {
                                             <button
                                                 type="submit"
                                                 disabled={username.trim().length < 2}
-                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                             >
                                                 {t('continue')} <ArrowRight size={18} />
                                             </button>
@@ -827,7 +872,7 @@ export default function LoginPage() {
                                                 <button
                                                     type="submit"
                                                     disabled={!password || password !== confirmPassword || password.length < 8 || isLoading}
-                                                    className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                                    className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                                 >
                                                     {isLoading ? (
                                                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -883,7 +928,7 @@ export default function LoginPage() {
                                     <button
                                         type="submit"
                                         disabled={twoFACode.length < 6 || isLoading}
-                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-black text-white font-medium py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         {isLoading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -986,7 +1031,7 @@ export default function LoginPage() {
                                         type="button"
                                         onClick={handleSaveVeylloKey}
                                         disabled={!veylloKey.trim() || veylloTesting}
-                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         {veylloTesting ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1073,7 +1118,7 @@ export default function LoginPage() {
                                             type="button"
                                             onClick={handleWizard2FAVerify}
                                             disabled={twoFACode.length < 6 || isLoading}
-                                            className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                            className="w-full bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                         >
                                             {isLoading ? (
                                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1087,7 +1132,7 @@ export default function LoginPage() {
                                     <button
                                         type="button"
                                         onClick={() => { setBootstrapError(null); handleStartSetup2FA(); }}
-                                        className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-white dark:shadow-none"
+                                        className="w-full mt-4 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                     >
                                         {t('retry')}
                                     </button>

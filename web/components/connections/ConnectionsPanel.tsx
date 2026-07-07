@@ -135,8 +135,8 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         category: 'communication',
         description: 'Chat with your agent on WhatsApp',
         configKey: 'whatsapp_config',
-        available: true,
-        comingSoon: false,
+        available: false,
+        comingSoon: true,
         iconColor: 'bg-green-600',
     },
     {
@@ -885,7 +885,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
 
                     <div className="space-y-2">
                         {getFilteredAppsByCategory(category.id).map(app => {
-                            const configured = isConfigured(app);
+                            // A coming-soon app always renders as not-configured (greyed "Coming Soon",
+                            // disabled Connect) even if a config exists, so it is fully non-clickable.
+                            const configured = isConfigured(app) && !app.comingSoon;
                             const enabled = isEnabled(app);
                             const status = app.id === 'email'
                                 ? (connectionStatus.email ?? ((config?.email_config?.accounts?.length ?? 0) > 0 ? 'connected' : 'disconnected'))

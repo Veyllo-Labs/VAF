@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a9] - 2026-07-08
+
 ### Added
 - **Choose light or dark mode during first-run setup.** A new step right after the language
   picker lets you pick Light or Dark; the choice applies live (onboarding switches immediately)

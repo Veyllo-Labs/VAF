@@ -38,6 +38,7 @@ RUN apt-get -o Acquire::Check-Date=false update && apt-get install -y --no-insta
     tzdata \
     curl \
     socat \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security
@@ -49,6 +50,11 @@ RUN mkdir -p /home/browser/.config/chromium && \
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# X11 socket dir must exist and be world-writable so Xvfb (running as the non-root
+# 'browser' user) can create its display socket. Without it Xvfb warns
+# "_XSERVTransmkdir: euid != 0, directory /tmp/.X11-unix will not be created".
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
 USER browser
 WORKDIR /home/browser

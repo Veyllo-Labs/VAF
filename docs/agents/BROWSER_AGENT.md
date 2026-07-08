@@ -460,17 +460,19 @@ When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC
 **User:** non-root (`browser:browser`)  
 **Health check:** `curl http://localhost:9222/json/version` every 10 seconds
 
-The container runs a single persistent Chromium process **headed under a virtual X display (Xvfb)** — not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). browser-use opens new tabs per task and cleans them up on completion.
+The container runs a **supervised** Chromium process **headed under a virtual X display (Xvfb)**, not `--headless`. Real headed Chrome leaks far fewer automation signals, so it is the stronger anti-bot baseline (see [Anti-Bot Detection](#anti-bot-detection)). If Chromium ever exits (a crash, an OOM, or the startup issue in [Troubleshooting](#troubleshooting)), the entrypoint relaunches it and serves the CDP proxy only while the browser is live, so the service self-heals instead of staying down. browser-use opens new tabs per task and cleans them up on completion.
 
 **Default behaviour:** each task starts with a clean browser profile — no cookies, no login state.
 
 **Persistent mode** (`persistent=true`): cookies and storage are saved to `~/.vaf/browser_sessions/<scope>/{session}.json` (one subdirectory per user_scope_id) after each task and restored at the start of the next. See [Persistent Sessions](#persistent-sessions).
 
-### Rebuild after Dockerfile changes
+### Rebuild after Dockerfile or entrypoint changes
+
+`entrypoint.sh` is copied into the image at build time, so a change to it (or the Dockerfile) needs
+a rebuild, not a plain `restart` (which reuses the old image and keeps the old baked-in script).
 
 ```bash
-docker compose -f docker-compose.memory.yml build vaf-browser
-docker compose -f docker-compose.memory.yml up -d vaf-browser
+docker compose -f docker-compose.memory.yml up -d --build vaf-browser
 ```
 
 ---
@@ -500,6 +502,21 @@ The entrypoint (`docker/browser/entrypoint.sh`) removes the stale lock/socket on
 
 ```bash
 docker compose -f docker-compose.memory.yml up -d --force-recreate vaf-browser
+```
+
+### Container is `(unhealthy)` after a rebuild / logs show `Trace/breakpoint trap` (SIGTRAP)
+
+Debian's `chromium 150.0.7871.46` (and later) crashes on startup with a SIGTRAP when `--no-first-run`
+is set and the profile resolves to an EEA region (the container reports `TZ=Europe/Berlin`). Chromium
+prints its version, then dies before CDP opens on `9223`, so socat loops with `Connection refused`
+and the healthcheck flips the container to `(unhealthy)`. This is Debian bug #1141618 (`149` works,
+`150` regressed) on the search-engine-choice code path. The entrypoint launches Chromium **without**
+`--no-first-run` (the trigger) and keeps the first-run search-engine choice quiet with
+`--disable-search-engine-choice-screen` + `--search-engine-choice-country=US`; if you built the image
+before that fix, rebuild:
+
+```bash
+docker compose -f docker-compose.memory.yml up -d --build vaf-browser
 ```
 
 ### Agent keeps failing steps / `VAFLLMBridge: cannot parse`

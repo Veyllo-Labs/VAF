@@ -22,6 +22,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   integrations. This is a UI gate only (the backend is unchanged) and is easily reverted.
 
 ### Fixed
+- **The browser tool no longer crashes on startup with Chromium 150+.** With the Debian bookworm
+  `chromium 150.0.7871.46` build, the browser container died about a second into launch (SIGTRAP)
+  whenever the profile resolved to an EEA region, so every browser task failed with "Chrome
+  DevTools at http://localhost:9222 did not respond" (Debian bug #1141618; `149` was fine, `150`
+  regressed). The container now launches Chromium without `--no-first-run` (the specific trigger)
+  and keeps the first-run search-engine choice quiet with `--disable-search-engine-choice-screen`
+  and `--search-engine-choice-country=US`; it also supervises Chromium (relaunches it if it exits,
+  reaps orphaned child processes, and serves the CDP proxy only while the browser is live) so a
+  one-off crash self-heals in seconds instead of leaving the tool permanently unreachable. Apply
+  with a browser image rebuild: `docker compose -f docker-compose.memory.yml up -d --build vaf-browser`.
 - **Dark-mode buttons stay readable on hover.** Emphasis buttons (e.g. "Save Changes",
   "Connect") turned dark on hover in dark mode while their text stayed dark, making the label
   unreadable; they now brighten slightly on hover so the text stays readable. Applied

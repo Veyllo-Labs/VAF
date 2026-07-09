@@ -1225,8 +1225,14 @@ def run_session_compaction_sync(
 
     def _notify_ui(status: str, message: str, memories_saved: int = 0) -> None:
         try:
+            if not session_id:
+                return
             from vaf.core.web_interface import get_web_interface
-            get_web_interface().push_update({
+            # SECURITY (user isolation): scope the learning banner to the session's viewers rather
+            # than a global broadcast to every connected client (it otherwise exposed another user's
+            # session id + "saved N memories" activity). _push_session_update also adds the camelCase
+            # sessionId the frontend cross-session filter needs.
+            get_web_interface()._push_session_update(session_id, {
                 "type": "memory_learning",
                 "status": status,
                 "session_id": session_id,
@@ -1240,13 +1246,14 @@ def run_session_compaction_sync(
     try:
         # Broadcast to WebUI: Memory Learning started
         try:
-            from vaf.core.web_interface import get_web_interface
-            get_web_interface().push_update({
-                "type": "memory_learning",
-                "status": "started",
-                "session_id": session_id,
-                "message": "Memory Learning in progress... Analyzing conversation for important facts."
-            })
+            if session_id:
+                from vaf.core.web_interface import get_web_interface
+                get_web_interface()._push_session_update(session_id, {
+                    "type": "memory_learning",
+                    "status": "started",
+                    "session_id": session_id,
+                    "message": "Memory Learning in progress... Analyzing conversation for important facts."
+                })
         except Exception:
             pass
 
@@ -1697,8 +1704,14 @@ def run_memory_search_sync(
                         "metadata": s.metadata
                     })
                 
-                if web_sources:
-                    get_web_interface().push_update({
+                # SECURITY (user isolation): route the snippet push to the OWNER's connections
+                # only, and drop it entirely when the scope is unknown (fail-closed). This used to
+                # be a global push_update() broadcast to EVERY connected websocket, which leaked
+                # one user's memory snippets into another user's "RAG-Snippets" panel in network
+                # mode - e.g. a background thinking/automation run under user B's scope painted B's
+                # snippets into user A's open tab. See docs/security/USER_ISOLATION.md.
+                if web_sources and user_scope_id:
+                    get_web_interface().push_update_to_user(user_scope_id, {
                         "type": "rag_results",
                         "query": query,
                         "sources": web_sources

@@ -7104,8 +7104,13 @@ class Agent:
                                 if len(parts) > 1:
                                     rag_part = parts[1].split("##")[0].strip()
 
-                            if _emit_to_web_ui():
-                                get_web_interface().push_update({
+                            # SECURITY (user isolation): this X-ray carries the FULL prepared
+                            # prompt (system prompt incl. the "## Memory context" RAG block) and
+                            # the whole message history of the current turn. Route it to the turn
+                            # owner's connections only, fail-closed - never a global broadcast.
+                            _xray_scope = getattr(self, "_current_user_scope_id", None)
+                            if _emit_to_web_ui() and _xray_scope:
+                                get_web_interface().push_update_to_user(_xray_scope, {
                                     "type": "real_context_payload",
                                     "system": sys_prompt,
                                     "rag_preview": rag_part,

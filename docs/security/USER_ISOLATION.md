@@ -33,7 +33,7 @@ VAF uses a **`user_scope_id`** (UUID) as the universal isolation key. Every user
 │  Layer 4: Database (PostgreSQL + RLS)                              │
 │  ┌──────────────────────────────────────────────────────────┐      │
 │  │  Row-Level Security (forced, fail-closed) on memories    │      │
-│  │  App connects as non-superuser vaf_app (RLS enforced)    │      │
+│  │  RLS forced; app data role cutover to vaf_app pending    │      │
 │  └──────────────────────────────────────────────────────────┘      │
 │                              │                                     │
 │  Layer 5: Filesystem                                               │
@@ -124,6 +124,8 @@ The memory system is the most data-sensitive component. Every memory operation i
 
 Memory reads fail **closed** when no scope is available. `RagPipeline.search()` returns `[]` for an empty scope in **both** the vector and the lexical/hybrid lanes — a missing scope means **no results**, never "search all". `run_memory_search_sync` resolves a concrete scope up front and **denies** (returns nothing) when no scope is present in server/multi-user mode, flooring to the local-admin scope only in genuine single-user/local mode. An unparseable scope is treated as a deny as well, so a missing or malformed scope yields no results rather than searching across all users.
 
+**Retrieval scope alone is not enough - the UI push must be scoped too.** Retrieved snippets are shown in the web UI's "RAG-Snippets" panel via a WebSocket event. That push was previously a *global* broadcast to every connected client, so a correctly-scoped search under user B's scope (including a background thinking or automation run) surfaced B's snippets in user A's open panel even though B's data at rest stayed correctly isolated. The push is now routed to the owning user's connections only (`push_update_to_user(user_scope_id, ...)`) and dropped when the scope is unknown (fail-closed); the same applies to the `real_context_payload` X-ray, which carries the full prompt including the memory-context block. Real-time events that carry user content must be scoped at the emit site, not only at retrieval.
+
 ### CRUD Operations (`vaf/memory/rag.py`)
 
 All memory access methods accept and enforce `user_scope_id`:
@@ -198,7 +200,9 @@ Without this, User A could receive cached search results or graph data that was 
 
 ## 4. Database-Level Security (PostgreSQL RLS)
 
-PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table and is enforced for every memory data path. The application data connection uses a non-superuser role (`vaf_app`, `NOSUPERUSER`, `NOBYPASSRLS`) via `memory_db_url`, so the policy cannot be bypassed by the app; a separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used only for DDL, migrations, and global maintenance. The policy is fail-closed:
+PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table.
+
+**Status (important):** on a default install the application data connection (`memory_db_url`) still runs as the table **owner role `vaf` (superuser), which bypasses RLS** (`config.py`; `database.py` notes both DSNs are the owner role until the cutover). So today the application-layer scope filter (Section 2, also fail-closed) is the active enforcement; the RLS policy below is created and fail-closed by design but only becomes the enforced **second** line after the **cutover**: set `memory_db_url` to a non-superuser role (`vaf_app`, `NOSUPERUSER`, `NOBYPASSRLS`) and `memory_db_owner_url` to the owner DSN (used only for DDL, migrations, and global maintenance). The policy is fail-closed:
 
 ```sql
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
@@ -220,7 +224,7 @@ CREATE POLICY user_isolation_memories ON memories
    ```
    `set_config(..., true)` is the transaction-scoped form of `SET LOCAL`. It is used instead of a literal `SET LOCAL app.current_user_scope_id = :scope` because asyncpg rejects bind parameters in a literal `SET LOCAL` statement.
 2. The RLS policy checks this variable against each row's `user_scope_id`.
-3. A row is visible or writable only when its `user_scope_id` equals the per-transaction GUC. With a concrete scope set, other users' rows are invisible even if application-level filtering has a bug. With no scope set the GUC is empty, so the policy matches no rows and an unscoped transaction sees and writes nothing (fail-closed); a row whose `user_scope_id` is NULL is not blanket-visible. Because the data connection runs as the non-superuser `vaf_app` role, the database enforces this independently of the application filter.
+3. A row is visible or writable only when its `user_scope_id` equals the per-transaction GUC. With a concrete scope set, other users' rows are invisible even if application-level filtering has a bug. With no scope set the GUC is empty, so the policy matches no rows and an unscoped transaction sees and writes nothing (fail-closed); a row whose `user_scope_id` is NULL is not blanket-visible. After the cutover (see the status note above), when the data connection runs as the non-superuser `vaf_app` role, the database enforces this independently of the application filter; until then the owner role bypasses the policy and the fail-closed application filter is the enforcement.
 
 ### Policy logic
 
@@ -231,9 +235,9 @@ CREATE POLICY user_isolation_memories ON memories
 | Set to UUID                  | Same UUID           | Yes |
 | Set to UUID                  | Different UUID      | **No** |
 
-**Important**: The GUC is set with `set_config(..., true)` (transaction-scoped) on every memory data path — `get_db(user_scope_id=...)` threads the scope through all callers — so it is scoped to the current transaction and never leaks between concurrent requests sharing the connection pool. Because the data connection runs as the non-superuser `vaf_app` role, an unscoped transaction is denied at the database, not merely filtered in the application.
+**Important**: The GUC is set with `set_config(..., true)` (transaction-scoped) on every memory data path — `get_db(user_scope_id=...)` threads the scope through all callers — so it is scoped to the current transaction and never leaks between concurrent requests sharing the connection pool. After the cutover to the non-superuser `vaf_app` role, an unscoped transaction is denied at the database, not merely filtered in the application; before it, the fail-closed application filter is what denies the unscoped transaction.
 
-**Note**: this RLS policy is fail-closed and is genuinely enforced, not just a best-effort backstop. A row is visible or writable only when its `user_scope_id` exactly equals the per-transaction GUC; an unset or empty GUC matches nothing (an unscoped transaction sees and writes zero rows), and a row with `user_scope_id IS NULL` is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application's data connection uses a non-superuser role (`NOSUPERUSER`, `NOBYPASSRLS`), so the database enforces isolation independently of the application-layer scope filter. The owner role (`vaf`, superuser) bypasses RLS and is used only for DDL, migrations, and global maintenance via the owner engine. The application filter (also fail-closed, see Section 2) is the first line of defense; RLS is a real second one.
+**Note**: the RLS policy is fail-closed by design - a row is visible or writable only when its `user_scope_id` exactly equals the per-transaction GUC; an unset or empty GUC matches nothing (an unscoped transaction sees and writes zero rows), and a row with `user_scope_id IS NULL` is not blanket-visible; RLS is `ENABLE`d and `FORCE`d on `memories`. **But on a default install the application data connection is still the owner role `vaf` (superuser), which bypasses RLS**, so today the fail-closed application-layer scope filter (Section 2) is the active line of defense and the RLS policy is a genuine second line only after the cutover switches `memory_db_url` to the non-superuser `vaf_app` role. Until then, do not rely on RLS as an independent backstop.
 
 ## 5. Filesystem Isolation
 
@@ -394,7 +398,7 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Gateway | Server-side scope extraction, client scope stripped | Transport |
 | Config read (`GET /api/config`) | Secret keys (API keys, OAuth client secrets, JWT/encryption keys, DB URLs) redacted for non-admins; admins get full config | Application |
 | Redis cache | Scope-prefixed cache keys | Caching |
-| PostgreSQL | Fail-closed Row-Level Security (ENABLED + FORCED), enforced via non-superuser `vaf_app` role | Database |
+| PostgreSQL | Fail-closed RLS policy (ENABLED + FORCED); active enforcement pending the app-role cutover to `vaf_app` (owner role bypasses RLS today) | Database |
 | Filesystem | Scope-based paths (`~/.vaf/scopes/<user_scope_id>/`) preferred; legacy `~/.vaf/users/<username>/` as fallback | OS |
 | Generated projects (VAF_Projects) | `~/Documents/VAF_Projects/<uid[:8]>/<session_id>/` when session context is present; legacy flat root otherwise | OS |
 | Session workspace | `Session.project_path` anchored to first `VAF_Projects` creation; `[SESSION WORKSPACE]` injected per turn | Application |

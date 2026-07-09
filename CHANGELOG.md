@@ -11,6 +11,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+- **RAG snippets no longer leak between users on the local network.** In multi-user mode the
+  memory-search snippets shown in the chat "RAG-Snippets" panel were pushed to the browser via a
+  global WebSocket broadcast to every connected client, so one user's snippets - including those
+  from a background thinking or automation run under another user's scope - could appear in a
+  different logged-in user's panel. Retrieval itself was always correctly scoped per user; only the
+  UI push was global. The push is now routed to the owning user's connections only and dropped when
+  the scope is unknown (fail-closed); the same fix applies to the context X-ray payload
+  (`real_context_payload`) and the memory-learning status banner (now scoped to the session), and
+  the UI clears the snippet panel on session switch. Requires a restart.
+
 ## [0.1.0a9] - 2026-07-08
 
 ### Added

@@ -2316,6 +2316,12 @@ function VAFDashboardContent() {
         expectNewAssistantAfterToolRef.current = false;
         const cached = sessionCache.current[id] || [];
         setMessages(cached);
+        // Per-turn ephemeral state belongs to the previous session, not this one - clear it so a
+        // stale RAG-snippets badge / context X-ray cannot linger across a switch (defense-in-depth
+        // for user isolation; the backend now scopes these pushes to the owner). Repopulates on the
+        // next turn of this session.
+        setRagResults(null);
+        setRealContext(null);
         pendingScrollRestore.current = sessionScrollPositions.current[id] ?? 'bottom';
 
         // 4. Restore animation state for target session (or default to idle)

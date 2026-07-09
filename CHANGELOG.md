@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a10] - 2026-07-09
+
 ### Security
 - **RAG snippets no longer leak between users on the local network.** In multi-user mode the
   memory-search snippets shown in the chat "RAG-Snippets" panel were pushed to the browser via a

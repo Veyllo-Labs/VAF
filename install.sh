@@ -9,7 +9,7 @@
 #   ./install.sh --help          # Show help
 #
 # Requirements:
-#   - Python 3.10+
+#   - Python 3.10-3.13 (the installer provisions one via uv when none is present)
 #   - Internet connection
 #   - A container runtime (REQUIRED: database for users/auth/setup + memory)
 #
@@ -20,8 +20,31 @@ set -e
 # CONFIGURATION
 # ============================================================================
 MIN_PYTHON_VERSION="3.10"
+# Highest SUPPORTED minor - must match the CI matrix (.github/workflows/ci.yml /
+# ci-nightly.yml); tests/test_installer_python_gate.py fails when they drift.
+# A NEWER Python is rejected on purpose: brand-new releases lack prebuilt wheels
+# for key packages (pip then tries source builds and fails), so the installer
+# provisions a supported interpreter via uv instead.
+MAX_PYTHON_VERSION="3.13"
 MIN_NODE_VERSION="18"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Returns 0 when the major.minor version "$1" lies within
+# [MIN_PYTHON_VERSION, MAX_PYTHON_VERSION]. Compares major.minor as INTEGERS,
+# never as floats ("3.9" >= "3.10" would be wrongly true as a float).
+python_version_supported() {
+    local v="$1"
+    local v_maj=${v%%.*} v_min=${v#*.}
+    v_min=${v_min%%.*}
+    local lo_maj=${MIN_PYTHON_VERSION%%.*} lo_min=${MIN_PYTHON_VERSION#*.}
+    lo_min=${lo_min%%.*}
+    local hi_maj=${MAX_PYTHON_VERSION%%.*} hi_min=${MAX_PYTHON_VERSION#*.}
+    hi_min=${hi_min%%.*}
+    [ -n "$v_maj" ] && [ -n "$v_min" ] || return 1
+    { [ "$v_maj" -gt "$lo_maj" ] || { [ "$v_maj" -eq "$lo_maj" ] && [ "$v_min" -ge "$lo_min" ]; }; } || return 1
+    { [ "$v_maj" -lt "$hi_maj" ] || { [ "$v_maj" -eq "$hi_maj" ] && [ "$v_min" -le "$hi_min" ]; }; } || return 1
+    return 0
+}
 
 # Flags
 SKIP_DOCKER=false
@@ -204,21 +227,28 @@ PYTHON_CMD=""
 PYTHON_VERSION=""
 USE_UV=false
 
-# Try python3 first, then python
+# Try python3 first, then python. Accept ONLY the supported range (MIN..MAX): a too-NEW
+# Python is as unusable as a too-old one (no prebuilt wheels yet -> pip source builds fail,
+# e.g. pyaudio's portaudio.h on 3.14). An out-of-range find falls through to the uv path,
+# which provisions a supported interpreter. Comparison is integer major.minor, never float
+# ("3.9 >= 3.10" would be wrongly true as a float) - see python_version_supported().
+UNSUPPORTED_PYTHON=""
 for cmd in python3 python; do
     if command -v $cmd &> /dev/null; then
         version=$($cmd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        # Compare as VERSION numbers, not floats: bc/float treats "3.10" as 3.1, so "3.9 >= 3.10"
-        # is wrongly true and would accept the old macOS system Python 3.9. Compare major.minor ints.
-        v_maj=${version%%.*}; v_min=${version#*.}; v_min=${v_min%%.*}
-        r_maj=${MIN_PYTHON_VERSION%%.*}; r_min=${MIN_PYTHON_VERSION#*.}; r_min=${r_min%%.*}
-        if [ -n "$v_maj" ] && [ -n "$v_min" ] && { [ "$v_maj" -gt "$r_maj" ] || { [ "$v_maj" -eq "$r_maj" ] && [ "$v_min" -ge "$r_min" ]; }; }; then
+        if python_version_supported "$version"; then
             PYTHON_CMD=$cmd
             PYTHON_VERSION=$version
             break
+        elif [ -n "$version" ] && [ -z "$UNSUPPORTED_PYTHON" ]; then
+            UNSUPPORTED_PYTHON=$version
         fi
     fi
 done
+if [[ -n "$UNSUPPORTED_PYTHON" && -z "$PYTHON_CMD" ]]; then
+    print_warning "Python $UNSUPPORTED_PYTHON found, but VAF supports $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION (the CI-tested range)."
+    print_info "Out-of-range interpreters are not covered by CI or prebuilt wheels - provisioning a supported Python via uv instead."
+fi
 
 # Prefer uv: it provisions Python without sudo, so a bare machine needs nothing
 # pre-installed. Install uv when neither a suitable Python nor uv is present.
@@ -234,7 +264,7 @@ if command -v uv &> /dev/null; then
 elif [[ -n "$PYTHON_CMD" ]]; then
     print_success "Python $PYTHON_VERSION found ($PYTHON_CMD)"
 else
-    print_error "Python $MIN_PYTHON_VERSION or higher not found and uv could not be installed!"
+    print_error "No supported Python ($MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION) found and uv could not be installed!"
     echo ""
     if [[ "$OS_TYPE" == "macos" ]]; then
         echo -e "  Install with: ${CYAN}brew install python@3.12${NC}  or  ${CYAN}curl -LsSf https://astral.sh/uv/install.sh | sh${NC}"
@@ -563,6 +593,20 @@ cd "$PROJECT_ROOT"
 if [[ -d "venv" && ! -f "venv/bin/activate" && -f "venv/Scripts/activate" ]]; then
     print_warning "Windows virtual environment detected  recreating for this OS..."
     rm -rf venv
+fi
+
+# A venv created with a Python outside the supported range (e.g. 3.14 from an earlier
+# failed run) would just reproduce the wheel-build failures - recreate it instead of
+# reporting "already exists".
+if [[ -d "venv/bin" ]]; then
+    venv_py="venv/bin/python3"; [ -x "$venv_py" ] || venv_py="venv/bin/python"
+    if [ -x "$venv_py" ]; then
+        venv_version=$($venv_py --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        if [ -n "$venv_version" ] && ! python_version_supported "$venv_version"; then
+            print_warning "Existing venv uses Python $venv_version (supported: $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION) - recreating it..."
+            rm -rf venv
+        fi
+    fi
 fi
 
 if [[ -d "venv/bin" ]]; then

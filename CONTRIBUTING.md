@@ -176,7 +176,7 @@ Built a tool or workflow you're proud of? Share it with the community - record a
 
 ## Style Guide
 
-- **Python:** We use Python 3.10+ (CI tests 3.10-3.13). Type hints are **mandatory**.
+- **Python:** We support Python 3.10-3.13 (exactly the CI-tested range; the installers reject newer interpreters and provision a supported one via uv). Type hints are **mandatory**.
 - **Docstrings:** Every class and function must have a Google-style docstring.
 - **Naming:** `snake_case` for functions/variables, `PascalCase` for classes.
 - **Imports:** Group standard libs, third-party libs, and local imports.

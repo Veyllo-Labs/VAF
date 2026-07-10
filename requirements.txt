@@ -44,8 +44,11 @@ tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); us
 
 # Speech Processing (Optional - Offline STT)
 # pyttsx3 removed — RAM explosion on Windows (SAPI/comtypes); Docker TTS (Piper) is the primary engine
+# pyaudio removed from CORE requirements: it ships no wheels for brand-new Python versions and its
+# source build needs the portaudio C headers, which broke the whole install (seen on Python 3.14).
+# It stays available as the optional `vaf[speech]` extra (setup.py); the runtime import is guarded,
+# so CLI microphone input degrades gracefully without it. Web/desktop mic capture is unaffected.
 SpeechRecognition>=3.10.0
-pyaudio>=0.2.14
 # openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
 # openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
 # onnxruntime>=1.16.0  # Required for openWakeWord inference

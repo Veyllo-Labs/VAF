@@ -103,7 +103,7 @@ chmod +x install.sh
    - GPU type (NVIDIA/AMD/Apple Silicon/Intel)
 
 2. **Dependency Checks**
-   - Python 3.10+ (required)
+   - Python 3.10-3.13 (required)
    - Node.js 18+ (for Web UI)
    - Git (for version control features)
    - Docker (for Memory System)
@@ -145,7 +145,7 @@ chmod +x install.sh
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Python 3.10+ | Required | Core runtime |
+| Python 3.10-3.13 | Required | Core runtime |
 | pip | Required | Package manager |
 | Node.js 18+ | Optional | For Web UI |
 | Docker | Optional | For Memory System |

@@ -5,7 +5,7 @@
     
 .DESCRIPTION
     Complete installation script for Windows that handles:
-    - Python 3.10+ detection/installation guidance
+    - Python 3.10-3.13 detection (out-of-range Pythons fall back to uv provisioning)
     - Virtual environment creation
     - All dependencies installation
     - Docker Desktop detection for Memory System (pgvector)
@@ -65,6 +65,12 @@ try {
 # CONFIGURATION
 # ============================================================================
 $MIN_PYTHON_VERSION = [version]"3.10"
+# Highest SUPPORTED minor - must match the CI matrix (.github/workflows/ci.yml /
+# ci-nightly.yml); tests/test_installer_python_gate.py fails when they drift.
+# A NEWER Python is rejected on purpose: brand-new releases lack prebuilt wheels
+# for key packages (pip then tries source builds and fails, e.g. pyaudio on 3.14),
+# so the installer provisions a supported interpreter via uv instead.
+$MAX_PYTHON_VERSION = [version]"3.13"
 $PROJECT_ROOT = $PSScriptRoot
 if (-not $PROJECT_ROOT) { $PROJECT_ROOT = Get-Location }
 
@@ -327,19 +333,30 @@ $pythonCmd = $null
 $pythonVersion = $null
 $useUv = $false
 
-# Try python3 first, then python
+# Try python3 first, then python. Accept ONLY the supported range (MIN..MAX): a too-NEW
+# Python is as unusable as a too-old one (no prebuilt wheels yet -> pip source builds fail,
+# e.g. pyaudio's portaudio.h on 3.14). An out-of-range find falls through to the uv path,
+# which provisions a supported interpreter.
+$unsupportedPython = $null
 foreach ($cmd in @("python3", "python")) {
     try {
         $versionOutput = & $cmd --version 2>&1
         if ($versionOutput -match "Python (\d+\.\d+\.\d+)") {
             $version = [version]$Matches[1]
-            if ($version -ge $MIN_PYTHON_VERSION) {
+            $majorMinor = [version]("$($version.Major).$($version.Minor)")
+            if ($majorMinor -ge $MIN_PYTHON_VERSION -and $majorMinor -le $MAX_PYTHON_VERSION) {
                 $pythonCmd = $cmd
                 $pythonVersion = $version
                 break
+            } elseif (-not $unsupportedPython) {
+                $unsupportedPython = $version
             }
         }
     } catch { }
+}
+if ($unsupportedPython -and -not $pythonCmd) {
+    Write-Warn "Python $unsupportedPython found, but VAF supports $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION (the CI-tested range)."
+    Write-Info "Out-of-range interpreters are not covered by CI or prebuilt wheels - provisioning a supported Python via uv instead."
 }
 
 # Prefer uv: it provisions Python without admin rights, so a bare machine needs
@@ -360,7 +377,7 @@ if ($uvCmd) {
 } elseif ($pythonCmd) {
     Write-Success "Python $pythonVersion found ($pythonCmd)"
 } else {
-    Write-Err "Python $MIN_PYTHON_VERSION or higher not found and uv could not be installed!"
+    Write-Err "No supported Python ($MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION) found and uv could not be installed!"
     Write-Host ""
     Write-Host "  Install Python from: https://www.python.org/downloads/ (check 'Add Python to PATH')" -ForegroundColor Yellow
     Write-Host "  Or install uv:       irm https://astral.sh/uv/install.ps1 | iex" -ForegroundColor Yellow
@@ -705,6 +722,29 @@ function Assert-Venv {
     }
 }
 
+# Version of the interpreter inside an existing venv (or $null). Used to detect a venv
+# that was created with a Python outside the supported range (e.g. a 3.14 venv from an
+# earlier failed run) - reusing it would just reproduce the wheel-build failures.
+function Get-VenvPythonVersion {
+    $vpy = Join-Path $venvPath "Scripts\python.exe"
+    if (Test-Path $vpy) {
+        try {
+            $out = & $vpy --version 2>&1
+            if ("$out" -match "Python (\d+\.\d+\.\d+)") { return [version]$Matches[1] }
+        } catch { }
+    }
+    return $null
+}
+
+$venvVersion = Get-VenvPythonVersion
+if ($venvVersion) {
+    $venvMajorMinor = [version]("$($venvVersion.Major).$($venvVersion.Minor)")
+    if ($venvMajorMinor -lt $MIN_PYTHON_VERSION -or $venvMajorMinor -gt $MAX_PYTHON_VERSION) {
+        Write-Warn "Existing venv uses Python $venvVersion (supported: $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION) - recreating it..."
+        Remove-Item -Recurse -Force $venvPath
+    }
+}
+
 if ($useUv) {
     # uv creates the venv (and downloads Python 3.12 if needed). --seed adds pip so the
     # existing `python -m pip install` steps below keep working inside a uv venv.
@@ -799,9 +839,27 @@ if ($coreExit -eq 0) {
     Write-Info "Last lines of pip output:"
     $coreResult | Where-Object { "$_" -notmatch '^VAF_PIP_EXIT=' } | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     Write-Host ""
-    Write-Warn "Usually a transient network hiccup or a missing build tool. Fix it, then re-run:"
-    Write-Info "  cd `"$PROJECT_ROOT`""
-    Write-Info "  .\venv\Scripts\python.exe -m pip install -e ."
+    $coreWheelFailed = $coreResult | Where-Object { "$_" -match 'Failed building wheel|Failed to build installable wheels|failed-wheel-build-for-install' }
+    if ($coreWheelFailed) {
+        $venvVer = Get-VenvPythonVersion
+        $venvOutOfRange = $false
+        if ($venvVer) {
+            $venvMM = [version]("$($venvVer.Major).$($venvVer.Minor)")
+            $venvOutOfRange = ($venvMM -lt $MIN_PYTHON_VERSION -or $venvMM -gt $MAX_PYTHON_VERSION)
+        }
+        if ($venvOutOfRange) {
+            Write-Warn "A package could not be BUILT from source - there is no prebuilt wheel for Python $venvVer on Windows."
+            Write-Info "VAF supports Python $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION. Delete the venv folder and re-run install.bat -"
+            Write-Info "the installer will provision a supported Python via uv automatically."
+        } else {
+            Write-Warn "A package could not be BUILT from source - usually a missing build tool (e.g. MSVC Build Tools) or a package without a prebuilt wheel."
+            Write-Info "Check the pip output above for the failing package, fix the build requirement, then re-run install.bat."
+        }
+    } else {
+        Write-Warn "Usually a transient network hiccup or a missing build tool. Fix it, then re-run:"
+        Write-Info "  cd `"$PROJECT_ROOT`""
+        Write-Info "  .\venv\Scripts\python.exe -m pip install -e ."
+    }
     exit 1
 }
 
@@ -852,9 +910,30 @@ if ($pipExit -eq 0) {
     Write-Info "Last lines of pip output:"
     $reqResult | Where-Object { "$_" -notmatch '^VAF_PIP_EXIT=' } | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     Write-Host ""
-    Write-Warn "This is usually a transient network hiccup. Fix connectivity, then re-run:"
-    Write-Info "  cd `"$PROJECT_ROOT`""
-    Write-Info "  .\venv\Scripts\python.exe -m pip install -r requirements.txt"
+    # Classify the failure honestly: a wheel-BUILD failure is a Python-version/wheel problem,
+    # not a network problem - the old blanket "network hiccup" message sent users down the
+    # wrong path (real case: pyaudio source build on an unsupported Python 3.14).
+    $wheelBuildFailed = $reqResult | Where-Object { "$_" -match 'Failed building wheel|Failed to build installable wheels|failed-wheel-build-for-install' }
+    if ($wheelBuildFailed) {
+        $venvVer = Get-VenvPythonVersion
+        $venvOutOfRange = $false
+        if ($venvVer) {
+            $venvMM = [version]("$($venvVer.Major).$($venvVer.Minor)")
+            $venvOutOfRange = ($venvMM -lt $MIN_PYTHON_VERSION -or $venvMM -gt $MAX_PYTHON_VERSION)
+        }
+        if ($venvOutOfRange) {
+            Write-Warn "A package could not be BUILT from source - there is no prebuilt wheel for Python $venvVer on Windows."
+            Write-Info "VAF supports Python $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION. Delete the venv folder and re-run install.bat -"
+            Write-Info "the installer will provision a supported Python via uv automatically."
+        } else {
+            Write-Warn "A package could not be BUILT from source - usually a missing build tool (e.g. MSVC Build Tools) or a package without a prebuilt wheel."
+            Write-Info "Check the pip output above for the failing package, fix the build requirement, then re-run install.bat."
+        }
+    } else {
+        Write-Warn "This is usually a transient network hiccup. Fix connectivity, then re-run:"
+        Write-Info "  cd `"$PROJECT_ROOT`""
+        Write-Info "  .\venv\Scripts\python.exe -m pip install -r requirements.txt"
+    }
     exit 1
 }
 

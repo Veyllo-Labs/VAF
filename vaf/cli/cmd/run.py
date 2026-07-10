@@ -1013,7 +1013,13 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 if sm.stt_mic:
                     tui.event("Speech", "STT microphone ready", style="success")
                 else:
-                    tui.warning("STT enabled but no microphone detected")
+                    import importlib.util as _ilu
+                    if _ilu.find_spec("pyaudio") is None:
+                        # pyaudio is the optional speech extra now - without it the mic is not
+                        # "missing", capture is simply not installed; say so instead of guessing.
+                        tui.warning('STT enabled but pyaudio is not installed - CLI mic capture needs the optional speech extra: pip install pyaudio (or pip install "vaf[speech]")')
+                    else:
+                        tui.warning("STT enabled but no microphone detected")
             except Exception as e:
                 tui.warning(f"STT check failed: {e}")
         

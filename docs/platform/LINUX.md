@@ -8,9 +8,11 @@ duplicate the install steps.
 ## Runtime stack on Linux
 
 - **Python.** VAF runs from a project-local virtualenv at `venv/`, launched as
-  `venv/bin/python -m vaf.main`. The installer requires Python 3.10+ and, on a
-  bare machine, provisions it via [uv](https://docs.astral.sh/uv/) (no system
-  Python needed). `PyGObject` is pinned to `<3.52` in the venv because 3.52+
+  `venv/bin/python -m vaf.main`. The installer requires Python 3.10-3.13 (the
+  CI-tested range; newer interpreters are rejected because brand-new releases
+  lack prebuilt wheels for key packages) and provisions one via
+  [uv](https://docs.astral.sh/uv/) when the system Python is missing or outside
+  that range (no system Python needed). `PyGObject` is pinned to `<3.52` in the venv because 3.52+
   needs `girepository-2.0`, which older distros (e.g. Ubuntu 24.04) do not ship.
 - **Desktop window / web-view backend.** The native window is **pywebview on the
   Qt / QtWebEngine (Chromium) backend** — it is a Qt window, **not** GTK.

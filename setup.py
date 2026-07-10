@@ -150,6 +150,10 @@ setup(
     license="AGPL-3.0-or-later",
     url="https://github.com/Veyllo-Labs/VAF",
     packages=find_packages(),
+    # Floor only, DELIBERATELY no upper cap: an upper bound in python_requires makes pip
+    # silently resolve older releases on newer interpreters instead of failing clearly.
+    # The supported range (3.10-3.13) is enforced by the installers and kept in lockstep
+    # with the CI matrix via tests/test_installer_python_gate.py.
     python_requires=">=3.10",
     install_requires=BASE_REQUIRES,
     extras_require=EXTRAS,

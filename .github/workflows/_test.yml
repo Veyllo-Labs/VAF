@@ -28,18 +28,15 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
 
+    # The portaudio steps (Linux portaudio19-dev, macOS brew portaudio + LDFLAGS/CFLAGS)
+    # were removed together with pyaudio: it is no longer a core requirement (optional
+    # vaf[speech] extra), so nothing in requirements.txt needs the portaudio headers.
+    # python3-dev stays as a cheap safety net for sdist builds on Linux.
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y portaudio19-dev python3-dev
-
-    - name: Install system dependencies (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew install portaudio
-        echo "LDFLAGS=-L$(brew --prefix portaudio)/lib" >> $GITHUB_ENV
-        echo "CFLAGS=-I$(brew --prefix portaudio)/include" >> $GITHUB_ENV
+        sudo apt-get install -y python3-dev
 
     - name: Install dependencies
       run: |

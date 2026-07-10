@@ -80,7 +80,7 @@ In chat, retrieval runs in the **input phase** before the LLM is called: the use
 ## Requirements
 
 - **Docker** (required for PostgreSQL + pgvector + Redis)
-- **Python 3.10+**
+- **Python 3.10-3.13**
 - **sentence-transformers** (auto-installed)
 - **redis** (auto-installed)
 

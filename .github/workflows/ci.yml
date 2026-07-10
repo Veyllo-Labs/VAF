@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"   # the lock is generated on 3.13 — see the requirements.lock header
-      - name: Install system build deps (for sdist metadata resolution, e.g. pyaudio)
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev python3-dev
+      - name: Install system build deps (for sdist metadata resolution)
+        run: sudo apt-get update && sudo apt-get install -y python3-dev
       - name: Install pip-tools (pinned for deterministic output)
         run: python -m pip install --upgrade pip "pip-tools==7.5.3"
       - name: Verify requirements.lock is in sync with requirements.txt

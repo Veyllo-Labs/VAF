@@ -7,7 +7,7 @@ $ProjectRoot = Get-Location
 
 # 1. Check Python
 if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-    Write-Error "Python not found. Please install Python 3.10+ and add it to PATH."
+    Write-Error "Python not found. Please install Python 3.10-3.13 and add it to PATH."
     exit 1
 }
 

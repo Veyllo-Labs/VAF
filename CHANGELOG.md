@@ -11,6 +11,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The installer no longer fails on a too-new Python (e.g. 3.14).** Both installers accepted
+  any Python at or above 3.10, so a machine whose newest Python was 3.14 built the venv with an
+  unsupported interpreter and the dependency install crashed while compiling packages that have
+  no prebuilt wheels for it yet. The installers now accept only the CI-tested range (3.10-3.13),
+  automatically provision a supported Python via uv when the system one is outside that range,
+  and recreate an existing venv that was built with an unsupported Python. The Windows installer
+  also reports wheel-build failures honestly (unsupported Python / missing prebuilt wheel)
+  instead of blaming a "network hiccup".
+
+### Changed
+- **Voice input (pyaudio) is now an optional extra instead of a core dependency.** pyaudio ships
+  no prebuilt wheels for brand-new Python versions and its source build needs the PortAudio C
+  headers, which could break the whole installation. It moved out of `requirements.txt` into the
+  existing optional `vaf[speech]` extra; CLI microphone input degrades gracefully without it and
+  web/desktop microphone capture is unaffected. Install it with `pip install pyaudio` (or
+  `pip install "vaf[speech]"`) if you use CLI voice input.
+
 ## [0.1.0a10] - 2026-07-09
 
 ### Security

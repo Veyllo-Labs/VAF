@@ -1,7 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-import pyaudio
+import sys
+
+try:
+    import pyaudio
+except ImportError:
+    # pyaudio is the optional vaf[speech] extra, not a core dependency (no wheels for
+    # brand-new Pythons; the source build needs the portaudio C headers).
+    print("pyaudio is not installed - it is part of the optional speech extra.")
+    print('Install it with:  pip install pyaudio   (or:  pip install "vaf[speech]")')
+    sys.exit(1)
 
 def list_microphones():
     p = pyaudio.PyAudio()

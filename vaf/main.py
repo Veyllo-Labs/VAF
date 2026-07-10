@@ -57,7 +57,10 @@ def bootstrap():
         "inquirer": "inquirer",
         # Speech (TTS/STT/Wake Word)
         "SpeechRecognition": "speech_recognition",
-        "pyaudio": "pyaudio",
+        # pyaudio is NOT required here: it moved to the optional vaf[speech] extra (no wheels
+        # for brand-new Pythons; source build needs portaudio headers). Requiring it would
+        # recreate the infinite prompt documented in the rumps NOTE below, because the
+        # auto-install runs `pip install -r requirements.txt`, which no longer contains it.
         # "openwakeword": "openwakeword", # Optional/Unstable on Mac
         # "onnxruntime": "onnxruntime",   # Optional/Unstable on Mac
         # Document Processing (PDF, Word, Excel, PowerPoint)

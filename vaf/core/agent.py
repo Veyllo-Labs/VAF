@@ -9767,15 +9767,12 @@ class Agent:
 
         # search_tools post-hook: expand _active_tools with discovered tool names so the
         # model can call them in the very next turn without a router round-trip.
+        # The parser is SHARED with the tool module (and its format tests), so the
+        # output format and this hook can never drift apart silently.
         if name == "search_tools" and isinstance(result, str) and ":" in result:
             try:
-                discovered = []
-                for line in result.splitlines():
-                    line = line.strip().lstrip("-").lstrip(" ")
-                    if ":" in line:
-                        candidate = line.split(":")[0].strip()
-                        if candidate and candidate in self.tools:
-                            discovered.append(candidate)
+                from vaf.tools.search_tools import extract_discovered_tool_names
+                discovered = extract_discovered_tool_names(result, self.tools)
                 if discovered and self._active_tools is not None:
                     current = list(self._active_tools)
                     for t in discovered:

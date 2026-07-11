@@ -53,6 +53,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   instead of blaming a "network hiccup".
 
 ### Changed
+- **search_tools now returns call signatures for the top matches.** Discovering a tool
+  by keyword only returned its name and one description line, so the model had to
+  guess parameter names on the first call (observed live: an invented argument name
+  producing a schema error). The top three matches now include a compact signature
+  (required parameters first, optional ones bracketed); the output stays within the
+  tool-result budget and the discovery post-hook keeps working unchanged.
 - **Voice input (pyaudio) is now an optional extra instead of a core dependency.** pyaudio ships
   no prebuilt wheels for brand-new Python versions and its source build needs the PortAudio C
   headers, which could break the whole installation. It moved out of `requirements.txt` into the

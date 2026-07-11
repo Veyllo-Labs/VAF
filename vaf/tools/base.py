@@ -459,6 +459,33 @@ class BaseTool(ABC):
             "channel_restrictions": list(getattr(self, "channel_restrictions", []) or []),
             "side_effect_class": getattr(self, "side_effect_class", "none"),
         }
-    
+
     def __repr__(self) -> str:
         return f"<Tool: {self.name}>"
+
+
+def format_tool_signature(tool, max_chars: int = 180) -> str:
+    """Compact call signature from a tool's JSON-schema parameters.
+
+    Shape: ``name(req: type, req2: type, [opt: type])`` - required parameters
+    first, optional ones bracketed. Used by search_tools so a discovered tool
+    is callable without guessing parameters. Returns "" when the tool declares
+    no name or no properties. Fail-safe: never raises (callers sit on the tool
+    dispatch path).
+    """
+    try:
+        name = getattr(tool, "name", "") or ""
+        params = getattr(tool, "parameters", None) or {}
+        props = params.get("properties") or {}
+        if not name or not isinstance(props, dict) or not props:
+            return ""
+        required = [p for p in (params.get("required") or []) if p in props]
+        optional = [p for p in props if p not in required]
+        parts = [f"{p}: {(props[p] or {}).get('type', 'any')}" for p in required]
+        parts += [f"[{p}: {(props[p] or {}).get('type', 'any')}]" for p in optional]
+        sig = f"{name}({', '.join(parts)})"
+        if len(sig) > max_chars:
+            sig = sig[:max_chars - 4] + "...)"
+        return sig
+    except Exception:
+        return ""

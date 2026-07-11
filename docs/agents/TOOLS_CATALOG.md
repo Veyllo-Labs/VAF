@@ -100,7 +100,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `update_skill` | write | Edit a Skill the user owns. |
 | `delete_skill` | dangerous | Delete a Skill the user owns. |
 | `list_tools` | read | List all tools available to the model. |
-| `search_tools` | read | Search the tool catalogue by keyword. |
+| `search_tools` | read | Search the tool catalogue by keyword; top matches include the call signature. |
 
 ## Automations, timers & planner
 

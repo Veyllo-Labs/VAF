@@ -60,7 +60,7 @@ Examples:
 
 ### What the TOOLS property does with it
 
-`agent.py`'s `TOOLS` property calls `get_description_with_examples()` instead of the raw `.description`. For small context windows (`n_ctx < 8000`) the truncation budget widens from 150 to 300 chars when examples are present so at least one example survives.
+`agent.py`'s `TOOLS` property calls `get_description_with_examples()` instead of the raw `.description`. For small context windows (`n_ctx < 32000`) descriptions are truncated to 150 chars; the budget widens to 300 chars when examples are present so at least one example survives. (Note: `Config.load()` clamps `n_ctx` to at least 32768, so the small-context branch is effectively inactive on standard installs.)
 
 ### Tools that already have examples
 
@@ -130,11 +130,14 @@ Model: search_tools(query="calendar appointment")
 → Returns:
     Tools matching 'calendar appointment':
       create_calendar_event: Create a new calendar event or appointment.
+          create_calendar_event(title: string, start: string, [duration: integer])
       list_calendar_events:  List upcoming events from the calendar.
       update_calendar_event: Modify an existing event.
 ```
 
-**Scoring:** +2 per query token matching the tool name, +1 per token matching the description. Results capped at 10. If no matches, shows first 20 tools alphabetically with a "… and N more" trailer.
+**Scoring:** +2 per query token matching the tool name, +1 per token matching the description. Results capped at 10. The top 3 matches additionally carry a compact call signature (required parameters first, optional ones bracketed; rendered by `format_tool_signature` in `vaf/tools/base.py`) so a discovered tool is callable without guessing parameters. If no matches, shows first 20 tools alphabetically with a "… and N more" trailer (signature-free).
+
+**Format contract:** the post-hook parser is the shared `extract_discovered_tool_names()` in `vaf/tools/search_tools.py` — match lines stay `name: desc`; signature lines sit on their own indented line and their pre-colon part contains `(`, so they can never be mistaken for a tool name. The query echo in the header is capped and the total output self-caps under `execute_tool`'s 2000-char truncation (signature lines are dropped first). Round-trip guard: `tests/test_search_tools_signatures.py`.
 
 **Post-execution hook in `execute_tool()`:** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 

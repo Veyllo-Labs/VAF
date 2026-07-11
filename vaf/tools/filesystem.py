@@ -602,20 +602,64 @@ class WriteFileTool(BaseTool):
     name = "write_file"
     permission_level = "write"
     side_effect_class = "reversible"
-    description = "Writes content to a file."
+    description = (
+        "Writes content to a file (creates or overwrites). Use for saving any single-file "
+        "artifact the content of which you already have (html, svg, txt, code, ...). "
+        "A relative path lands in the current chat workspace; an absolute or ~ path is "
+        "honored (VAF's own directory and system locations are protected). "
+        "For multi-file code projects use coding_agent instead."
+    )
+    input_examples = [
+        {"path": "chart.svg", "content": "<svg xmlns=\"http://www.w3.org/2000/svg\">...</svg>"},
+        {"path": "report/summary.md", "content": "# Summary\n..."},
+    ]
 
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"}, 
+            "path": {"type": "string"},
             "content": {"type": "string"}
         },
         "required": ["path", "content"]
     }
 
     def run(self, **kwargs) -> str:
+        # Main-agent calls (identified by the injected kwargs from execute_tool) apply
+        # the per-user filesystem jail for non-admin users. It MUST be set here in the
+        # tool's own thread: execute_tool dispatches through a bounded-run worker
+        # thread and contextvars set in the dispatcher would not propagate into it.
+        # Direct consumers (coder, workflow engine, librarian) pass no user_scope_id
+        # and run the body unchanged.
+        _jail_token = None
+        _scope = kwargs.pop("user_scope_id", None)
+        if _scope:
+            try:
+                from vaf.core.platform import Platform as _PlatJail
+                _uid8 = str(_scope).replace("-", "").lower()[:8]
+                _own = _PlatJail.documents_dir() / "VAF_Projects" / _uid8
+                _jail_token = set_librarian_scope(
+                    {"is_admin": False, "uid8": _uid8, "allowed_roots": [_own]}
+                )
+            except Exception:
+                # Fail-closed: jail with no allowed roots rather than no jail at all.
+                _jail_token = set_librarian_scope(
+                    {"is_admin": False, "uid8": "", "allowed_roots": []}
+                )
+        try:
+            return self._run_write(**kwargs)
+        finally:
+            if _jail_token is not None:
+                reset_librarian_scope(_jail_token)
+
+    def _run_write(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         content = kwargs.get('content', '')
+        # Main-agent calls inject the chat workspace: a relative path ("chart.svg")
+        # resolves there instead of against the process cwd (which is the protected
+        # VAF root when the backend runs from the repo, so it would be denied).
+        _ws = kwargs.get('_session_workspace') or ""
+        if _ws and path and not os.path.isabs(os.path.expanduser(str(path))):
+            path = os.path.join(str(_ws), str(path))
         safe, res = is_safe_path(path)
         if not safe: return res
 
@@ -773,8 +817,13 @@ class WriteFileTool(BaseTool):
                             pass
                     if success:
                         # Emit file_created for all written files so Web UI shows a download/open link.
+                        # Session resolution order matters (emit-site scoping invariant): the
+                        # session injected for THIS call wins; the env var / process-global
+                        # fallback is only for legacy sub-agent processes, where it is
+                        # per-process anyway. On a multi-user server the global fallback could
+                        # attribute the file to another user's session.
                         try:
-                            _sid = os.environ.get("VAF_SESSION_ID")
+                            _sid = kwargs.get('_session_id') or os.environ.get("VAF_SESSION_ID")
                             if not _sid:
                                 from vaf.core.subagent_ipc import get_current_session_id
                                 _sid = get_current_session_id()
@@ -788,7 +837,7 @@ class WriteFileTool(BaseTool):
                         _doc_extensions = (".md", ".txt", ".docx")
                         if res.lower().endswith(_doc_extensions):
                             try:
-                                _sid2 = os.environ.get("VAF_SESSION_ID")
+                                _sid2 = kwargs.get('_session_id') or os.environ.get("VAF_SESSION_ID")
                                 if not _sid2:
                                     from vaf.core.subagent_ipc import get_current_session_id
                                     _sid2 = get_current_session_id()

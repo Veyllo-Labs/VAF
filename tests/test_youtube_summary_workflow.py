@@ -40,7 +40,21 @@ def test_sandbox_step_uses_packages_not_host():
     t = _tpl()
     args = t["steps"][0]["args"]
     assert "yt-dlp" in args.get("packages", []), "yt-dlp must install into the sandbox, not the host"
-    assert "--skip-download" in args["code"], "never download the video itself"
+    assert "skip_download=True" in args["code"], "never download the video itself"
+    # Rate-limit lesson (live: 67s of 429s while the caption track existed): ONE
+    # metadata call via the yt_dlp API, then the SIGNED caption URL - no
+    # per-language subtitle FILE downloads.
+    assert "extract_info" in args["code"]
+    assert "automatic_captions" in args["code"]
+
+
+def test_summary_step_forbids_self_fetching():
+    # An agentic coder that receives a failure marker + the URL will otherwise
+    # improvise its own transcript hunt (live: 6.2 minutes, 23 loops).
+    t = _tpl()
+    prompt = t["steps"][1]["input"]
+    assert "ABSOLUT VERBOTEN" in prompt
+    assert "task_done" in prompt
 
 
 def test_honesty_markers_wired_through():

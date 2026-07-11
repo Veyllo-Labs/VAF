@@ -14,12 +14,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 - **New built-in workflow: YouTube Summary.** Summarizes a YouTube video from its own
   captions: yt-dlp runs inside the Docker sandbox (installed per run - no host
-  installs, no confirmation cascade), downloads only the subtitle track with a
-  per-language fallback that respects YouTube's rate limits, and a validated
-  generation step writes the Markdown summary into the chat workspace. Videos without
-  captions (or a momentary YouTube rate limit) produce an honest note instead of an
-  invented summary. Composed from a live session where the agent built this lane
-  ad-hoc over confirmed host commands.
+  installs, no confirmation cascade) and fetches the caption track via ONE metadata
+  call plus the signed caption URL (json3) - per-language subtitle file downloads
+  turned out to be far more rate-limited and burned a live run in 429s while the
+  captions existed; the robust method was discovered by the coder sub-agent
+  improvising after that failure and is now the workflow's own. A validated
+  generation step writes the Markdown summary into the chat workspace and is
+  explicitly forbidden from fetching content itself (an agentic coder otherwise
+  spends minutes re-hunting the transcript on a failure marker). Videos without
+  captions (or a momentary rate limit) produce an honest note instead of an invented
+  summary. Composed from a live session where the agent built this lane ad-hoc over
+  confirmed host commands.
 - **analyze_image can inspect images from the chat workspace (`image_path`).** The vision
   tool only accepted user attachments, so an agent that had just produced a chart could
   not quality-check it and spiraled through header-parsing and OCR detours instead
@@ -46,6 +51,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   notifications are attributed to the calling chat session. Background thinking runs
   (propose-only) deliberately do not get the tool, and the write no longer triggers a
   confirmation prompt (the plan gate still applies, consistent with document_writer).
+
+### Changed
+- **The agent can now author full-power workflows itself.** create_agent_workflow's
+  engine and save path always supported multi-parameter steps, but the schema the
+  model sees never advertised them - an agent-created workflow could not express a
+  sandbox step with pip packages or exported artifacts. The step schema now documents
+  `args` (with python_sandbox packages/export_files and write_file examples), inline
+  `{variable|fallback}` defaults for saved workflows, and the brace-safety rule for
+  embedded Python code (a brace block containing a dot is a variable lookup and breaks
+  the run). The validation guidance also no longer reads as run_temp-only: the
+  validate flag works in saved workflows too, and the builder now tells the agent to
+  flag deliverable steps in create mode as well.
 
 ### Fixed
 - **Workflow runs open the Workflow Runtime panel again in TLS setups.** The @workflow

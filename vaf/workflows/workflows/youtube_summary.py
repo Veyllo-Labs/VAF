@@ -23,40 +23,80 @@ f-strings and dotted expressions inside braces entirely.
 """
 
 _SUBS_CODE = r"""
-import glob
+import json
 import re
-import subprocess
 import sys
 import time
+import urllib.request
+
+import yt_dlp
 
 url = "{video_url}"
 
-meta = subprocess.run(
-    ["yt-dlp", "--skip-download", "--no-warnings", "--print", "%(title)s", url],
-    capture_output=True, text=True, timeout=60,
-)
-title = (meta.stdout or "").strip().splitlines()[-1] if meta.stdout else "(Titel unbekannt)"
-
-# One language per request with fallback: a combined de,en,en-orig request fires
-# several subtitle downloads at once and trips YouTube's HTTP 429 rate limit far
-# more easily (observed live). Stop at the first language that yields a file.
-files = []
+# ONE metadata call via the yt_dlp Python API, then ONE fetch of the SIGNED
+# caption URL it returns. The previous approach (yt-dlp CLI writing subtitle
+# FILES per language) issued several unauthenticated subtitle downloads, which
+# YouTube rate-limits far more aggressively - a live run burned 67s of 429s and
+# gave up while the caption track existed. This method was discovered by the
+# coder sub-agent improvising after exactly that failure.
+info = None
 last_err = ""
-for lang in ["de", "en", "en-orig"]:
-    r = subprocess.run(
-        ["yt-dlp", "--write-subs", "--write-auto-subs", "--sub-langs", lang,
-         "--sub-format", "vtt", "--skip-download", "--no-warnings",
-         "--sleep-requests", "1", "-o", "/tmp/vsub_" + lang, url],
-        capture_output=True, text=True, timeout=120,
-    )
-    files = sorted(glob.glob("/tmp/vsub_" + lang + "*.vtt"))
-    if files:
+for attempt in [1, 2]:
+    try:
+        ydl = yt_dlp.YoutubeDL(dict(quiet=True, skip_download=True, no_warnings=True))
+        info = ydl.extract_info(url, download=False)
         break
-    last_err = (r.stderr or r.stdout or "")[-300:]
-    if "429" in last_err:
-        time.sleep(5)
+    except Exception as e:
+        last_err = str(e)[-300:]
+        time.sleep(4)
 
-if not files:
+if info is None:
+    print("TITLE: (Titel unbekannt)")
+    if "429" in last_err:
+        print("RATE_LIMITED_BY_YOUTUBE")
+    else:
+        print("NO_SUBTITLES_AVAILABLE")
+    print(last_err)
+    sys.exit(0)
+
+title = info.get("title") or "(Titel unbekannt)"
+
+
+def pick_track(container):
+    if not container:
+        return None
+    for lang in ["de", "en", "en-orig", "en-US", "en-GB"]:
+        tracks = container.get(lang)
+        if not tracks:
+            continue
+        for tr in tracks:
+            if tr.get("ext") == "json3":
+                return tr.get("url")
+        for tr in tracks:
+            u = tr.get("url")
+            if u:
+                return u + "&fmt=json3"
+    return None
+
+
+cap_url = pick_track(info.get("subtitles")) or pick_track(info.get("automatic_captions"))
+if not cap_url:
+    print("TITLE: " + title)
+    print("NO_SUBTITLES_AVAILABLE")
+    sys.exit(0)
+
+raw = ""
+last_err = ""
+for attempt in [1, 2, 3]:
+    try:
+        raw = urllib.request.urlopen(cap_url, timeout=30).read().decode("utf-8", "replace")
+        if raw.strip():
+            break
+    except Exception as e:
+        last_err = str(e)[-200:]
+    time.sleep(4)
+
+if not raw.strip():
     print("TITLE: " + title)
     if "429" in last_err:
         print("RATE_LIMITED_BY_YOUTUBE")
@@ -65,19 +105,35 @@ if not files:
     print(last_err)
     sys.exit(0)
 
-raw = open(files[0], encoding="utf-8", errors="replace").read()
-lines = []
-seen_last = None
-for line in raw.splitlines():
-    line = re.sub(r"<[^>]+>", "", line).strip()
-    if not line or "-->" in line or line.startswith(("WEBVTT", "Kind:", "Language:", "NOTE")):
-        continue
-    if line == seen_last:
-        continue
-    seen_last = line
-    lines.append(line)
-text = " ".join(lines)
+text = ""
+try:
+    data = json.loads(raw)
+    texts = []
+    for ev in data.get("events") or []:
+        for seg in ev.get("segs") or []:
+            t = seg.get("utf8")
+            if t:
+                texts.append(t)
+    text = "".join(texts)
+except Exception:
+    # Not json3 (vtt/srv fallback): strip tags, timestamps and duplicates.
+    lines = []
+    prev = None
+    for line in raw.splitlines():
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line or "-->" in line or line.startswith(("WEBVTT", "Kind:", "Language:", "NOTE")):
+            continue
+        if line == prev:
+            continue
+        prev = line
+        lines.append(line)
+    text = " ".join(lines)
+
 text = re.sub(r"\s+", " ", text).strip()
+if not text:
+    print("TITLE: " + title)
+    print("NO_SUBTITLES_AVAILABLE")
+    sys.exit(0)
 if len(text) > 12000:
     text = text[:9000] + " ...[Transkript gekuerzt]... " + text[-2500:]
 print("TITLE: " + title)
@@ -139,7 +195,12 @@ WORKFLOW = {
                 "kurzen Hinweis, dass das Video keine Untertitel hat und daher nicht "
                 "zusammengefasst werden kann. Wenn dort 'RATE_LIMITED_BY_YOUTUBE' steht, "
                 "schreibe NUR einen Hinweis, dass YouTube die Abfrage gerade begrenzt "
-                "(spaeter erneut versuchen). Erfinde NIEMALS Inhalte.\n\n"
+                "(spaeter erneut versuchen). Erfinde NIEMALS Inhalte.\n"
+                "ABSOLUT VERBOTEN: das Transkript oder Videoinhalte SELBST zu beschaffen - "
+                "kein python_sandbox, kein web_search, kein Fetch-Versuch. Deine EINZIGE "
+                "Aufgabe ist das Schreiben des Markdown-Texts aus dem Material unten; bei "
+                "einem Marker schreibst du SOFORT nur den Hinweis und rufst task_done auf. "
+                "(Ein frueherer Lauf hat hier 6 Minuten mit eigenen Fetch-Versuchen verbrannt.)\n\n"
                 "Material (Titel + Transkript):\n{transcript}\n"
             ),
             "output": "summary",

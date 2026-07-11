@@ -2701,13 +2701,40 @@ class Agent:
                 })
             else:
                 UI.error(f"✗ Sub-Agent [{task.task_id}] failed: {task.error}")
+                # Boundary coercion (Rule 4.7): persisted task JSON passes through
+                # from_dict uncoerced - a legacy record can carry None here, and a
+                # TypeError would abort the drain BEFORE consume_result (duplicate
+                # re-delivery).
+                _task_desc = str(getattr(task, "task_description", "") or "")[:300]
+                # WW B-track for the ASYNC lane: sub-agent failures never hit the
+                # sync reactive hook (the tool result was only the DELEGATED
+                # marker), so attach the failed tool's know-how to THIS message -
+                # content extension only, no extra history entry (adjacency), and
+                # hard fail-safe before consume_result (exactly-once).
+                _kh_block = ""
+                try:
+                    from vaf.whare_wananga.runtime import async_failure_hint
+                    _kh = async_failure_hint(self, task.agent_type, err_text)
+                    if _kh:
+                        _kh_block = f"\n{_kh}\n"
+                        try:
+                            append_domain_log(
+                                "backend",
+                                f"[WW-REACTIVE-ASYNC] {task.agent_type}: know-how attached to drained failure"
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    _kh_block = ""
                 self.history.append({
                     "role": "system",
                     "content": (
                         f"[X] **Sub-Agent Task FAILED / TERMINATED** [Task: {task.task_id}]\n"
                         f"Agent: {task.agent_type}\n"
-                        f"Error: {task.error}\n\n"
-                        f"IMPORTANT: The task has stopped. Do not say it is still running.\n"
+                        f"Error: {task.error}\n"
+                        + (f"Original task: {_task_desc}\n" if _task_desc else "")
+                        + _kh_block
+                        + f"\nIMPORTANT: The task has stopped. Do not say it is still running.\n"
                         f"Inform the user about the error."
                     )
                 })

@@ -192,6 +192,16 @@ def known_pitfall_hit(name: str, error_text: str, *, allow_unverified: bool = Fa
         err = _norm(error_text).lower()
         if not err:
             return False
+        # Strip filesystem paths BEFORE matching: an error like
+        # "[Errno 17] File exists: '/home/x/chat1/page.html'" is dominated by
+        # path tokens no stored pitfall can contain, so the 0.6 overlap never
+        # fires. Re-normalize afterwards - the dangling ':' / double space where
+        # the path stood would otherwise defeat the exact-substring branch.
+        # (The regex also eats URL tails and fractions like 3/8: acceptable
+        # noise for matching; on a fully-eaten error fall back to the raw form.)
+        stripped = _norm(re.sub(r"(?:[A-Za-z]:)?[/\\][^\s'\"]+", " ", err))
+        if stripped:
+            err = stripped
         etoks = set(re.findall(r"[a-z0-9']{3,}", err))
         for p in (rec.get("tuatea") or {}).get("pitfalls") or []:
             pt = _norm(p.get("text") if isinstance(p, dict) else p).lower()

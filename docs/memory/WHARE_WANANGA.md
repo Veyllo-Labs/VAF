@@ -244,6 +244,14 @@ loop), hard fail-safe. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
 
+The reactive lane covers BOTH failure paths: synchronous tool errors (above) and **asynchronous
+sub-agent failures**, which never produce an error-shaped tool result (the tool returned only the
+"TASK DELEGATED" marker; the real error arrives later via the IPC drain). Both drains - the
+runner/chat drain (`Agent._process_subagent_result`) and the CLI TUI drain (`vaf/cli/cmd/run.py`) -
+attach the failed tool's know-how to their existing failure message via the shared
+`runtime.async_failure_hint` (content extension only: no extra history message, fail-safe before
+`consume_result`, novel errors still feed `maybe_relearn`). Log marker: `[WW-REACTIVE-ASYNC]`.
+
 Unlike the A-track, the reactive lane runs **relaxed** (`allow_unverified=True`): a record that
 fails the quality gate (declare-mode, stale, draft) is still delivered, prefixed with an explicit
 `UNVERIFIED - <reason>` tag. Rationale (blue378604 incident): the call has ALREADY failed, so a

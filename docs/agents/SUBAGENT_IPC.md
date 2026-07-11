@@ -947,6 +947,18 @@ The Sub-Agent terminal **automatically closes after 5 seconds** when the task is
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+The drained failure message carries more than the raw error: both drains
+(`Agent._process_subagent_result` and the CLI TUI drain in `vaf/cli/cmd/run.py`,
+which consumes results before the runner drain in `vaf run` mode) append the
+original task description (coerced to `str` at the boundary - persisted records
+can carry `None`) and the failed tool's learned Whare Wananga know-how via the
+shared `runtime.async_failure_hint` (relaxed gate, `UNVERIFIED`-tagged for
+gate-failing records; novel errors feed the background re-learn). This is the
+reactive know-how lane for ASYNC failures, which never produce an error-shaped
+tool result - see `docs/memory/WHARE_WANANGA.md` (Delivery). The lookup is
+hard fail-safe and runs before `consume_result`, so a Whare Wananga error can
+never break exactly-once delivery.
+
 ---
 
 ## Configuration

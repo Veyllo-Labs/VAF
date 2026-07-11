@@ -223,12 +223,26 @@ def _check_subagent_results(tui, agent):
                 if paused_wf:
                     # Remove the paused workflow - it failed
                     ipc.remove_paused_workflow(paused_wf.workflow_id)
-                
+
+                # WW B-track for the ASYNC lane: this CLI TUI drain consumes results
+                # BEFORE the runner drain ever sees them, so it must attach the failed
+                # tool's know-how itself (same shared helper as
+                # Agent._process_subagent_result; fail-safe).
+                _kh_block = ""
+                try:
+                    from vaf.whare_wananga.runtime import async_failure_hint
+                    _kh = async_failure_hint(agent, task.agent_type, str(task.error or ""))
+                    if _kh:
+                        _kh_block = f"\n{_kh}"
+                except Exception:
+                    _kh_block = ""
+
                 agent.history.append({
                     "role": "system",
                     "content": f"**Sub-Agent Error [{task.task_id}]** ({task.agent_type}):\n{task.error}"
+                               + _kh_block
                 })
-                
+
                 # Add to return list so main agent can comment on failure
                 found_results_text.append(f"Sub-Agent '{task.agent_type}' FAILED:\n{task.error}")
                 

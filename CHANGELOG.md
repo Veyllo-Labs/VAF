@@ -25,6 +25,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **Sub-agent failures now carry the failed tool's learned know-how.** When a delegated
+  sub-agent (coder, research, document, browser) failed, the error arrived later via the
+  result drain as a bare message - the reactive know-how lane never fired because the
+  tool call itself had only returned a "task delegated" marker. Both drains (chat/runner
+  and the `vaf run` terminal) now attach the tool's learned pitfalls and procedure to the
+  failure message, include the original task for context, and feed novel errors into
+  background re-learning. The pitfall matcher also strips filesystem paths before
+  matching, so path-heavy errors ("File exists: /long/path/...") can match stored
+  pitfalls.
 - **Learned tool know-how no longer rots silently when it fails the quality gate.** The
   Whare Wananga delivery gate (confirmed + challenge passed + actually probed) silenced
   18 of 67 learned records completely - including ones whose stored pitfalls held exactly

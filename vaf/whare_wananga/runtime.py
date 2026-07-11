@@ -102,6 +102,34 @@ def _extract_json(text: str):
         return None
 
 
+def async_failure_hint(agent, tool: str, error: str):
+    """B-track know-how for an ASYNC sub-agent failure (IPC drain lane), or None.
+
+    Sub-agent failures never trigger the sync reactive lane: the tool result was
+    only the "[!] TASK DELEGATED" marker, and the real error arrives later via
+    the runner/CLI drain (blue378604 audit). Both drains call this instead:
+    returns the failed tool's know-how (relaxed gate, tagged UNVERIFIED when the
+    record is gate-failing) and triggers the background re-learn for novel
+    errors EVEN when no deliverable know-how exists (a confirmed record whose
+    baskets yield no blocks must still learn from the surprise). Shared by
+    Agent._process_subagent_result and the CLI TUI drain (vaf/cli/cmd/run.py) so
+    the two failure messages cannot drift apart. Fail-safe: never raises, never
+    blocks (the distil runs in a background thread)."""
+    try:
+        from vaf.whare_wananga.delivery import known_pitfall_hit, tool_knowhow
+        err = str(error or "")
+        known = known_pitfall_hit(tool, err, allow_unverified=True)
+        kh = tool_knowhow(tool, procedure_first=known, allow_unverified=True)
+        if not known:
+            try:
+                maybe_relearn(agent, tool, None, err)
+            except Exception:
+                pass
+        return kh
+    except Exception:
+        return None
+
+
 def maybe_relearn(agent, tool: str, args: Any, error: str) -> None:
     """Maybe spawn a background re-learn from a runtime surprise. Cheap, non-blocking, fail-safe."""
     try:

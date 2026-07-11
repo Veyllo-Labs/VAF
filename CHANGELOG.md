@@ -12,6 +12,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **analyze_image can inspect images from the chat workspace (`image_path`).** The vision
+  tool only accepted user attachments, so an agent that had just produced a chart could
+  not quality-check it and spiraled through header-parsing and OCR detours instead
+  (observed live). It now also takes a path to an image file inside the chat's own
+  workspace - and only there: paths outside the workspace are refused, so the vision
+  model can never be used to describe foreign files.
 - **python_sandbox can deliver the files it produces (`export_files`).** Binary
   artifacts had no scalable path out of the sandbox: the base64-through-context detour
   truncated anything beyond the model's output budget (a ~400KB chart arrived as 2.5KB

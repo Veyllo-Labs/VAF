@@ -37,9 +37,11 @@ class DocumentWriterTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"
     description = """Creates simple structured documents (contracts, letters, messages, templates).
-Supports: Text (.txt), Markdown (.md), Word (.docx).
+Supports ONLY Text (.txt), Markdown (.md), Word (.docx) - other extensions are rejected.
+The content is rendered as a document (headings, paragraphs), NOT written verbatim:
+for raw files (html/svg/code) use write_file with the finished content instead.
 For large/complex documents, use document_agent instead."""
-    
+
     parameters = {
         "type": "object",
         "properties": {
@@ -53,7 +55,7 @@ For large/complex documents, use document_agent instead."""
             },
             "filename": {
                 "type": "string",
-                "description": "Filename with extension (.txt, .md, .docx)"
+                "description": "Filename with extension (.txt, .md, .docx). Other extensions are rejected - use write_file for raw files."
             },
             "format": {
                 "type": "string",
@@ -63,31 +65,59 @@ For large/complex documents, use document_agent instead."""
         },
         "required": ["document_type", "content", "filename"]
     }
-    
+
+    # The ONLY formats this tool can actually produce. Anything else silently
+    # rendered as "text" in the past (a .svg happened to survive, a .html spec
+    # came out as an rst-like text file - blue378604 audit): now rejected with
+    # a redirect to the right tool.
+    _ALLOWED_SUFFIXES = (".txt", ".md", ".docx")
+
     def run(self, **kwargs) -> str:
         document_type = kwargs.get('document_type', 'document')
         content = kwargs.get('content', '')
-        filename = kwargs.get('filename', 'document.txt')
-        format_type = kwargs.get('format', 'text')
-        
+        # Boundary coercion: workflow step JSON bypasses the main agent's schema
+        # validation and may carry a non-string filename - coerce before Path().
+        filename = str(kwargs.get('filename') or 'document.txt')
+        format_type = str(kwargs.get('format') or 'text')
+
         if not content:
-            return "[ERROR] No content provided for document."
-        
+            # "Tool Error:" prefix so the agent's is_err and the workflow engine
+            # score this as a FAILED step (the bare [ERROR] string counted as success).
+            return "Tool Error: no content provided for document."
+
         from vaf.core.platform import Platform
         from vaf.core.session import resolve_agent_output_dir
 
         # Save into the chat's workspace folder when a session exists (visible
         # in the WebUI workspace browser); legacy VAF_Documents otherwise.
         vaf_docs_dir = resolve_agent_output_dir(Platform.documents_dir() / "VAF_Documents")
-        
-        # Auto-detect format from filename
+
         file_path = vaf_docs_dir / Path(filename)
-        if file_path.suffix == '.docx':
+        suffix = file_path.suffix.lower()
+        if not suffix:
+            # No extension: derive it from an explicit format param instead of
+            # blanket .txt (format="word" + bare name used to write DOCX bytes
+            # into a .txt file).
+            _by_format = {"word": ".docx", "markdown": ".md", "text": ".txt"}
+            file_path = file_path.with_suffix(_by_format.get(format_type.lower(), ".txt"))
+            suffix = file_path.suffix
+        if suffix not in self._ALLOWED_SUFFIXES:
+            return (
+                f"Tool Error: document_writer only writes .txt, .md and .docx documents - "
+                f"'{file_path.name}' is not one. For a raw {suffix} file (html/svg/code/...) "
+                "call write_file(path=\"...\", content=\"...\") with the FINISHED file content; "
+                "for a multi-file code project call coding_agent; for large structured "
+                "documents call document_agent."
+            )
+        # The extension is authoritative for the output format (a passed
+        # format="word" with filename "report.txt" used to write DOCX bytes
+        # into the .txt file).
+        if suffix == '.docx':
             format_type = 'word'
-        elif file_path.suffix == '.md':
+        elif suffix == '.md':
             format_type = 'markdown'
-        elif not file_path.suffix:
-            file_path = file_path.with_suffix('.txt')
+        else:
+            format_type = 'text'
         
         try:
             if format_type == 'word':
@@ -97,7 +127,7 @@ For large/complex documents, use document_agent instead."""
             else:
                 result = self._create_text_document(file_path, content, document_type)
             # Open the saved document in the Web UI Document Editor
-            if not result.startswith("[ERROR]"):
+            if not result.startswith(("Tool Error:", "[ERROR]")):
                 try:
                     session_id = os.environ.get("VAF_SESSION_ID")
                     if not session_id:
@@ -114,7 +144,7 @@ For large/complex documents, use document_agent instead."""
                     pass
             return result
         except Exception as e:
-            return f"[ERROR] Failed to create document: {e}"
+            return f"Tool Error: failed to create document: {e}"
     
     def _create_text_document(self, file_path: Path, content: str, doc_type: str) -> str:
         """Create plain text document."""
@@ -130,7 +160,7 @@ For large/complex documents, use document_agent instead."""
 **Format:** Text
 **Size:** {estimate_document_length(model):,} characters
 
-✅ Document saved successfully."""
+Document saved successfully."""
     
     def _create_markdown_document(self, file_path: Path, content: str, doc_type: str) -> str:
         """Create Markdown document."""
@@ -146,7 +176,7 @@ For large/complex documents, use document_agent instead."""
 **Format:** Markdown
 **Size:** {estimate_document_length(model):,} characters
 
-✅ Markdown document saved successfully."""
+Markdown document saved successfully."""
     
     def _create_word_document(self, file_path: Path, content: str, doc_type: str) -> str:
         """Create Word document from the normalized document model."""
@@ -161,15 +191,15 @@ For large/complex documents, use document_agent instead."""
 **Format:** Microsoft Word (.docx)
 **Size:** {estimate_document_length(model):,} characters
 
-✅ Word document saved successfully.
+Word document saved successfully.
    Open with: Microsoft Word, LibreOffice, Google Docs"""
-            
+
         except ImportError:
-            return f"""[ERROR] python-docx not installed.
+            return f"""Tool Error: python-docx not installed.
 
 To create Word documents, run:
     pip install python-docx
 
 Alternative: Save as text (.txt) or Markdown (.md) instead."""
         except Exception as e:
-            return f"[ERROR] Failed to create Word document: {e}"
+            return f"Tool Error: failed to create Word document: {e}"

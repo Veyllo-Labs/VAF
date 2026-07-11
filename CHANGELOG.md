@@ -25,6 +25,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **document_writer no longer silently accepts non-document filenames.** The tool
+  declared .txt/.md/.docx but wrote ANY extension as a rendered "text" document - a raw
+  .svg happened to survive, an .html request came out as a text rendering of the input
+  instead of HTML. Filenames outside .txt/.md/.docx are now rejected with a redirect to
+  the right tool (write_file for raw files, coding_agent for code projects), a missing
+  extension is derived from the format parameter (previously format="word" with a bare
+  name, or with report.txt, wrote Word bytes into a .txt file), and failures return a
+  "Tool Error:" prefix so workflows score them as failed steps instead of successes.
 - **The coding agent no longer treats a target FILE path as its project directory.** A task
   like "save it as /path/chart.html" made the coder use the full file path as the project
   folder: the run crashed with "File exists" when the file was already there, and otherwise

@@ -39,7 +39,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `document_agent` | write | Sub-agent for large structured documents (contracts, reports). |
-| `document_writer` | write | Create simple structured documents (letters, templates). |
+| `document_writer` | write | Create simple structured documents (letters, templates) as `.txt`/`.md`/`.docx` only; other extensions are rejected with a redirect to `write_file`/`coding_agent`. |
 | `document_editor` | read | Open a document in the editor panel for the user. |
 | `document_viewer` | read | Open a document in the viewer panel. |
 | `analyze_image` | read | Take a closer, targeted look at an image the user attached (exact colours, positions, small text, finding an object). Re-runs the vision backend on demand — see the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |

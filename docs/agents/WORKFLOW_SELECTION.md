@@ -184,7 +184,7 @@ create_agent_workflow(
 |------|----------|
 | `coding_agent` | Write/edit code, generate HTML/CSS/JS, structured files, analysis scripts. **Default.** |
 | `research_agent` | Deep research (10+ sources), patent analysis, market studies, technical reports. |
-| `document_writer` | Professional Word/PDF documents (contracts, reports, letters). |
+| `document_writer` | Simple structured documents as .txt/.md/.docx ONLY (contracts, reports, letters); other extensions are rejected. Writes into the chat workspace (the injected `project_path` is ignored). |
 | `librarian_agent` | File system: read/list/search files in directories. |
 | `web_search` | Quick single lookup (news, facts, prices). |
 | `write_file` | Write raw content to a specific path. |
@@ -197,7 +197,7 @@ The table above lists the common ones, but a step can call **any tool the user h
 
 ##### Shared project path (`{workflow_project_path}`)
 
-At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/<uid[:8]>/<session_id>/Patent Workflow/` — same user/chat scoping as coder projects) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step. Relative new-artifact paths in `write_file` (`path`) and `move_file` (`src`/`dst`) steps are resolved against the same directory, so a bare filename like `draft.md` never resolves against the backend process cwd. Explicit absolute or `~`-anchored paths, folder aliases the filesystem tools resolve themselves (`Desktop/…`, `Documents/…`), and relative paths pointing at an existing file (in-place updates) are left untouched. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
+At workflow start the engine creates **one shared directory** for the run (e.g. `VAF_Projects/<uid[:8]>/<session_id>/Patent Workflow/` — same user/chat scoping as coder projects) and injects it automatically as `project_path` for every `coding_agent` and `document_writer` step (`document_writer` currently ignores the injected `project_path` and writes into the session workspace itself). Relative new-artifact paths in `write_file` (`path`) and `move_file` (`src`/`dst`) steps are resolved against the same directory, so a bare filename like `draft.md` never resolves against the backend process cwd. Explicit absolute or `~`-anchored paths, folder aliases the filesystem tools resolve themselves (`Desktop/…`, `Documents/…`), and relative paths pointing at an existing file (in-place updates) are left untouched. All steps therefore write to the same folder — no scattered timestamp-suffixed directories.
 
 The path is also available as `{workflow_project_path}` in step input templates:
 

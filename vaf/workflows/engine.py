@@ -45,6 +45,8 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
     """Route file-producing steps into the shared per-run project directory (in place).
 
     - coding_agent / document_writer get it as project_path (unless the step set one).
+      NOTE: document_writer's run() does not read project_path today - it writes into
+      the session workspace via resolve_agent_output_dir; the injected arg is inert.
     - write_file / move_file relative NEW-artifact paths are resolved against it, so a
       bare filename does not resolve against the backend process cwd (observed live
       2026-07-03: a workflow draft written to the user's home root, where the file
@@ -270,9 +272,10 @@ class WorkflowEngine:
         error = None
 
         # ── Shared Workflow Project Path ───────────────────────────────────────
-        # Generate ONE project directory for the entire workflow run. All coding_agent
-        # and document_writer steps will use it automatically (via auto-inject below)
-        # so each step doesn't create its own scattered directory.
+        # Generate ONE project directory for the entire workflow run. coding_agent
+        # steps use it automatically (via auto-inject below) so each step doesn't
+        # create its own scattered directory. document_writer receives the arg too
+        # but ignores it (its run() writes into the session workspace itself).
         # Also exposed as {workflow_project_path} for use in step templates.
         _workflow_project_path: Optional[str] = None
         if "workflow_project_path" not in outputs:

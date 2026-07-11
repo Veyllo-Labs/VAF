@@ -131,8 +131,12 @@ Output:
 **Format:** Microsoft Word (.docx)
 **Size:** 450 characters
 
-✅ Word document saved successfully.
+Word document saved successfully.
 ```
+
+Note: `document_writer` accepts only `.txt`, `.md` and `.docx` filenames. Any other
+extension (`.html`, `.svg`, code files) is rejected with a redirect to `write_file`
+(raw single files) or `coding_agent` (code projects).
 
 ### Example 2: Complex Contract (document_agent)
 

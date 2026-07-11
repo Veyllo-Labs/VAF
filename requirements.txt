@@ -69,7 +69,7 @@ ruff>=0.1.0  # Fast Python linter and formatter
 # Gotenberg (Docker): optional Office→PDF for Document Viewer; see docs/setup/DOCKER_SERVICES.md
 PyPDF2>=3.0.0  # PDF reading (fallback path for pdf_extract)
 pdfplumber>=0.11.0  # PDF -> markdown (headings + tables); primary path in vaf/core/pdf_extract.py (MIT)
-pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
+pycryptodome>=3.23.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
 pdf2image>=1.16.0  # PDF → images for OCR (scanned PDFs); system: poppler required
 pytesseract>=0.3.10  # OCR for scanned PDFs; system: Tesseract required (optional lang pack "deu" for German)
 python-docx>=1.1.0  # Word document reading

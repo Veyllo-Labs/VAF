@@ -13,6 +13,7 @@ Each `.py` file here defines a `WORKFLOW` dictionary that includes:
 - **analyze_website.py**: Analyzes a website's content and structure.
 - **deep_research.py**: Performs multi-query topic investigation.
 - **research_and_code.py**: Research + code generation pipeline.
+- **youtube_summary.py**: Summarizes a YouTube video from its captions (yt-dlp in the sandbox, honest no-subs/rate-limit handling, validated summary step).
 - **research_and_document.py**: Research + document creation pipeline.
 - **code_review.py**: Analyzes and suggests improvements for code.
 - **generate_docs.py**: Creates project documentation.

@@ -217,6 +217,7 @@ To increase match probability:
 Check the existing workflows in `workflows/` for examples:
 - `create_website.py` - Multi-file web project
 - `research_and_code.py` - Web search then code generation
+- `youtube_summary.py` - Summarize a YouTube video from its captions (sandbox yt-dlp, no video download)
 - `research_and_document.py` - Research + document creation
 - `analyze_website.py` - Fetch and analyze web content
 - `code_review.py` - Review code files

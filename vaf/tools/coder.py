@@ -3837,7 +3837,7 @@ Complete this task: "{task}"
 <tools>
 - `set_todos(tasks=[...])`: REQUIRED FIRST step - break down the task into specific subtasks.
 - `web_search(query)`: Search web for docs, examples, or research BEFORE planning (optional).
-- `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code.
+- `write_file(path, content)`: Create/update files - YOU MUST CALL THIS to actually create code. For BINARY deliverables (png/jpg/pdf) render in `python_sandbox`, print base64, then `write_file(path, content_base64=...)` - never write script source into an image-named file.
 - `read_file(path)`: Read existing files.
 - `codesearch(query, search_type?)`: Locate code fast — definitions/usages/patterns (search_type: text|regex|symbol). On an existing/large project, FIND where things are with this, then read the whole file, instead of reading many files blindly.
 - `run_tests(command?)`: Run the project's tests in the sandbox and get the REAL result. After writing tests, CALL THIS to verify - never claim tests pass without running them.
@@ -4252,7 +4252,7 @@ project_directory: {base_dir}
 <tools>
 - `read_file(path)` - Read file contents
 - `list_files(path)` - List directory contents
-- `write_file(path, content)` - Create/modify files with actual code
+- `write_file(path, content)` - Create/modify files with actual code (binary via content_base64: sandbox-render, print base64)
 - `web_search(query)` - Search web for docs, examples, solutions
 - `task_done(summary)` - Mark task complete and move to next
 - `update_codex(title, content)` - Save important patterns/conventions
@@ -9025,9 +9025,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     "⛔ BLOCKED: python_sandbox cannot write to project files.\n\n"
                                     "Use write_file(path='...', content='...') to write/update project files.\n"
                                     "Use read_file(path='...') to read project files.\n"
+                                    "For BINARY deliverables (png/jpg/pdf charts, images): render them in the "
+                                    "sandbox to /tmp, print the file as base64 "
+                                    "(base64.b64encode(open('/tmp/x.png','rb').read()).decode()), then call "
+                                    "write_file(path='<name>.png', content_base64='<that base64>') — never write "
+                                    "script source into a .png-named file.\n"
                                     "To RUN THE PROJECT'S TESTS, call run_tests() — it runs pytest against the "
                                     "real project files in the sandbox and returns the actual pass/fail result.\n"
-                                    "python_sandbox is only for pure computation (math, algorithms, string processing)."
+                                    "python_sandbox is otherwise for pure computation (math, algorithms, string processing)."
                                 )
                                 history.append({"role": "tool", "tool_call_id": tc['id'], "content": result})
                                 _log_to_file(f"[GUARD] python_sandbox blocked (project file I/O detected)")

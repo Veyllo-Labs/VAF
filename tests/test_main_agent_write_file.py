@@ -217,6 +217,32 @@ def test_explicit_empty_content_still_writes_empty_file(fake_home):
     assert (ws / "empty.txt").read_bytes() == b""
 
 
+def test_write_outside_workspace_carries_ui_visibility_note(fake_home):
+    # Live case (red543900): the deliverable was copied to the VAF_Projects ROOT,
+    # invisible to the UI file browser / LAN clients. Absolute writes outside the
+    # injected workspace stay ALLOWED (admin freedom) but must say so.
+    ws = fake_home / "Documents" / "VAF_Projects" / "sess1"
+    ws.mkdir(parents=True)
+    outside = fake_home / "Documents" / "VAF_Projects" / "root_level.png"
+    out = WriteFileTool().run(path=str(outside), content="x", _session_workspace=str(ws))
+    assert "successfully" in out.lower(), out
+    assert "OUTSIDE the chat workspace" in out, out
+
+
+def test_write_inside_workspace_has_no_note(fake_home):
+    ws = fake_home / "Documents" / "VAF_Projects" / "sess1"
+    ws.mkdir(parents=True)
+    out = WriteFileTool().run(path="inside.txt", content="x", _session_workspace=str(ws))
+    assert "OUTSIDE the chat workspace" not in out, out
+
+
+def test_unscoped_writes_have_no_note(fake_home):
+    # Direct consumers (coder/engine) inject no workspace - no note, byte-identical output.
+    (fake_home / "Documents").mkdir(exist_ok=True)
+    out = WriteFileTool().run(path=str(fake_home / "Documents" / "plain.txt"), content="x")
+    assert "OUTSIDE the chat workspace" not in out, out
+
+
 def test_sandbox_redirect_mentions_binary_lane():
     msg = PythonSandboxTool._blocked_persistence_write(
         "plt.savefig('/home/u/Documents/chart.png')"

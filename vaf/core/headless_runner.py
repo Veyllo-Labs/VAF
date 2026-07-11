@@ -1367,6 +1367,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             proj_note = (
                                 f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"
                                 f"[ACTIVE PROJECT] Most recently created/edited: {_edit_path}\n"
+                                f"Final deliverables belong IN the session workspace - it is the ONLY folder "
+                                f"the user's UI file browser shows (remote/LAN clients cannot browse anywhere "
+                                f"else). When the user says 'Projekte-Ordner' / 'projects folder', they mean "
+                                f"THIS workspace, never the VAF_Projects root. write_file with a relative path "
+                                f"lands here automatically; move artifacts created via shell commands here.\n"
                                 f'To edit or modify: coding_agent(task="<your task>", project_path="{_edit_path}")\n\n'
                             )
                             effective_input = proj_note + effective_input

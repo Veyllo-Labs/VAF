@@ -271,6 +271,12 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 - ❌ "What's the weather today?" → web_search (NOT research_agent!)
 - ❌ "Save this diagram as chart.svg" → write_file (NOT coding_agent!)
 
+### Where files belong:
+Save deliverables with RELATIVE paths - they land in the chat's session workspace,
+the ONLY folder the user's UI file browser shows (remote clients cannot browse
+anywhere else). Never place final outputs in the VAF_Projects root or other
+absolute locations unless the user names an explicit absolute path.
+
 Sub-agents run asynchronously - results arrive later
 - Don't guess sub-agent results - wait for them
 """,

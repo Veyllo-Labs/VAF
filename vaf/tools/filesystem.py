@@ -885,9 +885,29 @@ class WriteFileTool(BaseTool):
                                     )
                             except Exception:
                                 pass
+                        # Main-agent calls (workspace injected): flag writes that land
+                        # OUTSIDE the chat workspace in the same turn - the UI file
+                        # browser only shows the workspace, so the model can correct
+                        # itself before telling the user "the file is ready" (live
+                        # case: deliverable copied to the VAF_Projects root, invisible
+                        # to LAN clients). Informational only - explicit absolute
+                        # targets stay allowed for the admin.
+                        _ws_note = ""
+                        try:
+                            if _ws:
+                                _res_r = Path(res).resolve()
+                                _ws_r = Path(str(_ws)).resolve()
+                                if not (_res_r == _ws_r or _res_r.is_relative_to(_ws_r)):
+                                    _ws_note = (
+                                        " (note: this is OUTSIDE the chat workspace and will "
+                                        "NOT appear in the user's UI file browser - use a "
+                                        "relative path to save into the workspace)"
+                                    )
+                        except Exception:
+                            _ws_note = ""
                         if used_fallback:
-                            return f"File written successfully to {res} (Desktop not writable, saved to Documents instead)"
-                        return f"File written successfully to {res}"
+                            return f"File written successfully to {res} (Desktop not writable, saved to Documents instead){_ws_note}"
+                        return f"File written successfully to {res}{_ws_note}"
                     return f"⚠️ File written but size verification failed: {res}"
                         
                 except Exception as e:

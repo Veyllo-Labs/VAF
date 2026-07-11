@@ -25,6 +25,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **Deliverables are steered into the chat workspace instead of scattering across the
+  filesystem.** A finished artifact could end up in the VAF_Projects root, where the UI
+  file browser (the only file access remote/LAN clients have) never shows it. The
+  session-workspace context now states that final outputs belong in the workspace,
+  write_file flags successful writes that land outside it in the same turn, the coder
+  is taught the binary lane (render in the sandbox, save via content_base64) instead of
+  writing script source into image-named files, and the built-in "Research & Code"
+  workflow declares that it produces text code and cannot emit binary files.
 - **The machine owner is no longer locked out of write_file.** The per-user write jail
   treated only an EMPTY user scope as admin, but a logged-in owner session carries the
   admin's real UUID - the owner got "Access denied: outside your own data" on their own

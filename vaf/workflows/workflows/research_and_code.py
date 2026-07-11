@@ -9,7 +9,12 @@ Search the web for information, then generate code based on findings.
 
 WORKFLOW = {
     "name": "Research & Code",
-    "description": "Search the web for information, then generate code based on findings",
+    "description": (
+        "Search the web for information, then generate a CODE file (text source) based "
+        "on findings. Text code only - NOT for images or other binary outputs (a .png "
+        "filename would receive script source; render images via python_sandbox + "
+        "write_file content_base64 instead)"
+    ),
     "triggers": [
         "recherchiere und erstelle code",
         "research and create code",
@@ -27,7 +32,11 @@ WORKFLOW = {
     ],
     "variables": {
         "query": "What to research",
-        "filename": "Output filename (optional, default: output.py)",
+        "filename": (
+            "Output CODE filename (optional, default: output.py). Must be a text/code "
+            "file (.py/.js/...) - this workflow writes source text and cannot produce "
+            "binary files such as images."
+        ),
     },
     "defaults": {
         "filename": "output.py",

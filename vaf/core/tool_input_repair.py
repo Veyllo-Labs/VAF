@@ -47,10 +47,16 @@ def _localize(err) -> str:
         # err.message reads e.g. "'attachment_paths' is a required property"
         return err.message
     path = ".".join(str(p) for p in err.absolute_path)
-    expected = err.schema.get("type") if isinstance(err.schema, dict) else None
-    if expected and path:
-        return f"field '{path}' expects {expected}, got {type(err.instance).__name__}"
-    return err.message
+    # The expects/got wording ONLY fits actual type failures. Rendering every
+    # field error this way turned e.g. an enum violation on a valid string into
+    # the nonsense "expects string, got str" (live: update_working_memory
+    # tasks.0.status) - the model cannot repair from that. Non-type failures get
+    # jsonschema's own message ("'x' is not one of ['pending', 'done']").
+    if err.validator == "type" and path:
+        expected = err.schema.get("type") if isinstance(err.schema, dict) else None
+        if expected:
+            return f"field '{path}' expects {expected}, got {type(err.instance).__name__}"
+    return f"field '{path}': {err.message}" if path else err.message
 
 
 def repair_tool_input(schema: Any, args: Any):

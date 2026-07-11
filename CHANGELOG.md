@@ -25,6 +25,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **The machine owner is no longer locked out of write_file.** The per-user write jail
+  treated only an EMPTY user scope as admin, but a logged-in owner session carries the
+  admin's real UUID - the owner got "Access denied: outside your own data" on their own
+  VAF_Projects folder (observed live). Admin detection now mirrors the librarian jail:
+  no scope OR the configured local_admin_scope_id means full access.
+- **write_file can now save binary files.** Rendering an image had no supported path:
+  write_file only took text, so a sandbox-rendered PNG had to detour through confirmed
+  host shell commands (including a host pip install). write_file now accepts
+  content_base64 for binary data - render in python_sandbox, print the file as base64,
+  save it with write_file; the sandbox's persistence guard message documents the lane.
+- **Tool argument errors no longer misreport enum violations as type errors.** A valid
+  string that violated an enum (e.g. a task status) was reported as "expects string,
+  got str", which a model cannot act on; non-type failures now surface jsonschema's own
+  message ("'x' is not one of [...]"), and the reactive know-how lane also recognizes
+  "[ERROR]"/"Access denied" shaped failures.
 - **Sub-agent failures now carry the failed tool's learned know-how.** When a delegated
   sub-agent (coder, research, document, browser) failed, the error arrived later via the
   result drain as a bare message - the reactive know-how lane never fired because the

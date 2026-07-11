@@ -8433,7 +8433,13 @@ class Agent:
                     #    fail-safe -- must never break the tool loop. ──
                     try:
                         _rs = (result_str or "").strip().lower()
-                        if _rs.startswith(("error", "failed", "tool error", "security error", "exception", "❌")) \
+                        # "[error]" and "access denied" are real failure shapes observed
+                        # live (sandbox tracebacks, filesystem jail denials) that the
+                        # original prefix set missed - the retry ran uninformed.
+                        # Deliberately NOT matched: "blocked"/"[security]" guard messages,
+                        # which already carry their own instructions.
+                        if _rs.startswith(("error", "failed", "tool error", "security error",
+                                           "exception", "❌", "[error]", "access denied")) \
                                 and function_name not in _ww_reactive_injected:
                             from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
                             # allow_unverified: the call ALREADY failed, so a tagged hint from a

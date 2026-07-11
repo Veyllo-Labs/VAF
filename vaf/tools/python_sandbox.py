@@ -340,8 +340,11 @@ class PythonSandboxTool(BaseTool):
             "vanishes when the run ends, even though a print(\"Saved: ...\") looks successful. "
             "That is why such 'saved' files never appear in the workspace.\n\n"
             "To SAVE a file to the chat workspace, call write_file(path=\"<name>\", content=\"...\") "
-            "— it writes to the real workspace and shows up in the file browser. Use python_sandbox "
-            "only for computation and scratch files (/tmp, /workspace)."
+            "— it writes to the real workspace and shows up in the file browser.\n"
+            "For BINARY artifacts (png/jpg/pdf): render them HERE in the sandbox, print the file "
+            "as base64 (e.g. base64.b64encode(open('/tmp/x.png','rb').read()).decode()), then call "
+            "write_file(path=\"<name>.png\", content_base64=\"<that base64>\"). "
+            "Use python_sandbox only for computation and scratch files (/tmp, /workspace)."
         )
 
     def run(self, **kwargs) -> str:

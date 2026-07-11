@@ -605,22 +605,26 @@ class WriteFileTool(BaseTool):
     description = (
         "Writes content to a file (creates or overwrites). Use for saving any single-file "
         "artifact the content of which you already have (html, svg, txt, code, ...). "
-        "A relative path lands in the current chat workspace; an absolute or ~ path is "
-        "honored (VAF's own directory and system locations are protected). "
+        "For BINARY files (png, jpg, pdf, ...) pass base64 data via content_base64 instead "
+        "of content - e.g. render an image in python_sandbox, print it as base64, then "
+        "save it here. A relative path lands in the current chat workspace; an absolute "
+        "or ~ path is honored (VAF's own directory and system locations are protected). "
         "For multi-file code projects use coding_agent instead."
     )
     input_examples = [
         {"path": "chart.svg", "content": "<svg xmlns=\"http://www.w3.org/2000/svg\">...</svg>"},
         {"path": "report/summary.md", "content": "# Summary\n..."},
+        {"path": "diagram.png", "content_base64": "iVBORw0KGgoAAAANSUhEUgAA..."},
     ]
 
     parameters = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
-            "content": {"type": "string"}
+            "content": {"type": "string", "description": "Text content (UTF-8). Use content_base64 for binary files."},
+            "content_base64": {"type": "string", "description": "Base64-encoded binary content (png/jpg/pdf/...). Mutually exclusive with content."}
         },
-        "required": ["path", "content"]
+        "required": ["path"]
     }
 
     def run(self, **kwargs) -> str:
@@ -632,6 +636,18 @@ class WriteFileTool(BaseTool):
         # and run the body unchanged.
         _jail_token = None
         _scope = kwargs.pop("user_scope_id", None)
+        if _scope:
+            # Librarian semantics (librarian.py _compute_jail): the LOCAL ADMIN is
+            # "no scope OR the configured local-admin scope". A logged-in owner
+            # session carries the admin's real UUID, not None - without this
+            # comparison the machine owner got jailed out of their own
+            # VAF_Projects root (live regression, acceptance test green080979).
+            try:
+                from vaf.core.config import get_local_admin_scope_id
+                if str(_scope) == str(get_local_admin_scope_id() or ""):
+                    _scope = None
+            except Exception:
+                pass
         if _scope:
             try:
                 from vaf.core.platform import Platform as _PlatJail
@@ -654,6 +670,24 @@ class WriteFileTool(BaseTool):
     def _run_write(self, **kwargs) -> str:
         path = kwargs.get('path', '')
         content = kwargs.get('content', '')
+        # Binary lane: content_base64 decodes to raw bytes (png/jpg/pdf/... - the
+        # sandbox can render and print base64, but a str content cannot carry
+        # binary). Exactly one of content / content_base64 must be provided;
+        # explicit content="" (create an empty file) stays valid.
+        _b64 = kwargs.get('content_base64') or ''
+        if _b64:
+            if (content or '') != '':
+                return "Tool Error: pass either content OR content_base64, not both."
+            try:
+                import base64 as _b64mod
+                import binascii as _binascii
+                _data = _b64mod.b64decode(_b64, validate=True)
+            except (_binascii.Error, ValueError):
+                return "Tool Error: content_base64 is not valid base64 data."
+        elif 'content' not in kwargs or kwargs.get('content') is None:
+            return "Tool Error: provide content (text) or content_base64 (binary)."
+        else:
+            _data = (content or "").encode("utf-8")
         # Main-agent calls inject the chat workspace: a relative path ("chart.svg")
         # resolves there instead of against the process cwd (which is the protected
         # VAF root when the backend runs from the repo, so it would be denied).
@@ -755,8 +789,10 @@ class WriteFileTool(BaseTool):
                 
                 try:
                     # Write to temp file
-                    # Write bytes to avoid platform newline translation breaking size verification.
-                    data = (content or "").encode("utf-8")
+                    # Bytes were prepared above (text encoded / base64 decoded);
+                    # writing bytes avoids platform newline translation breaking
+                    # the size verification.
+                    data = _data
                     with os.fdopen(temp_fd, "wb") as f:
                         f.write(data)
                         f.flush()  # Ensure data is written

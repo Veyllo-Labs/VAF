@@ -104,3 +104,37 @@ def test_send_mail_string_attachment_is_wrapped_not_dropped():
         schema, {"to": "a@b.c", "subject": "s", "body": "b", "attachment_paths": "/x.pdf"}
     )
     assert out["attachment_paths"] == ["/x.pdf"]
+
+
+def test_enum_violation_not_rendered_as_type_mismatch():
+    # Live bug (session green080979): tasks.0.status carried a VALID string that
+    # violated an enum, but _localize rendered every field error with the type
+    # wording -> "expects string, got str", which the model cannot repair from.
+    schema = {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["pending", "done"]},
+                    },
+                },
+            },
+        },
+    }
+    _out, _applied, errors = repair_tool_input(schema, {"tasks": [{"status": "in-progress"}]})
+    assert errors, "enum violation must surface an error"
+    assert "got str" not in errors[0], errors
+    assert "is not one of" in errors[0], errors
+    assert "tasks.0.status" in errors[0], errors
+
+
+def test_real_type_mismatch_keeps_expects_got_wording():
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+    }
+    _out, _applied, errors = repair_tool_input(schema, {"count": "many"})
+    assert errors and "expects integer, got str" in errors[0], errors

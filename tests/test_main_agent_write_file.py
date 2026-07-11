@@ -155,6 +155,77 @@ def test_admin_scope_none_is_not_jailed(fake_home):
     assert target.read_text() == "x"
 
 
+def test_local_admin_scope_uuid_is_not_jailed(fake_home, monkeypatch):
+    # Live regression (acceptance test green080979): the logged-in OWNER session
+    # carries the admin's real UUID, not None - it must not be jailed out of the
+    # VAF_Projects root (librarian _compute_jail semantics: no scope OR the
+    # local-admin scope = admin).
+    import vaf.core.config as config_mod
+    admin_uuid = "a74e6e21-3516-4305-85a0-ecaef07111e8"
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: admin_uuid)
+    target = fake_home / "Documents" / "VAF_Projects" / "flat_root.py"
+    out = WriteFileTool().run(path=str(target), content="print(1)", user_scope_id=admin_uuid)
+    assert "successfully" in out.lower(), out
+    assert target.read_text() == "print(1)"
+
+
+def test_non_admin_scope_still_jailed(fake_home, monkeypatch):
+    import vaf.core.config as config_mod
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id",
+                        lambda: "a74e6e21-3516-4305-85a0-ecaef07111e8")
+    target = fake_home / "Documents" / "VAF_Projects" / "flat_root.py"
+    out = WriteFileTool().run(path=str(target), content="x",
+                              user_scope_id="deadbeef-0000-0000-0000-000000000000")
+    assert "outside your own data" in out.lower(), out
+    assert not target.exists()
+
+
+# ── Binary lane (content_base64) ─────────────────────────────────────────────
+
+def test_base64_binary_roundtrip(fake_home):
+    import base64
+    png_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    ws = fake_home / "Documents" / "VAF_Projects" / "sess1"
+    ws.mkdir(parents=True)
+    out = WriteFileTool().run(path="diagram.png",
+                              content_base64=base64.b64encode(png_magic).decode(),
+                              _session_workspace=str(ws))
+    assert "successfully" in out.lower(), out
+    assert (ws / "diagram.png").read_bytes() == png_magic
+
+
+def test_base64_invalid_is_tool_error(fake_home):
+    out = WriteFileTool().run(path="x.png", content_base64="not!!valid@@base64")
+    assert out.startswith("Tool Error:"), out
+
+
+def test_base64_and_content_together_rejected(fake_home):
+    out = WriteFileTool().run(path="x.png", content="text", content_base64="aGk=")
+    assert out.startswith("Tool Error:"), out
+
+
+def test_neither_content_nor_base64_rejected(fake_home):
+    out = WriteFileTool().run(path="x.txt")
+    assert out.startswith("Tool Error:"), out
+
+
+def test_explicit_empty_content_still_writes_empty_file(fake_home):
+    ws = fake_home / "Documents" / "VAF_Projects" / "sess1"
+    ws.mkdir(parents=True)
+    out = WriteFileTool().run(path="empty.txt", content="", _session_workspace=str(ws))
+    assert "successfully" in out.lower(), out
+    assert (ws / "empty.txt").read_bytes() == b""
+
+
+def test_sandbox_redirect_mentions_binary_lane():
+    msg = PythonSandboxTool._blocked_persistence_write(
+        "plt.savefig('/home/u/Documents/chart.png')"
+    )
+    assert msg and "content_base64" in msg, (
+        "sandbox redirect must document the binary lane (render + base64 + write_file)"
+    )
+
+
 # ── Emit-site session scoping ────────────────────────────────────────────────
 
 def test_emits_use_injected_session_id(fake_home, monkeypatch):

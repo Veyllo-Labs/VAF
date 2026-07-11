@@ -43,6 +43,34 @@ Implements a "Mini-IDE" using `rich.live`.
 
 ## 2. `CodingAgentTool` Class Structure
 
+### Explicit-path resolution in `run()` (before `_determine_base_dir`)
+
+`run()` resolves the project directory in this order (normal mode):
+
+1.  **`project_path` kwarg** — expanded/absolutized first. If it names a FILE (see the
+    file-vs-directory rule below), it is split into directory + target-file hint and the
+    directory becomes the candidate. Unsafe candidates are ignored (fall through to 2-4).
+2.  **Explicit path in the task text** — `_extract_explicit_task_path()` matches phrase forms
+    ("im Verzeichnis /x", "in directory /x", "path: /x") and bare absolute paths
+    (`/home|/tmp|/mnt|/root/...` or Windows drive paths). Dots are part of the match (filenames
+    keep their extension) and quotes end it. The match is split file-vs-directory the same way;
+    the unsafe guard judges the DIRECTORY part, so a file directly in `$HOME` falls back to
+    `VAF_Projects` while the filename hint survives.
+3.  **Session's `last_project_path`** (`_get_session_project_path`) when the task looks like an
+    edit request.
+4.  **`_determine_base_dir`** (below) as the fallback.
+
+**File-vs-directory rule (`_looks_like_file_path` / `_split_explicit_path`):** an existing
+filesystem entry decides directly (a directory named like a file stays a directory — the
+continue-project case). A path that does not exist yet counts as a file only when its basename
+has a known file extension (`_FILE_TARGET_EXTENSIONS`, curated: `project.v2` stays a directory).
+A file target is split into `(dirname, basename)`; the basename becomes the **target-file hint**,
+injected as a `target_file:` line into the planner and per-task system prompts so the model
+writes exactly that file. This prevents two real incidents: `os.makedirs` on an existing file
+crashed the run, and a nonexistent file path became a DIRECTORY named like the file with the
+deliverable nested inside. `os.makedirs` failures (`FileExistsError` / `NotADirectoryError`)
+return an actionable error string instead of a traceback.
+
 ### `_determine_base_dir(task, provided_path)` (The Smart Switch)
 *   **Safety guard:** `is_unsafe_project_dir(path)` rejects the user's home directory itself, the standard user dirs (Documents, Desktop, ... — their subdirectories are fine), `~/.vaf` and the VAF program tree as work directories. Applied to every path source below; unsafe paths fall through to `_generate_project_directory`. Sub-agent terminals spawn with CWD=$HOME, where `~/.vaf` (and a stray `~/.git`) would otherwise make home look like a project root.
 *   **Logic:** Decides whether to work in the current directory or create a new one.
@@ -67,7 +95,7 @@ Implements a "Mini-IDE" using `rich.live`.
 
 ### `_ensure_git_repo(base_dir)`
 *   **Logic:**
-    1.  Refuses unsafe locations (`is_unsafe_project_dir`) — a `.git` in e.g. the home directory would make it look like a project root forever after.
+    1.  Refuses unsafe locations (`is_unsafe_project_dir`) — a `.git` in e.g. the home directory would make it look like a project root forever after. Also refuses any `base_dir` that is not an existing directory (a file path would raise `NotADirectoryError` inside subprocess, which the git error handling does not catch).
     2.  Checks for `.git` folder.
     3.  If missing, runs `git init`.
     4.  Writes a default `.gitignore` (Python/Node/IDE patterns).

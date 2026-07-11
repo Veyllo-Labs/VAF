@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The coding agent no longer treats a target FILE path as its project directory.** A task
+  like "save it as /path/chart.html" made the coder use the full file path as the project
+  folder: the run crashed with "File exists" when the file was already there, and otherwise
+  created a DIRECTORY named `chart.html` with the real file nested inside it. File-shaped
+  paths (existing files, or unknown paths with a known file extension) are now split into
+  project directory + target filename; the filename is passed to the model as the explicit
+  deliverable, the safety guard judges the directory part, and a blocked project directory
+  now returns an actionable error instead of a crash. The path extraction also keeps file
+  extensions intact (previously truncated after "path:"/"in directory" phrases and in
+  Windows paths) and no longer swallows closing quotes around quoted paths.
 - **The installer no longer fails on a too-new Python (e.g. 3.14).** Both installers accepted
   any Python at or above 3.10, so a machine whose newest Python was 3.14 built the venv with an
   unsupported interpreter and the dependency install crashed while compiling packages that have

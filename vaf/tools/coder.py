@@ -99,6 +99,98 @@ def is_unsafe_project_dir(path: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Explicit-path handling (task text / project_path may name the deliverable FILE)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Extensions that mark a NONEXISTENT path as a file target. An existing path is
+# classified by the filesystem; this list only decides the ambiguous case of a
+# path that does not exist yet. Deliberately curated: names like "project.v2" or
+# "site.backup" must keep resolving to directories.
+_FILE_TARGET_EXTENSIONS = {
+    ".html", ".htm", ".css", ".js", ".mjs", ".ts", ".tsx", ".jsx",
+    ".py", ".ipynb", ".sh", ".ps1", ".bat",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".xml", ".sql",
+    ".md", ".rst", ".txt", ".csv",
+    ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+    ".pdf", ".docx", ".xlsx", ".pptx",
+    ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php",
+}
+
+
+def _path_module_for(path: str):
+    """ntpath for Windows-style paths (drive letter), os.path otherwise - so task
+    text containing C:\\ paths splits correctly even when parsed on a POSIX host."""
+    import ntpath
+    return ntpath if re.match(r"^[A-Za-z]:[\\/]", str(path or "")) else os.path
+
+
+def _looks_like_file_path(path) -> bool:
+    """True if `path` names a FILE target rather than a project directory.
+
+    An existing filesystem entry decides directly (isfile/isdir). A path that
+    does not exist yet counts as a file only when its basename carries a known
+    file extension (_FILE_TARGET_EXTENSIONS) - dot-directories (".vaf") split to
+    ("", ".vaf") in splitext and stay directories.
+    """
+    p = str(path or "").strip()
+    if not p:
+        return False
+    if os.path.isfile(p):
+        return True
+    if os.path.isdir(p):
+        return False
+    mod = _path_module_for(p)
+    ext = mod.splitext(mod.basename(p.rstrip("/\\")))[1].lower()
+    return ext in _FILE_TARGET_EXTENSIONS
+
+
+def _split_explicit_path(path):
+    """Split an explicit path into (project_dir, target_filename).
+
+    A file target yields (dirname, basename) so a FILE path is never used as the
+    project directory: os.makedirs on it crashes when the file exists and creates
+    a directory named like a file when it does not - both were real incidents
+    (coder runs 9db44519 / afb0e5f7). A directory target yields (path, "").
+    """
+    p = str(path or "").strip()
+    if not p or not _looks_like_file_path(p):
+        return p, ""
+    mod = _path_module_for(p)
+    parent, name = mod.dirname(p), mod.basename(p)
+    return (parent or p), name
+
+
+# Phrase forms ("im Verzeichnis /x", "in directory /x", "path: /x"). Dots are
+# part of the match so filenames keep their extension; quotes/commas/parens end
+# it (trailing punctuation is rstripped by the extractor).
+_TASK_PATH_PHRASE_RE = re.compile(
+    r'(?:im\s+Verzeichnis|in\s+directory|in\s+folder|path\s*[:=])\s*([/\\][^\s\n"\',)]+)',
+    re.IGNORECASE,
+)
+# Bare absolute paths: Unix home/tmp/mnt/root or Windows drive paths. Quotes end
+# the match (a quoted path must not drag its closing quote along).
+_TASK_PATH_BARE_RE = re.compile(
+    r'(/(?:home|tmp|mnt|root)/[^\s\n"\']+|[A-Za-z]:\\[^\s\n"\',)]+)'
+)
+
+
+def _extract_explicit_task_path(task):
+    """Extract an explicit absolute path from task text, or None.
+
+    Phrase forms win over bare paths. Returns the raw match rstripped of
+    trailing punctuation; expansion/abspath and the file-vs-directory split are
+    the caller's job.
+    """
+    text = str(task or "")
+    m = _TASK_PATH_PHRASE_RE.search(text)
+    if not m:
+        m = _TASK_PATH_BARE_RE.search(text)
+    if not m:
+        return None
+    return m.group(1).rstrip('.,)/\\') or None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Planning Rules (code-enforced)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2637,6 +2729,10 @@ class CodingAgentTool(BaseTool):
         # there would make them look like project roots forever after.
         if is_unsafe_project_dir(base_dir):
             return
+        # Never git-init a file path or a nonexistent dir: subprocess(cwd=<file>)
+        # raises NotADirectoryError, which the except below does not catch.
+        if not os.path.isdir(base_dir):
+            return
         git_dir = os.path.join(base_dir, '.git')
         if os.path.exists(git_dir):
             return  # Already a git repo
@@ -3182,6 +3278,21 @@ Thumbs.db
         
         # Check if continuing existing project
         project_path = kwargs.get('project_path', '')
+        # The deliverable filename when a passed/extracted path names a FILE, not a
+        # directory. Flows into the system prompts so the model writes exactly this file.
+        _target_file_hint = ""
+        if project_path:
+            # Main agents sometimes pass the deliverable FILE as project_path.
+            # Split it so the DIRNAME becomes the project and the unsafe check
+            # below judges the directory, not the file.
+            _pp_abs = os.path.abspath(os.path.expanduser(str(project_path)))
+            if _looks_like_file_path(_pp_abs):
+                _pp_abs, _target_file_hint = _split_explicit_path(_pp_abs)
+                tui.append_stream(
+                    f"project_path names a file - using its directory as project "
+                    f"(target file: {_target_file_hint})"
+                )
+            project_path = _pp_abs
         if project_path and is_unsafe_project_dir(project_path):
             # Sessions poisoned before the safety guard may still tell the main
             # agent the "project" lives in /home/<user>. Ignore and fall back to
@@ -3190,7 +3301,7 @@ Thumbs.db
             project_path = ''
         if project_path:
             # Continue existing project OR create new one at specific path
-            base_dir = os.path.abspath(os.path.expanduser(project_path))
+            base_dir = project_path  # already expanded + absolute above
             if not os.path.exists(base_dir):
                 try:
                     os.makedirs(base_dir, exist_ok=True)
@@ -3209,29 +3320,38 @@ Thumbs.db
             # then fall back to keyword-based directory generation.
             _explicit_path = None
             try:
-                import re as _re_pb
-                # Match "im Verzeichnis /path", "in directory /path", "in folder /path", etc.
-                _m = _re_pb.search(
-                    r'(?:im\s+Verzeichnis|in\s+directory|in\s+folder|path\s*[:=])\s*([/\\][^\s\n"\'.,)]+)',
-                    task, _re_pb.IGNORECASE
-                )
-                if not _m:
-                    # Bare absolute path (Unix home/tmp/mnt or Windows C:\)
-                    _m = _re_pb.search(r'(/(?:home|tmp|mnt|root)/\S+|C:\\[^\s\n"\'.,)]+)', task)
-                if _m:
-                    _explicit_path = os.path.abspath(
-                        os.path.expanduser(_m.group(1).rstrip('.,)/\\'))
-                    )
-                    # A bare path mentioned in the task may include the filename
-                    # (".../index.html in /home/user") or point to an unsafe dir.
-                    if _explicit_path and is_unsafe_project_dir(_explicit_path):
+                _raw_path = _extract_explicit_task_path(task)
+                if _raw_path:
+                    # A path in the task often names the deliverable FILE
+                    # (".../marktmodell.html"): split so the DIRNAME becomes the
+                    # project dir and the basename survives as the target-file hint.
+                    _dir_part, _hint = _split_explicit_path(_raw_path)
+                    if _hint:
+                        _target_file_hint = _hint
+                    _candidate = os.path.abspath(os.path.expanduser(_dir_part))
+                    if is_unsafe_project_dir(_candidate):
+                        # Unsafe dirname (file directly in $HOME, Documents root, ...):
+                        # fall through to the generated VAF_Projects dir but KEEP the
+                        # filename hint so the deliverable is still the named file.
+                        if _target_file_hint:
+                            tui.append_stream(
+                                f"Path from task points into an unsafe directory - creating "
+                                f"'{_target_file_hint}' in a VAF_Projects folder instead"
+                            )
                         _explicit_path = None
+                    else:
+                        _explicit_path = _candidate
             except Exception:
-                pass
+                _explicit_path = None
 
             if _explicit_path:
                 base_dir = _explicit_path
-                tui.append_stream(f"Using path from task: {base_dir}")
+                if _target_file_hint:
+                    tui.append_stream(
+                        f"Using path from task: {base_dir} (target file: {_target_file_hint})"
+                    )
+                else:
+                    tui.append_stream(f"Using path from task: {base_dir}")
             else:
                 # Check session's last project path before generating a new directory
                 _session_proj = self._get_session_project_path(task)
@@ -3241,7 +3361,17 @@ Thumbs.db
                 else:
                     base_dir = self._determine_base_dir(task)
 
-            os.makedirs(base_dir, exist_ok=True)
+            try:
+                os.makedirs(base_dir, exist_ok=True)
+            except (FileExistsError, NotADirectoryError) as e:
+                # A file is sitting where the project directory should be (or a
+                # path component is a file). Fail with an actionable message
+                # instead of a raw traceback through the sub-agent runner.
+                return (
+                    f"Error: cannot use '{base_dir}' as the project directory - a file "
+                    f"is in the way ({e}). Move or delete that file, or pass an actual "
+                    f"directory via project_path."
+                )
             tui.append_stream(f"Project directory: {os.path.basename(base_dir)}")
         
         time.sleep(0.05)
@@ -3683,13 +3813,21 @@ The following template files exist as a starting point:
         # is unaffected.
         orientation_summary = "" if skip_template else _build_orientation_summary(base_dir)
 
+        # Deliverable-file line for the prompts: set when the task/project_path named
+        # a FILE (split into project dir + filename above). Empty string otherwise, so
+        # the prompts are unchanged for directory-shaped tasks.
+        _target_hint_line = (
+            f"target_file: {_target_file_hint} (the deliverable is exactly this file inside the project directory)\n"
+            if _target_file_hint else ""
+        )
+
         system_prompt = f"""<identity>
 You are a Senior software developer Sub-agent. Your task is to complete coding tasks autonomously and efficiently.
 </identity>
 
 <context>
 project_directory: {base_dir}
-All file paths must be OS-independent (use forward slashes or Path objects).
+{_target_hint_line}All file paths must be OS-independent (use forward slashes or Path objects).
 {orientation_summary}</context>
 
 <goal>
@@ -4104,7 +4242,7 @@ You are a Senior software developer Sub-agent.
 
 <context>
 project_directory: {base_dir}
-All files must be saved inside this directory.
+{_target_hint_line}All files must be saved inside this directory.
 {completed_section}
 {_existing_note}
 {fresh_existing_files_info}

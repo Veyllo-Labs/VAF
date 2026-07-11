@@ -3363,14 +3363,17 @@ Thumbs.db
 
             try:
                 os.makedirs(base_dir, exist_ok=True)
-            except (FileExistsError, NotADirectoryError) as e:
-                # A file is sitting where the project directory should be (or a
-                # path component is a file). Fail with an actionable message
-                # instead of a raw traceback through the sub-agent runner.
+            except OSError as e:
+                # Typically a file sitting where the project directory should be
+                # (FileExistsError; a path COMPONENT being a file surfaces as
+                # NotADirectoryError on POSIX but as different OSError subclasses
+                # on Windows) - catch the whole family and fail with an
+                # actionable message instead of a raw traceback through the
+                # sub-agent runner.
                 return (
-                    f"Error: cannot use '{base_dir}' as the project directory - a file "
-                    f"is in the way ({e}). Move or delete that file, or pass an actual "
-                    f"directory via project_path."
+                    f"Error: cannot use '{base_dir}' as the project directory ({e}). "
+                    f"If a file with that name is in the way, move or delete it, or "
+                    f"pass an actual directory via project_path."
                 )
             tui.append_stream(f"Project directory: {os.path.basename(base_dir)}")
         

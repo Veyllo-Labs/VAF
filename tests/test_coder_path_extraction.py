@@ -78,8 +78,10 @@ def test_split_windows_file_path_on_any_host():
 
 
 def test_split_non_string_is_coerced():
+    # str(Path(...)) yields backslashes on Windows - compare separator-neutrally
+    # (the coercion itself, not the separator style, is under test here).
     d, hint = _split_explicit_path(Path("/nonexistent/dir/page.html"))
-    assert d == "/nonexistent/dir"
+    assert d.replace("\\", "/") == "/nonexistent/dir"
     assert hint == "page.html"
 
 
@@ -152,13 +154,17 @@ def test_ensure_git_repo_refuses_nonexistent_path(tmp_path):
 
 # ── makedirs failure classes used by run()'s graceful fallback ───────────────
 
-def test_makedirs_on_existing_file_raises_expected_types(tmp_path):
+def test_makedirs_on_existing_file_raises_oserror(tmp_path):
+    # run() catches OSError broadly: the file-in-the-way case is FileExistsError
+    # everywhere, but a file as a path COMPONENT maps to different OSError
+    # subclasses per platform (NotADirectoryError on POSIX, varying WinError
+    # mappings on Windows) - the exact subclass is deliberately not pinned.
     blocker = tmp_path / "page.html"
     blocker.write_text("placeholder")
     try:
         os.makedirs(str(blocker), exist_ok=True)
         raised = None
-    except (FileExistsError, NotADirectoryError) as e:
+    except OSError as e:
         raised = e
     assert raised is not None
 
@@ -166,6 +172,6 @@ def test_makedirs_on_existing_file_raises_expected_types(tmp_path):
     try:
         os.makedirs(str(nested), exist_ok=True)
         raised = None
-    except (FileExistsError, NotADirectoryError) as e:
+    except OSError as e:
         raised = e
     assert raised is not None

@@ -12,6 +12,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **python_sandbox can deliver the files it produces (`export_files`).** Binary
+  artifacts had no scalable path out of the sandbox: the base64-through-context detour
+  truncated anything beyond the model's output budget (a ~400KB chart arrived as 2.5KB
+  of corrupt PNG). Code can now write files to relative paths and declare them in
+  `export_files`; they are copied out of the container into the chat workspace after a
+  successful run (before the scratch dir is removed), show up in the UI file browser,
+  and never pass through the model's context. Only sandbox scratch paths can be named;
+  the destination is always the chat's own workspace. Works with both the persistent
+  and the ephemeral sandbox container.
 - **The main agent can now save files directly with `write_file`.** Saving a single
   finished artifact (an SVG, an HTML page, a text file) previously required guessing
   between unrelated tools, and the sandbox's own guidance pointed at `write_file` - a

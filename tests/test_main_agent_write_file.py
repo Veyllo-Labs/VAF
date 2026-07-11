@@ -247,8 +247,8 @@ def test_sandbox_redirect_mentions_binary_lane():
     msg = PythonSandboxTool._blocked_persistence_write(
         "plt.savefig('/home/u/Documents/chart.png')"
     )
-    assert msg and "content_base64" in msg, (
-        "sandbox redirect must document the binary lane (render + base64 + write_file)"
+    assert msg and "export_files" in msg, (
+        "sandbox redirect must document the binary lane (relative path + export_files)"
     )
 
 
@@ -286,7 +286,8 @@ def test_sandbox_redirect_points_at_registered_tool():
     assert msg and "write_file" in msg, "sandbox persistence guard changed shape"
     # Every tool the redirect tells the model to call must exist for the main
     # agent - a redirect to an excluded tool is the dead-signpost bug class.
-    referenced = set(re.findall(r"call (\w+)\(", msg))
+    # Tool references appear as `name(path=...` call examples in the message.
+    referenced = set(re.findall(r"\b(\w+)\(path=", msg))
     assert referenced, "redirect no longer names a concrete tool call"
     excluded = _exclusion_literal()
     for tool in referenced:

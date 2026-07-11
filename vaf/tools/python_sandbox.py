@@ -35,11 +35,13 @@ Works with every backend (OpenAI, Anthropic, Google, local) — no special
 API features required.
 """
 import base64
+import os
 import subprocess
 import logging
 import time
 import uuid
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 from vaf.tools.base import BaseTool
 
@@ -77,8 +79,10 @@ class PythonSandboxTool(BaseTool):
         "Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU). "
         "Use for calculations, data processing, algorithms, and running untrusted code. "
         "The sandbox filesystem is EPHEMERAL and isolated from the host: files you write here "
-        "do NOT persist to the user's workspace and vanish when the run ends. To SAVE a file for "
-        "the user, use write_file(path=..., content=...) instead — never python_sandbox. "
+        "do NOT reach the user by themselves. To DELIVER files (images, PDFs, any artifact "
+        "your code produces), write them to relative paths and list them in export_files - "
+        "they are copied into the chat workspace after the run. For plain text content "
+        "write_file(path=..., content=...) also works. "
         "Set with_vaf_tools=True to call other VAF tools from inside the code via "
         "`import vaf_tools; result = vaf_tools.call('tool_name', {...})` — "
         "only the final print output returns to context (Programmatic Tool Calling). "
@@ -86,8 +90,8 @@ class PythonSandboxTool(BaseTool):
     )
     input_examples = [
         {"code": "print(2 ** 32)"},
+        {"code": "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\nplt.plot([1,2,3])\nplt.savefig('chart.png')\nprint('done')", "packages": ["matplotlib"], "export_files": ["chart.png"]},
         {"code": "import vaf_tools\ndata = vaf_tools.call('web_search', {'query': 'EUR/USD rate'})\nprint(data)", "with_vaf_tools": True},
-        {"code": "import pandas as pd\ndf = pd.DataFrame({'a': [1,2,3]})\nprint(df.describe())", "packages": ["pandas"]},
     ]
     parameters = {
         "type": "object",
@@ -105,6 +109,16 @@ class PythonSandboxTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional: pip packages to install before running (e.g., ['numpy', 'pandas'])"
+            },
+            "export_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Files your code wrote that must be DELIVERED to the user: copied from the "
+                    "sandbox into the chat workspace after a successful run (e.g. ['chart.png']). "
+                    "THE way to persist binary artifacts - never print base64 into context. "
+                    "Relative paths resolve against the run's working directory. Max 5 files."
+                )
             },
             "with_vaf_tools": {
                 "type": "boolean",
@@ -339,13 +353,73 @@ class PythonSandboxTool(BaseTool):
             "host/workspace path (e.g. under VAF_Projects or Documents) does NOT persist — it "
             "vanishes when the run ends, even though a print(\"Saved: ...\") looks successful. "
             "That is why such 'saved' files never appear in the workspace.\n\n"
-            "To SAVE a file to the chat workspace, call write_file(path=\"<name>\", content=\"...\") "
-            "— it writes to the real workspace and shows up in the file browser.\n"
-            "For BINARY artifacts (png/jpg/pdf): render them HERE in the sandbox, print the file "
-            "as base64 (e.g. base64.b64encode(open('/tmp/x.png','rb').read()).decode()), then call "
-            "write_file(path=\"<name>.png\", content_base64=\"<that base64>\"). "
-            "Use python_sandbox only for computation and scratch files (/tmp, /workspace)."
+            "To DELIVER files produced by your code (images, PDFs, any artifact): write them to "
+            "RELATIVE paths and pass export_files=[\"<name>\"] in the SAME python_sandbox call — "
+            "they are copied into the chat workspace after the run. Do NOT print base64 into "
+            "context (large files get truncated and arrive corrupt).\n"
+            "For plain text content you already have, write_file(path=\"<name>\", content=\"...\") "
+            "also works. Use python_sandbox scratch paths (/tmp, /workspace) for intermediates."
         )
+
+    def _export_artifacts(self, export_files, workdir: str, use_persistent: bool,
+                          session_id) -> list:
+        """Copy files the code produced OUT of the container into the chat workspace.
+
+        This is the sanctioned exit for binary artifacts (blue378604 wish item
+        "sandbox_persist"): the base64-through-context lane truncates anything
+        beyond the model's output budget (live incident: a 400KB chart arrived
+        as 2.5KB of corrupt PNG). docker cp runs BEFORE the per-exec workdir is
+        removed. Only scratch paths (/tmp, /workspace) may be named; the
+        DESTINATION is always the chat workspace - the model never chooses a
+        host path. Returns human/model-readable note lines; never raises.
+        """
+        notes = []
+        try:
+            if use_persistent:
+                container = SANDBOX_CONTAINER
+            else:
+                container = getattr(self._ephemeral_sandbox, "container_name", None)
+            if not container:
+                return ["[export failed: no sandbox container available]"]
+            from vaf.core.platform import Platform
+            from vaf.core.session import resolve_agent_output_dir
+            dest_dir = resolve_agent_output_dir(
+                Platform.documents_dir() / "VAF_Projects", session_id=session_id
+            )
+            for raw in list(export_files)[:5]:
+                p = str(raw or "").strip()
+                if not p:
+                    continue
+                cpath = p if p.startswith("/") else f"{workdir}/{p}"
+                if not (cpath.startswith("/tmp/") or cpath.startswith("/workspace/")):
+                    notes.append(f"[export skipped: {p} - only /tmp or /workspace paths can be exported]")
+                    continue
+                base = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(cpath.rstrip("/"))) or "artifact"
+                dest = str(Path(dest_dir) / base)
+                try:
+                    r = subprocess.run(
+                        ["docker", "cp", f"{container}:{cpath}", dest],
+                        capture_output=True, text=True, timeout=60,
+                        **self._get_subprocess_kwargs(),
+                    )
+                except Exception as e:
+                    notes.append(f"[export failed: {p}: {e}]")
+                    continue
+                if r.returncode != 0 or not os.path.isfile(dest):
+                    reason = (r.stderr or "").strip() or "file not found in sandbox"
+                    notes.append(f"[export failed: {p}: {reason[:150]}]")
+                    continue
+                size = os.path.getsize(dest)
+                notes.append(f"Exported to chat workspace: {dest} ({size:,} bytes)")
+                try:
+                    if session_id:
+                        from vaf.core.web_interface import notify_file_created
+                        notify_file_created(session_id, dest)
+                except Exception:
+                    pass
+        except Exception as e:
+            notes.append(f"[export failed: {e}]")
+        return notes
 
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""
@@ -460,6 +534,23 @@ class PythonSandboxTool(BaseTool):
                 logger.debug(f"Executing: {code[:100]}...")
                 exit_code, stdout, stderr = execute_fn(safe_cmd, timeout=timeout)
 
+            # Step 5b: Export declared artifacts BEFORE the workdir is removed -
+            # this is how binary files reach the user (docker cp to the chat
+            # workspace; no base64 through the model's context).
+            export_notes = []
+            _export_files = kwargs.get("export_files") or []
+            if _export_files and exit_code == 0:
+                _sid = kwargs.get("_session_id") or os.environ.get("VAF_SESSION_ID")
+                if not _sid:
+                    try:
+                        from vaf.core.subagent_ipc import get_current_session_id
+                        _sid = get_current_session_id()
+                    except Exception:
+                        _sid = None
+                export_notes = self._export_artifacts(
+                    _export_files, workdir, use_persistent, _sid
+                )
+
             # Step 6: Cleanup workspace
             execute_fn(f"rm -rf {workdir}", timeout=5)
 
@@ -476,6 +567,8 @@ class PythonSandboxTool(BaseTool):
                     result += f"\n[stderr]\n{stderr}"
                 else:
                     result = f"[stderr]\n{stderr}"
+            if export_notes:
+                result = (result.strip() + "\n\n" if result.strip() else "") + "\n".join(export_notes)
 
             return result.strip() or "[OK] Code executed successfully (no output)."
 

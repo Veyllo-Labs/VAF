@@ -74,7 +74,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 |------|------|--------------|
 | `coding_agent` | write | Autonomous code-generation sub-agent. |
 | `create_agent_tool` | system | Create/update a Python tool the agent can use immediately. |
-| `python_sandbox` | write | Run Python in a Docker-isolated sandbox. |
+| `python_sandbox` | write | Run Python in a Docker-isolated sandbox; `export_files` copies produced artifacts (images, PDFs) into the chat workspace after the run. |
 | `python_exec` | dangerous | Run Python on the host (no sandbox) — confirmed. |
 | `run_tests` | read | *(coder-only)* Run the project's tests in the isolated sandbox and return the real pass/fail. |
 | `host_bash` | dangerous | *(main agent)* Run a shell command on the HOST for host/docker tasks. Requires the user's confirmation each time; hard-blocked on remote channels (Telegram/WhatsApp/Discord), local app only. |

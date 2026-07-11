@@ -605,11 +605,12 @@ class WriteFileTool(BaseTool):
     description = (
         "Writes content to a file (creates or overwrites). Use for saving any single-file "
         "artifact the content of which you already have (html, svg, txt, code, ...). "
-        "For BINARY files (png, jpg, pdf, ...) pass base64 data via content_base64 instead "
-        "of content - e.g. render an image in python_sandbox, print it as base64, then "
-        "save it here. A relative path lands in the current chat workspace; an absolute "
-        "or ~ path is honored (VAF's own directory and system locations are protected). "
-        "For multi-file code projects use coding_agent instead."
+        "A relative path lands in the current chat workspace; an absolute or ~ path is "
+        "honored (VAF's own directory and system locations are protected). "
+        "For files PRODUCED BY CODE in python_sandbox (images, PDFs), do NOT route them "
+        "through here as base64 - use the sandbox's export_files parameter instead (large "
+        "base64 gets truncated in context). content_base64 exists only for SMALL binary "
+        "data you already hold. For multi-file code projects use coding_agent instead."
     )
     input_examples = [
         {"path": "chart.svg", "content": "<svg xmlns=\"http://www.w3.org/2000/svg\">...</svg>"},

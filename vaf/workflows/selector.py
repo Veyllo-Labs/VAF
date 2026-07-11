@@ -299,14 +299,19 @@ class WorkflowSelector:
                     # Return canonical names that tools can resolve (e.g., Librarian folder aliases)
                     return canonical.capitalize()
 
-            # Look for file paths
-            path_match = re.search(r'["\']?([./\\]?[\w./\\-]+\.\w{1,10})["\']?', user_input)
+            # Look for file paths. URLs are NOT file paths: this regex happily
+            # matches inside "https://www.youtube.com/..." (live incident: the
+            # filename variable became "//www.youtube.com"). Strip URLs first -
+            # URL-shaped variables are handled by the URL branch above.
+            _no_urls = re.sub(r'https?://[^\s<>"\']+', ' ', user_input)
+            path_match = re.search(r'["\']?([./\\]?[\w./\\-]+\.\w{1,10})["\']?', _no_urls)
             if path_match:
                 return path_match.group(1)
-        
-        # Filename extraction
+
+        # Filename extraction (same URL guard as the path branch)
         if "filename" in var_name.lower():
-            filename_match = re.search(r'["\']?([\w-]+\.\w{1,10})["\']?', user_input)
+            _no_urls = re.sub(r'https?://[^\s<>"\']+', ' ', user_input)
+            filename_match = re.search(r'["\']?([\w-]+\.\w{1,10})["\']?', _no_urls)
             if filename_match:
                 return filename_match.group(1)
         

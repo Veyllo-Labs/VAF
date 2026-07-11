@@ -123,30 +123,11 @@ class ExecuteWorkflowTool(BaseTool):
                     variables=str({k: str(v)[:80] for k, v in variables.items()}))
 
             # ── Tool registry ─────────────────────────────────────────────────
-            # Start with the workflow PRIMITIVES the main agent delegates to sub-agents (so they
-            # are NOT in agent.tools) but that workflows legitimately use as direct steps.
-            tools = {}
-            _optional = [
-                ("vaf.tools.search",         "WebSearchTool",       "web_search"),
-                ("vaf.tools.webfetch",        "WebFetchTool",        "webfetch"),
-                ("vaf.tools.filesystem",      "WriteFileTool",       "write_file"),
-                ("vaf.tools.filesystem",      "ReadFileTool",        "read_file"),
-                ("vaf.tools.filesystem",      "ListFilesTool",       "list_files"),
-                ("vaf.tools.filesystem",      "MoveFileTool",        "move_file"),
-                ("vaf.tools.bash",            "BashTool",            "bash"),
-                ("vaf.tools.coder",           "CodingAgentTool",     "coding_agent"),
-                ("vaf.tools.librarian",       "LibrarianTool",       "librarian_agent"),
-                ("vaf.tools.research_agent",  "ResearchAgentTool",   "research_agent"),
-                ("vaf.tools.document_writer", "DocumentWriterTool",  "document_writer"),
-                ("vaf.tools.list_tools",      "ListToolsTool",       "list_tools"),
-            ]
-            for module_path, class_name, tool_name in _optional:
-                try:
-                    import importlib
-                    mod = importlib.import_module(module_path)
-                    tools[tool_name] = getattr(mod, class_name)()
-                except Exception:
-                    pass
+            # Workflow PRIMITIVES from the SHARED builder (vaf/workflows/tool_overlay.py)
+            # - the same list the @workflow CLI subprocess uses. Hand-maintained
+            # copies drifted (the CLI lacked python_sandbox -> "Tool not found").
+            from vaf.workflows.tool_overlay import workflow_primitives
+            tools = workflow_primitives()
 
             # Overlay the agent's FULL live registry so a saved workflow has every tool the user
             # has in chat (search_tools, custom tools, calendar, memory, github, …) — matching

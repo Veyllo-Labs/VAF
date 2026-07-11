@@ -678,6 +678,24 @@ def start_model_download_broadcast(poll_seconds: float = 0.5):
     return stop_evt.set
 
 
+def internal_api_base() -> str:
+    """Base URL for SUBPROCESS -> backend HTTP calls (single source, Rule 2).
+
+    With local_network_tls_enabled the public port 8001 speaks HTTPS; plain-HTTP
+    requests there die silently. The backend keeps a plain-HTTP INTERNAL port
+    (8005) for exactly this. Several senders hardcoded http://127.0.0.1:8001 and
+    lost every event in TLS setups - live incident: the @workflow subprocess's
+    workflow_start/update/done never reached the UI, so the SubAgent window
+    showed instead of the Workflow Runtime panel.
+    """
+    try:
+        from vaf.core.config import Config
+        tls_on = Config.get("local_network_tls_enabled", False)
+    except Exception:
+        tls_on = False
+    return "http://127.0.0.1:8005" if tls_on else "http://127.0.0.1:8001"
+
+
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None) -> None:
     """
     Notify the Web UI that a file was created so it shows a download/open link.

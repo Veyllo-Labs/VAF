@@ -87,8 +87,11 @@ def _heartbeat_loop(interval=5):
     client_id = str(uuid.uuid4())
     while True:
         try:
+            # TLS-aware internal base: with local_network_tls_enabled the public
+            # 8001 port speaks HTTPS - a hardcoded plain-HTTP POST dies silently.
+            from vaf.core.web_interface import internal_api_base
             requests.post(
-                "http://127.0.0.1:8001/api/heartbeat",
+                f"{internal_api_base()}/api/heartbeat",
                 json={"client_id": client_id, "timestamp": time.time()},
                 timeout=1
             )
@@ -828,7 +831,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     
     tray_running = False
     try:
-        requests.get("http://127.0.0.1:8001/health", timeout=0.2)
+        from vaf.core.web_interface import internal_api_base
+        requests.get(f"{internal_api_base()}/health", timeout=0.2)
         tray_running = True
     except:
         pass
@@ -855,9 +859,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             
             # Wait briefly for it to initialize (max 3s)
             with tui.spinner("Waiting for background service..."):
+                from vaf.core.web_interface import internal_api_base
                 for _ in range(30):
                     try:
-                        requests.get("http://127.0.0.1:8001/health", timeout=0.2)
+                        requests.get(f"{internal_api_base()}/health", timeout=0.2)
                         tray_running = True
                         break
                     except:

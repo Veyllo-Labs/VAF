@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **New built-in workflow: YouTube Summary.** Summarizes a YouTube video from its own
+  captions: yt-dlp runs inside the Docker sandbox (installed per run - no host
+  installs, no confirmation cascade), downloads only the subtitle track with a
+  per-language fallback that respects YouTube's rate limits, and a validated
+  generation step writes the Markdown summary into the chat workspace. Videos without
+  captions (or a momentary YouTube rate limit) produce an honest note instead of an
+  invented summary. Composed from a live session where the agent built this lane
+  ad-hoc over confirmed host commands.
 - **analyze_image can inspect images from the chat workspace (`image_path`).** The vision
   tool only accepted user attachments, so an agent that had just produced a chart could
   not quality-check it and spiraled through header-parsing and OCR detours instead
@@ -40,6 +48,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **Workflow runs open the Workflow Runtime panel again in TLS setups.** The @workflow
+  subprocess posted its UI events (workflow_start/update/done, terminal lines) to a
+  hardcoded plain-HTTP 127.0.0.1:8001 - with local_network_tls_enabled that port speaks
+  HTTPS, every event died silently, and the frontend (never learning a workflow was
+  running) showed the generic SubAgent window instead of the Workflow Runtime panel.
+  Subprocess senders now resolve the backend through a shared TLS-aware helper
+  (internal plain-HTTP port 8005 when TLS is on); the vaf-run terminal's
+  heartbeat/health probes had the same blindness and use it too.
+- **@workflow runs no longer fail with "Tool not found" for sandbox steps.** The
+  @workflow CLI subprocess, the in-chat executor and the run_temp overlay each
+  hand-maintained their own copy of the workflow tool set, and the copies had drifted -
+  the subprocess lacked python_sandbox entirely, so a template using it failed its
+  first step. All runners now build from one shared list, and a test enforces that
+  every tool named by any built-in template is constructible headless. The workflow
+  variable extractor also no longer mistakes URLs for file paths (a YouTube link
+  became the output filename "//www.youtube.com").
 - **A chat's system prompt can no longer advertise another chat's workspace.** With
   parallel main workers, the "this chat's workspace" line and the document writer's
   output folder were resolved through a process-global session pointer that belongs to

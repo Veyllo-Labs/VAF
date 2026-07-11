@@ -187,6 +187,14 @@ def run_workflow(
             debug_logger.event("workflow_template_loaded", workflow_name=template.get('name'),
                               num_steps=len(template.get('steps', [])))
 
+        # Fill missing variables from the template defaults - the in-chat
+        # executor does the same (workflow_executor.py); without this an
+        # unset {filename} stays a LITERAL "{filename}" in step args and a
+        # file named "{filename}" lands on disk (observed live).
+        for _var_name in (template.get("variables") or {}).keys():
+            if _var_name not in vars_dict and _var_name in (template.get("defaults") or {}):
+                vars_dict[_var_name] = template["defaults"][_var_name]
+
         UI.success(f"[OK] Starting workflow: {template['name']}")
         UI.info(f"Variables: {vars_dict}")
 
@@ -194,47 +202,16 @@ def run_workflow(
         from vaf.workflows.engine import create_workflow, WorkflowEngine
         steps = create_workflow(template)
 
-        # Load all tools needed for workflow
-        from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
-        from vaf.tools.bash import BashTool
-        from vaf.tools.search import WebSearchTool
-        from vaf.tools.webfetch import WebFetchTool
-
-        tools = {
-            "write_file": WriteFileTool(),
-            "read_file": ReadFileTool(),
-            "list_files": ListFilesTool(),
-            "move_file": MoveFileTool(),
-            "bash": BashTool(),
-            "web_search": WebSearchTool(),
-            "webfetch": WebFetchTool(),
-        }
-
-        # Load sub-agent tools
-        try:
-            from vaf.tools.coder import CodingAgentTool
-            from vaf.tools.librarian import LibrarianTool
-            from vaf.tools.research_agent import ResearchAgentTool
-            tools["coding_agent"] = CodingAgentTool()
-            tools["librarian_agent"] = LibrarianTool()
-            tools["research_agent"] = ResearchAgentTool()
-        except ImportError as e:
-            UI.warning(f"Could not load some tools: {e}")
-
-        # Load utility tools
-        try:
-            from vaf.tools.report_filename import ReportFilenameTool
-            from vaf.tools.repair_report import RepairReportTool
-            tools["report_filename"] = ReportFilenameTool()
-            tools["repair_report"] = RepairReportTool()
-        except ImportError as e:
-            UI.warning(f"Could not load utility tools: {e}")
-
-        try:
-            from vaf.tools.list_tools import ListToolsTool
-            tools["list_tools"] = ListToolsTool()
-        except ImportError:
-            pass
+        # Load all tools needed for workflow: the SHARED primitives builder
+        # (vaf/workflows/tool_overlay.py) - this subprocess has no live agent
+        # registry to overlay, so the shared list must cover every tool a
+        # built-in template names. The previous hand-maintained copy here
+        # lacked python_sandbox, failing youtube_summary's first step with
+        # "Tool not found" (live incident, session yellow305153).
+        from vaf.workflows.tool_overlay import workflow_primitives
+        tools = workflow_primitives()
+        if not tools:
+            UI.warning("No workflow tools could be constructed.")
 
         # Web UI Reporting Setup
         import requests
@@ -244,9 +221,14 @@ def run_workflow(
         def send_web_update(data):
             if not session_id: return
             try:
-                # Add session ID to every update
+                # Add session ID to every update. TLS-aware base (Rule 2 single
+                # source): with local_network_tls_enabled the public 8001 port
+                # speaks HTTPS and a hardcoded plain-HTTP POST dies silently -
+                # the UI then never saw workflow_start and showed the SubAgent
+                # window instead of the Workflow Runtime (live incident).
+                from vaf.core.web_interface import internal_api_base
                 data["sessionId"] = session_id
-                requests.post("http://127.0.0.1:8001/api/workflow/update", json=data, timeout=0.2)
+                requests.post(f"{internal_api_base()}/api/workflow/update", json=data, timeout=0.2)
             except: pass
 
         def send_web_line(line: str):

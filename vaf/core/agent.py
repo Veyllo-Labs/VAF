@@ -1689,8 +1689,12 @@ class Agent:
                         # read_file and list_files are intentionally INCLUDED — the main agent
                         # needs them to verify work, answer user questions about files, etc.
                         # librarian_agent is for heavy analysis tasks, not simple file reads.
+                        # write_file is intentionally INCLUDED (since the blue378604 audit): the
+                        # python_sandbox persistence guard redirects the model to write_file, and
+                        # simple single-file artifacts (svg/html/txt) need no coding_agent run.
+                        # Main-agent calls get session workspace + per-user jail via execute_tool.
                         MAIN_AGENT_EXCLUDED_TOOLS = [
-                            "write_file", "move_file",   # Write operations (delegate to sub-agents)
+                            "move_file",      # Move/rename (delegate to sub-agents)
                             "folder_size",   # Deterministic sizing (prefer via librarian_agent)
                             "bash",           # Shell commands (for build/test)
                             "codesearch",     # Code navigation
@@ -1707,10 +1711,11 @@ class Agent:
                         #  - no Git (VAF is the user's project), no memory_save (read memory, don't write),
                         #  - no update_user_identity (propose profile changes via save_thinking_suggestion),
                         #  - no set_timer / direct user-facing scheduled actions (propose via ask_user; the
-                        #    main agent carries it out after the user confirms).
+                        #    main agent carries it out after the user confirms),
+                        #  - no write_file (a propose-only background run must not create files).
                         if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
-                                                 "update_user_identity", "set_timer"):
+                                                 "update_user_identity", "set_timer", "write_file"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
@@ -9592,6 +9597,26 @@ class Agent:
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                if name == "write_file":
+                    # Main-agent file writes: relative paths resolve into THIS chat's workspace,
+                    # the Web-UI file_created/document_created emits carry THIS session (emit-site
+                    # scoping - never the process-global fallback), and non-admin (remote) users
+                    # are jailed to their own VAF_Projects/<uid8> via the shared filesystem jail.
+                    # The jail is applied inside WriteFileTool.run (contextvars do not propagate
+                    # into the bounded-run worker thread). Direct WriteFileTool() consumers
+                    # (coder, workflow engine, librarian, automations) pass none of these kwargs
+                    # and keep their exact legacy behavior.
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
+                    tool_args["_session_id"] = getattr(self, "current_session_id", None)
+                    try:
+                        from vaf.core.platform import Platform as _PlatWF
+                        from vaf.core.session import resolve_agent_output_dir as _resolve_out
+                        tool_args["_session_workspace"] = str(_resolve_out(
+                            _PlatWF.documents_dir() / "VAF_Projects",
+                            session_id=getattr(self, "current_session_id", None),
+                        ))
+                    except Exception:
+                        pass
                 if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)

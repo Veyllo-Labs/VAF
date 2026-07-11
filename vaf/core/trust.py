@@ -28,8 +28,9 @@ Decision = Literal["allow_once", "allow_always", "cancel"]
 
 
 RISKY_TOOLS = {
-    # Filesystem writes/moves
-    "write_file",
+    # Filesystem moves (write_file is deliberately NOT here: main-agent writes are
+    # workspace-anchored + per-user jailed and gate via the plan gate instead,
+    # consistent with document_writer which writes the same workspace unprompted)
     "move_file",
     # Shell execution tools (if present)
     "bash",
@@ -120,7 +121,7 @@ def should_gate_tool(tool_name: str) -> bool:
 
 
 def explain_gate(tool_name: str) -> str:
-    if tool_name in {"write_file", "move_file"}:
+    if tool_name in {"move_file"}:
         return "This action modifies files on disk."
     if tool_name in {"bash", "run_command"}:
         return "This action runs shell commands on your machine."

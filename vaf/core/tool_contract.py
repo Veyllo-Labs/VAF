@@ -224,7 +224,7 @@ def evaluate_tool_policy(
         base_reason = explain_gate(tool_name)
         if contract.side_effect_class == "irreversible":
             base_reason = f"{base_reason} This action may be irreversible."
-        elif tool_name not in {"write_file", "move_file", "bash", "run_command", "python_exec"}:
+        elif tool_name not in {"move_file", "bash", "run_command", "python_exec"}:
             base_reason = "This action is marked as dangerous by the tool contract."
         logger.info("POLICY_CONFIRM tool=%s reason=dangerous", tool_name)
         return ToolPolicyDecision(

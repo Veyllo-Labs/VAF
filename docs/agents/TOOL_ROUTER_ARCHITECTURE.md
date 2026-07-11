@@ -357,7 +357,13 @@ class BashTool(BaseTool):
 | `linter` | Linting — Coder-specific |
 | `context_tools` | Internal Coder context management |
 
-The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. The Coder loads them separately from `vaf/tools/`.
+The Main Agent's `_load_tools()` skips any tool with `coder_only = True`. In addition, a
+hardcoded `MAIN_AGENT_EXCLUDED_TOOLS` list inside `_load_tools()` excludes a few tools by
+NAME (`move_file`, `folder_size`, `bash`, `codesearch`, `batch`,
+`save_thinking_suggestion`) — `write_file` was removed from that list (blue378604 audit):
+the main agent now writes single-file artifacts directly, workspace-anchored and
+per-user jailed (see `docs/security/USER_ISOLATION.md`). The Coder loads its tools
+separately from `vaf/tools/`.
 
 `_load_tools()` discovers tools from four sources, in order:
 

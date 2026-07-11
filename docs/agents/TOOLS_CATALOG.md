@@ -2,10 +2,10 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 95 tools. The **Coder sub-agent**
-additionally loads `coder_only` file/shell tools (e.g. `bash`, file write/edit) that are
-not in this list. Some tools only do anything once their integration is connected
-(GitHub, email, calendar, WhatsApp, …).
+[vaf/core/agent.py](../../vaf/core/agent.py)); 111 tools. The **Coder sub-agent**
+additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
+`codesearch`) that are not in this list. Some tools only do anything once their
+integration is connected (GitHub, email, calendar, WhatsApp, …).
 
 `Perm` is the tool's `permission_level`: **read** (safe), **write** (changes state, no
 prompt by default), **dangerous** (always confirmed), **system** (internal plumbing). See
@@ -28,6 +28,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `read_file` | read | Read a file (text, PDF, Word, Excel, PowerPoint, …). |
+| `write_file` | write | Write a single file (create/overwrite). Relative paths land in the chat workspace; non-admin users are jailed to their own `VAF_Projects/<uid8>`. |
 | `find_files` | read | Find files by glob pattern, recursively. |
 | `list_files` | read | List files in a directory. |
 | `tree` | read | ASCII tree of a directory structure. |

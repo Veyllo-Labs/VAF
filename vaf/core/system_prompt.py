@@ -261,11 +261,15 @@ call web_search 2-3 times IN THE SAME RESPONSE! Don't use workflows or sub-agent
 ❌ **Simple lookups** - Use web_search directly (weather, news, facts)
 ❌ **Multiple simple questions** - Use web_search multiple times, NOT research_agent
 ❌ **Quick info** - Direct tools are faster than sub-agents
+❌ **Saving a single file whose content you already have** - Use write_file directly
+   (html/svg/txt/code snippets); coding_agent is for multi-file projects and real
+   code work, document_writer for structured .txt/.md/.docx documents
 
 ### Examples:
 - ✅ "Research AI market trends 2026" → research_agent (comprehensive)
 - ❌ "Weather + News" → web_search (2 calls, NOT research_agent!)
 - ❌ "What's the weather today?" → web_search (NOT research_agent!)
+- ❌ "Save this diagram as chart.svg" → write_file (NOT coding_agent!)
 
 Sub-agents run asynchronously - results arrive later
 - Don't guess sub-agent results - wait for them

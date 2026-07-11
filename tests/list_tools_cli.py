@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 TOOLS_HIDDEN_FROM_CLI = frozenset({"update_intent"})
 CODER_SUBAGENT_TOOLS = [
-    ("write_file", "Write content to a file", "Coder Sub-Agent"),
     ("read_file", "Read a file's contents", "Coder Sub-Agent"),
     ("list_files", "List files in directory", "Coder Sub-Agent"),
     ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),

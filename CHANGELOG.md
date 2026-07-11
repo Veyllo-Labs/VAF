@@ -11,6 +11,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **The main agent can now save files directly with `write_file`.** Saving a single
+  finished artifact (an SVG, an HTML page, a text file) previously required guessing
+  between unrelated tools, and the sandbox's own guidance pointed at `write_file` - a
+  tool the main agent did not have (it was sub-agent-only), so following the
+  instruction produced "Unknown tool". `write_file` is now registered to the main
+  agent: relative paths land in the current chat's workspace, explicit absolute paths
+  are honored (VAF's own directory and system locations stay protected), non-admin
+  (remote) users are jailed to their own `VAF_Projects` area, and the Web UI file
+  notifications are attributed to the calling chat session. Background thinking runs
+  (propose-only) deliberately do not get the tool, and the write no longer triggers a
+  confirmation prompt (the plan gate still applies, consistent with document_writer).
+
 ### Fixed
 - **The coding agent no longer treats a target FILE path as its project directory.** A task
   like "save it as /path/chart.html" made the coder use the full file path as the project

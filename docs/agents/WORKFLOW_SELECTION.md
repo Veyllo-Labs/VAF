@@ -193,7 +193,7 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat** — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`write_file`, `bash`, `move_file`) that the Main Agent normally delegates to sub-agents. (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat** — `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" — they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 

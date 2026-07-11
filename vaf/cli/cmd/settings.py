@@ -444,8 +444,9 @@ def show_tools_menu(agent):
             table.add_row(name, desc, t_type)
     
     # 2. Coder Sub-Agent only tools (not given to Main Agent; shown for reference)
+    # write_file/read_file/list_files are NOT in this list: they are registered to
+    # the main agent too (write_file since the blue378604 audit fix).
     CODER_SUBAGENT_TOOLS = [
-        ("write_file", "Write content to a file", "Coder Sub-Agent"),
         ("read_file", "Read a file's contents", "Coder Sub-Agent"),
         ("list_files", "List files in directory", "Coder Sub-Agent"),
         ("bash", "Execute shell commands (build, test, git)", "Coder Sub-Agent"),

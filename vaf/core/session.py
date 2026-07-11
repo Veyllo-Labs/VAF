@@ -831,6 +831,49 @@ def get_manager() -> SessionManager:
 # PER-CHAT WORKSPACE RESOLUTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def record_created_file(session_id: Optional[str], file_path) -> None:
+    """Anchor a session's workspace from a created file (single shared setter).
+
+    Sets ``runtime_state["last_project_path"]`` and - once, never overwritten -
+    ``session.project_path`` (VAF_Projects paths only), which arms the
+    [SESSION WORKSPACE] context note. Historically this logic lived ONLY in the
+    /api/workflow/update HTTP endpoint, which is the SUBPROCESS notification
+    fallback: files written in-process (main-agent write_file, workflow engine)
+    updated the UI but never anchored the session, so the workspace note never
+    fired for those chats (live incident, session red543900). Both notify paths
+    call this now. Fail-safe: never raises.
+    """
+    try:
+        if not session_id or not file_path:
+            return
+        from vaf.tools.coder import is_unsafe_project_dir
+        project_dir = str(Path(file_path).parent.resolve())
+        # Never record unsafe dirs (e.g. /home/<user>) as the session's
+        # project - that would poison every later edit-task in this chat.
+        if is_unsafe_project_dir(project_dir):
+            return
+        mgr = get_manager()
+        loaded = mgr.load(session_id)
+        if not getattr(loaded, "runtime_state", None):
+            loaded.runtime_state = {}
+        loaded.runtime_state["last_project_path"] = project_dir
+        # Anchor session workspace on first "real" project creation
+        # (VAF_Projects paths only). session.project_path is stable - set once,
+        # never overwritten - giving the chat a persistent workspace root
+        # independent of which sub-project was last touched.
+        if not getattr(loaded, "project_path", ""):
+            try:
+                from vaf.core.platform import Platform
+                _vaf_root = str(Platform.documents_dir())
+                if "VAF_Projects" in project_dir and project_dir.startswith(_vaf_root):
+                    loaded.project_path = project_dir
+            except Exception:
+                pass
+        mgr.save(loaded, sync_state=False)
+    except Exception:
+        pass
+
+
 def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = False) -> Optional[Path]:
     """Per-chat workspace folder: VAF_Projects/<uid[:8]>/<session_id>/.
 

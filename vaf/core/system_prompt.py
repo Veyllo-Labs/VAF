@@ -508,8 +508,14 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         current_source: Optional[str] = None,
         last_interaction: Optional[Dict[str, Any]] = None,
         front_office: bool = False,
+        session_id: Optional[str] = None,
     ) -> str:
-        """Build the complete system prompt."""
+        """Build the complete system prompt.
+
+        session_id: the chat this prompt is FOR. Required for anything
+        session-derived (the workspace line): with parallel main workers the
+        process-global session pointer can belong to a DIFFERENT chat, so
+        session-scoped content must never fall back to it (Rule 4)."""
         parts = []
         # The <Action> declaration is a SOFT, optional transparency convention (docs/agents/ACTION_TAG.md):
         # the tool call is meant to follow it, and nothing breaks when it is omitted. gemma-4 uses native
@@ -696,7 +702,14 @@ Then use the results to answer. Do NOT guess from your training data!
             _proj_base = f"{_docs}/VAF_Projects/<this-chat>/"
             try:
                 from vaf.core.session import get_session_workspace_dir
-                _ws = get_session_workspace_dir(create=False)
+                # Rule 4 (user isolation): resolve THIS chat's workspace from the
+                # session id the CALLER passed - never from the process-global
+                # fallback. With parallel_main_workers > 1 the global points at
+                # whichever session touched it last: a fresh chat's system prompt
+                # advertised ANOTHER chat's folder as "this chat's workspace" and
+                # the model dutifully wrote the deliverable there (live incident,
+                # session green778499 -> red543900's workspace).
+                _ws = get_session_workspace_dir(session_id, create=False) if session_id else None
                 if _ws:
                     _proj_base = str(_ws).rstrip("/") + "/"
             except Exception:
@@ -983,8 +996,9 @@ Then use the results to answer. Do NOT guess from your training data!
                     _cc_ws = ""
                     try:
                         from vaf.core.session import get_session_workspace_dir
-                        from vaf.core.subagent_ipc import get_current_session_id
-                        _cc_ws_path = get_session_workspace_dir(get_current_session_id(), create=False)
+                        # Same Rule-4 constraint as the env workspace line: key on the
+                        # passed session, never the process-global pointer.
+                        _cc_ws_path = get_session_workspace_dir(session_id, create=False) if session_id else None
                         _cc_ws = str(_cc_ws_path) if _cc_ws_path else ""
                     except Exception:
                         _cc_ws = ""

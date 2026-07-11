@@ -695,6 +695,16 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
     }
     wi = get_web_interface()
     if getattr(wi, "_server_loop", None):
+        # In-process path: the /api/workflow/update endpoint (which anchors the
+        # session workspace) is bypassed here, so run the shared setter directly.
+        # Without this, files written by the main agent or the workflow engine
+        # never set session.project_path and the [SESSION WORKSPACE] note never
+        # fired for such chats (live incident red543900).
+        try:
+            from vaf.core.session import record_created_file
+            record_created_file(session_id, file_path)
+        except Exception:
+            pass
         wi._push_session_update(session_id, payload)
     else:
         try:

@@ -1358,6 +1358,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if _workspace and _is_unsafe_proj(_workspace):
                             _workspace = ""
 
+                        # Defense-in-depth: sessions whose files were written in-process
+                        # never got project_path anchored (the setter lived only in the
+                        # subprocess HTTP path). Derive the workspace deterministically
+                        # when the folder already exists on disk, keyed on THIS task's
+                        # session - never the process-global pointer.
+                        if not _workspace:
+                            try:
+                                from vaf.core.session import get_session_workspace_dir as _gswd
+                                _derived = _gswd(task.session_id, create=False)
+                                if _derived and os.path.isdir(str(_derived)):
+                                    _workspace = str(_derived)
+                            except Exception:
+                                pass
+
                         if _workspace and os.path.isdir(_workspace):
                             _edit_path = (
                                 _last_proj

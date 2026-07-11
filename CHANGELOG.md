@@ -25,6 +25,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **A chat's system prompt can no longer advertise another chat's workspace.** With
+  parallel main workers, the "this chat's workspace" line and the document writer's
+  output folder were resolved through a process-global session pointer that belongs to
+  whichever chat touched it last - a fresh chat was told its workspace is the previous
+  chat's folder and dutifully saved its deliverable there. Session-derived paths now
+  always key on the chat's own session id. The session-workspace anchor
+  (session.project_path) is also written by one shared setter on BOTH notification
+  paths - previously only files from subprocess sub-agents anchored it, so chats whose
+  files were written in-process never got the workspace context note - and the runner
+  derives the workspace deterministically when the anchor is missing but the folder
+  exists on disk.
 - **Deliverables are steered into the chat workspace instead of scattering across the
   filesystem.** A finished artifact could end up in the VAF_Projects root, where the UI
   file browser (the only file access remote/LAN clients have) never shows it. The

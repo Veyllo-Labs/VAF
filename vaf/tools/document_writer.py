@@ -90,7 +90,13 @@ For large/complex documents, use document_agent instead."""
 
         # Save into the chat's workspace folder when a session exists (visible
         # in the WebUI workspace browser); legacy VAF_Documents otherwise.
-        vaf_docs_dir = resolve_agent_output_dir(Platform.documents_dir() / "VAF_Documents")
+        # Main-agent calls inject _session_id: the workspace must key on THIS
+        # chat - the process-global fallback races under parallel workers and
+        # resolved another chat's folder (Rule 4; live incident green778499).
+        _sid = kwargs.get('_session_id') or None
+        vaf_docs_dir = resolve_agent_output_dir(
+            Platform.documents_dir() / "VAF_Documents", session_id=_sid
+        )
 
         file_path = vaf_docs_dir / Path(filename)
         suffix = file_path.suffix.lower()
@@ -129,7 +135,7 @@ For large/complex documents, use document_agent instead."""
             # Open the saved document in the Web UI Document Editor
             if not result.startswith(("Tool Error:", "[ERROR]")):
                 try:
-                    session_id = os.environ.get("VAF_SESSION_ID")
+                    session_id = _sid or os.environ.get("VAF_SESSION_ID")
                     if not session_id:
                         from vaf.core.subagent_ipc import get_current_session_id
                         session_id = get_current_session_id()

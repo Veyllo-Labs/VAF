@@ -899,9 +899,11 @@ class WriteFileTool(BaseTool):
                                 _ws_r = Path(str(_ws)).resolve()
                                 if not (_res_r == _ws_r or _res_r.is_relative_to(_ws_r)):
                                     _ws_note = (
-                                        " (note: this is OUTSIDE the chat workspace and will "
-                                        "NOT appear in the user's UI file browser - use a "
-                                        "relative path to save into the workspace)"
+                                        " (WARNING: this file is OUTSIDE the chat workspace and "
+                                        "will NOT appear in the user's UI file browser. If it is "
+                                        "the user's deliverable, save it AGAIN now with just the "
+                                        "filename as a relative path so it lands in the workspace, "
+                                        "and report THAT path to the user)"
                                     )
                         except Exception:
                             _ws_note = ""

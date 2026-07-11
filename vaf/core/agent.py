@@ -3133,6 +3133,9 @@ class Agent:
                 else get_last_interaction(getattr(self, "_current_user_scope_id", None))
             ),
             front_office=getattr(self, "_front_office_mode", False),
+            # Session-derived prompt content (workspace line) must key on THIS
+            # chat - the process-global fallback races under parallel workers.
+            session_id=getattr(self, "current_session_id", None),
         )
         
         # Optional: Load Project Context (VAF.md)
@@ -6303,6 +6306,7 @@ class Agent:
                 current_source=getattr(self, "_current_chat_source", None),
                 last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
                 front_office=getattr(self, "_front_office_mode", False),
+                session_id=getattr(self, "current_session_id", None),
             )
         
         # ------------------------------------------------------------------
@@ -9634,6 +9638,11 @@ class Agent:
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                 if name == "update_user_identity":
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                if name == "document_writer":
+                    # Same session race as write_file: the tool resolves the chat
+                    # workspace itself - it must key on THIS session, never the
+                    # process-global fallback (parallel workers).
+                    tool_args["_session_id"] = getattr(self, "current_session_id", None)
                 if name == "write_file":
                     # Main-agent file writes: relative paths resolve into THIS chat's workspace,
                     # the Web-UI file_created/document_created emits carry THIS session (emit-site

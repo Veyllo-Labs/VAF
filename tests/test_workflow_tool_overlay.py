@@ -106,3 +106,31 @@ def test_no_hardcoded_plain_http_8001_in_cli_senders():
             f"{mod.__name__} hardcodes the public plain-HTTP port - "
             f"use vaf.core.web_interface.internal_api_base()"
         )
+
+
+# ── the builder teaches what the engine supports (agent self-authoring) ──────
+
+def test_builder_advertises_args_and_authoring_lessons():
+    # The engine and the save path supported multi-parameter steps (args) all
+    # along, but the advertised schema hid them - an agent could not author a
+    # python_sandbox step with packages/export_files. The brace-safety rule and
+    # {var|fallback} defaults are the other two authoring lessons that live
+    # nowhere else the agent can see at runtime.
+    from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
+    schema = AgentWorkflowBuilderTool.parameters
+    step_props = schema["properties"]["steps"]["items"]["properties"]
+    assert "args" in step_props, "steps schema must advertise args"
+    steps_desc = schema["properties"]["steps"]["description"]
+    assert "export_files" in steps_desc
+    assert "BRACE SAFETY" in steps_desc
+    assert "{variable|fallback}" in steps_desc or "|fallback}" in steps_desc
+
+
+def test_builder_teaches_validate_for_create_mode_too():
+    # "(run_temp only)" wording made agents omit validate flags on SAVED
+    # workflows - the flag works in both modes, only the confirmation gate is
+    # run_temp-specific.
+    from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
+    desc = AgentWorkflowBuilderTool.description
+    assert "OUTPUT VALIDATION (run_temp AND create)" in desc
+    assert "in create mode too" in desc

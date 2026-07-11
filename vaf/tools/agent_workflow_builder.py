@@ -75,7 +75,7 @@ class AgentWorkflowBuilderTool(BaseTool):
         "Needs 2+ steps that chain outputs — a single-step workflow is rejected; "
         "for a one-off single tool call, call that tool directly instead.\n"
         "  create   — Save a workflow PERMANENTLY so it can be re-used later via "
-        "execute_workflow or from the WebUI Workflows tab. Admin-only. "
+        "execute_workflow, @workflow_id in chat, or the WebUI Workflows tab. Admin-only. "
         "Only use this if the user explicitly wants a reusable workflow.\n"
         "  list     — Show workflows the agent has saved.\n"
         "  delete   — Remove a saved workflow.\n\n"
@@ -87,10 +87,12 @@ class AgentWorkflowBuilderTool(BaseTool):
         "(documents, reports, data, images) is kept. To keep an extra file explicitly, pass "
         "keep_files=[\"/path/to/file\"]. Use write_file/document steps for the FINAL deliverable, "
         "and plain scripts for intermediate work.\n\n"
-        "OUTPUT VALIDATION (run_temp only): on content/agent steps (document/research/coding/"
+        "OUTPUT VALIDATION (run_temp AND create): on content/agent steps (document/research/coding/"
         "browser/librarian) set \"validate\": true to have the step's output LLM-checked against its "
         "goal and re-run up to 3x with a correction if it doesn't match, then accept and continue. "
-        "If you provide no validate flags on such steps, run_temp asks you to confirm — flag them "
+        "ALWAYS flag the deliverable-producing steps - in create mode too, otherwise the saved "
+        "workflow ships without any output checking. Only the confirmation gate is run_temp-only: "
+        "if you provide no validate flags there, run_temp asks you to confirm — flag the steps "
         "or pass skip_validation=true.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
         "and a 'tool'. AVAILABLE SUB-AGENTS AND TOOLS FOR STEPS:\n"
@@ -107,7 +109,10 @@ class AgentWorkflowBuilderTool(BaseTool):
         "  web_search      — Quick web search (1-3 sources). Use for: news, facts, prices.\n"
         "  write_file      — Write raw content to a specific file path.\n"
         "  read_file       — Read a file. Use for: reading outputs from previous steps.\n"
-        "  python_sandbox  — Execute Python code. Use for: data processing, calculations.\n\n"
+        "  python_sandbox  — Execute Python code in the Docker sandbox. Use for: data "
+        "processing, calculations, fetching/transforming data with pip tools "
+        "(args.packages=['...']), and producing binary artifacts - declare them in "
+        "args.export_files=['chart.png'] so they land in the chat workspace.\n\n"
         "RULE: Prefer research_agent for patent/market/technical research, "
         "coding_agent for file generation and analysis scripts. "
         "Do NOT use coding_agent for research that needs 10+ web sources.\n\n"
@@ -205,18 +210,30 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "description": (
                     "Ordered list of steps. Each step is an object with:\n"
                     "  input       — Prompt/instruction for this step. "
-                    "Use {variable_name} for output from previous steps or initial variables.\n"
+                    "Use {variable_name} for output from previous steps or initial variables; "
+                    "{variable|fallback} supplies an inline default when the variable is unset "
+                    "(saved workflows have no separate defaults block - use this).\n"
                     "  tool        — Tool to use (e.g. 'coding_agent', 'web_search', "
                     "'research_agent', 'python_sandbox', 'write_file'). Default: coding_agent.\n"
+                    "  args        — Dict of tool parameters for MULTI-parameter tools, e.g. "
+                    "python_sandbox: {\"code\": \"...\", \"packages\": [\"yt-dlp\"], "
+                    "\"export_files\": [\"chart.png\"]} or write_file: {\"path\": \"out.md\", "
+                    "\"content\": \"{summary}\"}. {variables} are substituted inside arg values too.\n"
                     "  output      — Variable name to store this step's result "
                     "(used in later steps as {output}). Default: step_N_output.\n"
-                    "  description — Short label shown in progress output. Optional."
+                    "  description — Short label shown in progress output. Optional.\n"
+                    "BRACE SAFETY for embedded code (python_sandbox args.code): every {...} block "
+                    "in ANY step string goes through variable substitution - a block containing a "
+                    "DOT is treated as a nested lookup and BREAKS the run. In embedded Python use "
+                    "no f-strings and no dict/set literals whose braces contain dots; build strings "
+                    "with + and use dict(...) constructors instead."
                 ),
                 "items": {
                     "type": "object",
                     "properties": {
                         "input":       {"type": "string"},
                         "tool":        {"type": "string"},
+                        "args":        {"type": "object", "description": "Tool parameters for multi-parameter tools ({variables} substituted inside values). See the steps description for examples."},
                         "output":      {"type": "string"},
                         "description": {"type": "string"},
                         "on_success":  {"type": "string", "description": "Jump to this step's output_name on success."},

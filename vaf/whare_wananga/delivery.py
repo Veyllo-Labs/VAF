@@ -48,32 +48,59 @@ def _mtime(name: str) -> float:
 
 
 @lru_cache(maxsize=512)
-def _load_gated(name: str, _mtime_key: float):
-    """Return the record IF it passes the quality gate, else None. Cached per (name, mtime).
-    Treat the result as read-only (it is shared from the cache)."""
+def _load_classified(name: str, _mtime_key: float):
+    """Return (record, verified) -- verified means it passes the strict quality gate.
+    Cached per (name, mtime); treat the record as read-only (shared from the cache).
+
+    A record that EXISTS but fails the gate is enqueued for re-training (once per
+    (name, mtime) thanks to the cache): before the queue existed, such records
+    rotted silently -- never delivered, never re-trained (blue378604 audit)."""
     try:
         rec = store.load(name)
         if not rec:
-            return None
-        if rec.get("status") != _GATE_STATUS:
-            return None
-        if rec.get("challenge_passed") is not True:
-            return None
-        if rec.get("learn_mode") not in _GATE_LEARN_MODES:
-            return None
-        conf = rec.get("confidence")
-        if _MIN_CONFIDENCE and isinstance(conf, (int, float)) and conf < _MIN_CONFIDENCE:
-            return None
-        return rec
+            return None, False
+        verified = (
+            rec.get("status") == _GATE_STATUS
+            and rec.get("challenge_passed") is True
+            and rec.get("learn_mode") in _GATE_LEARN_MODES
+        )
+        if verified:
+            conf = rec.get("confidence")
+            if _MIN_CONFIDENCE and isinstance(conf, (int, float)) and conf < _MIN_CONFIDENCE:
+                verified = False
+        if not verified:
+            try:
+                from vaf.whare_wananga import retrain
+                retrain.enqueue(name, reason=retrain.classify(rec))
+            except Exception:
+                pass
+        return rec, verified
     except Exception:
-        return None
+        return None, False
+
+
+def _classified(name: str):
+    try:
+        return _load_classified(name, _mtime(name))
+    except Exception:
+        return None, False
 
 
 def _gated(name: str):
+    """Strict-gate view (A-track): the record only when verified, else None."""
+    rec, verified = _classified(name)
+    return rec if verified else None
+
+
+def _unverified_tag(rec) -> str:
+    """Lead-in for relaxed (B-track) delivery of a gate-failing record."""
     try:
-        return _load_gated(name, _mtime(name))
+        from vaf.whare_wananga import retrain
+        reason = retrain.classify(rec)
     except Exception:
-        return None
+        reason = "unverified"
+    return (f"Learned tool know-how (UNVERIFIED - {reason} record; "
+            "double-check against the tool schema). ")
 
 
 def _norm(s) -> str:
@@ -112,17 +139,23 @@ def tool_pitfalls(name: str, *, max_pitfalls: int = _DEFAULT_MAX_PITFALLS,
 
 
 # ── Reactive (B-track): fuller know-how + surprise classification ─────────────
-def tool_knowhow(name: str, *, procedure_first: bool = False,
+def tool_knowhow(name: str, *, procedure_first: bool = False, allow_unverified: bool = False,
                  max_chars: int = _KNOWHOW_MAX_CHARS) -> Optional[str]:
     """Fuller learned know-how (pitfalls + procedure + checks) for a failed tool, or None.
 
     `procedure_first` puts the procedure ahead of the pitfalls -- used for a KNOWN pitfall, where
     the model already saw the pitfall (the A-track put it in the schema) and the new value on the
-    retry is how to call the tool correctly. Gated + fail-safe.
+    retry is how to call the tool correctly.
+
+    `allow_unverified=True` (B-track only) also delivers gate-failing records (declare/stale/
+    draft), clearly tagged UNVERIFIED: the call already failed, so a possibly-imperfect hint
+    costs little and the stored knowledge is usually exactly what was missing (the document_writer
+    record held the fix for the blue378604 failure and was never delivered). The A-track schema
+    injection stays strictly gated. Fail-safe.
     """
     try:
-        rec = _gated(name)
-        if not rec:
+        rec, verified = _classified(name)
+        if not rec or (not verified and not allow_unverified):
             return None
         raw = [p for p in ((rec.get("tuatea") or {}).get("pitfalls") or [])
                if not store.is_vacuous_pitfall(p)]
@@ -138,17 +171,22 @@ def tool_knowhow(name: str, *, procedure_first: bool = False,
         blocks = [b for b in order if b]
         if not blocks:
             return None
-        return _cap("Learned tool know-how (from practice). " + " | ".join(blocks), max_chars)
+        head = ("Learned tool know-how (from practice). " if verified
+                else _unverified_tag(rec))
+        return _cap(head + " | ".join(blocks), max_chars)
     except Exception:
         return None
 
 
-def known_pitfall_hit(name: str, error_text: str) -> bool:
+def known_pitfall_hit(name: str, error_text: str, *, allow_unverified: bool = False) -> bool:
     """True if the runtime error corresponds to a learned pitfall for this tool (so the agent hit
     something we already know about), False otherwise. Pass the RAW, uncompressed error string.
-    Fail-safe."""
+    `allow_unverified` matches against gate-failing records too (B-track). Fail-safe."""
     try:
-        rec = _gated(name)
+        if allow_unverified:
+            rec, _verified = _classified(name)
+        else:
+            rec = _gated(name)
         if not rec:
             return False
         err = _norm(error_text).lower()

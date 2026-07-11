@@ -12,6 +12,9 @@ for testing the learner, re-training a single tool, or training every tool in on
     python -m vaf.whare_wananga.cli train memory_search --quick   # small batches (fast smoke test)
     python -m vaf.whare_wananga.cli train --all                   # queue: every not-yet-learned tool
     python -m vaf.whare_wananga.cli retrain update_intent         # alias for train (a run is a fresh assessment)
+    python -m vaf.whare_wananga.cli retrain --pending             # drain the re-training queue (gate-failing records)
+    python -m vaf.whare_wananga.cli queue                         # show the re-training queue
+    python -m vaf.whare_wananga.cli queue --scan                  # seed the queue from gate-failing store records
     python -m vaf.whare_wananga.cli list                          # learned tools + state
     python -m vaf.whare_wananga.cli show create_contact           # the three baskets
     python -m vaf.whare_wananga.cli delete create_contact         # drop the stored knowledge
@@ -156,6 +159,27 @@ def cmd_train(args) -> int:
     agent = _build_agent()
     tools = getattr(agent, "tools", {})
 
+    if getattr(args, "pending", False):
+        # Drain the re-training queue (gate-failing records) in the foreground.
+        from vaf.whare_wananga import retrain
+        entries = retrain.pending(include_declare=getattr(args, "include_declare", False))
+        names = [e["tool"] for e in entries if e["tool"] in tools]
+        if not names:
+            _p("Re-training queue: nothing drainable (see 'queue' for held-back entries).")
+            return 0
+        _p(f"Re-training queue: {len(names)} tool(s): {', '.join(names)}")
+        results = []
+        for n in names:
+            retrain.mark_attempt(n)
+            r = _train_one(agent, n, quick=args.quick, verbose=args.verbose)
+            results.append(r)
+            if retrain.classify(store.load(n)) == "verified":
+                retrain.remove(n)
+        _p("\n" + "=" * 60)
+        for r in results:
+            _p(f"{r.get('tool', '?'):<28} {_summary_line(r)}")
+        return 0
+
     if args.all:
         names = sorted(tools.keys())
     else:
@@ -252,6 +276,31 @@ def cmd_delete(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_queue(args) -> int:
+    """Show (or seed) the re-training queue for gate-failing records."""
+    from vaf.whare_wananga import retrain
+    if getattr(args, "scan", False):
+        added = retrain.scan_store()
+        _p(f"Scanned the store: {added} gate-failing record(s) newly enqueued.")
+    entries = retrain.pending(include_declare=True, all_entries=True)
+    if not entries:
+        _p("Re-training queue is empty.")
+        return 0
+    _p(f"{'TOOL':<28} {'REASON':<18} {'ATTEMPTS':<9} DRAINABLE")
+    _p("-" * 68)
+    drainable = retrain.pending(include_declare=False)
+    drainable_names = {e['tool'] for e in drainable}
+    for e in entries:
+        note = "yes" if e["tool"] in drainable_names else (
+            "declare (use --include-declare)" if e.get("reason") == "declare"
+            else "held back (attempt cap / cooldown)")
+        _p(f"{e['tool']:<28} {e.get('reason', '?'):<18} "
+           f"{int(e.get('attempts', 0))}/{retrain.MAX_ATTEMPTS:<7} {note}")
+    _p(f"\nDrain with: vaf ww retrain --pending"
+       f"{' (nothing drainable right now)' if not drainable else ''}")
+    return 0
+
+
 def cmd_eager(args) -> int:
     from vaf.whare_wananga import eager
     action = getattr(args, "action", None) or "status"
@@ -327,6 +376,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     pt.add_argument("--all", action="store_true", help="train every tool in a queue")
     pt.add_argument("--force", action="store_true", help="with --all, retrain already-learned tools too")
     pt.add_argument("--quick", action="store_true", help="small batches for a fast smoke test")
+    pt.add_argument("--pending", action="store_true",
+                    help="drain the re-training queue (gate-failing records)")
+    pt.add_argument("--include-declare", action="store_true", dest="include_declare",
+                    help="with --pending: also re-train declare-mode records (usually reproduces declare)")
     pt.add_argument("-v", "--verbose", action="store_true", help="print every probe")
     pt.set_defaults(func=cmd_train)
 
@@ -335,8 +388,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     pr.add_argument("--all", action="store_true")
     pr.add_argument("--force", action="store_true")
     pr.add_argument("--quick", action="store_true")
+    pr.add_argument("--pending", action="store_true",
+                    help="drain the re-training queue (gate-failing records)")
+    pr.add_argument("--include-declare", action="store_true", dest="include_declare")
     pr.add_argument("-v", "--verbose", action="store_true")
     pr.set_defaults(func=cmd_train)
+
+    pq = sub.add_parser("queue", help="show the re-training queue (--scan seeds it from the store)")
+    pq.add_argument("--scan", action="store_true",
+                    help="enqueue every stored record that fails the delivery gate")
+    pq.set_defaults(func=cmd_queue)
 
     pl = sub.add_parser("list", help="list learned tools + state")
     pl.set_defaults(func=cmd_list)
@@ -364,8 +425,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if getattr(args, "all", False) and getattr(args, "tools", None):
         _p("Use either tool names or --all, not both.")
         return 2
-    if args.cmd in ("train", "retrain") and not args.all and not args.tools:
-        _p("Give at least one tool name, or use --all.")
+    if args.cmd in ("train", "retrain") and not args.all and not args.tools \
+            and not getattr(args, "pending", False):
+        _p("Give at least one tool name, or use --all / --pending.")
         return 2
     return args.func(args)
 

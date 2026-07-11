@@ -8409,8 +8409,12 @@ class Agent:
                         if _rs.startswith(("error", "failed", "tool error", "security error", "exception", "❌")) \
                                 and function_name not in _ww_reactive_injected:
                             from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
-                            _known = known_pitfall_hit(function_name, result_str)
-                            _kh = tool_knowhow(function_name, procedure_first=_known)
+                            # allow_unverified: the call ALREADY failed, so a tagged hint from a
+                            # gate-failing record (declare/stale/draft) costs little and is often
+                            # exactly the missing knowledge. The proactive A-track (schema
+                            # injection) stays strictly gated.
+                            _known = known_pitfall_hit(function_name, result_str, allow_unverified=True)
+                            _kh = tool_knowhow(function_name, procedure_first=_known, allow_unverified=True)
                             if _kh:
                                 _ww_reactive_injected.add(function_name)
                                 if _known:

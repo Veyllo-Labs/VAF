@@ -248,6 +248,13 @@ def invalidate_stale(tools) -> List[str]:
                     rec["status"] = "stale"
                     save(rec)
                     changed.append(name)
+                    # Queue a re-training so the stale record does not rot silently
+                    # (lazy import: retrain imports this module).
+                    try:
+                        from vaf.whare_wananga import retrain
+                        retrain.enqueue(name, reason="stale")
+                    except Exception:
+                        pass
             except Exception:
                 continue
     except Exception:

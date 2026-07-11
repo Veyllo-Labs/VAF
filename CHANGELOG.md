@@ -25,6 +25,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   confirmation prompt (the plan gate still applies, consistent with document_writer).
 
 ### Fixed
+- **Learned tool know-how no longer rots silently when it fails the quality gate.** The
+  Whare Wananga delivery gate (confirmed + challenge passed + actually probed) silenced
+  18 of 67 learned records completely - including ones whose stored pitfalls held exactly
+  the knowledge that would have prevented a live failure. Two changes: on the reactive
+  lane (a tool call just failed) gate-failing records are now delivered too, clearly
+  tagged "UNVERIFIED" (the proactive schema injection stays strictly gated), and every
+  gate reject lands in a persistent re-training queue instead of being dropped - shown
+  and drained via `vaf ww queue [--scan]` and `vaf ww retrain --pending` (3 attempts per
+  tool, 24h cooldown), or automatically by the opt-in eager training worker.
 - **document_writer no longer silently accepts non-document filenames.** The tool
   declared .txt/.md/.docx but wrote ANY extension as a rendered "text" document - a raw
   .svg happened to survive, an .html request came out as a text rendering of the input

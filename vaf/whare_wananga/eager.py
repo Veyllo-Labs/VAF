@@ -101,11 +101,21 @@ def enqueue(agent, names) -> int:
 
 
 def scan(agent) -> int:
-    """If enabled, enqueue every eligible safe tool. Returns count enqueued. Fail-safe."""
+    """If enabled, enqueue every eligible safe tool. Returns count enqueued. Fail-safe.
+    Also wakes the worker when the RE-TRAINING queue has pending entries, so queued
+    gate-failing records (stale/draft/...) get their auto-drain (see _run_worker)."""
     try:
         if not is_enabled():
             return 0
-        return enqueue(agent, eligible_tools(agent))
+        added = enqueue(agent, eligible_tools(agent))
+        if not added:
+            try:
+                from vaf.whare_wananga import retrain
+                if retrain.has_pending():
+                    _ensure_worker(agent)
+            except Exception:
+                pass
+        return added
     except Exception:
         return 0
 
@@ -124,11 +134,23 @@ def _run_worker(agent) -> None:
     global _current
     while True:
         with _lock:
-            if not _queue:
-                _current = None
-                return
-            tool = _queue.pop(0)
+            tool = _queue.pop(0) if _queue else None
             _current = tool
+        if tool is None:
+            # Eager queue empty: drain ONE queued re-training (gate-failing records,
+            # vaf/whare_wananga/retrain.py). Runs HERE in the worker thread -- never
+            # in the scanner -- so exactly one training runs at a time (an empty
+            # eager queue does NOT mean the worker is idle; Rule 4.6). Gated by the
+            # same opt-in eager flag; declare-mode records stay excluded.
+            try:
+                from vaf.whare_wananga import retrain
+                if is_enabled() and retrain.drain_one(agent) is not None:
+                    continue  # look again: more retrains or new eager items
+            except Exception:
+                pass
+            with _lock:
+                _current = None
+            return
         try:
             obj = (getattr(agent, "tools", {}) or {}).get(tool)
             # re-check at run time (state may have changed since enqueue)

@@ -18,12 +18,15 @@ It is distinct from two neighbouring concepts:
   the producers (training dashboard + the `vaf ww` CLI, plus a one-pass sweep over all tools); the
   **proactive** delivery (router-driven pitfalls injection into the tool schema); the
   **reactive** delivery (re-feed a failed tool's know-how on error, with a known-vs-novel surprise
-  signal); **runtime re-learning** (a novel runtime error is distilled into a new pitfall from the
-  real observation); **eager training** (opt-in background scanner + serialized queue that
-  auto-trains safe, configured, unlearned tools); schema-hash invalidation (a changed tool
-  definition flips its record to `stale`, so outdated know-how is no longer delivered until
-  re-trained); and **Teacher/Noho co-learning** (opt-in: after a weak local run, a stronger
-  configured API model co-learns the tool over the same loop).
+  signal; may deliver gate-failing records tagged UNVERIFIED); **runtime re-learning** (a novel
+  runtime error is distilled into a new pitfall from the real observation); **eager training**
+  (opt-in background scanner + serialized queue that auto-trains safe, configured, unlearned
+  tools); schema-hash invalidation (a changed tool definition flips its record to `stale`, so
+  outdated know-how is no longer schema-injected until re-trained); the **re-training queue**
+  (gate-failing records - stale/draft/declare/interrupted - are enqueued instead of rotting
+  silently; drained manually via `vaf ww retrain --pending` or automatically in the eager worker);
+  and **Teacher/Noho co-learning** (opt-in: after a weak local run, a stronger configured API
+  model co-learns the tool over the same loop).
 - **Planned:** declared-vs-actual via the Action tag; auto-training agent-created tools; teacher
   continuity (per-tool session memory).
 
@@ -237,9 +240,29 @@ facts ("no required arguments", "requires an admin session", "limit is optional"
 *fuller* know-how -- pitfalls + procedure + verification (`delivery.tool_knowhow`) -- as a deferred
 system nudge (the same `_post_tc_messages` channel used for other tool-error nudges), so the loop's
 natural re-generation retries informed. Once per tool per turn (to avoid an inject->fail->inject
-loop), same quality gate, hard fail-safe. The error is re-checked from the raw result, and a cheap
+loop), hard fail-safe. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
+
+Unlike the A-track, the reactive lane runs **relaxed** (`allow_unverified=True`): a record that
+fails the quality gate (declare-mode, stale, draft) is still delivered, prefixed with an explicit
+`UNVERIFIED - <reason>` tag. Rationale (blue378604 incident): the call has ALREADY failed, so a
+possibly-imperfect hint costs little -- while the withheld record often holds exactly the missing
+knowledge (document_writer's declare-mode record contained the fix for the live failure and was
+never delivered). The vacuous-pitfall filter still applies. The A-track schema injection stays
+strictly gated on `status=confirmed` + `challenge_passed` + a probed `learn_mode`.
+
+**Re-training queue (built).** A record that fails the delivery gate no longer rots: every gate
+reject (and every record newly marked `stale` by the schema-hash invalidation) is enqueued in
+`~/.vaf/whare_wananga_retrain.json` -- deliberately OUTSIDE the store dir, which `store.list_tools`
+globs. The queue is drained one tool at a time via the shared jobs runner: manually
+(`vaf ww retrain --pending`, `vaf ww queue [--scan]`) or automatically inside the **eager worker
+thread** when `whare_wananga_eager_enabled` is on (never in the scanner thread -- an empty eager
+queue does not mean the worker is idle). Limits: 3 attempts per tool, 24h cooldown between
+attempts. Declare-mode records are excluded from draining by default (re-training deterministically
+reproduces declare; `--include-declare` is the escape hatch). Cross-process caveat: job status is
+process-local, so drain from one side at a time (a CLI drain cannot see an in-app training).
+Implementation: `vaf/whare_wananga/retrain.py`.
 
 **Runtime re-learning (built).** A novel, *learnable* runtime error (environmental/transient errors
 like DNS/timeout/5xx are filtered out) is turned into a new learned pitfall from the real
@@ -292,6 +315,10 @@ vaf ww train create_contact          # train one tool (live trace, final summary
 vaf ww train memory_search --quick    # small batches -- fast smoke test
 vaf ww train --all                    # queue: every not-yet-learned tool (--force includes learned)
 vaf ww retrain update_intent          # alias for train (a run is a fresh assessment)
+vaf ww retrain --pending              # drain the re-training queue (gate-failing records)
+vaf ww retrain --pending --include-declare   # also re-train declare-mode records
+vaf ww queue                          # show the re-training queue (reason, attempts, drainable)
+vaf ww queue --scan                   # seed the queue from gate-failing store records
 vaf ww list                           # learned tools + state + confidence
 vaf ww show create_contact            # the three baskets
 vaf ww delete create_contact          # drop the stored knowledge
@@ -317,7 +344,8 @@ bypassed and probes reach the tool's own validation.
 | `vaf/whare_wananga/cli.py` | training CLI (runs the loop synchronously in the foreground) |
 | `vaf/whare_wananga/delivery.py` | delivery read-path: gated lookups for runtime injection -- `tool_pitfalls` (proactive), `tool_knowhow` + `known_pitfall_hit` (reactive) |
 | `vaf/whare_wananga/runtime.py` | LAZY-corrective: distil a new pitfall from a novel runtime error (`maybe_relearn`) |
-| `vaf/whare_wananga/eager.py` | opt-in eager scanner + serialized training queue (`scan`, `enqueue`, `start`) |
+| `vaf/whare_wananga/eager.py` | opt-in eager scanner + serialized training queue (`scan`, `enqueue`, `start`); its worker also drains the re-training queue |
+| `vaf/whare_wananga/retrain.py` | persistent re-training queue for gate-failing records (`enqueue`, `pending`, `scan_store`, `drain_one`) |
 | `vaf/whare_wananga/teacher.py` | opt-in Teacher/Noho co-learning: trigger, gating, serial worker, teacher-model selection (`maybe_teach`) |
 | `vaf/cli/cmd/ww.py` | `vaf ww` Typer wrapper around the CLI |
 | `vaf/whare_wananga/__init__.py` | package exports |

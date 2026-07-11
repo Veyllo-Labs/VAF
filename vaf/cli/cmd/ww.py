@@ -15,7 +15,7 @@ from vaf.whare_wananga import cli as _ww
 app = typer.Typer(help="Whare Wananga tool self-learning (train / inspect tool know-how)")
 
 
-def _train(tools, all_, force, quick, verbose):
+def _train(tools, all_, force, quick, verbose, pending=False, include_declare=False):
     argv = ["train"]
     if tools:
         argv += list(tools)
@@ -25,6 +25,10 @@ def _train(tools, all_, force, quick, verbose):
         argv.append("--force")
     if quick:
         argv.append("--quick")
+    if pending:
+        argv.append("--pending")
+    if include_declare:
+        argv.append("--include-declare")
     if verbose:
         argv.append("--verbose")
     raise typer.Exit(_ww.main(argv))
@@ -36,10 +40,13 @@ def train(
     all: bool = typer.Option(False, "--all", help="train every tool in a queue"),
     force: bool = typer.Option(False, "--force", help="with --all, retrain already-learned tools too"),
     quick: bool = typer.Option(False, "--quick", help="small batches for a fast smoke test"),
+    pending: bool = typer.Option(False, "--pending", help="drain the re-training queue (gate-failing records)"),
+    include_declare: bool = typer.Option(False, "--include-declare",
+                                         help="with --pending: also re-train declare-mode records"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="print every probe"),
 ):
     """Train one or more tools (foreground, live)."""
-    _train(tools, all, force, quick, verbose)
+    _train(tools, all, force, quick, verbose, pending, include_declare)
 
 
 @app.command()
@@ -48,10 +55,22 @@ def retrain(
     all: bool = typer.Option(False, "--all"),
     force: bool = typer.Option(False, "--force"),
     quick: bool = typer.Option(False, "--quick"),
+    pending: bool = typer.Option(False, "--pending", help="drain the re-training queue (gate-failing records)"),
+    include_declare: bool = typer.Option(False, "--include-declare",
+                                         help="with --pending: also re-train declare-mode records"),
     verbose: bool = typer.Option(False, "-v", "--verbose"),
 ):
     """Alias for train (a run is a fresh assessment)."""
-    _train(tools, all, force, quick, verbose)
+    _train(tools, all, force, quick, verbose, pending, include_declare)
+
+
+@app.command()
+def queue(
+    scan: bool = typer.Option(False, "--scan", help="seed the queue from gate-failing store records"),
+):
+    """Show the re-training queue for gate-failing records (stale/draft/declare/...)."""
+    argv = ["queue"] + (["--scan"] if scan else [])
+    raise typer.Exit(_ww.main(argv))
 
 
 @app.command(name="list")

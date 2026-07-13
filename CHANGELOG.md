@@ -153,8 +153,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   messenger (two messages per run); it now skips the messenger push on a confirmed
   in-run delivery, in BOTH lanes: workflow-based (send step result) and prompt-based
   (send-tool success in the agent history - live incident: the daily calendar check
-  messaged the user twice). Detection is conservative: a failed or unclear send keeps
-  the push (a duplicate beats a lost message). The "saved file" line in the Web UI
+  messaged the user twice). The history check also recognizes the end-of-turn squash
+  form: chat_step consolidates tool results into one "[Context: tools used this turn]"
+  system note, which is the only shape left by the time the post-run delivery decision
+  runs (live: a real send was missed and the user got the push on top). Detection is
+  conservative: a failed or unclear send keeps the push (a duplicate beats a lost
+  message). The "saved file" line in the Web UI
   result showed the raw last-step result string (live: "Gespeichert: Message sent to
   the user via Telegram.") - it now appears only when the last step's output actually
   is a file on disk.

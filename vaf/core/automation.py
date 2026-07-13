@@ -235,19 +235,40 @@ def _wait_for_abandoned_run(chat_done: dict, grace_seconds: float = _TIMEOUT_GRA
 def _delivered_via_agent_history(history) -> bool:
     """True if a send tool confirmed delivery during a prompt-based agent run.
 
-    Prompt-based automations deliver in-run via tool calls; the tool result in
-    the agent history carries the shared success phrase. Same conservative
-    contract as _delivered_via_send_step: only an explicit send-tool success
-    suppresses the post-run push - a duplicate message beats a lost one.
+    Prompt-based automations deliver in-run via tool calls. TWO history shapes
+    must be recognized: live role='tool' entries (turn still running), and the
+    END-OF-TURN SQUASH - chat_step consolidates all intermediate messages into
+    one '[Context: tools used this turn]' system note with '- <tool> -> OK:
+    <snippet>' lines (agent.py turn finalize). The dedup reads the history
+    AFTER the turn ended, so the squashed form is the one that matters (live
+    2026-07-13 15:52: a real send_to_user delivery was missed and the user got
+    the push on top). Same conservative contract as _delivered_via_send_step:
+    only an explicit send-tool SUCCESS suppresses the post-run push - a
+    duplicate message beats a lost one.
     """
+    try:
+        from vaf.core.context import TURN_CONTEXT_PREFIX as _CTX_PREFIX
+    except Exception:
+        _CTX_PREFIX = "[Context:"
     for m in history or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = str(m.get("content") or "")
         if (
-            isinstance(m, dict)
-            and m.get("role") == "tool"
+            role == "tool"
             and m.get("name") in _SEND_STEP_TOOLS
-            and "sent to the user via" in str(m.get("content") or "").lower()
+            and "sent to the user via" in content.lower()
         ):
             return True
+        if role == "system" and content.startswith(_CTX_PREFIX):
+            for line in content.splitlines():
+                line = line.strip()
+                if not line.startswith("- ") or " → OK: " not in line:
+                    continue
+                name, _, rest = line[2:].partition(" → OK: ")
+                if name.strip() in _SEND_STEP_TOOLS and "sent to the user via" in rest.lower():
+                    return True
     return False
 
 

@@ -279,3 +279,41 @@ def test_thinking_callers_opt_out_of_recording():
     assert not without_opt_out, (
         f"thinking-mode send_to_main_messenger call(s) missing record=False: {without_opt_out}"
     )
+
+
+# ── dedup must survive the end-of-turn history squash (live 2026-07-13 15:52) ─
+
+def _squash(entries):
+    # Build the squashed note with the REAL runtime function so this test can
+    # never drift from the actual squash format (agent.py turn finalize
+    # consolidates tool entries into one '[Context: ...]' system note - the
+    # dedup reads history AFTER that happened).
+    from vaf.core.context import summarize_tool_turn
+    note = summarize_tool_turn(entries)
+    assert note, "squash produced nothing - fixture broken"
+    return [{"role": "system", "content": note}]
+
+
+def test_agent_history_dedup_detects_send_in_squashed_note():
+    from vaf.core.automation import _delivered_via_agent_history
+    squashed = _squash([{
+        "role": "tool", "tool_call_id": "1", "name": "send_to_user",
+        "content": "Message and document tagesbericht_1552.html sent to the user via Telegram.",
+    }])
+    assert _delivered_via_agent_history(squashed) is True
+
+
+def test_squashed_failed_or_foreign_lines_keep_the_push():
+    from vaf.core.automation import _delivered_via_agent_history
+    # failed send in the squash -> push stays on
+    failed = _squash([{
+        "role": "tool", "tool_call_id": "1", "name": "send_to_user",
+        "content": "Could not deliver via messenger: no main_messenger configured.",
+    }])
+    assert _delivered_via_agent_history(failed) is False
+    # success phrase inside a NON-send tool's snippet -> push stays on
+    foreign = _squash([{
+        "role": "tool", "tool_call_id": "1", "name": "web_search",
+        "content": "docs say: Message sent to the user via Telegram.",
+    }])
+    assert _delivered_via_agent_history(foreign) is False

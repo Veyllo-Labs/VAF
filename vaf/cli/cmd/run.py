@@ -47,7 +47,7 @@ def _make_cli_agent(verbose: bool = False) -> Agent:
     CLI-only. The Web/Channel paths keep their server-validated JWT scope and are NOT
     affected; the multi-user separation there is untouched.
     """
-    a = Agent(verbose=verbose)
+    a = Agent(verbose=verbose, run_kind="chat")
     try:
         from uuid import UUID
         from vaf.core.config import get_local_admin_scope_id, get_local_admin_username

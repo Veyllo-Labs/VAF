@@ -59,9 +59,17 @@ def _now() -> datetime:
     return datetime.now()
 
 
+# Per-message content cap for stored bundles. The only reader
+# (_render_handoff_bundle) digests the last 8 messages at ~300 chars each, so
+# storing unbounded content (or image payloads) is pure privacy residue on disk.
+_MAX_MSG_CONTENT = 4000
+
+
 def _sanitize_history(history: Optional[List[dict]]) -> List[dict]:
     """Reduce each message to JSON-safe known keys, coercing content to str. A defensive copy so the
-    stored bundle can never be corrupted by a transient/non-serializable object on the live history."""
+    stored bundle can never be corrupted by a transient/non-serializable object on the live history.
+    Data minimization: multimodal content keeps only its text parts (never base64 image payloads),
+    and content is capped at _MAX_MSG_CONTENT chars."""
     out: List[dict] = []
     for msg in (history or []):
         if not isinstance(msg, dict):
@@ -71,8 +79,17 @@ def _sanitize_history(history: Optional[List[dict]]) -> List[dict]:
             if k not in msg or msg[k] is None:
                 continue
             v = msg[k]
+            if k == "content" and isinstance(v, list):
+                # Multimodal parts: keep text, drop image/audio payloads.
+                texts = []
+                for part in v:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        texts.append(str(part.get("text") or ""))
+                v = "\n".join(t for t in texts if t)
             if k == "content" and not isinstance(v, str):
                 v = str(v)
+            if k == "content" and len(v) > _MAX_MSG_CONTENT:
+                v = v[:_MAX_MSG_CONTENT] + " ...[truncated]"
             clean[k] = v
         if clean:
             out.append(clean)
@@ -196,6 +213,11 @@ def update_status(user_scope_id: Optional[str], bundle_id: str, status: str) -> 
         return None
     data["status"] = status
     data["updated_at"] = _now().isoformat()
+    if status == "resolved":
+        # A resolved bundle's history has no remaining reader (the pickup digest
+        # was already rendered) - keep metadata + summary for audit, drop the
+        # snapshot. Removes exactly the data that is pure privacy residue.
+        data.pop("history", None)
     _write_atomic(path, data)
     return data
 

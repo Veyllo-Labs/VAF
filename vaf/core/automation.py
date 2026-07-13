@@ -1263,7 +1263,7 @@ vaf automation delete <id>   # Delete task
                 from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 
                 # Initialize agent to get tools
-                agent = Agent(verbose=False)
+                agent = Agent(verbose=False, run_kind="automation")
                 agent.load_model()
                 agent.init_chat()
                 # Background run: this agent must stay SILENT — its tool_update emits must never broadcast
@@ -1437,7 +1437,7 @@ vaf automation delete <id>   # Delete task
                 from vaf.core.agent import Agent
                 import re
                 
-                agent = Agent(verbose=False)
+                agent = Agent(verbose=False, run_kind="automation")
                 agent.load_model()
                 agent.init_chat()
                 # RUNAWAY GUARD: a prompt-based automation fallback must NOT recursively spawn workflows or

@@ -79,6 +79,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   flag deliverable steps in create mode as well.
 
 ### Fixed
+- **Background-run identity no longer leaks between concurrent runs.** ask_user's
+  automation-handoff branch, thinking/automation tool registration and dispatch
+  injection gated on process-wide env vars (VAF_IN_AUTOMATION / VAF_THINKING_MODE),
+  which are shared across threads: while a scheduled automation was running, a
+  concurrent thinking run's question was misrouted into an automation handoff
+  bundle (three occurrences in the 07:00 window), which later steered a user reply
+  into unintended actions. Agents now carry a per-instance run kind stamped at
+  construction (thinking / automation / chat); env remains only a fallback for
+  embedders. Handoff bundles are additionally data-minimized: text-only capped
+  snapshots, and resolved bundles drop their history entirely.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

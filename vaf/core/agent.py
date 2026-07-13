@@ -325,8 +325,22 @@ class Agent:
 
             return True
 
-    def __init__(self, verbose=False, register_signals=True, config_overrides=None):
+    def __init__(self, verbose=False, register_signals=True, config_overrides=None, run_kind=None):
         self.verbose = verbose
+        # Per-instance run kind: 'thinking' | 'automation' | 'chat' | None.
+        # Tool registration and dispatch decisions MUST use this instance truth,
+        # never the process-global env vars: env is shared across threads, so a
+        # concurrent automation run makes every other agent in the process look
+        # like an automation (live incident 2026-07-13: a thinking question was
+        # misrouted into an automation handoff bundle). The env sniff below is
+        # only a fallback for constructors that predate the kwarg (embedders,
+        # subprocess lanes) - first-party construction sites pass it explicitly.
+        if run_kind is None:
+            if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                run_kind = "thinking"
+            elif os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+                run_kind = "automation"
+        self._run_kind = run_kind
         self.config = Config.load()
         # Programmatic config injection for embedding VAF as a library.
         # Merges on top of the on-disk config without writing ~/.vaf/config.json,
@@ -1713,13 +1727,19 @@ class Agent:
                         #  - no set_timer / direct user-facing scheduled actions (propose via ask_user; the
                         #    main agent carries it out after the user confirms),
                         #  - no write_file (a propose-only background run must not create files).
-                        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                        # Registration gates key on the per-instance run kind (see __init__):
+                        # env vars race across threads - a chat agent constructed during a
+                        # thinking window would otherwise gain thinking tools and silently
+                        # lose git/memory_save/set_timer/write_file for its whole lifetime.
+                        _rk_thinking = self._run_kind == "thinking"
+                        _rk_automation = self._run_kind == "automation"
+                        if _rk_thinking:
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
                                                  "update_user_identity", "set_timer", "write_file"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
-                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                            if not _rk_thinking:
                                 continue
                             self.tools[instance.name] = instance
                             continue
@@ -1728,22 +1748,20 @@ class Agent:
                         # a scheduled automation — a background automation that hits a genuine blocker hands
                         # off via this same channel (it then carries a handoff bundle; see ask_user routing).
                         if instance.name == "ask_user":
-                            _thinking = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
-                            _automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
-                            if not (_thinking or _automation):
+                            if not (_rk_thinking or _rk_automation):
                                 continue
                             self.tools[instance.name] = instance
                             continue
                         # thinking_workspace_* tools: ONLY in thinking mode
                         if instance.name.startswith("thinking_workspace_"):
-                            if os.environ.get("VAF_THINKING_MODE", "").strip() not in ("1", "true", "yes"):
+                            if not _rk_thinking:
                                 continue
                             self.tools[instance.name] = instance
                             continue
-                        
+
                         # save_thinking_suggestion: available in thinking mode for proactive suggestions
                         if instance.name == "save_thinking_suggestion":
-                            if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                            if _rk_thinking:
                                 self.tools[instance.name] = instance
                                 continue
                         # thinking_note_add: available in both modes — agent can save notes during
@@ -1756,7 +1774,7 @@ class Agent:
                         
                         # When context is very small (<= 4096), exclude automation management tools to save space.
                         # Automation agent gets the same tools as main agent (no exclusions).
-                        is_in_automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
+                        is_in_automation = self._run_kind == "automation"
                         n_ctx = self.config.get("n_ctx", 8192)
                         if not is_in_automation and n_ctx <= 4096:
                             SMALL_CTX_EXCLUDED_TOOLS = [
@@ -9594,15 +9612,16 @@ class Agent:
                     # configured main_messenger, would push that non-admin's private question to the
                     # admin's Telegram/WhatsApp/Discord. Inject the real scope/username in thinking mode
                     # AND automation; the handoff-bundle `_agent` is automation-only.
-                    _au = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
-                    _th = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
+                    _au = getattr(self, "_run_kind", None) == "automation"
+                    _th = getattr(self, "_run_kind", None) == "thinking"
                     if _au or _th:
                         tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                         tool_args["username"] = getattr(self, "_current_username", None) or "admin"
-                    if _au:
-                        # A background automation handing off to the user's main agent: give the tool the
-                        # live agent so it can snapshot the full working history into a handoff bundle.
-                        tool_args["_agent"] = self
+                    # ALWAYS pass the live agent: the tool branches on the CALLER's
+                    # run kind itself (instance truth), so a thinking question can
+                    # never take the automation-handoff path because some other
+                    # run's env var happened to be set (incident 2026-07-13).
+                    tool_args["_agent"] = self
                 if name in ("update_intent", "update_working_memory"):
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("set_timer", "list_timers", "cancel_timer"):

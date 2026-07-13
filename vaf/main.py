@@ -722,7 +722,7 @@ def prompt_command(
         except FileNotFoundError:
             loaded_session = None
 
-    agent = Agent(verbose=False)
+    agent = Agent(verbose=False, run_kind="chat")
     agent.init_chat()
 
     # Restore session history if provided (keeps system prompt at history[0])

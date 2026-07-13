@@ -351,7 +351,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         _agent_attempt += 1
         _lifecycle(f"Agent init attempt {_agent_attempt}")
         try:
-            agent = Agent(verbose=False, register_signals=False)
+            agent = Agent(verbose=False, register_signals=False, run_kind="chat")
             _lifecycle("Agent() constructor OK, calling init_chat()")
             agent.init_chat()
             _lifecycle("init_chat() OK")

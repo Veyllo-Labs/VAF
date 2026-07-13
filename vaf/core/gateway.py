@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
         UI.success = adapter.success
         UI.warning = adapter.warning
         
-        agent_instance = Agent(verbose=False)
+        agent_instance = Agent(verbose=False, run_kind="chat")
         
         # Run init_chat in thread to avoid blocking startup
         loop = asyncio.get_running_loop()

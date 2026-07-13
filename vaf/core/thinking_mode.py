@@ -2387,7 +2387,7 @@ def _run_thinking_for_user(
     try:
         from vaf.core.agent import Agent
 
-        agent = Agent(verbose=False)
+        agent = Agent(verbose=False, run_kind="thinking")
         agent.load_model()
         # Set user context BEFORE init_chat() so system prompt (User Identity, RAG scope) and tools get the right user
         agent._current_user_scope_id = user_scope_id

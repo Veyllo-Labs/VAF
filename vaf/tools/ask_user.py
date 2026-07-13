@@ -89,7 +89,21 @@ class AskUserTool(BaseTool):
         # automation agent's FULL working context as a bundle, record the linked request, then end. The
         # main agent loads the bundle and continues when the user replies. (The thinking-mode path below
         # is untouched.)
-        if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
+        # The branch keys on the CALLING agent's per-instance run kind, never on the
+        # process-global env: env is shared across threads, so a concurrent automation
+        # made a thinking run's question take this handoff path (live 2026-07-13, and
+        # twice before in the same 07:00 window). Env fallback only when no agent
+        # instance was injected (direct tool invocation, tests).
+        _agent = kwargs.get("_agent")
+        _MISSING = object()
+        _rk = getattr(_agent, "_run_kind", _MISSING) if _agent is not None else _MISSING
+        if _rk is not _MISSING:
+            # Real agents always carry _run_kind (set in __init__); None means a
+            # plain chat agent - explicitly NOT an automation, even mid-window.
+            in_automation = _rk == "automation"
+        else:
+            in_automation = os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
+        if in_automation:
             return self._run_automation_handoff(**kwargs)
 
         try:

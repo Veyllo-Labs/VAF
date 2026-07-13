@@ -32,7 +32,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `find_files` | read | Find files by glob pattern, recursively. |
 | `list_files` | read | List files in a directory. |
 | `tree` | read | ASCII tree of a directory structure. |
-| `librarian_agent` | write | Sub-agent for file system / storage / retrieval. |
+| `librarian_agent` | write | Sub-agent for file system / storage / retrieval; no delete capability - deletion tasks are refused with an explicit capability statement. |
 
 ## Documents (create, edit, view)
 

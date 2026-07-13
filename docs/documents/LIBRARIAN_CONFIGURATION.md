@@ -6,6 +6,8 @@ The VAF Librarian Agent now supports **user-configurable settings** for file siz
 
 **Access scope (multi-user):** the librarian runs under a per-user filesystem jail. A remote (non-admin) user can read only their own `VAF_Projects/<uid[:8]>/`; the local admin / machine owner keeps full access; another user's data is never readable. See [USER_ISOLATION.md](../security/USER_ISOLATION.md#librarian-agent-vaftoolslibrarianpy-vaftoolsfilesystempy).
 
+**No delete capability (deliberate):** the librarian never deletes files or folders - there is no delete tool and the sandbox cannot modify host files. Deletion tasks are refused with an explicit capability statement (never an error-styled message that would invite retries); deletion must be handled elsewhere with explicit user confirmation.
+
 ## Configuration File
 
 Settings are stored in: **`~/.vaf/config.json`**

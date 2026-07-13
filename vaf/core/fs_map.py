@@ -3,6 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import os
 import platform
+import re
 import time
 import json
 from pathlib import Path
@@ -345,9 +346,16 @@ Current OS: {self.map['os']}
             Answer string if found, None if needs file search
         """
         q = question.lower()
-        
-        # Documents query
-        if any(kw in q for kw in ['document', 'pdf', 'txt', 'docx', 'doc']):
+        # Strip path-like tokens and filename mentions BEFORE intent matching: a task
+        # text quoting '/home/user/Documents/x.html' or 'report.pdf' must never trigger
+        # a folder-stats answer (live 2026-07-13: four delete tasks were each answered
+        # with Documents statistics because 'document' substring-matched the PATH).
+        q = re.sub(r"\S*[/\\]\S*", " ", q)
+        q = re.sub(r"\b[\w-]+\.[a-z0-9]{1,5}\b", " ", q)
+
+        # Documents query (word-boundary matching: 'doc' must not match 'docker',
+        # 'mov' must not match 'remove')
+        if re.search(r"\b(documents?|dokumente?n?|pdfs?|txts?|docx|docs?)\b", q):
             docs = self.map['locations'].get('documents', {})
             types = docs.get('file_types', {})
             
@@ -363,7 +371,7 @@ Current OS: {self.map['os']}
             )
         
         # Pictures query
-        if any(kw in q for kw in ['picture', 'image', 'photo', 'jpg', 'png']):
+        if re.search(r"\b(pictures?|images?|photos?|fotos?|bilder|jpe?gs?|pngs?)\b", q):
             pics = self.map['locations'].get('pictures', {})
             types = pics.get('file_types', {})
             
@@ -374,13 +382,13 @@ Current OS: {self.map['os']}
             return f"Pictures folder: {jpg} JPGs, {png} PNGs (Total: {total} images)"
         
         # Downloads query
-        if 'download' in q:
+        if re.search(r"\bdownloads?\b", q):
             dl = self.map['locations'].get('downloads', {})
             total = dl.get('total_files', 0)
             return f"Downloads folder: {total} files"
         
         # Videos query
-        if any(kw in q for kw in ['video', 'movie', 'mp4', 'mov']):
+        if re.search(r"\b(videos?|movies?|filme?|mp4|mov)\b", q):
             vids = self.map['locations'].get('videos', {})
             total = vids.get('total_files', 0)
             return f"Videos folder: {total} files"

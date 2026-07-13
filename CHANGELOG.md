@@ -118,6 +118,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   guard against untagged chain-of-thought prefixes; the drain summary is based on the
   reasoning-stripped chat_step return value, and an empty-after-sanitize summary falls
   back to a deterministic localized result excerpt instead of a noise placeholder.
+- **The librarian refuses deletion tasks honestly instead of answering with folder
+  statistics.** The librarian has no delete capability, but its filesystem-map fast
+  path keyword-matched 'document' inside a task's PATH ('/home/.../Documents/...')
+  and answered four delete/verify tasks with canned Documents statistics - neither
+  doing nor refusing anything, which fueled the caller's retries. Destructive tasks
+  (destructive verb governing a file/folder/path target, DE+EN, per sentence) are now
+  refused before any fast path with an explicit capability statement; the map's quick
+  answers match intent words with word boundaries after stripping paths and filenames
+  ('mov' no longer matches 'remove', 'doc' no longer matches 'docker'), and the tool
+  description tells the delegating agent up front that deletion is impossible.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

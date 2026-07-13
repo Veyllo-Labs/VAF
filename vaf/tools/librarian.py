@@ -48,6 +48,33 @@ except ImportError:
     HAS_PSUTIL = False
 
 
+# ── Destructive-intent detection (incident 2026-07-13) ──────────────────────
+# Per SENTENCE: a destructive verb governing a file/folder/path target. The
+# per-sentence rule keeps legitimate verification tasks alive: "Answer YES if
+# it exists, NO if deleted" carries the verb but no target in that sentence.
+_DESTRUCTIVE_VERB_RE = re.compile(
+    r"\b(delete[ds]?|deleting|remove[ds]?|removing|erase[ds]?|erasing|unlink(?:ed|ing)?"
+    r"|rm|rmdir|l(?:ö|oe)sch\w*|entfern\w*)\b",
+    re.IGNORECASE,
+)
+_DESTRUCTIVE_TARGET_RE = re.compile(
+    r"\b(files?|folders?|director(?:y|ies)|dir|datei(?:en)?|ordner|verzeichnis(?:se)?)\b"
+    r"|\S[/\\]\S",
+    re.IGNORECASE,
+)
+
+
+def _is_destruction_request(task: str) -> bool:
+    """True when any sentence pairs a destructive verb with a file/folder/path
+    target. The librarian has no delete capability; such tasks are refused
+    honestly instead of being hijacked by a fast path (live: four delete tasks
+    each got canned Documents statistics, fueling the caller's retries)."""
+    for sentence in re.split(r"[.!?;\n]+", task or ""):
+        if _DESTRUCTIVE_VERB_RE.search(sentence) and _DESTRUCTIVE_TARGET_RE.search(sentence):
+            return True
+    return False
+
+
 class LibrarianTool(BaseTool):
     """
     Smart Librarian that handles file/info retrieval tasks.
@@ -67,7 +94,8 @@ class LibrarianTool(BaseTool):
     - **Cloud Storage:** "What's in my Google Drive?", "Browse cloud", "List Drive folders"
     - **System Info:** "How many drives", "Hardware info"
     
-    Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent! Do not use this agent to search or analyze the VAF installation folder; that path is not allowed."""
+    Use this agent for ANY file system, cloud storage, or storage query. Do not say "I can't access files" - delegate to this agent! Do not use this agent to search or analyze the VAF installation folder; that path is not allowed.
+    This agent CANNOT delete files or folders - never delegate deletion tasks to it."""
     
     parameters = {
         "type": "object",
@@ -669,7 +697,25 @@ Remove duplicates and ensure smooth flow.
 
             # If we couldn't parse, force LLM slow-path instead of filesystem
             return None
-        
+
+        # ─────────────────────────────────────────────────────────────────────
+        # DESTRUCTIVE-INTENT GUARD (before all fast paths; after the web-results
+        # guard so a synthesis task QUOTING 'delete' near a URL is not refused)
+        # ─────────────────────────────────────────────────────────────────────
+        # The librarian has NO delete capability at all. On 2026-07-13 four delete
+        # tasks were each "answered" with canned Documents statistics (the fs-map
+        # fast path hijacked them), which fueled the caller's escalating retries.
+        # Refuse honestly and deterministically instead - and never phrase it like
+        # a transient error, or the caller retries.
+        if _is_destruction_request(task):
+            return (
+                "I cannot delete files or folders: the librarian agent has no delete "
+                "capability at all (it reads, lists, finds and analyzes; the sandbox "
+                "cannot modify host files). Nothing was deleted. If something must be "
+                "removed, the main agent has to do it itself with explicit user "
+                "confirmation - do not re-delegate deletion to this agent."
+            )
+
         # ─────────────────────────────────────────────────────────────────────
         # SMART FILESYSTEM MAP QUERY (Ultra-Fast Path)
         # ─────────────────────────────────────────────────────────────────────
@@ -2253,6 +2299,8 @@ home: {self.home}
 2. Do NOT think in loops - act decisively
 3. Summarize results (don't dump raw data)
 4. If unsure about path, use the home directory
+5. You CANNOT delete files or folders. There is no delete tool and python_sandbox
+   cannot modify host files. If the task requires deletion, refuse and state this.
 </rules>"""
 
         # Initialize context manager for this librarian agent session

@@ -275,6 +275,14 @@ class Config:
                 # blocking question to the user before auto-continuing. Off -> last-line "?" heuristic.
                 "autocontinue_question_classifier_enabled": True,
 
+                # Incident 2026-07-13 gates (both kill-switches, default on):
+                # (a) a reply to a tracked background question that is not a CLEAR
+                # affirmative must not mutate stored state or delegate destructive work;
+                "proactive_reply_mutation_gate_enabled": True,
+                # (c) once the agent's reply asked the user a blocking question, synthetic
+                # drain turns must not launch new write-level tools until the user answers.
+                "ask_first_drain_gate_enabled": True,
+
                 # Task-overwrite guard: replacing the whole task list (tasks=[...]) while steps are
                 # still pending can silently drop work in progress. The first such replace is bounced
                 # once with the pending steps listed ("are you sure?"); a re-call within the window

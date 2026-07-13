@@ -826,6 +826,97 @@ class Agent:
         except Exception:
             return None
 
+    # ── Incident 2026-07-13 gates: unconfirmed mutation from a proactive-reply turn ──
+    # Stored-state mutations and delegation lanes a misread background-question reply
+    # must never trigger without a clear confirmation.
+    _PROACTIVE_REPLY_MUTATION_TOOLS = frozenset({
+        "update_automation", "delete_automation", "create_automation",
+        "create_agent_workflow", "execute_workflow", "create_agent_tool",
+    })
+    _DELEGATION_TOOLS = frozenset({
+        "coding_agent", "librarian_agent", "research_agent", "document_agent",
+    })
+    _DESTRUCTIVE_TEXT_RE = re.compile(
+        r"\b(delete[ds]?|deleting|remove[ds]?|removing|erase[ds]?|erasing|unlink\w*|rm|rmdir"
+        r"|l(?:ö|oe)sch\w*|gel(?:ö|oe)scht|entfern\w*)\b",
+        re.IGNORECASE,
+    )
+    _NEGATION_RE = re.compile(r"\b(nicht|nein|kein\w*|no|not|don'?t|stop|niemals|never)\b", re.IGNORECASE)
+    _AFFIRMATIVE_RE = re.compile(
+        r"^(ja|jep|jup|jo|yes|yep|yeah|ok|okay|okey|klar|gerne|passt|go|los|mach(?:e|s| das| es| mal)?"
+        r"|do it|bitte mach|ja bitte|yes please)\b",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_clear_affirmative(cls, text) -> bool:
+        """Deterministic check: is this reply an unambiguous go-ahead? Anything with a
+        negation, or not starting with a known affirmative, counts as NOT confirmed -
+        the gate then asks instead of acting (duplicate question beats wrong action)."""
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+        if cls._NEGATION_RE.search(t):
+            return False
+        return bool(cls._AFFIRMATIVE_RE.match(t))
+
+    def _proactive_reply_gate_decision(self, name, tool_instance, tool_args):
+        """Gate (a): while this turn is a pickup of the user's reply to a tracked
+        background question (_thinking_reply_context set), stored-state mutations and
+        destructive delegation require a CLEAR affirmative reply - otherwise the tool
+        call is answered with a confirm-style RESULT (invariant 4.1: never a mid-loop
+        system message). Live incident: 'nein bitte nicht' was misread and the agent
+        mutated an automation and delegated a file deletion, all unconfirmed."""
+        try:
+            if not getattr(self, "_thinking_reply_context", None):
+                return None
+            if not Config.get("proactive_reply_mutation_gate_enabled", True):
+                return None
+            if self._is_clear_affirmative(getattr(self, "_thinking_reply_user_text", None)):
+                return None
+            gated = name in self._PROACTIVE_REPLY_MUTATION_TOOLS
+            if not gated and name in self._DELEGATION_TOOLS:
+                try:
+                    _args_text = " ".join(str(v) for v in (tool_args or {}).values())
+                except Exception:
+                    _args_text = ""
+                gated = bool(self._DESTRUCTIVE_TEXT_RE.search(_args_text))
+            if not gated:
+                return None
+            return (
+                f"[CONFIRM REQUIRED] The user's message is a reply to a background question and is "
+                f"NOT a clear confirmation. Do not change stored state or delegate destructive work "
+                f"based on it. Answer in text instead: acknowledge their reply and ask ONE short "
+                f"confirming question. '{name}' stays blocked for this turn."
+            )
+        except Exception:
+            return None
+
+    def _ask_first_gate_decision(self, name, tool_instance):
+        """Gate (c): once the agent's final reply asked the user a blocking question,
+        synthetic background turns (runner drain) may deliver results and read, but must
+        not launch NEW write-level tools or delegations until a real user message
+        arrives. Live incident: drain turns re-delegated file deletion twice AFTER the
+        agent itself had asked 'Soll ich die Datei jetzt direkt loeschen?'."""
+        try:
+            if not getattr(self, "_synthetic_drain_turn", False):
+                return None
+            if not getattr(self, "_pending_user_question", None):
+                return None
+            if not Config.get("ask_first_drain_gate_enabled", True):
+                return None
+            _perm = getattr(tool_instance, "permission_level", "read")
+            if _perm not in ("write", "dangerous") and name not in self._DELEGATION_TOOLS:
+                return None
+            return (
+                f"[AWAITING USER] You asked the user a question and they have not answered yet. "
+                f"Do not start new write actions or delegations until their reply arrives - "
+                f"summarize the available results in text only. '{name}' is blocked in this "
+                f"background turn."
+            )
+        except Exception:
+            return None
+
     def get_live_session_subagents(self) -> list:
         """Session-scoped, heartbeat-verified list of GENUINELY running sub-agent tasks.
 
@@ -6169,9 +6260,17 @@ class Agent:
         # Reset the thinking-reply context per turn so it persists across ALL generations of THIS turn
         # (set below from waiting_for_reply) but never leaks into the next turn.
         self._thinking_reply_context = None
+        # Raw user reply of a pickup turn - the proactive-reply mutation gate needs it to decide
+        # "clear affirmative" deterministically. Reset per turn with the context above.
+        self._thinking_reply_user_text = None
         # Set at reply pickup when the user answers a tracked background question; consumed once at the
         # end-of-turn return to stash the main agent's own reply onto that request. Reset per turn here.
         self._thinking_reply_pending = None
+        # Ask-first invariant: a REAL user message clears the pending-question latch; synthetic
+        # background turns (runner drain sets _synthetic_drain_turn) must NOT clear it - that is
+        # exactly the window in which new write actions stay blocked until the user answers.
+        if user_input and not skip_input and not getattr(self, "_synthetic_drain_turn", False):
+            self._pending_user_question = None
         
         try:
             append_domain_log("backend", "chat_step_start")
@@ -6247,6 +6346,7 @@ class Agent:
                                 self._thinking_reply_pending = {"scope": _scope, "request_id": _req_id}
                             except Exception:
                                 pass
+                        self._thinking_reply_user_text = user_input
                         _carry = f" If they CLEARLY confirm, carry out this proposal now: {_action}." if _action else ""
                         # If this request came from a background AUTOMATION handoff, it links to a bundle that
                         # holds the automation agent's FULL working context. Load it (same scope only) and
@@ -9218,6 +9318,15 @@ class Agent:
                     pass
                 if not _ac_needs_user:
                     _ac_needs_user = self._reply_needs_user(history_content)
+                # Ask-first invariant: latch "the agent is waiting on the user" so synthetic
+                # background turns (runner drain) cannot launch new write actions meanwhile.
+                # Only SET here; cleared exclusively by a real user message at chat_step entry
+                # (a later non-question background reply does not mean the user answered).
+                if _ac_needs_user:
+                    try:
+                        self._pending_user_question = {"preview": (history_content or "")[-160:]}
+                    except Exception:
+                        pass
                 if (_ac_on and not _ac_thinking and not _ac_needs_user and _ac_budget_left
                         and not tool_calls_detected and not auto_retry
                         and getattr(self, "main_persistence", None)):
@@ -9467,6 +9576,16 @@ class Agent:
         _ww = getattr(self, "_ww_training", False)
         if not _ww:
             gate_msg = self._plan_gate_decision(name, tool_instance)
+            if gate_msg is not None:
+                return gate_msg
+            # Incident 2026-07-13 gates (order after the plan gate, before execution):
+            # (a) a non-affirmative reply to a background question must not mutate state,
+            # (c) while the agent awaits the user's answer, drain turns must not start
+            # new write work. Both return confirm-style RESULTS (never raise/prompt).
+            gate_msg = self._proactive_reply_gate_decision(name, tool_instance, args)
+            if gate_msg is not None:
+                return gate_msg
+            gate_msg = self._ask_first_gate_decision(name, tool_instance)
             if gate_msg is not None:
                 return gate_msg
 

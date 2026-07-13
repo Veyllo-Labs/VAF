@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (251 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (253 keys).
 
 ## How configuration is set
 
@@ -146,6 +146,8 @@ These are sent only on the local path; cloud APIs ignore them.
 | `team_await_enabled` | `True` | When a reply claims completion while a sub-agent still runs, keep the reply (never erased) and append a "work not finished" note for the next turn. |
 | `autocontinue_pending_tasks_enabled` | `True` | Keep working within the turn while tasks remain pending. |
 | `autocontinue_question_classifier_enabled` | `True` | LLM check whether a reply is a blocking question before auto-continuing. |
+| `proactive_reply_mutation_gate_enabled` | `True` | A reply to a background question that is not a clear affirmative cannot mutate stored state or delegate destructive work (confirm-style block). |
+| `ask_first_drain_gate_enabled` | `True` | While the agent awaits the user's answer to its own question, background drain turns cannot start new write-level tools or delegations. |
 | `task_overwrite_guard_enabled` | `True` | Confirm before replacing the whole task list while steps are pending. |
 | `task_overwrite_confirm_window_seconds` | `120` | Re-call within this window = confirmed. |
 | `workflow_step_validation_enabled` | `True` | LLM check that a workflow step met its goal. |

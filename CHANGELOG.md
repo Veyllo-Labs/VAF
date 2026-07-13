@@ -98,6 +98,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a plain-question note otherwise, and every lane is reply-conditional: clear
   agreement continues, a decline changes nothing, an ambiguous reply gets exactly one
   confirming question before any action. Each pickup writes a [REPLY_CTX] audit line.
+- **Two confirmation gates stop unconfirmed actions around background questions.**
+  (a) While a turn handles the user's reply to a tracked background question, stored-state
+  mutations (automation create/update/delete, workflow/tool builders) and destructive
+  sub-agent delegation are blocked with a confirm-style result unless the reply is a
+  clear affirmative - the agent acknowledges and asks one confirming question instead
+  (live incident: a misread "nein bitte nicht" mutated an automation and delegated a
+  file deletion). (c) Once the agent's own reply asked the user a blocking question,
+  background drain turns deliver results but cannot launch new write-level tools or
+  delegations until the user answers; the drain's retry instruction becomes a status
+  report meanwhile (live incident: deletion was re-delegated twice AFTER the agent had
+  asked "Soll ich die Datei jetzt direkt loeschen?"). Kill-switches:
+  proactive_reply_mutation_gate_enabled, ask_first_drain_gate_enabled.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

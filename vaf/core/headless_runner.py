@@ -2377,7 +2377,26 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _per_limit = 4000 if _is_coding_result else 1000
                                 combined_results = "\n\n---\n\n".join(r[:_per_limit] for r in found_results_text) if found_results_text else ""
 
-                                if any_needs_retry:
+                                if any_needs_retry and getattr(agent, "_pending_user_question", None):
+                                    # Ask-first invariant (incident 2026-07-13): the agent asked the user a
+                                    # question that is still unanswered - the retry command below drove
+                                    # repeated unconsented re-delegation. Report status instead; a retry can
+                                    # happen after the user replies.
+                                    if user_lang == "de":
+                                        instruction_prompt = (
+                                            "Das Sub-Agent-Ergebnis erfüllt die Anfrage nicht, aber du wartest gerade "
+                                            "auf die Antwort des Nutzers auf deine offene Frage.\n"
+                                            "Starte KEINEN neuen Versuch und keine neuen Aktionen. Fasse kurz und ehrlich "
+                                            "zusammen, was das Ergebnis war, und warte auf die Antwort. ANTWORTE AUF DEUTSCH."
+                                        )
+                                    else:
+                                        instruction_prompt = (
+                                            "The sub-agent result did not fulfill the request, but you are currently "
+                                            "waiting for the user's answer to your open question.\n"
+                                            "Do NOT retry and do not start new actions. Briefly and honestly summarize "
+                                            "what the result was, then wait for their reply."
+                                        )
+                                elif any_needs_retry:
                                     if user_lang == "de":
                                         instruction_prompt = (
                                             "Der Sub-Agent-Ergebnis erfüllt die Anfrage des Benutzers NICHT.\n"
@@ -2449,13 +2468,21 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             session_id=getattr(agent, "current_session_id", None)
                                         )
 
-                                agent.chat_step(
-                                    user_input=instruction_prompt,
-                                    stream_callback=webui_stream_callback,
-                                    skip_input=False,
-                                    disable_workflows=True,
-                                    disable_tools=False
-                                )
+                                # SYNTHETIC background turn for the whole drain call: the ask-first
+                                # gate keys on this flag, and chat_step must not treat the
+                                # instruction prompt as a real user message (it would clear the
+                                # pending-question latch). Restored on EVERY exit path (Rule 4.5).
+                                agent._synthetic_drain_turn = True
+                                try:
+                                    agent.chat_step(
+                                        user_input=instruction_prompt,
+                                        stream_callback=webui_stream_callback,
+                                        skip_input=False,
+                                        disable_workflows=True,
+                                        disable_tools=False
+                                    )
+                                finally:
+                                    agent._synthetic_drain_turn = False
 
                                 # POST-CHAT: Emit final message + save session
                                 # (mirrors main chat path – ensures browser sees the response even

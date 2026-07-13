@@ -592,12 +592,16 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
                     should_run_now = False
                     catchup_skipped_note = skip_msg or ""
             
-            # Try to auto-start scheduler if not already running
+            # Try to auto-start the scheduler if not already running. MUST go through
+            # the process-wide singleton (ensure_scheduler_running): this tool's own
+            # manager instance has _running=False even while the real scheduler runs,
+            # and starting on it re-registered every task into the module-global
+            # `schedule` registry a second time (live 2026-07-13: double TRIGGER on
+            # every automation; only the run lock prevented double execution).
             scheduler_started = False
             try:
-                if not manager._running:
-                    manager.start_scheduler()
-                    scheduler_started = True
+                from vaf.core.automation import ensure_scheduler_started
+                _, scheduler_started = ensure_scheduler_started(origin="create_automation_tool")
             except Exception:
                 # Scheduler might not be available or already running
                 pass

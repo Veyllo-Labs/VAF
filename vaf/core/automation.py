@@ -1870,9 +1870,29 @@ vaf automation delete <id>   # Delete task
         if not HAS_SCHEDULE:
             self._log_scheduler_event("START_FAILED reason='schedule package missing'")
             raise ImportError("'schedule' package required. Install: pip install schedule")
-        
+
         if self._running:
             self._log_scheduler_event("START_SKIPPED reason='already running'")
+            return
+
+        # The `schedule` registry is MODULE-GLOBAL while _running is per-instance:
+        # a second manager instance starting "its" scheduler re-registers every job
+        # into the same global registry (without a clear) and spins up a second
+        # loop thread - every task then fires twice and only the run lock prevents
+        # double execution (live 2026-07-13: double TRIGGER on every automation).
+        # Only the process-wide singleton may pump the scheduler. Deliberately read
+        # WITHOUT _scheduler_manager_lock: ensure_scheduler_started() calls this
+        # method while holding that (non-reentrant) lock - taking it here would
+        # deadlock. The bare reference read is atomic under the GIL, and this guard
+        # is defense-in-depth (the primary fix routes callers through the ensure
+        # helper in the first place).
+        global _scheduler_manager
+        _process_sm = _scheduler_manager
+        if (_process_sm is not None and _process_sm is not self
+                and getattr(_process_sm, "_running", False)):
+            self._log_scheduler_event(
+                "START_SKIPPED reason='process scheduler already running on another manager instance'"
+            )
             return
         
         self._running = True

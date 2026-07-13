@@ -79,6 +79,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   flag deliverable steps in create mode as well.
 
 ### Fixed
+- **Automations no longer get registered twice in the scheduler.** The create_automation
+  tool auto-started the scheduler on its own manager instance (whose running-flag was
+  False even while the process scheduler ran); since the schedule registry is
+  module-global, every job was registered a second time and a second loop thread
+  started - each task then triggered twice on every firing, with only the run lock
+  preventing double execution. The tool now goes through the process-wide
+  ensure_scheduler_started helper, and start_scheduler itself refuses to run on a
+  non-singleton manager instance (defense in depth).
 - **Background-run identity no longer leaks between concurrent runs.** ask_user's
   automation-handoff branch, thinking/automation tool registration and dispatch
   injection gated on process-wide env vars (VAF_IN_AUTOMATION / VAF_THINKING_MODE),

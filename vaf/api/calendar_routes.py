@@ -103,11 +103,11 @@ DEFAULT_CALENDAR_CHECK_PROMPT = """You are running the daily calendar check. You
 2. Analyze each event: How important is it? Consider: meetings, deadlines, presentations, reviews, customer calls, first or last appointment of the day, long duration. Ignore low-value blocks (e.g. "Focus time", "Lunch" unless relevant).
 
 3. For each important event, decide what to do:
-   - Reminder: If the event is in the future and the user would benefit from a reminder (e.g. 30 minutes before), create a one-off automation with create_automation: frequency "once", time = 30 minutes before the event start. In the prompt for that one-off automation, instruct the agent to send the reminder with send_to_user (it resolves the user's main_messenger at run time and falls back to the Web UI). Use the exact time in HH:MM for the "time" parameter.
+   - Reminder: If the event is in the future and the user would benefit from a reminder (e.g. 30 minutes before), call schedule_reminder(message=..., fire_at="YYYY-MM-DD HH:MM"). Write the FINAL reminder text into message - it is delivered VERBATIM at fire_at on the user's main messenger, no agent processes it. Use the event's date and a time 30 minutes before its start.
    - Prepare now: If the event starts within the next 30–60 minutes, send a reminder or preparation help now with send_to_user: a short summary and "Your meeting [X] starts soon".
    - Optional: Use memory_search to find relevant notes for a meeting and include a one-line hint in the reminder.
 
-4. Execute: Actually call create_automation for each one-off reminder you decided on, and for any immediate reminders call send_to_user. Do not just say what you would do - do it.
+4. Execute: Actually call schedule_reminder for each future reminder you decided on, and send_to_user for any immediate ones. Do not just say what you would do - do it. (create_automation is not available in this run - never try to create automations here.)
 
 5. At the end, reply briefly in the user's language: what you found, how many events, which reminders or messages you created/sent."""
 

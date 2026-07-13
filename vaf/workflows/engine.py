@@ -615,6 +615,9 @@ class WorkflowEngine:
                         elif tool_name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
+                        elif tool_name == "schedule_reminder":
+                            a["username"] = self.username
+                            a["user_scope_id"] = self.user_scope_id
                         elif tool_name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id

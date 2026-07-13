@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 112 tools. The **Coder sub-agent**
+[vaf/core/agent.py](../../vaf/core/agent.py)); 113 tools. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
 integration is connected (GitHub, email, calendar, WhatsApp, …).
@@ -116,6 +116,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `add_automation_note` / `list_automation_notes` / `delete_automation_note` | write/read/write | Notes shown in the automation calendar. |
 | `add_automation_todo` / `list_automation_todos` / `delete_automation_todo` | write/read/write | To-dos shown in the automation calendar. |
 | `set_timer` | write | Schedule a short one-shot timer that fires in this chat. |
+| `schedule_reminder` | write | Persistent one-shot reminder: stored as data, delivered verbatim at fire_at on the user's main messenger by the scheduler (no agent run). |
 | `cancel_timer` | write | Cancel a pending timer. |
 | `list_timers` | read | List pending timers. |
 

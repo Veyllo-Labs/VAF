@@ -58,7 +58,10 @@ def test_write_file_not_in_main_agent_exclusion_list():
 
 
 def test_write_file_excluded_in_thinking_mode():
-    assert '"set_timer", "write_file")' in AGENT_SRC, (
+    # Whitespace-tolerant: the tuple gained schedule_reminder (reminders are
+    # propose-only in thinking runs too); the invariant pinned here is that
+    # write_file stays excluded.
+    assert re.search(r'"set_timer",\s*"schedule_reminder",\s*"write_file"\)', AGENT_SRC), (
         "thinking-mode exclusion tuple must contain write_file - a propose-only "
         "background run must not create files"
     )

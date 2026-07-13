@@ -1826,7 +1826,8 @@ class Agent:
                         _rk_automation = self._run_kind == "automation"
                         if _rk_thinking:
                             if instance.name in ("git_add_commit", "git_status", "git_log", "memory_save",
-                                                 "update_user_identity", "set_timer", "write_file"):
+                                                 "update_user_identity", "set_timer", "schedule_reminder",
+                                                 "write_file"):
                                 continue
                         # thinking_done: ONLY in thinking mode — the main agent must never call this
                         if instance.name == "thinking_done":
@@ -9798,6 +9799,11 @@ class Agent:
                 if name in ("set_timer", "list_timers", "cancel_timer"):
                     # Timer tools read the live session/source/identity off the agent.
                     tool_args["_agent"] = self
+                if name == "schedule_reminder":
+                    # Reminders are stored per user scope and fired with the OWNER's
+                    # identity - never the process-global fallback (Rule 4.4).
+                    tool_args["username"] = getattr(self, "_current_username", None) or "admin"
+                    tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name == "learn_document":
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self

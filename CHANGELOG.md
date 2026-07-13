@@ -12,6 +12,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **New tool: schedule_reminder - persistent one-shot reminders without an agent run.**
+  The daily calendar check was designed to create one-off reminder automations, but
+  create_automation is deliberately stripped from automation runs (runaway guard) -
+  the agent silently fell back to set_timer, which is in-memory only and anchored to
+  a session via the process-global fallback: reminders from background runs died on
+  restart or landed in the wrong chat. A reminder is now stored DATA: the scheduler
+  delivers the stored message verbatim at fire_at on the user's main messenger (Web
+  UI notification fallback), with no agent run and no tools - which is why the narrow
+  lane is safe where create_automation is not. Per-user scoped, bounded (pending cap,
+  14-day horizon, 6-hour delivery grace after downtime with honest missed
+  notifications), cancellable, excluded from thinking runs (propose-only). The
+  calendar-check prompt (default and the existing stored automation) now teaches
+  schedule_reminder; the calendar doc no longer claims create_automation is allowed
+  inside the run.
 - **New tool: send_to_user - channel-agnostic delivery to the user's main messenger.**
   Workflows, automations and the agent previously had to pick a platform tool
   (send_telegram, send_discord, ...) themselves, which froze the platform into stored

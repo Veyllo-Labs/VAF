@@ -1905,6 +1905,14 @@ vaf automation delete <id>   # Delete task
             self._log_scheduler_event("LOOP_STARTED")
             while self._running:
                 schedule.run_pending()
+                # One-shot reminders (narrow lane, see vaf/core/reminders.py): a
+                # reminder is stored data delivered verbatim - no agent run. Fired
+                # here so only the process singleton ever delivers them.
+                try:
+                    from vaf.core.reminders import fire_due_reminders
+                    fire_due_reminders()
+                except Exception:
+                    pass
                 time.sleep(30)  # Check every 30 seconds
             self._log_scheduler_event("LOOP_STOPPED")
         

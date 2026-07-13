@@ -36,7 +36,9 @@ For a **short, one-off delay that should fire proactively in the current convers
 | Timing | **Relative delay in seconds** (second-precise) | **Clock time `HH:MM`**, minute granularity, ≥10 min apart |
 | Delivery | **Proactive message in the live chat** (CLI + WebUI) | Detached run; result delivered to the active web session and `main_messenger` (with any produced file attached) |
 | Persistence | **In-memory, per process — lost on restart** | Persisted to disk; survives restarts |
-| Use for | Short timers/reminders that should appear in *this* chat now | Longer/persistent reminders, specific clock times, recurring schedules |
+| Use for | Short timers/reminders that should appear in *this* chat now | Recurring schedules and tasks that need an agent run |
+
+**One-shot reminders (`schedule_reminder`)** sit between the two: a reminder is stored **data**, not an executable automation - the scheduler loop delivers the stored message **verbatim** at `fire_at` via the canonical main-channel router (Web UI notification fallback), with no agent run, no tools and no prompt. Persistent across restarts, per-user scoped, bounded (pending cap, 14-day horizon, and a 6-hour delivery grace after downtime - older ones are honestly marked missed with a notification). Because a reminder cannot spawn anything, the daily calendar check may schedule reminders even though `create_automation` stays stripped from automation runs (runaway guard intact); previously the calendar agent fell back to `set_timer`, which is in-memory only and session-anchored. Thinking runs cannot schedule reminders (propose-only lane). Code: `vaf/core/reminders.py`, tool `vaf/tools/schedule_reminder.py`.
 
 **Tools:** `set_timer` (provide `seconds` plus exactly one of `message` — a short note/reminder — or `task` — a concrete instruction), `list_timers`, and `cancel_timer`. `set_timer` is part of the agent's always-available core tools.
 

@@ -200,8 +200,54 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
         return "admin"
 
 
+# Outbound send tools a workflow step can use for in-run delivery. When one of
+# them already reached the user, the post-run messenger push is skipped (the Web
+# UI trace and the notification still happen) - otherwise every workflow with a
+# delivery step would message the user twice.
+_SEND_STEP_TOOLS = frozenset({
+    "send_to_user", "send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail",
+})
+
+
+def _delivered_via_agent_history(history) -> bool:
+    """True if a send tool confirmed delivery during a prompt-based agent run.
+
+    Prompt-based automations deliver in-run via tool calls; the tool result in
+    the agent history carries the shared success phrase. Same conservative
+    contract as _delivered_via_send_step: only an explicit send-tool success
+    suppresses the post-run push - a duplicate message beats a lost one.
+    """
+    for m in history or []:
+        if (
+            isinstance(m, dict)
+            and m.get("role") == "tool"
+            and m.get("name") in _SEND_STEP_TOOLS
+            and "sent to the user via" in str(m.get("content") or "").lower()
+        ):
+            return True
+    return False
+
+
+def _delivered_via_send_step(step_results) -> bool:
+    """True if a send step in this run confirmed delivery to the user.
+
+    Keys on the shared success phrase of the send tools ("sent to the user via
+    ..."). Deliberately conservative: an unrecognized or failed send result
+    keeps the post-run push ON - a duplicate message beats a lost one.
+    """
+    for sr in step_results or []:
+        if (
+            sr.get("tool") in _SEND_STEP_TOOLS
+            and sr.get("status") == "success"
+            and "sent to the user via" in str(sr.get("result") or "").lower()
+        ):
+            return True
+    return False
+
+
 def _push_result_to_web_ui(
-    task: "AutomationTask", status: str, summary: str, output_file: Optional[str] = None
+    task: "AutomationTask", status: str, summary: str, output_file: Optional[str] = None,
+    deliver_messenger: bool = True,
 ) -> bool:
     """Push automation result to Web UI and, if configured, to the user's messenger.
 
@@ -209,6 +255,8 @@ def _push_result_to_web_ui(
     whether they have Telegram/WhatsApp/Discord configured.
     When ``output_file`` is given (the automation produced a file), it is referenced in the Web UI
     message AND delivered as an attachment on the messenger.
+    ``deliver_messenger=False`` skips only the messenger push - used when a workflow
+    send step already delivered the content in-run (no double delivery).
     Returns True if at least the Web UI push succeeded.
     """
     status_icon = "\u2705" if status == "success" else "\u274c"
@@ -271,12 +319,13 @@ def _push_result_to_web_ui(
     # mode). It resolves the per-channel chat id/jid, attaches the output file (Telegram/WhatsApp/
     # Discord all support it), and never raises. The username is resolved to the TASK OWNER (not the
     # local admin) so a per-user automation result never leaks onto the admin's messenger.
-    try:
-        from vaf.core.messaging_connections import send_to_main_messenger
-        username = _resolve_username(task.user_scope_id)
-        send_to_main_messenger(task.user_scope_id, username, msg, file_path=output_file)
-    except Exception as _e:
-        append_domain_log("backend", f"[AUTOMATION] Messenger delivery failed: {_e}")
+    if deliver_messenger:
+        try:
+            from vaf.core.messaging_connections import send_to_main_messenger
+            username = _resolve_username(task.user_scope_id)
+            send_to_main_messenger(task.user_scope_id, username, msg, file_path=output_file)
+        except Exception as _e:
+            append_domain_log("backend", f"[AUTOMATION] Messenger delivery failed: {_e}")
 
     # 3. Notification store — surface the result in the WebUI NotificationsModal (kind 'automation',
     # already understood by the frontend) so it appears alongside other proactive results.
@@ -1193,6 +1242,10 @@ vaf automation delete <id>   # Delete task
         # Final path of the saved output file (if any). Initialised here so it survives to the
         # delivery call after the try/finally; set only when a file is actually written.
         saved_output_path: Optional[str] = None
+        # True when the prompt-based agent already delivered to the user in-run via a
+        # send tool (confirmed by the tool result). Drives the same double-delivery
+        # dedup the workflow lane has; survives to the delivery call below.
+        prompt_delivered_in_run = False
 
         try:
             # ... (Rest of the method logic) ...
@@ -1358,15 +1411,20 @@ vaf automation delete <id>   # Delete task
                     if task.frequency == Frequency.ONCE:
                         self.delete(task.id, permanent=True)
                     # Build a short, friendly bot summary instead of the raw technical report.
-                    saved_path = workflow_result.final_output or ""
+                    # final_output is the LAST step's result string - only treat it as a saved
+                    # file when it actually IS one, otherwise the Web UI printed tool chatter
+                    # like "Gespeichert: Message sent to the user via Telegram." (live 2026-07-13).
+                    saved_path = str(workflow_result.final_output or "").strip()
+                    real_file = saved_path if (saved_path and os.path.isfile(saved_path)) else None
                     short_summary = (
                         f"✅ **{task.name}** ist fertig!\n\n"
-                        f"{saved_path}\n\n"
-                        f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
+                        + (f"{real_file}\n\n" if real_file else "")
+                        + f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
                     ).strip()
-                    # If the workflow's write_file step produced an actual file, deliver it as an
-                    # attachment on the messenger (the helper ignores a non-file string).
-                    _push_result_to_web_ui(task, "success", short_summary, output_file=(saved_path or None))
+                    _push_result_to_web_ui(
+                        task, "success", short_summary, output_file=real_file,
+                        deliver_messenger=not _delivered_via_send_step(step_results),
+                    )
                     return result
             else:
                 # Legacy: Use prompt-based execution (backwards compatibility)
@@ -1646,13 +1704,14 @@ vaf automation delete <id>   # Delete task
             _stamp_successful_run(task)
             # next_run is calculated dynamically - no need to store it
             self._save_task(task)
-            
+
             # If frequency is ONCE, delete after run
             if task.frequency == Frequency.ONCE:
                 # Use permanent=True because it's a planned one-time run, not a manual deletion
                 self.delete(task.id, permanent=True)
                 append_domain_log_always("backend", f"Automation '{task.name}' ({task.id}) frequency is 'once' - deleted after run.")
-            
+
+            prompt_delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
             agent.shutdown()
             
         except Exception as e:
@@ -1693,7 +1752,12 @@ vaf automation delete <id>   # Delete task
             status = "error" if (result or "").strip().startswith("Error:") else "success"
             # For prompt-based tasks the result IS the summary (already clean text).
             # saved_output_path is None for chat-only runs (no file produced) -> text-only delivery.
-            _push_result_to_web_ui(task, status, result or "Completed", output_file=saved_output_path)
+            # A confirmed in-run send suppresses only the messenger push (live 2026-07-14:
+            # the calendar check messaged the user twice); Web UI + notification stay.
+            _push_result_to_web_ui(
+                task, status, result or "Completed", output_file=saved_output_path,
+                deliver_messenger=not prompt_delivered_in_run,
+            )
         except Exception:
             pass
         try:

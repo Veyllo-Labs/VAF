@@ -18,6 +18,18 @@ from typing import Any, Dict, List, Optional
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 
+# ── Channel registry (single source of truth) ────────────────────────────────
+# The messaging platforms VAF knows. Copies of this list exist in schema enums,
+# dispatch maps and guard tuples across the codebase; tests/test_channel_registry_sync.py
+# fails when one drifts. When adding a platform, extend HERE first, then follow
+# the checklist in docs/integrations/CONNECTIONS.md (Channel model).
+KNOWN_CHANNELS = ("telegram", "whatsapp", "discord", "slack")
+# Channels send_to_main_messenger can actually dispatch to today (Slack has no
+# bridge yet, so it is known but not routable).
+ROUTABLE_CHANNELS = ("telegram", "whatsapp", "discord")
+# Channel -> per-platform send tool (interactive, explicit-platform lane).
+CHANNEL_SEND_TOOLS = {ch: f"send_{ch}" for ch in KNOWN_CHANNELS}
+
 _ENDPOINTS_LOCK = threading.Lock()
 _ENDPOINTS_FILE = None
 
@@ -348,11 +360,60 @@ def get_messaging_connections(
     return {"available": available, "main_messenger": main_messenger}
 
 
+def _record_outbound(
+    channel: str,
+    endpoint: str,
+    text: str,
+    username: Optional[str],
+    user_scope_id: Optional[Any],
+    file_path: Optional[str] = None,
+) -> None:
+    """Mirror a router-delivered outbound message into the channel session history
+    (and, where the bridge does not do it itself, the channel message store).
+
+    The per-platform send TOOLS record their own sends; the router path
+    (automation result push, send_to_user, ...) previously delivered without any
+    trace, so the channel main agent lacked its own last message when the user
+    replied to it (live 2026-07-14: the agent could not know which "Timer" the
+    user meant and confabulated). Best-effort: never raises, never blocks a send.
+    """
+    uname = (username or "admin").strip() or "admin"
+    if channel == "whatsapp":
+        session_id = f"whatsapp_{uname}_{(endpoint.split('@', 1)[0] or 'self')}"
+    else:
+        session_id = f"{channel}_{endpoint}"
+    try:
+        from vaf.core.session import SessionManager, Session
+        sm = SessionManager()
+        try:
+            session = sm.load(session_id, restore_state=False)
+        except FileNotFoundError:
+            session = Session(id=session_id, name=f"{channel.capitalize()} {endpoint}")
+        session.add_message(role="assistant", content=text)
+        sm.save(session, sync_state=False)
+    except Exception:
+        pass
+    # Channel store: the WhatsApp bridge already records every outbound send
+    # itself (whatsapp_bridge sender loop) - recording here again would duplicate
+    # entries for read_/find_ tools.
+    if channel != "whatsapp":
+        try:
+            from vaf.core.channel_message_store import append_message
+            append_message(
+                username=uname, chat_id=str(endpoint), body=text, direction="out",
+                content_type=("document" if file_path else "text"),
+                channel=channel, user_scope_id=user_scope_id,
+            )
+        except Exception:
+            pass
+
+
 def send_to_main_messenger(
     user_scope_id: Optional[Any],
     username: Optional[str],
     text: str,
     file_path: Optional[str] = None,
+    record: bool = True,
 ) -> "tuple[bool, Optional[str]]":
     """Send ``text`` to the user's configured ``main_messenger`` (Telegram/WhatsApp/Discord).
 
@@ -369,6 +430,11 @@ def send_to_main_messenger(
     (Telegram 1024 chars) so the full text AND the file always arrive. The attachment is
     best-effort: overall success is decided by the text send, so a too-large/failed attachment
     never reports the whole delivery as failed (the Web UI still carries the file link).
+
+    ``record`` (default True): mirror the delivered text into the channel session history
+    so the channel main agent has context when the user replies to it. Thinking-mode
+    callers pass ``record=False`` - their tracked requests are reconstructed scope-keyed
+    at reply time, and a session append would duplicate the question in context.
     """
     text = (text or "").strip()
     if not text:
@@ -393,6 +459,8 @@ def send_to_main_messenger(
                             send_telegram_reply(chat_id, caption, file_path=attach)
                         except Exception:
                             pass
+                    if record:
+                        _record_outbound("telegram", str(chat_id), text, username, user_scope_id, attach)
                     return True, "telegram"
         elif main == "whatsapp":
             jid = get_whatsapp_chat_jid(user_scope_id, username)
@@ -410,6 +478,8 @@ def send_to_main_messenger(
                             )
                         except Exception:
                             pass
+                    if record:
+                        _record_outbound("whatsapp", str(jid), text, username, user_scope_id, attach)
                     return True, "whatsapp"
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
@@ -424,6 +494,8 @@ def send_to_main_messenger(
                                 send_discord_dm(bot_token, user_id, caption, file_path=attach)
                             except Exception:
                                 pass
+                        if record:
+                            _record_outbound("discord", str(user_id), text, username, user_scope_id, attach)
                         return True, "discord"
     except Exception:
         pass

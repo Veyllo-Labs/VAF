@@ -6578,6 +6578,10 @@ class Agent:
                         tool_name = {"telegram": "send_telegram", "discord": "send_discord", "slack": "send_slack", "whatsapp": "send_whatsapp"}.get(ch)
                         if tool_name and tool_name in self.tools:
                             tools_set.add(tool_name)
+                    # Channel-agnostic delivery: pinned whenever ANY messenger is
+                    # connected (it resolves the platform itself at run time).
+                    if (conn.get("available") or []) and "send_to_user" in self.tools:
+                        tools_set.add("send_to_user")
                 except Exception:
                     pass
                 
@@ -9663,7 +9667,7 @@ class Agent:
                         ))
                     except Exception:
                         pass
-                if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
+                if name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                     tool_args["_agent"] = self  # lets send_whatsapp detect front_office_mode

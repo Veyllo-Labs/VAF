@@ -12,6 +12,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **New tool: send_to_user - channel-agnostic delivery to the user's main messenger.**
+  Workflows, automations and the agent previously had to pick a platform tool
+  (send_telegram, send_discord, ...) themselves, which froze the platform into stored
+  automation definitions and produced wrong deliveries for non-Telegram users. The new
+  tool wraps the one canonical router (send_to_main_messenger): the platform is
+  resolved at RUN time from the user's main_messenger, a produced file is attached
+  best-effort, and when no messenger is reachable the content falls back to a Web UI
+  notification instead of being dropped. Switching main_messenger now retargets every
+  existing automation automatically. Per-channel send tools remain for explicit
+  requests ("send it via Telegram"). The tool joins every send-tool registry copy
+  (thinking-mode strip set, agent/engine scope injection, router pinning, workflow
+  project-path resolution for file_path) and stays out of the front-office allow-list
+  by design. The channel model (rule vs adapter, extension checklist) is documented in
+  docs/integrations/CONNECTIONS.md.
 - **New built-in workflow: YouTube Summary.** Summarizes a YouTube video from its own
   captions: yt-dlp runs inside the Docker sandbox (installed per run - no host
   installs, no confirmation cascade) and fetches the caption track via ONE metadata
@@ -65,6 +79,36 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   flag deliverable steps in create mode as well.
 
 ### Fixed
+- **Generated automations no longer message the user raw tool output.** The automation
+  workflow generator wrote send steps like "here is the data: {search_results} - please
+  summarize" - but send steps are deterministic and deliver their arguments verbatim,
+  so the user received a raw search-result dump with a dangling instruction, and the
+  HTML report the same automation produced was never attached. The generator now
+  teaches the channel-agnostic delivery step (send_to_user incl. file_path attachment),
+  that send/write steps are verbatim (produce the final text in a CONTENT_ONLY step
+  first), and that a platform tool must never be hardwired; its canonical example
+  summarizes before sending and attaches the produced file. The calendar-check prompt
+  teaches the same delivery step instead of enumerating platform tools.
+- **Automation results are no longer delivered twice, and the Web UI no longer shows
+  tool chatter as a saved file.** When an automation already delivered in-run via a
+  send tool, the post-run pipeline additionally pushed the run summary to the
+  messenger (two messages per run); it now skips the messenger push on a confirmed
+  in-run delivery, in BOTH lanes: workflow-based (send step result) and prompt-based
+  (send-tool success in the agent history - live incident: the daily calendar check
+  messaged the user twice). Detection is conservative: a failed or unclear send keeps
+  the push (a duplicate beats a lost message). The "saved file" line in the Web UI
+  result showed the raw last-step result string (live: "Gespeichert: Message sent to
+  the user via Telegram.") - it now appears only when the last step's output actually
+  is a file on disk.
+- **Router-delivered messenger messages now leave a trace in the channel session.**
+  The per-platform send tools record their own sends, but the canonical router path
+  (automation result push, send_to_user) delivered without writing to the channel
+  session history or message store - so when the user replied to such a message, the
+  channel main agent had never seen it and confabulated (live incident: the agent
+  could not know which "Timer" the user meant). Successful router sends are now
+  mirrored into the channel session (and, where the bridge does not record outbound
+  itself, the channel message store). Thinking-mode deliveries opt out: tracked
+  requests are reconstructed scope-keyed at reply time and would appear twice.
 - **Workflow runs open the Workflow Runtime panel again in TLS setups.** The @workflow
   subprocess posted its UI events (workflow_start/update/done, terminal lines) to a
   hardcoded plain-HTTP 127.0.0.1:8001 - with local_network_tls_enabled that port speaks

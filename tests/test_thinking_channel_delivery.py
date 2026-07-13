@@ -46,7 +46,7 @@ def test_delivers_via_main_messenger_and_skips_web(monkeypatch, tmp_path, channe
                         lambda scope, content, session_id=None: (web_emits.append(content), "sid-web")[1])
     sent = []
     monkeypatch.setattr(mc, "send_to_main_messenger",
-                        lambda scope, uname, text: (sent.append((scope, text)), (True, channel))[1])
+                        lambda scope, uname, text, record=True: (sent.append((scope, text, record)), (True, channel))[1])
 
     scope = f"user-{channel}"
     req = tm.deliver_tracked_message(scope, "Soll ich das Update einspielen?", source_note_id="n1")
@@ -54,6 +54,9 @@ def test_delivers_via_main_messenger_and_skips_web(monkeypatch, tmp_path, channe
     # Delivered via the messenger, exactly once, with the user-facing text.
     assert req and req.get("delivered") is True
     assert len(sent) == 1 and sent[0][1] == "Soll ich das Update einspielen?"
+    # Tracked questions must opt out of router session recording: they are
+    # reconstructed scope-keyed at reply time and would appear twice otherwise.
+    assert sent[0][2] is False
     # NO double-delivery to the Web UI.
     assert web_emits == []
     # Request tracked.
@@ -73,7 +76,7 @@ def test_no_messenger_falls_back_to_web(monkeypatch, tmp_path):
     web_emits = []
     monkeypatch.setattr(tm, "emit_message_to_web_ui",
                         lambda scope, content, session_id=None: (web_emits.append(content), "sid-web")[1])
-    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text: (False, None))
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, record=True: (False, None))
 
     scope = "user-noch"
     req = tm.deliver_tracked_message(scope, "Web-Frage?", source_note_id="n1")
@@ -188,7 +191,7 @@ def test_nudge_routes_to_messenger_for_messenger_channel(monkeypatch, tmp_path):
     monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
     nudges = []
     monkeypatch.setattr(mc, "send_to_main_messenger",
-                        lambda scope, uname, text: (nudges.append((scope, text)), (True, "telegram"))[1])
+                        lambda scope, uname, text, record=True: (nudges.append((scope, text)), (True, "telegram"))[1])
 
     scope = "user-nudge"
     tm.set_waiting_for_reply(
@@ -209,7 +212,7 @@ def test_nudge_after_escalation_goes_to_web_not_messenger(monkeypatch, tmp_path)
     monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
     messenger_calls = []
     monkeypatch.setattr(mc, "send_to_main_messenger",
-                        lambda scope, uname, text: (messenger_calls.append(text), (True, "telegram"))[1])
+                        lambda scope, uname, text, record=True: (messenger_calls.append(text), (True, "telegram"))[1])
     # Web nudge fallback path: stub the web interface lookup to a no-op-ish failure so _send_nudge returns
     # without a messenger send; we only assert the messenger was NOT used.
     monkeypatch.setattr("vaf.core.web_interface.get_web_interface", lambda: None)

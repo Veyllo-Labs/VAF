@@ -2,7 +2,7 @@
 
 The tools the **main agent** loads by default, grouped by area. Generated from the live
 tool registry (`Agent.tools`, populated by `_load_tools()` in
-[vaf/core/agent.py](../../vaf/core/agent.py)); 111 tools. The **Coder sub-agent**
+[vaf/core/agent.py](../../vaf/core/agent.py)); 112 tools. The **Coder sub-agent**
 additionally loads `coder_only` file/shell tools (e.g. `bash`, `move_file`,
 `codesearch`) that are not in this list. Some tools only do anything once their
 integration is connected (GitHub, email, calendar, WhatsApp, …).
@@ -149,6 +149,7 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 
 | Tool | Perm | What it does |
 |------|------|--------------|
+| `send_to_user` | write | Channel-agnostic delivery: resolves the user's `main_messenger` at run time and sends text plus optional file via the canonical router; Web UI notification fallback (irreversible). |
 | `send_whatsapp` | write | Send WhatsApp text / voice / document (irreversible). |
 | `whatsapp_inbox` | read | List WhatsApp chats. |
 | `read_whatsapp_chat` | read | Read messages from a WhatsApp chat. |

@@ -628,7 +628,10 @@ def _send_nudge(user_scope_id: Optional[str], username: str, display_name: str, 
         # is anchored to the web chat (channel="web", e.g. after an escalation), then go straight to web.
         if (channel or "").strip().lower() != "web":
             from vaf.core.messaging_connections import send_to_main_messenger
-            sent, _ch = send_to_main_messenger(user_scope_id, username, nudge)
+            # record=False: the nudge belongs to a tracked request that is
+            # reconstructed scope-keyed at reply time - a session append would
+            # duplicate it in the channel agent's context.
+            sent, _ch = send_to_main_messenger(user_scope_id, username, nudge, record=False)
             if sent:
                 return True
         # Fallback: no messenger configured — push to the ANCHOR Web UI session (the chat the question
@@ -1290,11 +1293,11 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail"}
+_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail", "send_to_user"}
 
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
-    """Remove ALL outbound `send_*` tools from a thinking run.
+    """Remove ALL outbound send tools (this NAME SET, not a prefix match) from a thinking run.
 
     `ask_user` now delivers to the user's configured main channel (Telegram/WhatsApp/Discord, else the
     Web UI) AND tracks the request, so the agent never needs a raw send tool to reach the user — leaving
@@ -1484,7 +1487,10 @@ def deliver_tracked_message(
     from vaf.core.messaging_connections import send_to_main_messenger
     sent_channel = None
     try:
-        _ok, sent_channel = send_to_main_messenger(user_scope_id, uname, message)
+        # record=False: tracked questions are persisted via the request store and
+        # reconstructed scope-keyed in chat_step when the user replies - a session
+        # append here would put the question into context twice.
+        _ok, sent_channel = send_to_main_messenger(user_scope_id, uname, message, record=False)
         if not _ok:
             sent_channel = None
     except Exception:

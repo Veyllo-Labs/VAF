@@ -19,6 +19,7 @@ def _registry():
         "send_whatsapp": object(),
         "send_discord": object(),
         "send_slack": object(),
+        "send_to_user": object(),
         "web_search": object(),
         "save_thinking_suggestion": object(),
         "thinking_done": object(),
@@ -29,7 +30,7 @@ def test_no_main_messenger_removes_all_send_tools():
     tools = _registry()
     removed = _filter_thinking_send_tools(tools, "")
     assert sorted(removed) == [
-        "send_discord", "send_mail", "send_slack", "send_telegram", "send_whatsapp",
+        "send_discord", "send_mail", "send_slack", "send_telegram", "send_to_user", "send_whatsapp",
     ]
     # Non-send tools stay untouched
     assert "web_search" in tools
@@ -47,8 +48,9 @@ def test_configured_messenger_still_removes_all_send_tools():
     assert "send_whatsapp" not in tools
     assert "send_discord" not in tools
     assert "send_slack" not in tools
+    assert "send_to_user" not in tools
     assert sorted(removed) == [
-        "send_discord", "send_mail", "send_slack", "send_telegram", "send_whatsapp",
+        "send_discord", "send_mail", "send_slack", "send_telegram", "send_to_user", "send_whatsapp",
     ]
     # Non-send tools stay untouched
     assert "web_search" in tools

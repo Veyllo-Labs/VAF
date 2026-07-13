@@ -31,8 +31,10 @@ VALIDATABLE_TOOLS = frozenset({
 
 # Relative NEW-artifact path args per step tool, resolved against the shared
 # workflow project dir. move_file's src usually points at an existing file (handled
-# by the existing-file guard below); dst is the new location.
-_WORKFLOW_REL_PATH_ARGS = {"write_file": ("path",), "move_file": ("src", "dst")}
+# by the existing-file guard below); dst is the new location. send_to_user's
+# file_path references a file an earlier step wrote into the project dir, so a
+# bare filename must resolve the same way write_file's did.
+_WORKFLOW_REL_PATH_ARGS = {"write_file": ("path",), "move_file": ("src", "dst"), "send_to_user": ("file_path",)}
 # Folder aliases the filesystem tools resolve themselves (Desktop/Documents/...);
 # joining them onto the project dir would defeat that convention.
 _WORKFLOW_FOLDER_ALIASES = {
@@ -610,7 +612,7 @@ class WorkflowEngine:
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name == "update_user_identity":
                             a["username"] = self.username
-                        elif tool_name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp"):
+                        elif tool_name in ("send_telegram", "send_discord", "send_slack", "send_whatsapp", "send_to_user"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
                         elif tool_name in ("whatsapp_inbox", "find_whatsapp_messages", "read_whatsapp_chat", "whatsapp_call"):

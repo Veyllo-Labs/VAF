@@ -130,7 +130,9 @@ You’re not just a program, you’re an evolving intelligence: a helper and a c
         """Human user profile (name, language, city, country, preferences, do's/don'ts, change_log) – used in "User identity (current user)" block."""
         if not self.user_identity_file.exists():
             self.ensure_exists()
-        VALID_MAIN_MESSENGERS = ("telegram", "discord", "slack", "whatsapp")
+        # Single source of truth for the platform list (lazy import: auth layer
+        # must not hard-depend on core at module load).
+        from vaf.core.messaging_connections import KNOWN_CHANNELS as VALID_MAIN_MESSENGERS
         defaults = {
             "name": self.username,
             "preferred_language": None,

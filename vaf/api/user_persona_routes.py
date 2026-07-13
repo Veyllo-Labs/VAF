@@ -111,7 +111,7 @@ async def update_user_identity(data: UserIdentityUpdate, username: str = Depends
     # Update fields that are provided
     update_dict = data.dict(exclude_none=True)
     full_dict = data.dict()
-    valid_main_messengers = ("telegram", "discord", "slack", "whatsapp")
+    from vaf.core.messaging_connections import KNOWN_CHANNELS as valid_main_messengers
     if "main_messenger" in full_dict:
         value = full_dict["main_messenger"]
         normalized = (value or "").strip().lower() or None

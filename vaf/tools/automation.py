@@ -134,7 +134,7 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
 
 4. **PROMPT CONTENT (when the automation sends something to the user):**
    - Never hardcode a messenger (e.g. send_telegram). The user may use WhatsApp, Discord, email, etc.
-   - In the prompt, instruct: "Send the result/summary to the user via their **main_messenger** (see User Identity): use the matching tool—send_telegram, send_whatsapp, send_discord, send_slack, or send_mail—depending on main_messenger. If main_messenger is not set, summarize in your reply."
+   - In the prompt, instruct: "Send the result/summary to the user with **send_to_user** (it resolves their main_messenger at run time and falls back to the Web UI). Use a platform tool (send_telegram, send_whatsapp, send_discord, send_mail, ...) ONLY if the user explicitly named that platform."
    - For "weekly review", "wöchentlicher Report", or similar: use frequency **weekly** and set **weekday** (e.g. friday). Do not use daily.
    - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log; otherwise skip or use file/context."
 
@@ -734,6 +734,9 @@ Available Tools:
 - write_file(path, content): Write content to file
 - librarian_agent(task): File/info retrieval and analysis
 - python_sandbox(code): Execute Python code safely for calculations
+- send_to_user(message, file_path): Deliver a message to the user on their main messenger
+  (channel-agnostic: the platform is resolved at RUN time from the user's main_messenger,
+  with a Web UI fallback); file_path optionally attaches a produced file (HTML report, PDF, ...)
 
 Return ONLY a JSON array of workflow steps. Each step should have:
 - "tool": tool name (e.g., "web_search", "coding_agent", "write_file")
@@ -745,18 +748,28 @@ Rules:
 1. Break down the task into logical steps (like n8n nodes)
 2. First step should gather data (web_search if needed)
 3. Middle steps should process/generate content (coding_agent)
-4. Last step should save the result (write_file)
+4. Then save the result (write_file); if the task asks to notify/message the user,
+   the LAST step is send_to_user - with file_path set to the saved file when one was
+   produced. NEVER pick a platform tool (send_telegram, send_discord, ...) here: the
+   user's platform is their configuration, not your decision, and it can change later.
 5. Use {{previous_step.output}} to reference previous step outputs
 6. For write_file, use a descriptive filename. The ONLY placeholders you may use are the
    declared step outputs above PLUS these built-in variables (do NOT invent others):
    {{date}} {{time}} {{datetime}} {{timestamp}} {{today}} {{now}} {{year}} {{month}} {{day}}
+7. CRITICAL - send_to_user and write_file are DETERMINISTIC: they send/write their args
+   VERBATIM. Never put a raw step output like {{weather_data}} or an instruction
+   ("summarize this...") into a message or file content - no LLM processes it there.
+   To send a readable message, FIRST add a coding_agent step that produces the final
+   short text (CONTENT_ONLY), then send THAT output. (A live automation sent the user
+   a raw search-result dump with a dangling "summarize" instruction because of this.)
 
-Example for weather report:
+Example for weather report with messenger delivery:
 [
   {{"tool": "web_search", "args": {{"query": "weather Berlin tomorrow"}}, "description": "Get weather data", "output": "weather_data"}},
-  {{"tool": "web_search", "args": {{"query": "motivational quote today"}}, "description": "Get motivational quote", "output": "quote_data"}},
-  {{"tool": "coding_agent", "args": {{"task": "CONTENT_ONLY: Generate ONLY the complete HTML document content (with <!DOCTYPE html>, <head>, <body>, embedded CSS styling) for a weather report.\\n\\nHere is the weather data from the previous step:\\n{{weather_data}}\\n\\nHere is the motivational quote from the previous step:\\n{{quote_data}}\\n\\nReturn ONLY the HTML code as a single string, no explanations, no project structure, no file paths, just the complete HTML document content."}}, "description": "Generate HTML content", "output": "html_content"}},
-  {{"tool": "write_file", "args": {{"path": "{output_path}/weather_berlin_{{date}}.html", "content": "{{html_content}}"}}, "description": "Save HTML file"}}
+  {{"tool": "coding_agent", "args": {{"task": "CONTENT_ONLY: Generate ONLY the complete HTML document content (with <!DOCTYPE html>, <head>, <body>, embedded CSS styling) for a weather report.\\n\\nHere is the weather data from the previous step:\\n{{weather_data}}\\n\\nReturn ONLY the HTML code as a single string, no explanations, no project structure, no file paths, just the complete HTML document content."}}, "description": "Generate HTML content", "output": "html_content"}},
+  {{"tool": "write_file", "args": {{"path": "{output_path}/weather_berlin_{{date}}.html", "content": "{{html_content}}"}}, "description": "Save HTML file"}},
+  {{"tool": "coding_agent", "args": {{"task": "CONTENT_ONLY: Write ONLY the final short messenger message (3-4 lines, German, no smalltalk): current temperature, max temperature, rain probability, wind, notable warnings. Base it STRICTLY on this data:\\n{{weather_data}}"}}, "description": "Write the short message text", "output": "message_text"}},
+  {{"tool": "send_to_user", "args": {{"message": "{{message_text}}", "file_path": "{output_path}/weather_berlin_{{date}}.html"}}, "description": "Deliver summary + report file on the user's main messenger"}}
 ]
 
 Return ONLY valid JSON array, no explanations, no markdown code blocks."""

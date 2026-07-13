@@ -50,3 +50,40 @@ def test_empty_and_none():
 def test_first_array_invalid_falls_through_to_next():
     # A malformed first '[...]' is skipped; the next valid array wins.
     assert f('[not, valid, json]\n[{"tool": "ok"}]') == [{"tool": "ok"}]
+
+
+# ── generator teaches deterministic delivery (live incident f9efc6d6) ────────
+
+def test_workflow_generator_teaches_verbatim_send_rule():
+    # A generated automation once sent the user the RAW web_search dump plus a
+    # dangling "summarize" instruction: send steps deliver their args verbatim,
+    # no LLM sits between template resolution and delivery. The generator
+    # prompt must teach the summarize-before-send pattern and file attachment.
+    from pathlib import Path
+    import vaf.tools.automation as auto_mod
+    src = Path(auto_mod.__file__).read_text(encoding="utf-8")
+    assert "send_to_user(message, file_path)" in src, "generator must know the delivery tool"
+    assert "DETERMINISTIC" in src and "VERBATIM" in src, "verbatim rule missing"
+    assert '"file_path": "{output_path}/weather_berlin_{{date}}.html"' in src, (
+        "delivery example must attach the produced file"
+    )
+    assert '"output": "message_text"' in src, (
+        "delivery example must summarize BEFORE sending"
+    )
+
+
+def test_workflow_generator_is_platform_agnostic():
+    # The delivery step must never hardwire a platform tool: the platform is
+    # the user's configuration (main_messenger), resolved at run time by
+    # send_to_user. A hardwired send_telegram froze the platform into every
+    # generated automation JSON (live incident f9efc6d6).
+    from pathlib import Path
+    import vaf.tools.automation as auto_mod
+    src = Path(auto_mod.__file__).read_text(encoding="utf-8")
+    start = src.index("Available Tools:")
+    end = src.index("Return ONLY valid JSON array", start)
+    generator_prompt = src[start:end]
+    for platform_tool in ("send_telegram", "send_whatsapp", "send_discord", "send_slack"):
+        assert f'"{platform_tool}"' not in generator_prompt, (
+            f"generator example/steps must not hardwire {platform_tool}"
+        )

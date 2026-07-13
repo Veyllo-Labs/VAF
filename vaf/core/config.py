@@ -193,7 +193,11 @@ class Config:
                 "tool_timeout_seconds": 120,           # generic in-process tool call
                 "subagent_timeout_seconds": 300,       # research/coding/document sub-agent step
                 "workflow_generation_timeout_seconds": 30,   # create_automation: bound the inline workflow-gen Agent (fast-fail to prompt-based; was 90s, too slow on reasoning providers)
-                "automation_run_timeout_seconds": 180,       # prompt-based automation fallback: bound the whole turn (runaway guard)
+                # Prompt-based automation runs: bound the whole turn (runaway guard). 180 was
+                # unrealistic for real tasks (mails + searches + coder + delivery need minutes)
+                # and produced timeout-then-double-delivery incidents; on timeout the runner now
+                # waits a bounded grace for the abandoned worker before giving up honestly.
+                "automation_run_timeout_seconds": 600,
                 "librarian_timeout_seconds": 60,       # filesystem agent — should be fast
                 "browser_timeout_seconds": 1800,       # worst-case hard cap (30 min); liveness is the real guard
                 "tool_stop_poll_seconds": 0.5,         # how often the bounded wait checks stop/deadline

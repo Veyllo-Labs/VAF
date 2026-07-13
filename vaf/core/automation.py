@@ -209,6 +209,29 @@ _SEND_STEP_TOOLS = frozenset({
 })
 
 
+# Grace window after a prompt-run timeout: the bounded worker is ABANDONED, not
+# killed, and live runs finished 77-140s late and then delivered fine (2026-07-13,
+# twice). Waiting a bounded grace turns "timeout + junk push + late zombie message"
+# into one normal, complete delivery. Only timed-out runs pay this wait.
+_TIMEOUT_GRACE_SECONDS = 300.0
+
+
+def _wait_for_abandoned_run(chat_done: dict, grace_seconds: float = _TIMEOUT_GRACE_SECONDS,
+                            poll: float = 2.0) -> bool:
+    """Wait up to ``grace_seconds`` for the abandoned prompt-run worker to set its
+    completion flag (the worker sets chat_done['done'] after chat_step returns).
+    True = the run finished; treat it as a normal completion. Never raises."""
+    try:
+        deadline = time.monotonic() + max(0.0, float(grace_seconds))
+        while time.monotonic() < deadline:
+            if chat_done.get("done"):
+                return True
+            time.sleep(max(0.1, float(poll)))
+        return bool(chat_done.get("done"))
+    except Exception:
+        return False
+
+
 def _delivered_via_agent_history(history) -> bool:
     """True if a send tool confirmed delivery during a prompt-based agent run.
 
@@ -1246,6 +1269,11 @@ vaf automation delete <id>   # Delete task
         # send tool (confirmed by the tool result). Drives the same double-delivery
         # dedup the workflow lane has; survives to the delivery call below.
         prompt_delivered_in_run = False
+        # True when a prompt run hit the time limit AND did not finish within the
+        # grace window: no partial stream as result, no legacy file wrap - the user
+        # gets one honest timeout note instead (live 2026-07-13: the half stream was
+        # wrapped into a junk HTML and pushed, then the zombie delivered again).
+        prompt_timeout_unresolved = False
 
         try:
             # ... (Rest of the method logic) ...
@@ -1535,37 +1563,80 @@ vaf automation delete <id>   # Delete task
                 # gateway 400ing every tool turn) can never run unbounded. On timeout the caller is freed and
                 # the automation lock released; the abandoned worker cannot keep spawning recursive workflows
                 # because those tools were stripped above.
+                _auto_to = 600.0
                 try:
-                    from vaf.core.bounded_run import run_bounded as _run_bounded
+                    from vaf.core.bounded_run import (
+                        run_bounded as _run_bounded,
+                        TIMEOUT_PREFIX as _TO_PREFIX,
+                        STOPPED_PREFIX as _ST_PREFIX,
+                    )
                     from vaf.core.config import Config as _CfgAuto
-                    _auto_to = float(_CfgAuto.get("automation_run_timeout_seconds", 180) or 180)
+                    _auto_to = float(_CfgAuto.get("automation_run_timeout_seconds", 600) or 600)
+                    _chat_done = {"done": False}
 
                     def _do_chat():
                         agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
+                        _chat_done["done"] = True
                         return True
 
-                    _run_bounded(_do_chat, timeout=_auto_to, label="automation_prompt_run")
+                    _bounded_ret = _run_bounded(_do_chat, timeout=_auto_to, label="automation_prompt_run")
+                    # The old code ignored this return value entirely - a timed-out run was
+                    # indistinguishable from a finished one, so the half stream became the
+                    # "result" while the abandoned worker delivered again later.
+                    if isinstance(_bounded_ret, str) and _bounded_ret.startswith(_TO_PREFIX):
+                        append_domain_log_always(
+                            "backend",
+                            f"[AUTOMATION] '{task.name}' hit the {int(_auto_to)}s time limit - "
+                            f"waiting up to {int(_TIMEOUT_GRACE_SECONDS)}s grace for the abandoned run to finish.",
+                        )
+                        if _wait_for_abandoned_run(_chat_done):
+                            append_domain_log_always(
+                                "backend",
+                                f"[AUTOMATION] '{task.name}' finished within the grace window - "
+                                f"treating it as a normal completion.",
+                            )
+                        else:
+                            prompt_timeout_unresolved = True
+                            append_domain_log_always(
+                                "backend",
+                                f"[AUTOMATION] '{task.name}' still unfinished after the grace window - "
+                                f"delivering an honest timeout note (no partial result, no file wrap).",
+                            )
+                    elif isinstance(_bounded_ret, str) and _bounded_ret.startswith(_ST_PREFIX):
+                        # User-initiated stop: no grace wait, but the same honest handling.
+                        prompt_timeout_unresolved = True
                 except Exception:
                     # Fallback to a plain call if run_bounded is unavailable for any reason.
                     agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
-                raw_result = "".join(response_parts)
 
-                # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses
-                # (agent._clean_reasoning): it removes whole <think>...</think> blocks (content included),
-                # so reasoning is stripped structurally and language-agnostically — not by brittle, English-
-                # only phrase heuristics. Fall back to the legacy extractor only if that yields nothing.
-                result = ""
-                try:
-                    result = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
-                except Exception:
+                if prompt_timeout_unresolved:
+                    result = (
+                        f"Error: Zeitlimit überschritten - die Automation '{task.name}' war nach "
+                        f"{int(_auto_to)}s plus Nachfrist noch nicht fertig. Es wird bewusst kein "
+                        f"Teilergebnis zugestellt; falls der Lauf im Hintergrund doch noch fertig "
+                        f"wird, meldet er sich selbst."
+                    )
+                else:
+                    raw_result = "".join(response_parts)
+
+                    # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses
+                    # (agent._clean_reasoning): it removes whole <think>...</think> blocks (content included),
+                    # so reasoning is stripped structurally and language-agnostically — not by brittle, English-
+                    # only phrase heuristics. Fall back to the legacy extractor only if that yields nothing.
                     result = ""
-                if not result:
-                    result = self._extract_clean_answer(raw_result, agent.history)
+                    try:
+                        result = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
+                    except Exception:
+                        result = ""
+                    if not result:
+                        result = self._extract_clean_answer(raw_result, agent.history)
 
                 agent.shutdown()
             
-            # Save output if path specified
-            if task.output_path:
+            # Save output if path specified. NEVER on an unresolved timeout: wrapping the
+            # honest error note (or a half stream) into an output file produced the junk
+            # HTML attachments of 2026-07-13.
+            if task.output_path and not prompt_timeout_unresolved:
                 # Resolve path properly (handle "Desktop", "Documents", etc.)
                 output_path_str = str(task.output_path).strip()
                 output_path = Path(output_path_str).expanduser()

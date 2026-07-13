@@ -128,6 +128,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answers match intent words with word boundaries after stripping paths and filenames
   ('mov' no longer matches 'remove', 'doc' no longer matches 'docker'), and the tool
   description tells the delegating agent up front that deletion is impossible.
+- **Automation timeouts no longer deliver half results twice.** The prompt-run bound
+  (previously 180s - unrealistic for real tasks) ignored the timeout sentinel: the
+  half-streamed text became the "result", was wrapped into a junk output file and
+  pushed, while the abandoned worker finished minutes later and delivered again
+  (observed twice live: double message, double attachment). The default is now 600s,
+  the sentinel is evaluated, and on timeout the runner waits a bounded grace window
+  for the abandoned worker - both live cases would have recovered into one normal,
+  complete delivery. Only past the grace does the user get one honest timeout note:
+  no partial result, no file wrap, status error.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

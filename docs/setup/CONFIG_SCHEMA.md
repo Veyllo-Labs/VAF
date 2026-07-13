@@ -146,6 +146,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `team_await_enabled` | `True` | When a reply claims completion while a sub-agent still runs, keep the reply (never erased) and append a "work not finished" note for the next turn. |
 | `autocontinue_pending_tasks_enabled` | `True` | Keep working within the turn while tasks remain pending. |
 | `autocontinue_question_classifier_enabled` | `True` | LLM check whether a reply is a blocking question before auto-continuing. |
+| `automation_run_timeout_seconds` | `600` | Wall-clock bound for a prompt-based automation run. On timeout the runner waits a bounded grace for the abandoned worker to finish (then treats it as a normal completion); otherwise one honest timeout note is delivered - never a partial result or a wrapped file. |
 | `proactive_reply_mutation_gate_enabled` | `True` | A reply to a background question that is not a clear affirmative cannot mutate stored state or delegate destructive work (confirm-style block). |
 | `ask_first_drain_gate_enabled` | `True` | While the agent awaits the user's answer to its own question, background drain turns cannot start new write-level tools or delegations. |
 | `task_overwrite_guard_enabled` | `True` | Confirm before replacing the whole task list while steps are pending. |

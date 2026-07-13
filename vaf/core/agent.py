@@ -2299,7 +2299,14 @@ class Agent:
 
         send_intent = any(x in intent_lower for x in ["send", "schick", "schicken"])
         if send_intent:
-            send_success = any(x in result_lower for x in ["sent", "gesendet", "telegram", "mail"])
+            # Channel-agnostic success phrases. The old list contained bare platform
+            # names ("telegram", "mail"), which (a) welded the heuristic to two
+            # platforms and (b) counted FAILURES as success ("Failed to send Telegram
+            # message" contains "telegram").
+            send_success = any(x in result_lower for x in [
+                "sent to the user", "message sent", "gesendet", "delivered",
+                "email sent", "mail sent",
+            ])
             if not send_success and len(result_lower) > 50:
                 return False, f"Send the file as requested. {task_description}"
 

@@ -67,10 +67,11 @@ def test_update_user_identity_enum_covers_all_channels():
     )
     missing = set(KNOWN_CHANNELS) - enum
     assert not missing, f"update_user_identity enum misses platforms: {missing}"
-    unknown = enum - set(KNOWN_CHANNELS) - {"email"}
+    unknown = enum - set(KNOWN_CHANNELS)
     assert not unknown, (
-        f"update_user_identity enum has platforms unknown to KNOWN_CHANNELS: {unknown} "
-        f"- extend the SSOT first"
+        f"update_user_identity enum has values unknown to KNOWN_CHANNELS: {unknown} "
+        f"- extend the SSOT first ('email' was removed deliberately: user_workspace "
+        f"heals it to None on read, the router never dispatches it - a dead value)"
     )
 
 

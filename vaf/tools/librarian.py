@@ -1444,9 +1444,11 @@ Remove duplicates and ensure smooth flow.
             if len(matches) > 30:
                 result.append(f"\n... and {len(matches) - 30} more")
 
-            # If exactly one file found, add send hint for main agent
+            # If exactly one file found, add send hint for main agent (channel-agnostic:
+            # send_to_user resolves the user's main messenger at run time - the old hint
+            # hardwired Telegram and was wrong for every non-Telegram user)
             if len(file_matches) == 1:
-                result.append(f"\n**To send via Telegram:** Use send_telegram(message=\"...\", file_path=\"{str(file_matches[0].resolve())}\")")
+                result.append(f"\n**To send to the user:** Use send_to_user(message=\"...\", file_path=\"{str(file_matches[0].resolve())}\") - it delivers on their main messenger.")
 
             return "\n".join(result)
             

@@ -79,6 +79,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   flag deliverable steps in create mode as well.
 
 ### Fixed
+- **The last platform-hardwired prompt surfaces are channel-agnostic.** The librarian's
+  found-one-file hint said "To send via Telegram" regardless of the user's messenger,
+  the channel-capabilities prompt picked its send tool via a hardcoded ternary that
+  defaulted to send_telegram (CLI sessions now get send_to_user), the ask-once guidance
+  now teaches send_to_user for delivery, and the delegation send-success heuristic no
+  longer contains bare platform names - which also fixes a latent false positive
+  ("Failed to send Telegram message" counted as a successful send). The front-office
+  owner-notification mapping gains its missing slack line.
+- **The dead 'email' main_messenger value is gone.** update_user_identity accepted
+  main_messenger="email", but the identity store heals it to None on every read and the
+  delivery router never dispatches e-mail - the value could be stored yet never worked.
+  Removed from the tool enum, both validators and the front-office mapping; the channel
+  registry drift guard now rejects any value outside KNOWN_CHANNELS.
+- **send_discord can attach documents.** The core Discord sender supported file uploads
+  all along; only the tool schema hid them, so agents fell back to other channels for
+  files. send_discord now accepts file_path with the same path validation and result
+  phrasing as send_telegram.
 - **Automations no longer get registered twice in the scheduler.** The create_automation
   tool auto-started the scheduler on its own manager instance (whose running-flag was
   False even while the process scheduler ran); since the schedule registry is

@@ -43,7 +43,7 @@ class UpdateUserIdentityTool(BaseTool):
             },
             "main_messenger": {
                 "type": "string",
-                "enum": ["telegram", "discord", "slack", "whatsapp", "email"],
+                "enum": ["telegram", "discord", "slack", "whatsapp"],
                 "description": "Preferred channel for proactive messages. Set when user says e.g. 'send it via Telegram' or 'use Mail'."
             },
             "name": {
@@ -123,7 +123,7 @@ class UpdateUserIdentityTool(BaseTool):
         add_dont = kwargs.get("add_dont")
         remove_dont = (kwargs.get("remove_dont") or "").strip() or None
         main_messenger_raw = (kwargs.get("main_messenger") or "").strip().lower() or None
-        main_messenger = main_messenger_raw if main_messenger_raw in ("telegram", "discord", "slack", "whatsapp", "email") else None
+        main_messenger = main_messenger_raw if main_messenger_raw in ("telegram", "discord", "slack", "whatsapp") else None
         timezone = (kwargs.get("timezone") or "").strip() or None
         date_format = (kwargs.get("date_format") or "").strip() or None
         time_format_raw = (kwargs.get("time_format") or "").strip().lower() or None

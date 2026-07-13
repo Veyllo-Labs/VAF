@@ -765,7 +765,15 @@ Then use the results to answer. Do NOT guess from your training data!
         if current_source and str(current_source).strip().lower() in _text_only_channels:
             chan = self._format_channel(current_source)
             src = str(current_source).strip().lower()
-            send_tool = "send_whatsapp" if src == "whatsapp" else ("send_discord" if src == "discord" else "send_telegram")
+            # Same-channel reply tool from the SSOT map; sessions without their own
+            # send tool (cli) get the channel-agnostic send_to_user, which resolves
+            # the user's main messenger at run time. The old hardcoded ternary
+            # defaulted everything unknown to send_telegram.
+            try:
+                from vaf.core.messaging_connections import CHANNEL_SEND_TOOLS
+                send_tool = CHANNEL_SEND_TOOLS.get(src, "send_to_user")
+            except Exception:
+                send_tool = "send_to_user"
             caps_de = (
                 f"**Wichtig:** Der Nutzer chattet über {chan} – er hat KEINEN Zugriff auf die Web-UI. "
                 "Er kann keine Dokumente, Anhänge-Listen oder Seiten im Browser ansehen. "
@@ -834,7 +842,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "   - Steht dort `telegram` → rufe `send_telegram(message=\"...\")` auf\n"
                 "   - Steht dort `whatsapp` → rufe `send_whatsapp(message=\"...\")` auf\n"
                 "   - Steht dort `discord` → rufe `send_discord(message=\"...\")` auf\n"
-                "   - Steht dort `email` → rufe `send_mail(...)` auf\n"
+                "   - Steht dort `slack` → rufe `send_slack(message=\"...\")` auf\n"
                 "3. Die Nachricht an den Inhaber soll **kurz und informativ** sein — Kontaktname + Kerninhalt (z.B. \"Alice bittet dich, sie zurückzurufen\").\n"
                 "4. **Sprache der Benachrichtigung:** Schreibe die Nachricht an den Inhaber **immer in der Sprache des Inhabers** (User Identity: `preferred_language`, z.B. Deutsch). Nicht in der Sprache des Kontakts — der Inhaber (z.B. Mert) spricht Deutsch, also die Benachrichtigung auf Deutsch.\n\n"
                 "**NICHT benachrichtigen** bei normalen Konversationen (Smalltalk, Fragen die du selbst beantworten kannst).\n"
@@ -881,7 +889,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 "   - If `telegram` → call `send_telegram(message=\"...\")`\n"
                 "   - If `whatsapp` → call `send_whatsapp(message=\"...\")`\n"
                 "   - If `discord` → call `send_discord(message=\"...\")`\n"
-                "   - If `email` → call `send_mail(...)`\n"
+                "   - If `slack` → call `send_slack(message=\"...\")`\n"
                 "3. The message to the owner should be **short and informative** — contact name + key content (e.g. \"Alice asks you to call her back\").\n"
                 "4. **Language of the notification:** Always write the message to the owner in the **owner's language** (User Identity: `preferred_language`, e.g. German). Not in the contact's language — the owner (e.g. Mert) has preferred_language German, so send the notification in German.\n\n"
                 "**Do NOT notify** for normal conversations (small talk, questions you can answer yourself).\n"
@@ -1064,7 +1072,7 @@ Then use the results to answer. Do NOT guess from your training data!
                         user_data["dos"] = ui.get("dos")
                     if ui.get("donts"):
                         user_data["donts"] = ui.get("donts")
-                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack", "whatsapp", "email"):
+                    if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in ("telegram", "discord", "slack", "whatsapp"):
                         user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
                     tz_val = (ui.get("timezone") or "").strip()
                     if tz_val:
@@ -1126,7 +1134,9 @@ Then use the results to answer. Do NOT guess from your training data!
                     if not main:
                         identity_block += (
                             "Preferred channel not set. If user asks to receive something, ask once which channel they prefer, "
-                            "then save with `update_user_identity(main_messenger=\"...\")` and use `search_tools(query=\"send [channel]\")` to find the right tool.\n"
+                            "then save with `update_user_identity(main_messenger=\"...\")` and deliver with `send_to_user(message=..., file_path=...)` "
+                            "- it resolves their main messenger automatically. Use a platform tool (via `search_tools(query=\"send [channel]\")`) "
+                            "only when the user explicitly names a platform.\n"
                         )
             except Exception:
                 pass

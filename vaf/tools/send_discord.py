@@ -6,13 +6,15 @@ Send a proactive message to the user via Discord.
 Only available when the user has Discord connected; use main_messenger or user request to decide when to call this tool.
 """
 import re
+from pathlib import Path
 
 from vaf.tools.base import BaseTool
+from vaf.tools.send_telegram import _resolve_path
 
 
 class SendDiscordTool(BaseTool):
     """
-    Send a message to the user via Discord.
+    Send a message to the user via Discord, optionally with a document attachment.
     Use when the user asked you to send them something and they prefer Discord or said "via Discord".
     """
     name = "send_discord"
@@ -20,7 +22,8 @@ class SendDiscordTool(BaseTool):
     side_effect_class = "irreversible"
     description = (
         "Send a message to the user via Discord. "
-        "Use when the user asked you to send them something (e.g. 'send me the result via Discord' or when main_messenger is Discord)."
+        "Use when the user asked you to send them something (e.g. 'send me the result via Discord' or when main_messenger is Discord). "
+        "For documents (invoice, contract, PDF, etc.), pass file_path with the full path to the file."
     )
     parameters = {
         "type": "object",
@@ -28,7 +31,11 @@ class SendDiscordTool(BaseTool):
             "message": {
                 "type": "string",
                 "description": "The message text to send to the user on Discord.",
-            }
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Optional. Full path to a file to send as document (PDF, DOCX, etc.). Use when user asks for a specific document or when you created one.",
+            },
         },
         "required": ["message"]
     }
@@ -37,6 +44,18 @@ class SendDiscordTool(BaseTool):
         message = (kwargs.get("message") or "").strip()
         if not message:
             return "No message provided. Pass the message text to send."
+
+        # The core sender (send_discord_dm) supported attachments all along -
+        # only this tool schema hid them, so agents fell back to Telegram for files.
+        file_path_str = (kwargs.get("file_path") or "").strip()
+        file_path: Path | None = None
+        if file_path_str:
+            resolved, path_error = _resolve_path(file_path_str)
+            if path_error:
+                return path_error
+            file_path = resolved
+        if file_path and not file_path.is_file():
+            return f"File not found or not a file: {file_path}"
 
         username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")
@@ -73,7 +92,8 @@ class SendDiscordTool(BaseTool):
             return "Message was blocked (contained internal system content). Send a clean user-facing message without any internal context markers."
 
         try:
-            ok = send_discord_dm(bot_token, user_id, out, chunk=True)
+            ok = send_discord_dm(bot_token, user_id, out, chunk=True,
+                                 file_path=str(file_path) if file_path else None)
             if not ok:
                 return "Failed to send Discord message. Check bot token and user permissions."
         except Exception as e:
@@ -100,7 +120,8 @@ class SendDiscordTool(BaseTool):
             from vaf.core.channel_message_store import append_message
             append_message(
                 username=str(username or "admin"), chat_id=str(user_id), body=out,
-                direction="out", content_type="text", channel="discord", user_scope_id=user_scope_id,
+                direction="out", content_type=("document" if file_path else "text"),
+                channel="discord", user_scope_id=user_scope_id,
             )
         except Exception:
             pass
@@ -119,4 +140,6 @@ class SendDiscordTool(BaseTool):
         except Exception:
             pass
 
+        if file_path:
+            return f"Message and document {file_path.name} sent to the user via Discord."
         return "Message sent to the user via Discord."

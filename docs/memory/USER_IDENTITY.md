@@ -27,7 +27,7 @@ In `vaf/core/system_prompt.py`, `build_prompt()` adds a user-identity block when
 
 - Name, preferred language, and location (city, country) when set.
 - Preferences, Do, and Don't lists.
-- Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, or slack).
+- Optional `main_messenger` (preferred channel for proactive messages: telegram, discord, slack, or whatsapp).
 - Optional `timezone`, `date_format`, and `time_format` (used for the **`<context>`** block datetime line and so the model can show dates/times in the user's preferred format).
 
 The datetime line inside the **`<context>`** block uses the user's `timezone` (if set) and `date_format`/`time_format` so the model sees the correct local time and format.
@@ -48,9 +48,20 @@ On each successful run, the tool appends one entry to `change_log` with the curr
 
 The agent injects the current username into the tool call so the correct `user_identity.json` is updated.
 
-## Proactive messaging (send_telegram, send_discord, send_whatsapp)
+## Proactive messaging (send_to_user and the per-channel tools)
 
-When the user asks the agent to send them something (e.g. a summary or a result "via Telegram"), the agent uses:
+Two delivery lanes exist, both keyed on `main_messenger`:
+
+- **Channel-agnostic (`send_to_user`)**: the default delivery step for automations and
+  workflows, and for interactive sends where the user did not name a platform. The tool
+  resolves `main_messenger` at RUN time via the canonical router
+  (`send_to_main_messenger` in `vaf/core/messaging_connections.py`) and falls back to a
+  Web UI notification when no messenger is reachable. Because the platform is resolved
+  at run time, changing `main_messenger` retargets existing automations automatically.
+  See the *Channel model* section in [CONNECTIONS.md](../integrations/CONNECTIONS.md).
+- **Per-channel tools**: used when the user explicitly names a platform ("via Telegram").
+
+When the user asks the agent to send them something on a named platform, the agent uses:
 
 1. **Messaging connections** (in the system prompt): which channels are available (Telegram, Discord, WhatsApp) and whether `main_messenger` is set. Only tools for configured connections are exposed (e.g. `send_telegram` only if the user has Telegram).
 2. If preferred channel is not set, the agent asks once (e.g. "Should I send it via Discord, Telegram, or WhatsApp?") and stores the answer with `update_user_identity(main_messenger="telegram")` (or discord/slack/whatsapp).

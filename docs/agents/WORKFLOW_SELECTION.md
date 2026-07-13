@@ -190,6 +190,7 @@ create_agent_workflow(
 | `write_file` | Write raw content to a specific path. |
 | `read_file` | Read a file (e.g. output from a previous step). |
 | `python_sandbox` | Data processing, calculations, Python scripts. |
+| `send_to_user` | Delivery step: send the final message (plus optional produced file) to the user's main messenger, resolved at run time; Web UI fallback. See *Delivery steps* below. |
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
@@ -222,6 +223,33 @@ Every run seeds a fixed set of **temporal built-ins** into the variable scope, s
 A real user-supplied variable of the same name always wins (built-ins are seeded with `setdefault`). These exist because LLM-generated automation workflows routinely write filenames like `report_{date}.html`; without a value, the run used to abort.
 
 **Unknown placeholders are non-fatal.** A simple `{var}` the engine cannot resolve (not a step output, not a built-in) is left **literally** in the text (`"{var}"`) instead of aborting the workflow — so one hallucinated placeholder can no longer fail an entire scheduled automation. Nested access to a missing object (`{step.field}`) still raises, surfaced as a per-step `Missing variable` error.
+
+##### Delivery steps (`send_to_user`)
+
+When a workflow should notify the user, the LAST step is `send_to_user(message,
+file_path)` - channel-agnostic: the platform comes from the user's `main_messenger`
+at run time (see [CONNECTIONS.md](../integrations/CONNECTIONS.md), *Channel model*),
+never from the workflow definition.
+
+**Rule:** send steps are deterministic - they deliver their arguments VERBATIM. No
+LLM sits between template resolution and delivery, so a raw step output
+(`{search_results}`) or an instruction ("summarize this") in `message` reaches the
+user's phone as-is (live incident: a generated weather automation did exactly that).
+Produce the final text in a preceding CONTENT_ONLY generation step, then send that
+step's `{output}`.
+
+**Rule:** never put `assertions` or `validate` on a delivery step - an assertion
+retry re-sends the message to the user. Validation belongs on the step that
+produces the content.
+
+`file_path` is best-effort by contract (the text send decides success; the router
+skips a missing file silently), and a relative `file_path` resolves against
+`{workflow_project_path}` exactly like `write_file`'s `path` did, so a bare
+filename written earlier in the run is found. If no messenger is configured the
+step still succeeds: the tool reports the Web UI fallback honestly in its result.
+In the automation lane, a confirmed in-run delivery suppresses the post-run
+messenger push (no double message; see
+[AUTOMATIONS.md](../platform/AUTOMATIONS.md), *Result delivery*).
 
 ##### Assertions (selective step-retry)
 
@@ -362,4 +390,4 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ---
 
-*Last updated: 2026-06-23*
+*Last updated: 2026-07-13*

@@ -389,10 +389,55 @@ For questions like “Has [Name] written to me?”, the agent calls `get_contact
 When you have one or more messaging connections (e.g. Telegram, Discord), the agent can **send you proactive messages**—for example when you ask it to "send me the result via Telegram" or "tell me how full my desktop is and send that to me".
 
 - **System prompt**: The agent is informed which channels are available for the current user and whether a preferred channel (`main_messenger`) is set. This is stored in User Identity (see [USER_IDENTITY.md](../memory/USER_IDENTITY.md)).
-- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_slack` for Slack (when supported), and `send_whatsapp` when WhatsApp is linked. The agent never sees a send tool for a channel you do not have.
+- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_slack` for Slack (when supported), and `send_whatsapp` when WhatsApp is linked. The agent never sees a per-channel send tool for a channel you do not have. The channel-agnostic `send_to_user` is additionally pinned whenever at least one messenger is connected (it resolves the platform itself at run time, see *Channel model* below).
 - **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via Discord, Telegram or Slack?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool).
-- **Sending**: The agent uses the matching tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`) to deliver the content. For **Telegram**, the agent can send to you once your account is linked (whitelist entry or one message from you); the verified account owner is recognized without a separate manual step. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
+- **Sending**: When you named a platform ("send it via Telegram"), the agent uses the matching tool (`send_telegram`, `send_discord`, `send_slack`, or `send_whatsapp`). When no platform was named - and always in automations/workflows - it uses `send_to_user`, which resolves `main_messenger` at run time. For **Telegram**, the agent can send to you once your account is linked (whitelist entry or one message from you); the verified account owner is recognized without a separate manual step. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
 - **Discord**: Proactive send is implemented via `send_discord` (with the same user-scope checks used by other messaging tools).
+
+## Channel model
+
+Messaging platforms are **channels**: each contributes a connection config, endpoint
+store entries, and per-channel tools (send/read/find/inbox). The delivery RULE,
+however, is channel-agnostic and exists exactly once:
+
+- **The rule**: automations and workflows deliver with `send_to_user(message,
+  file_path)`. Send steps are deterministic - they deliver their arguments verbatim -
+  so the final user-facing text is produced FIRST (a CONTENT_ONLY generation step),
+  then sent. The platform is resolved at RUN time from the user's `main_messenger`
+  (User Identity); it is never chosen by the model and never frozen into a stored
+  automation/workflow definition, so switching your main messenger later retargets
+  every existing automation automatically.
+- **The adapter**: `send_to_main_messenger` in `vaf/core/messaging_connections.py` is
+  the single dispatch point mapping `main_messenger` to a concrete channel send
+  (Telegram/WhatsApp/Discord today). The text send decides success; a file is
+  attached best-effort as a separate message (avoids per-channel caption limits).
+  When no messenger is reachable, delivery falls back to the Web UI (notification
+  preview, and for automations the result lane) - content is never dropped silently.
+- **Explicit platform requests** stay on the per-channel tools: "send this via
+  Telegram" uses `send_telegram`.
+
+Adding a new platform means extending adapters and registries, NOT the rule. The
+prompt surfaces that teach delivery (automation workflow generator, calendar check
+prompt) stay unchanged. Start at the single source of truth (`KNOWN_CHANNELS` /
+`ROUTABLE_CHANNELS` in `vaf/core/messaging_connections.py`); the drift guard
+`tests/test_channel_registry_sync.py` fails until the copies below are consistent.
+Checklist of the real registry copies (each has drifted before):
+
+1. Channel bridge + `<platform>_config` + availability detection in
+   `get_messaging_connections()`.
+2. A dispatch branch in `send_to_main_messenger` - this is all `send_to_user`
+   needs to support the new platform.
+3. Per-channel tools (`send_<platform>`, read/find/inbox) for interactive use, plus
+   their rows in [TOOLS_CATALOG.md](../agents/TOOLS_CATALOG.md).
+4. The `main_messenger` allowlists (user_workspace, `update_user_identity` enum,
+   persona API route, system prompt validator).
+5. The channel-to-tool map and send-tool injection tuples in `vaf/core/agent.py`,
+   the workflow engine injection tuple, `_SENT_TOOLS` in thinking mode (a missing
+   entry makes the new send tool an UNTRACKED outbound channel in background runs),
+   and `FRONT_OFFICE_ALLOWED_TOOLS` (deliberate decision, default deny).
+6. `channel_restrictions` tuples on restricted tools and the ingress policy's
+   supported-channel list - these fail OPEN for an unknown channel source and must
+   be extended consciously.
 
 ## Architecture
 

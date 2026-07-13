@@ -110,6 +110,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   report meanwhile (live incident: deletion was re-delegated twice AFTER the agent had
   asked "Soll ich die Datei jetzt direkt loeschen?"). Kill-switches:
   proactive_reply_mutation_gate_enabled, ask_first_drain_gate_enabled.
+- **Sub-agent result summaries can no longer leak chain-of-thought to messengers.**
+  The result drain hand-copied a shorter sanitizer chain than the normal reply path
+  and built its text from the raw stream buffer - 1034 characters of untagged English
+  deliberation reached the user on Telegram. All messenger sends (normal headless path
+  and drain) now share one sanitizer chain including a conservative, language-agnostic
+  guard against untagged chain-of-thought prefixes; the drain summary is based on the
+  reasoning-stripped chat_step return value, and an empty-after-sanitize summary falls
+  back to a deterministic localized result excerpt instead of a noise placeholder.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

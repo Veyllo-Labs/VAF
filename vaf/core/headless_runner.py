@@ -202,6 +202,66 @@ def _sanitize_outgoing_message(text: str) -> str:
     return text
 
 
+# Paragraph openers that mark model deliberation (chain-of-thought emitted as plain
+# content, without <think> tags). Language check would be wrong (English-speaking
+# users get legit English replies), so the guard is STRUCTURAL - see
+# _strip_untagged_cot_prefix.
+_COT_OPENERS = (
+    "let me ", "let's ", "actually,", "actually ", "wait,", "wait.", "hmm",
+    "okay,", "okay so", "alright,", "alright so",
+)
+_COT_RESULT_SAYS = re.compile(r"^the .{0,40}\bresult says\b", re.IGNORECASE)
+
+
+def _is_deliberative_paragraph(p: str) -> bool:
+    s = p.strip().lower()
+    return s.startswith(_COT_OPENERS) or bool(_COT_RESULT_SAYS.match(s))
+
+
+def _strip_untagged_cot_prefix(text: str) -> str:
+    """Conservative structural guard against untagged chain-of-thought reaching a
+    messenger (live 2026-07-13: 1034 chars of plain English deliberation went to
+    Telegram). Strips the LEADING deliberation block only when ALL of these hold:
+    the FIRST paragraph is deliberative, at least TWO paragraphs in the lead block
+    are deliberative, and at least one paragraph survives after it (the actual
+    user-facing tail). Anything less stays untouched - a legit reply that merely
+    contains a rhetorical 'Actually,' mid-text is never trimmed."""
+    if not text or not text.strip():
+        return text
+    paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paras) < 3 or not _is_deliberative_paragraph(paras[0]):
+        return text
+    last_delib = max((i for i, p in enumerate(paras) if _is_deliberative_paragraph(p)), default=-1)
+    if last_delib < 0 or last_delib + 1 >= len(paras):
+        return text
+    lead = paras[: last_delib + 1]
+    if sum(1 for p in lead if _is_deliberative_paragraph(p)) < 2:
+        return text
+    logging.getLogger(__name__).warning(
+        "SANITIZE: stripped %d leading deliberation paragraph(s) from outgoing message", len(lead)
+    )
+    return "\n\n".join(paras[last_delib + 1:]).strip()
+
+
+def _prepare_channel_outbound(text: str) -> str:
+    """THE outbound sanitizer chain for messenger sends (Telegram/WhatsApp/Discord),
+    shared by the normal headless reply path AND the sub-agent result drain. The
+    drain previously hand-copied a shorter chain and drifted (skipped the
+    workflow-async strip, the internal-phrase net and any CoT guard) - one shared
+    helper makes a fifth divergent copy structurally impossible. Pure text->text:
+    it never decides WHETHER a message is sent, only what the text looks like.
+    Never used for the WebUI/session lane (the browser already streamed the
+    original text - invariant 4.2)."""
+    out = str(text or "")
+    out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
+    out = _strip_tool_calls_json(out)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    out = _strip_workflow_async_from_message(out)
+    out = _sanitize_outgoing_message(out)
+    out = _strip_untagged_cot_prefix(out)
+    return (out or "").strip()
+
+
 def _user_asked_for_text(user_input: str) -> bool:
     """True if the user prompt looks like a request to write/compose text (for opening in Document Editor)."""
     if not (user_input and user_input.strip()):
@@ -1685,13 +1745,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             pass
                         if task_source == "telegram" and chat_id:
                             from vaf.core.telegram_reply import send_telegram_reply
-                            # Strip <think>...</think>, raw tool_calls JSON, workflow-async lines, and internal phrases
-                            out = str(final_text)
-                            out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
-                            out = _strip_tool_calls_json(out)
-                            out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                            out = _strip_workflow_async_from_message(out)
-                            out = _sanitize_outgoing_message(out)
+                            out = _prepare_channel_outbound(final_text)
                             if not out:
                                 try:
                                     log_telegram_reply(
@@ -1713,12 +1767,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     )
                                 except Exception:
                                     pass
-                                out = str(final_text)
-                                out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
-                                out = _strip_tool_calls_json(out)
-                                out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                                out = _strip_workflow_async_from_message(out)
-                                out = _sanitize_outgoing_message(out)
+                                out = _prepare_channel_outbound(final_text)
                                 if out:
                                     send_discord_reply(str(discord_channel_id), out)
                         elif task_source == "whatsapp":
@@ -1742,12 +1791,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     )
                                 except Exception:
                                     pass
-                                out = str(final_text)
-                                out = re.sub(r'<think>.*?</think>', '', out, flags=re.DOTALL)
-                                out = _strip_tool_calls_json(out)
-                                out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                                out = _strip_workflow_async_from_message(out)
-                                out = _sanitize_outgoing_message(out)
+                                out = _prepare_channel_outbound(final_text)
                                 if out:
                                     send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
                                 else:
@@ -2443,6 +2487,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         "Konzentriere dich auf den Inhalt (was wurde gefunden/getan).\n"
                                         "Bleib prägnant aber informativ.\n"
                                         "Du kannst `read_file` nutzen, wenn du den Inhalt sehen musst.\n"
+                                        "Schreibe NUR die fertige Nachricht an den Nutzer - keine Überlegungen, "
+                                        "kein Meta-Kommentar, kein Denkprozess.\n"
                                         "Wiederhole NICHT deine vorherige Nachricht. ANTWORTE AUSSCHLIESSLICH AUF DEUTSCH."
                                     )
                                 else:
@@ -2453,6 +2499,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         "Focus on the content (what was found/done).\n"
                                         "Keep it concise but informative.\n"
                                         "You may use `read_file` if you need to see the content before summarizing.\n"
+                                        "Write ONLY the final user-facing message - no deliberation, no meta "
+                                        "commentary, no thinking out loud.\n"
                                         f"Do NOT repeat your previous message. RESPOND EXCLUSIVELY IN {native_lang.upper()}."
                                     )
 
@@ -2472,9 +2520,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # gate keys on this flag, and chat_step must not treat the
                                 # instruction prompt as a real user message (it would clear the
                                 # pending-question latch). Restored on EVERY exit path (Rule 4.5).
+                                drain_summary_text = ""
                                 agent._synthetic_drain_turn = True
                                 try:
-                                    agent.chat_step(
+                                    # Capture the return value: chat_step returns the FINAL answer with
+                                    # reasoning stripped (AGENT_LOOP design) - the messenger summary is
+                                    # based on it, never on the raw stream buffer (which carried untagged
+                                    # chain-of-thought to Telegram on 2026-07-13). The WebUI lane keeps
+                                    # using response_parts: the browser already saw that stream (4.2).
+                                    drain_summary_text = agent.chat_step(
                                         user_input=instruction_prompt,
                                         stream_callback=webui_stream_callback,
                                         skip_input=False,
@@ -2544,18 +2598,25 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     except Exception:
                                         pass
 
-                                # Send subagent summary to Telegram/Discord if this session originated from there
+                                # Send subagent summary to Telegram/Discord if this session originated from there.
+                                # Same sanitizer chain as the normal reply path (the old hand-copied short
+                                # chain here let 1034 chars of untagged chain-of-thought reach Telegram),
+                                # and a DETERMINISTIC fallback instead of the old noise placeholder: the
+                                # drain owns delivery (4.3) - it must send something useful, never noise
+                                # and never nothing.
                                 try:
                                     sid = getattr(agent, "current_session_id", None)
-                                    if sid and response_parts:
+                                    if sid:
                                         session = session_mgr.load(sid)
-                                        out = "".join(response_parts)
-                                        out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
-                                        out = re.sub(r"\n{3,}", "\n\n", out).strip()
-                                        out = _strip_tool_calls_json(out)
-                                        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+                                        out = _prepare_channel_outbound(drain_summary_text or "")
                                         if not out:
-                                            out = "[No summary generated]"
+                                            out = _prepare_channel_outbound("".join(response_parts))
+                                        if not out:
+                                            _mb_head = ("Der Sub-Agent ist fertig. Ergebnis:"
+                                                        if user_lang == "de" else "The sub-agent finished. Result:")
+                                            _mb_body = (combined_results or "").strip()[:2000] or (
+                                                "(kein Text-Ergebnis)" if user_lang == "de" else "(no textual result payload)")
+                                            out = _prepare_channel_outbound(f"{_mb_head}\n\n{_mb_body}") or _mb_head
                                         chat_id = session.metadata.get("telegram_chat_id")
                                         if chat_id:
                                             from vaf.core.telegram_reply import send_telegram_reply

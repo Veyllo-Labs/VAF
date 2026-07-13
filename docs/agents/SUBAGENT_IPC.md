@@ -295,7 +295,14 @@ sending unlocked (no banner — the SubAgent window already shows the work). A S
 generation — killing the sub-agent requires pressing Stop again when nothing is streaming
 (explicit `scope: "all"`). Completed results are delivered exclusively by the headless
 runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) —
-a user chat turn no longer consumes them mid-reply. On `provider=local` the block and hint
+a user chat turn no longer consumes them mid-reply. Drain messenger summaries pass the SAME
+outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
+tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and are
+based on `chat_step`'s reasoning-stripped return value, not the raw stream buffer; when
+sanitization empties the summary, a deterministic localized fallback (head + result excerpt)
+is sent instead — never a noise placeholder, never a skipped send (the drain owns delivery).
+The WebUI/session lane is exempt from the new guard: the browser already streamed the
+original text and must not see it retro-edited. On `provider=local` the block and hint
 are simply absent (no new gating of messages): the single llama server would otherwise serve
 two inferences at once. Kill-switch: `subagent_concurrent_chat_enabled`. See
 [PROVIDER_MODES.md](../llm/PROVIDER_MODES.md).

@@ -112,7 +112,7 @@ grep the symbol names to find them.
 | 4 | Tool router | `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
-| 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT — never erased — and a history note keeps the next turn honest) |
+| 7 | Guardrails | false-promise, result-grounding gates; team-await note (a reply claiming completion while a sub-agent runs is KEPT — never erased — and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text based on chat_step's reasoning-stripped return value |
 | 8 | Tool dispatch | `execute_tool`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation | `_validate_final_answer` |
 | 10 | Pending-task auto-continue | `_reply_needs_user`, `_task_stuck_step` |

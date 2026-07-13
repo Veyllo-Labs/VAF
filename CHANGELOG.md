@@ -89,6 +89,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   construction (thinking / automation / chat); env remains only a fallback for
   embedders. Handoff bundles are additionally data-minimized: text-only capped
   snapshots, and resolved bundles drop their history entirely.
+- **Replies to background questions no longer trigger unconditional task continuation.**
+  The reply-pickup note asserted "CONTINUE the task now" whenever a handoff bundle was
+  linked, without validating the bundle and without a decline or ambiguity lane - a
+  mislabeled, finding-less bundle framed a plain "nein bitte nicht" as an automation
+  continuation and the agent mutated an automation and attempted file deletion.
+  Pickup now validates the bundle (automation source + curated findings), degrades to
+  a plain-question note otherwise, and every lane is reply-conditional: clear
+  agreement continues, a decline changes nothing, an ambiguous reply gets exactly one
+  confirming question before any action. Each pickup writes a [REPLY_CTX] audit line.
 - **Generated automations no longer message the user raw tool output.** The automation
   workflow generator wrote send steps like "here is the data: {search_results} - please
   summarize" - but send steps are deterministic and deliver their arguments verbatim,

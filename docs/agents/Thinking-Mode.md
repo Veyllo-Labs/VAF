@@ -41,10 +41,13 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`). `confirmed` is a legacy
   status kept valid for old entries.
 - **Handoff to the main agent:** the request is linked to `waiting_for_reply`. When the user replies in
-  chat, `chat_step` loads the request, injects its `proposed_action` as context ("if they confirm, carry
-  it out now") — so the **main agent still carries out** a clear "yes" immediately — and **captures** the
-  exchange: it records the user's reply (at pickup) and its own reply (at end-of-turn), moving the status
-  to `replied`. The main agent does NOT decide accepted-vs-declined here.
+  chat, `chat_step` loads the request and injects a reply note carrying the question text and, when a
+  `proposed_action` exists, "if they CLEARLY confirm, carry it out now" - so the **main agent still
+  carries out** a clear "yes" immediately, while a decline changes nothing and an ambiguous reply
+  triggers exactly one confirming question before any action (the old unconditional continue steered a
+  "nein bitte nicht" into unintended mutations, live 2026-07-13). It **captures** the exchange: the
+  user's reply (at pickup) and its own reply (at end-of-turn), moving the status to `replied`. The main
+  agent does NOT decide accepted-vs-declined here. Each pickup logs one `[REPLY_CTX]` line (prompt log).
 - **Outcome classification (next run):** the background run that owns the question classifies each
   `replied` request from the full triple {its question, the user's reply, the main agent's own reply
   (capped)} via one small LLM call (`_classify_replied_requests` → `agent._generate_for_classification`):

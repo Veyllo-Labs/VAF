@@ -6012,23 +6012,33 @@ class Agent:
 
         return True
 
-    def _render_handoff_bundle(self, scope, req) -> str:
+    def _render_handoff_bundle(self, scope, req) -> "tuple[str, bool]":
         """For a reply to a background AUTOMATION handoff: load the linked bundle (THIS scope only) and
-        render a BOUNDED digest of the automation's working context — its summary (the curated findings)
-        plus a short tail of recent steps — for the main agent to continue with. Marks the bundle resolved.
-        Returns '' when there is no bundle / it is missing / expired / for another scope (then the caller
-        falls back to the normal thinking-reply path). The full history stays in the bundle for reference;
-        only a bounded digest is injected, so the user's chat is never raw-dumped."""
+        render a BOUNDED digest of the automation's working context - its summary (the curated findings)
+        plus a short tail of recent steps - for the main agent to continue with. Marks the bundle resolved.
+        Returns (digest, curated): digest is '' when there is no bundle / it is missing / expired / for
+        another scope / not from an automation (then the caller falls back to the plain-question note);
+        curated is True only when the automation stored genuine findings (a summary). A mislabeled bundle
+        (source != 'automation') is consumed and yields '' - defense in depth: on 2026-07-13 a thinking
+        question stored as an 'automation' bundle framed a user reply as an automation continuation and
+        steered the main agent into unintended actions. The full history stays in the bundle until it is
+        resolved; only a bounded digest is injected, so the user's chat is never raw-dumped."""
         bundle_id = (req or {}).get("bundle_id") or ""
         if not bundle_id:
-            return ""
+            return "", False
         try:
             from vaf.core import handoff_bundle as _hb
             bundle = _hb.load(scope, bundle_id)
         except Exception:
-            return ""
+            return "", False
         if not bundle:
-            return ""
+            return "", False
+        if (bundle.get("source") or "").strip() != "automation":
+            try:
+                _hb.update_status(scope, bundle_id, "resolved")
+            except Exception:
+                pass
+            return "", False
         parts = []
         summary = (bundle.get("summary") or "").strip()
         if summary:
@@ -6054,7 +6064,44 @@ class Agent:
             _hb.update_status(scope, bundle_id, "resolved")
         except Exception:
             pass
-        return "\n".join(parts).strip()
+        return "\n".join(parts).strip(), bool(summary)
+
+    @staticmethod
+    def _build_reply_pickup_note(q_text, carry, digest, curated, facts) -> str:
+        """Build the system note injected when the user replies to a tracked background question.
+
+        Three lanes (incident 2026-07-13: the old note asserted 'CONTINUE the task now' on an
+        unvalidated bundle, with no decline or uncertainty lane - the model mutated state on a
+        'nein bitte nicht'):
+        - genuine rich handoff (digest + curated findings): automation framing, but continuation is
+          reply-CONDITIONAL - agree = continue with this context, decline = change nothing, unclear =
+          exactly one confirming question first;
+        - handoff without curated findings: treated like a plain question (the digest is dropped -
+          in the incident it was garbage), no automation-continuation claim;
+        - plain background question: as before, plus the decline/uncertainty guidance.
+        Pure function for unit-testability."""
+        if digest and curated:
+            return (
+                f"[Context: The user's message below is a REPLY to a question a BACKGROUND "
+                f"AUTOMATION of yours raised: \"{q_text}\". Their reply answers THAT question. "
+                f"If they CLEARLY agree, continue the task now using THIS context - do not "
+                f"re-derive facts, do not restart.{carry} If they DECLINE, change NOTHING - "
+                f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the "
+                f"question, do NOT act: ask ONE short confirming question first.\n"
+                f"{digest}\n"
+                f"Answer about THAT question only. For THIS turn, IGNORE any earlier <user_intent> "
+                f"or working-memory <Plan> shown above - they are unrelated. The user's reply "
+                f"follows immediately after this system note.]"
+            )
+        return (
+            f"[Context: The user's message below is a REPLY to a question YOUR background pass "
+            f"asked them: \"{q_text}\".{facts}{carry} If they DECLINE, change NOTHING - "
+            f"acknowledge briefly. If their reply is ambiguous or seems unrelated to the question, "
+            f"do NOT act: ask ONE short confirming question first. Answer about THAT question "
+            f"only. For THIS turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown "
+            f"above - they are unrelated to this reply and must not be treated as the topic. The "
+            f"user's reply follows immediately after this system note.]"
+        )
 
     def _ensure_image_base_descriptions(self, images: List[Dict]) -> None:
         """Generate the one-time base description for each freshly attached image (in place).
@@ -6200,44 +6247,42 @@ class Agent:
                                 self._thinking_reply_pending = {"scope": _scope, "request_id": _req_id}
                             except Exception:
                                 pass
-                        _carry = f" If they confirm, carry out this proposal now: {_action}." if _action else ""
+                        _carry = f" If they CLEARLY confirm, carry out this proposal now: {_action}." if _action else ""
                         # If this request came from a background AUTOMATION handoff, it links to a bundle that
                         # holds the automation agent's FULL working context. Load it (same scope only) and
                         # integrate it deliberately: a concise note + a BOUNDED digest of the run's summary +
-                        # recent steps — so the main agent continues with full context, not a raw transcript
-                        # dumped into the chat. A missing/expired/wrong-scope bundle falls back to the normal
-                        # reply path below (no bundle context).
-                        _bundle_ctx = self._render_handoff_bundle(_scope, _req) if _req else ""
-                        if _bundle_ctx:
-                            self._thinking_reply_context = (
-                                f"[Context: The user's message below is a REPLY to a question a BACKGROUND "
-                                f"AUTOMATION of yours raised: \"{q_text}\". That automation could not finish on "
-                                f"its own and handed you its full working context. CONTINUE the task now using "
-                                f"THIS context — do not invent facts and do not restart from scratch.{_carry}\n"
-                                f"{_bundle_ctx}\n"
-                                f"Answer about THAT task only. For THIS turn, IGNORE any earlier <user_intent> or "
-                                f"working-memory <Plan> shown above — they are unrelated. The user's reply follows "
-                                f"immediately after this system note.]"
-                            )
+                        # recent steps - so the main agent continues with full context, not a raw transcript
+                        # dumped into the chat. A missing/expired/wrong-scope/mislabeled bundle falls back to
+                        # the plain-question note (no automation framing).
+                        _bundle_ctx, _bundle_curated = (
+                            self._render_handoff_bundle(_scope, _req) if _req else ("", False)
+                        )
+                        # Concrete content the background run gathered behind a teaser message (e.g. the actual
+                        # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
+                        # answered with the REAL findings - not a made-up version (observed 2026-06-22: the
+                        # main agent invented incoherent cooling tips because the content was never passed).
+                        _details = (_req or {}).get("details") or ""
+                        if _details:
+                            _facts = (f" The concrete information behind that message - use THIS to answer their "
+                                      f"reply, do not invent new facts: {_details}.")
                         else:
-                            # Concrete content the background run gathered behind a teaser message (e.g. the actual
-                            # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
-                            # answered with the REAL findings — not a made-up version (observed 2026-06-22: the
-                            # main agent invented incoherent cooling tips because the content was never passed).
-                            _details = (_req or {}).get("details") or ""
-                            if _details:
-                                _facts = (f" The concrete information behind that message — use THIS to answer their "
-                                          f"reply, do not invent new facts: {_details}.")
-                            else:
-                                _facts = (" You do not have the specifics on hand; if the user asks for details, look "
-                                          "them up (e.g. web_search) — do NOT make up facts.")
-                            self._thinking_reply_context = (
-                                f"[Context: The user's message below is a REPLY to a question YOUR background pass "
-                                f"asked them: \"{q_text}\".{_facts}{_carry} Answer about THAT question only. For THIS "
-                                f"turn, IGNORE any earlier <user_intent> or working-memory <Plan> shown above — they "
-                                f"are unrelated to this reply and must not be treated as the topic. The user's reply "
-                                f"follows immediately after this system note.]"
+                            _facts = (" You do not have the specifics on hand; if the user asks for details, look "
+                                      "them up (e.g. web_search) - do NOT make up facts.")
+                        self._thinking_reply_context = self._build_reply_pickup_note(
+                            q_text, _carry, _bundle_ctx, _bundle_curated, _facts
+                        )
+                        # Observability (incident lesson: the injected note is mid-list and appears in
+                        # no prompt log - the next incident should be a grep, not an inference).
+                        try:
+                            _lane = ("handoff" if (_bundle_ctx and _bundle_curated)
+                                     else ("handoff_uncurated" if _bundle_ctx else "plain"))
+                            append_domain_log(
+                                "prompt",
+                                f"[REPLY_CTX] lane={_lane} req={_req_id} "
+                                f"len={len(self._thinking_reply_context or '')} q_head={q_text[:120]!r}",
                             )
+                        except Exception:
+                            pass
                 else:
                     self._thinking_reply_context = None
 

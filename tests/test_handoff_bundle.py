@@ -152,21 +152,72 @@ def test_ask_user_routes_to_handoff_in_automation(monkeypatch, tmp_path):
 
 def test_render_handoff_bundle_digest_and_resolves(monkeypatch, tmp_path):
     """The main-agent merge helper renders a bounded digest (summary + recent steps) from the linked
-    bundle and marks it resolved; a request without a bundle yields ''."""
+    bundle and marks it resolved; a request without a bundle yields ''. Returns (digest, curated)."""
     _isolate(monkeypatch, tmp_path)
     from vaf.core.agent import Agent
     render = Agent._render_handoff_bundle.__get__(object())   # method does not use self attributes
 
     b = hb.create(SCOPE_A, history=_HIST, summary="found flights to X, Y, Z",
                   question="which?", proposed_action="book it")
-    digest = render(SCOPE_A, {"bundle_id": b["id"]})
+    digest, curated = render(SCOPE_A, {"bundle_id": b["id"]})
+    assert curated is True                               # genuine findings present
     assert "found flights to X, Y, Z" in digest          # the summary (curated findings)
     assert "web_search" in digest                        # a recent step from the history
     assert "system" not in digest.split("Recent steps")[-1]  # the bundle's own system turn is excluded
     assert hb.load(SCOPE_A, b["id"])["status"] == "resolved"  # marked resolved on pickup
 
     # no bundle linked -> empty (caller falls back to the normal reply path)
-    assert render(SCOPE_A, {"bundle_id": None}) == ""
-    assert render(SCOPE_A, {}) == ""
+    assert render(SCOPE_A, {"bundle_id": None}) == ("", False)
+    assert render(SCOPE_A, {}) == ("", False)
     # wrong scope -> empty (isolation)
-    assert render(SCOPE_B, {"bundle_id": b["id"]}) == ""
+    assert render(SCOPE_B, {"bundle_id": b["id"]}) == ("", False)
+
+
+def test_render_uncurated_bundle_is_not_curated(monkeypatch, tmp_path):
+    # Incident 2026-07-13: bundle 6cffd5e7 had summary=None and unrelated chat
+    # history - it must never carry the automation-continuation framing.
+    _isolate(monkeypatch, tmp_path)
+    from vaf.core.agent import Agent
+    render = Agent._render_handoff_bundle.__get__(object())
+    b = hb.create(SCOPE_A, history=_HIST, summary="", question="check-back?")
+    digest, curated = render(SCOPE_A, {"bundle_id": b["id"]})
+    assert curated is False
+    assert hb.load(SCOPE_A, b["id"])["status"] == "resolved"
+
+
+def test_render_mislabeled_bundle_is_consumed_empty(monkeypatch, tmp_path):
+    # Defense in depth: a bundle whose source is not 'automation' yields no
+    # digest at all and is consumed so it cannot poison a later pickup.
+    _isolate(monkeypatch, tmp_path)
+    from vaf.core.agent import Agent
+    render = Agent._render_handoff_bundle.__get__(object())
+    b = hb.create(SCOPE_A, history=_HIST, summary="s", question="q", source="thinking")
+    assert render(SCOPE_A, {"bundle_id": b["id"]}) == ("", False)
+    assert hb.load(SCOPE_A, b["id"])["status"] == "resolved"
+
+
+def test_reply_pickup_note_three_lanes():
+    """The injected reply note: continuation is reply-CONDITIONAL and only for curated
+    handoffs; uncurated/plain lanes never claim an automation must be continued, and
+    every lane carries the decline + ambiguity guidance (incident: 'nein bitte nicht'
+    triggered unconfirmed mutations under an unconditional CONTINUE imperative)."""
+    from vaf.core.agent import Agent
+    build = Agent._build_reply_pickup_note
+
+    q = "ZIM-Skizze oder Website-Updates?"
+    rich = build(q, " If they CLEARLY confirm, carry out this proposal now: prepare it.",
+                 "What the background run worked out: findings", True, " facts")
+    assert q in rich and "BACKGROUND" in rich
+    assert "If they CLEARLY agree" in rich and "If they DECLINE, change NOTHING" in rich
+    assert "ask ONE short confirming question" in rich
+    assert "CONTINUE the task now" not in rich  # the old unconditional imperative is gone
+
+    # incident replay: uncurated handoff digest is dropped -> plain lane, no automation framing
+    uncurated = build(q, "", "garbage digest from an unrelated chat", False, " facts")
+    assert q in uncurated
+    assert "AUTOMATION" not in uncurated and "garbage digest" not in uncurated
+    assert "If they DECLINE, change NOTHING" in uncurated
+
+    plain = build(q, "", "", False, " facts")
+    assert q in plain and "AUTOMATION" not in plain
+    assert "ask ONE short confirming question" in plain

@@ -103,13 +103,14 @@ def test_dispatch_always_injects_agent_into_ask_user():
 
 
 def test_background_construction_sites_pass_run_kind():
+    repo_root = Path(agent_mod.__file__).resolve().parents[2]
     for mod_path, kind in (
         ("vaf/core/thinking_mode.py", "thinking"),
         ("vaf/core/automation.py", "automation"),
         ("vaf/core/gateway.py", "chat"),
         ("vaf/core/headless_runner.py", "chat"),
     ):
-        src = Path("/mnt/veyllo1/VAF") .joinpath(mod_path).read_text(encoding="utf-8")
+        src = (repo_root / mod_path).read_text(encoding="utf-8")
         assert f'run_kind="{kind}"' in src, f"{mod_path} lost its explicit run_kind"
 
 

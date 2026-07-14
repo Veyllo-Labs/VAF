@@ -11,7 +11,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Speaker confirmation with a named voice DB.** When speaker identification
+  scores a voice as "unsure", VAF now asks the owner to confirm - via the main
+  messenger (question + audio segment attached) or, without one, via a card in
+  the web chat (audio player, yes/no, optional name). Answering "no, that's
+  Peter" stores the voice as a named third-party profile in the per-user voice
+  DB, and future utterances by that voice are labeled `[Peter]:` for the agent.
+  The owner's own profile is never modified by an answer, named speakers can
+  never trigger delegations, at most one question is pending per user, and
+  replies on messengers are consumed without starting an agent turn.
+
 ### Fixed
+- **Veyllo no longer 400s mid-task after a text-recovered tool call.** When a model
+  leaks a tool call as text (deepseek-v4 does intermittently) or a stream loses the
+  id, VAF must mint a tool_call id itself; those ids now carry a recognizable
+  `call_synth_` prefix (also fixing an id collision when two recoveries happened
+  within the same second), and for Veyllo such exchanges are folded into plain-text
+  context before sending instead of being replayed structurally (the gateway only
+  accepts ids it issued itself). Tasks that previously died with a visible API
+  error (e.g. mail checks delegated from a live voice call) now complete.
 - **Host-speaker TTS is now opt-in per agent (fail-closed).** With TTS enabled, every
   background turn (web/Telegram/WhatsApp/Discord queue, automations, proactive thinking
   runs, `vaf run -p`, the gateway) used to synthesize and play the answer, a thinking

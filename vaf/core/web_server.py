@@ -133,6 +133,12 @@ manager = get_web_interface()
 _whisper_model = None
 _whisper_model_lock = threading.Lock()
 
+# Live-call state per WebSocket connection (voice-agent first layer):
+# {id(websocket): {"history": [...], "lang": str, "scope": str}}. Entries are
+# removed on voice_call_end; stale entries from abrupt disconnects are
+# harmless (few KB) and reused keys get overwritten on the next call start.
+_VOICE_CALLS: dict = {}
+
 def get_whisper_model():
     """Get or lazily load the Whisper STT model (singleton)."""
     global _whisper_model
@@ -3662,6 +3668,45 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log("WebServer", f"contact_reply_decision failed: {e}")
                             await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": str(e)[:200], "replyId": reply_id})
 
+                elif type == "speaker_confirm_reply":
+                    # Web-card answer to a speaker confirmation (yes / no /
+                    # no+name). Ownership: the reply only applies to the
+                    # PENDING RECORD OF THIS CONNECTION'S OWN SCOPE - a name
+                    # answer writes into the voice DB, so this is fail-closed
+                    # on the connection identity, never on client-sent ids.
+                    try:
+                        from vaf.core import speaker_confirm as _scr
+                        from vaf.core.config import get_local_admin_scope_id as _glas
+                        _scope_r = str(manager.get_connection_user(websocket) or _glas())
+                        _answer = cmd.get("answer")
+                        _name_r = (cmd.get("name") or "").strip() or None
+                        if _answer not in ("yes", "no"):
+                            await websocket.send_json({
+                                "type": "speaker_confirm_result", "ok": False,
+                                "error": "bad answer", "confirmId": cmd.get("confirmId") or "",
+                            })
+                        else:
+                            loop = asyncio.get_running_loop()
+                            _res = await loop.run_in_executor(
+                                None, lambda: _scr.resolve(
+                                    _scope_r, _answer,
+                                    _name_r if _answer == "no" else None,
+                                    confirm_id=cmd.get("confirmId") or None))
+                            _res_payload = {
+                                "type": "speaker_confirm_result",
+                                "ok": _res.get("ok", False),
+                                "outcome": _res.get("outcome", ""),
+                                "ack": _res.get("ack", ""),
+                                "confirmId": cmd.get("confirmId") or "",
+                            }
+                            await websocket.send_json(_res_payload)
+                    except Exception as e:
+                        log("WebServer", f"speaker_confirm_reply failed: {e}")
+                        await websocket.send_json({
+                            "type": "speaker_confirm_result", "ok": False,
+                            "error": str(e)[:200], "confirmId": cmd.get("confirmId") or "",
+                        })
+
                 elif type == "gate_response":
                     # User clicked Allow Once / Allow Always / Cancel in the trust gate dialog.
                     decision = cmd.get("decision")  # "allow_once" | "allow_always" | "cancel"
@@ -5669,10 +5714,46 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 })
                                 continue
 
-                        await websocket.send_json({
-                            "type": "stt_result",
-                            "text": text.strip()
-                        })
+                        # Speaker identification: label the utterance against the
+                        # user's voice profile (fail-closed: any problem -> no label).
+                        _speaker = None
+                        try:
+                            from vaf.core import speaker_id as _sid
+                            if suffix == ".wav" and _sid.is_enabled() and text.strip():
+                                from vaf.core.config import get_local_admin_scope_id
+                                _scope = str(manager.get_connection_user(websocket)
+                                             or get_local_admin_scope_id())
+                                if _sid.load_profile(_scope) is not None:
+                                    _wav_bytes = open(temp_path, "rb").read()
+                                    loop = asyncio.get_running_loop()
+                                    _speaker = await loop.run_in_executor(
+                                        None, lambda: _sid.score_wav(_wav_bytes, _scope))
+                        except Exception:
+                            _speaker = None
+
+                        _payload = {"type": "stt_result", "text": text.strip()}
+                        if _speaker:
+                            try:
+                                from vaf.core import speaker_id as _sid
+                                _prof = _sid.load_profile(_scope)
+                                _name = ((_prof or {}).get("meta") or {}).get("display_name", "Ich")
+                                _payload["text"] = _sid.label_prefix(_speaker, _name) + _payload["text"]
+                                _payload["speaker_label"] = _speaker["label"]
+                                _payload["speaker_score"] = _speaker["score"]
+                            except Exception:
+                                pass
+                            if _speaker.get("label") == "unsure":
+                                # Unsure band: ask the owner to confirm (one
+                                # pending per scope, cooldown inside).
+                                try:
+                                    from vaf.core import speaker_confirm as _sc
+                                    _uname = manager.get_connection_username(websocket) or "admin"
+                                    await loop.run_in_executor(
+                                        None, lambda: _sc.maybe_request_confirmation(
+                                            _scope, _uname, _wav_bytes, _speaker))
+                                except Exception:
+                                    pass
+                        await websocket.send_json(_payload)
                     except Exception as e:
                         await websocket.send_json({
                             "type": "stt_error",
@@ -5748,6 +5829,264 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     from vaf.core.speech import SpeechManager
                     sm = SpeechManager.get_instance()
                     sm.stop()
+
+                # ---- Speaker identification (voice profile, guided enrollment) ----
+                # All replies are per-connection (websocket.send_json) and all
+                # state is keyed on the connection's user_scope_id (isolation).
+                # ---- Live-Call: voice-agent first layer ----
+                elif type in ("voice_call_start", "voice_call_turn", "voice_call_end"):
+                    from vaf.core import voice_agent as _va
+                    from vaf.core.config import get_local_admin_scope_id
+                    _scope = str(manager.get_connection_user(websocket) or get_local_admin_scope_id())
+                    _conn_key = id(websocket)
+
+                    if type == "voice_call_start":
+                        _lang = (cmd.get("ui_lang") or "de")[:2].lower()
+                        _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang, "scope": _scope}
+                        await websocket.send_json({
+                            "type": "voice_call_started",
+                            "ok": _va.available(),
+                            "lang": _lang,
+                            "reason": None if _va.available() else "no_api_provider",
+                        })
+
+                    elif type == "voice_call_end":
+                        _VOICE_CALLS.pop(_conn_key, None)
+                        await websocket.send_json({"type": "voice_call_ended"})
+
+                    elif type == "voice_call_turn":
+                        _call = _VOICE_CALLS.get(_conn_key)
+                        if _call is None:
+                            await websocket.send_json({"type": "voice_call_error", "error": "no_call"})
+                            continue
+                        import base64 as _b64v
+                        _audio_b64 = cmd.get("audio") or ""
+                        if cmd.get("format") != "wav" or not _audio_b64:
+                            await websocket.send_json({"type": "voice_call_error", "error": "bad_format"})
+                            continue
+                        _wav = _b64v.b64decode(_audio_b64)
+                        loop = asyncio.get_running_loop()
+
+                        # 0. Noise gate (backend belt to the frontend VAD gate):
+                        # clicks/near-silence never reach STT - Whisper-class
+                        # models hallucinate text on silence.
+                        _active_s = _va.active_speech_seconds(_wav)
+                        if _active_s < 0.3:
+                            log("WebServer", f"voice_call: turn gated as noise (active={_active_s:.2f}s)")
+                            await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
+                            continue
+
+                        # 1. STT (provider lane first inside speech_client)
+                        from vaf.core import speech_client as _vsc
+                        _text, _stt_lang = await loop.run_in_executor(
+                            None, lambda: _vsc.transcribe(_wav, mime="audio/wav", filename="call.wav"))
+                        if not _text:
+                            await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
+                            continue
+
+                        # 2. Speaker label (voice profile), same contract as the chat mic.
+                        # With an enrolled profile the voice check is authoritative for
+                        # delegation: only a verified "self" may trigger real work.
+                        # Unsure, other or a FAILED scoring all leave _speaker_ok False
+                        # (fail-closed) - the code guard in voice_reply drops the marker.
+                        _label = None
+                        _display = "Ich"
+                        _speaker_ok = True
+                        try:
+                            from vaf.core import speaker_id as _vsid
+                            if _vsid.is_enabled():
+                                _prof = _vsid.load_profile(_call["scope"])
+                                if _prof is not None:
+                                    _speaker_ok = False
+                                    _display = (_prof.get("meta") or {}).get("display_name", "Ich")
+                                    _score = await loop.run_in_executor(
+                                        None, lambda: _vsid.score_wav(_wav, _call["scope"]))
+                                    if _score:
+                                        _label = _score.get("label")
+                                        _text = _vsid.label_prefix(_score, _display) + _text
+                                        _speaker_ok = _label == "self"
+                                        if _label == "unsure":
+                                            # Unsure band: queue ONE confirmation
+                                            # question (messenger/web) without
+                                            # interrupting the running call.
+                                            try:
+                                                from vaf.core import speaker_confirm as _vsc
+                                                _vuname = manager.get_connection_username(websocket) or "admin"
+                                                await loop.run_in_executor(
+                                                    None, lambda: _vsc.maybe_request_confirmation(
+                                                        _call["scope"], _vuname, _wav, _score,
+                                                        session_id=cmd.get("sessionId") or ""))
+                                            except Exception:
+                                                pass
+                        except Exception:
+                            pass
+
+                        # 3. First-layer reply (one step + RAG; may delegate).
+                        # While the main agent works on an earlier delegation,
+                        # further delegation is suppressed - casual talk must
+                        # never spawn or disturb a running main-agent turn.
+                        _busy = bool(cmd.get("main_busy"))
+                        _pending = (cmd.get("pending_task") or "")[:300]
+                        _res = await loop.run_in_executor(
+                            None,
+                            lambda: _va.voice_reply(
+                                _text, scope_id=_call["scope"], lang=_call["lang"],
+                                user_name=_display, history=_call["history"],
+                                main_busy=_busy, pending_task=_pending,
+                                speaker_ok=_speaker_ok,
+                            ),
+                        )
+                        if _res is None:
+                            await websocket.send_json({"type": "voice_call_error", "error": "llm_failed"})
+                            continue
+                        log("WebServer",
+                            f"voice_call turn: active={_active_s:.1f}s label={_label or '-'} "
+                            f"speaker_ok={_speaker_ok} text={_text[:80]!r} -> "
+                            f"reply_len={len(_res['reply'])} delegate={'yes' if _res.get('delegate') else 'no'}")
+
+                        # 4. Delegation -> normal main-agent task in this session
+                        _delegated = None
+                        if _res.get("delegate"):
+                            try:
+                                from vaf.core.task_queue import TaskQueue
+                                _sid = cmd.get("sessionId") or ""
+                                TaskQueue().add(
+                                    session_id=_sid,
+                                    input_text=_res["delegate"],
+                                    source="web",
+                                    metadata={
+                                        "user_scope_id": _call["scope"],
+                                        "origin_channel": "voice_call",
+                                    },
+                                )
+                                _delegated = _res["delegate"]
+                            except Exception as _dele:
+                                log("WebServer", f"voice_call delegation failed: {_dele}")
+
+                        # 5. Speak the reply (provider lane first inside synthesize_audio)
+                        _reply_audio = None
+                        try:
+                            from vaf.core.speech import SpeechManager
+                            _sm = SpeechManager.get_instance()
+                            _audio_out = await asyncio.wait_for(
+                                loop.run_in_executor(
+                                    None,
+                                    lambda: _sm.synthesize_audio(
+                                        _res["reply"], _call["lang"], force_engine="docker"),
+                                ),
+                                timeout=130.0,
+                            )
+                            if _audio_out:
+                                _reply_audio = _b64v.b64encode(_audio_out).decode("utf-8")
+                        except Exception:
+                            _reply_audio = None
+
+                        _call["history"].append({"role": "user", "content": _text})
+                        _call["history"].append({"role": "assistant", "content": _res["reply"]})
+                        _call["history"] = _call["history"][-16:]
+
+                        await websocket.send_json({
+                            "type": "voice_call_reply",
+                            "user_text": _text,
+                            "speaker_label": _label,
+                            "reply": _res["reply"],
+                            "audio": _reply_audio,
+                            "delegated": _delegated,
+                        })
+
+                elif type in ("speaker_enroll_start", "speaker_enroll_round",
+                              "speaker_enroll_finalize", "speaker_enroll_abort",
+                              "speaker_enroll_speak", "voice_call_speak",
+                              "speaker_profile_get", "speaker_profile_delete"):
+                    from vaf.core import speaker_id as _sid
+                    from vaf.core.config import get_local_admin_scope_id
+                    _scope = manager.get_connection_user(websocket) or get_local_admin_scope_id()
+                    _scope = str(_scope)
+
+                    if type == "speaker_enroll_start":
+                        info = _sid.enroll_start(_scope, ui_lang=cmd.get("ui_lang", "en"))
+                        await websocket.send_json({"type": "speaker_enroll_started", **info})
+
+                    elif type == "speaker_enroll_round":
+                        import base64 as _b64
+                        _audio_b64 = cmd.get("audio") or ""
+                        _fmt = cmd.get("format", "")
+                        if _fmt != "wav" or not _audio_b64:
+                            await websocket.send_json({
+                                "type": "speaker_enroll_round_result",
+                                "ok": False, "quality": "bad_format",
+                            })
+                        else:
+                            _wav = _b64.b64decode(_audio_b64)
+                            loop = asyncio.get_running_loop()
+                            _res = await loop.run_in_executor(
+                                None, lambda: _sid.enroll_round(_scope, _wav))
+                            await websocket.send_json(
+                                {"type": "speaker_enroll_round_result", **_res})
+
+                    elif type == "speaker_enroll_finalize":
+                        _name = (cmd.get("display_name") or "").strip() or "Ich"
+                        loop = asyncio.get_running_loop()
+                        _meta = await loop.run_in_executor(
+                            None, lambda: _sid.enroll_finalize(_scope, _name))
+                        await websocket.send_json({
+                            "type": "speaker_profile",
+                            "profile": _meta,
+                            "saved": _meta is not None,
+                        })
+
+                    elif type == "speaker_enroll_abort":
+                        _sid.enroll_abort(_scope)
+                        await websocket.send_json({"type": "speaker_enroll_aborted"})
+
+                    elif type in ("speaker_enroll_speak", "voice_call_speak"):
+                        # The agent's voice during enrollment/live calls. Distinct
+                        # reply type so the chat TTS handler in page.tsx never
+                        # reacts to it. Falls back to captions-only (audio=null).
+                        _text = (cmd.get("text") or "").strip()
+                        if type == "voice_call_speak" and _text:
+                            # A delegated result is being announced: the voice
+                            # agent's own call history must know it, or on the
+                            # next turn it still believes the task is running
+                            # (live incident: "the search is still running").
+                            _vc = _VOICE_CALLS.get(id(websocket))
+                            if _vc is not None:
+                                _vc["history"].append(
+                                    {"role": "assistant", "content": _text[:800]})
+                                _vc["history"] = _vc["history"][-16:]
+                        _audio_b64 = None
+                        if _text:
+                            try:
+                                from vaf.core.speech import SpeechManager
+                                _sm = SpeechManager.get_instance()
+                                _lang = _detect_language_simple(_text)
+                                loop = asyncio.get_running_loop()
+                                _audio = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        None,
+                                        lambda: _sm.synthesize_audio(_text, _lang, force_engine="docker"),
+                                    ),
+                                    timeout=60.0,
+                                )
+                                if _audio:
+                                    import base64 as _b64s
+                                    _audio_b64 = _b64s.b64encode(_audio).decode("utf-8")
+                            except Exception:
+                                _audio_b64 = None
+                        await websocket.send_json({"type": "speaker_enroll_tts", "audio": _audio_b64})
+
+                    elif type == "speaker_profile_get":
+                        _prof = _sid.load_profile(_scope)
+                        await websocket.send_json({
+                            "type": "speaker_profile",
+                            "profile": (_prof or {}).get("meta"),
+                            "enabled": _sid.is_enabled(),
+                        })
+
+                    elif type == "speaker_profile_delete":
+                        _sid.delete_profile(_scope)
+                        _sid.enroll_abort(_scope)
+                        await websocket.send_json({"type": "speaker_profile", "profile": None})
 
                 elif type == "stop_generation":
                     # Stop the current generation by setting a flag

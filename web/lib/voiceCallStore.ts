@@ -1,0 +1,61 @@
+// SPDX-FileCopyrightText: 2026 Veyllo GmbH
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permissions and terms under AGPL Section 7: see LICENSING.md
+/**
+ * Zustand store for the live voice call.
+ *
+ * Shared between the call BAR (rendered inside the chat input container) and
+ * the CONTROLLER + agent window (rendered at page root): the controller owns
+ * the audio/WS logic and writes state; the bar renders it and raises the
+ * mute/hangup intents.
+ */
+
+import { create } from 'zustand';
+
+export type VoiceSpeaker = 'user' | 'agent' | null;
+export type VoiceAgentMode = 'idle' | 'listening' | 'thinking' | 'talking';
+
+interface VoiceCallState {
+  active: boolean;
+  /** true while the end-of-call exit animation plays (active stays true) */
+  closing: boolean;
+  seconds: number;
+  speaker: VoiceSpeaker;
+  agentMode: VoiceAgentMode;
+  /** i18n key suffix for the status slot (listening/thinking/speaking/connecting) */
+  statusKey: string;
+  /** running main-agent delegation, shown as substatus ('' = none) */
+  mainTask: string;
+  muted: boolean;
+  /** bar -> controller intents */
+  hangupRequested: boolean;
+
+  start: () => void;
+  stop: () => void;
+  tick: () => void;
+  set: (patch: Partial<VoiceCallState>) => void;
+  requestHangup: () => void;
+  toggleMute: () => void;
+}
+
+export const useVoiceCallStore = create<VoiceCallState>((set) => ({
+  active: false,
+  closing: false,
+  seconds: 0,
+  speaker: null,
+  agentMode: 'idle',
+  statusKey: 'connecting',
+  mainTask: '',
+  muted: false,
+  hangupRequested: false,
+
+  start: () => set({
+    active: true, closing: false, seconds: 0, speaker: null, agentMode: 'idle',
+    statusKey: 'connecting', mainTask: '', muted: false, hangupRequested: false,
+  }),
+  stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false }),
+  tick: () => set((s) => ({ seconds: s.seconds + 1 })),
+  set: (patch) => set(patch as VoiceCallState),
+  requestHangup: () => set({ hangupRequested: true }),
+  toggleMute: () => set((s) => ({ muted: !s.muted })),
+}));

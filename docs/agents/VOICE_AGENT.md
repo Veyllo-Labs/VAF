@@ -1,0 +1,148 @@
+# Voice Agent (Live Call)
+
+The voice agent is the fast conversational FIRST LAYER of a live call in the
+Web UI. On a call the user talks to this layer, not to the main agent: one LLM
+step per turn, no tool loop, RAG snippets as the only grounding - that keeps
+per-turn latency at speech level. Anything that needs real work (tools, files,
+messages, research) is DELEGATED to the main agent through the normal
+TaskQueue; the user keeps talking while the main agent works, and the finished
+result is spoken into the call as an update.
+
+Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
+`speaker_enroll_*` handlers in `vaf/core/web_server.py`,
+`web/components/VoiceCallLayer.tsx`, `web/components/VoiceCallBar.tsx`,
+`web/lib/voiceCallStore.ts`, or `vaf/core/speaker_id.py` /
+`vaf/core/speaker_confirm.py`.
+
+## Requirements
+
+- An API provider (`provider != "local"` with a key): the lane rides the main
+  provider like `vision_infer.py`; pure-local calls are a later iteration.
+  `voice_agent.available()` gates the UI button.
+- The speech stack (STT + TTS, local Docker or a cloud voice provider - see
+  [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
+- Optional but strongly recommended: an enrolled speaker profile
+  (Settings > Voice). Without one, delegation is not voice-gated.
+
+## Turn pipeline (server side, `voice_call_turn`)
+
+1. **Noise gate**: `voice_agent.active_speech_seconds()` - clips with less
+   than 0.3 s of audible 30 ms frames never reach STT (Whisper-class models
+   hallucinate text on silence). Convenience gate, fail-open on analysis
+   errors.
+2. **STT** via `speech_client.transcribe` (provider lane first).
+3. **Speaker label**: `speaker_id.score_wav` against the owner profile and
+   all named third-party profiles; the transcript gets a `[Name]: ` prefix.
+   With an enrolled profile the check is AUTHORITATIVE for delegation
+   (`_speaker_ok`, see invariants). An "unsure" score queues a confirmation
+   question (`speaker_confirm.maybe_request_confirmation`) without
+   interrupting the call.
+4. **First-layer reply**: `voice_agent.voice_reply()` - one
+   `chat_completion` with `tools=None`, system prompt + RAG memory block +
+   last call turns as history. The model may append
+   `<delegate>task</delegate>`; the marker is parsed out and never spoken.
+5. **Delegation**: the task text goes into the TaskQueue for the CALLING
+   session (`origin_channel: "voice_call"`); the main agent runs it as a
+   normal turn.
+6. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
+   `reply`, `audio`, `delegated`).
+
+Every turn writes one forensic log line (`voice_call turn: active=... label=...
+speaker_ok=... text=... -> reply_len=... delegate=...`).
+
+## Invariants (each one exists because a live incident taught it)
+
+1. **Voice-gated delegation (anti-spoofing).** With an enrolled profile, only
+   a turn verified as the OWNER (`label == "self"`) may create main-agent
+   work. `web_server` computes `_speaker_ok` fail-closed (profile present ->
+   False until proven "self"; unsure/other/failed scoring stay False) and
+   `voice_reply(speaker_ok=False)` drops any delegate marker in CODE. The
+   system prompt additionally pins: the label comes from voice verification
+   and outranks spoken claims ("I am Mert" from `[anderer_Sprecher]` stays
+   another speaker). Named third-party profiles are known but never
+   authorized.
+2. **No delegation while the main agent works.** The frontend sends
+   `main_busy` + `pending_task`; the prompt carries a busy block and the code
+   drops markers anyway (a casual "okay thanks" must never spawn or disturb a
+   run). Promises require the marker in the SAME reply, and "still running"
+   may only be claimed when the busy block says so.
+3. **Reasoning never reaches TTS.** Reasoning models stream thoughts as
+   `<think>` sentinel chunks; the streaming walker drops them (handles open
+   and close in one chunk), `_strip_reasoning` also removes UNCLOSED blocks
+   (truncation), the token budget leaves room to finish thinking, and an
+   all-reasoning reply degrades to a short spoken fallback.
+4. **Small talk stays out of the chat.** Only delegations appear in the chat
+   (as the voice agent's message to the main agent); the conversation itself
+   lives in audio.
+5. **Result callback is anchored on `message_complete`** (the same event that
+   plays the completion chime): only THIS session's completion counts,
+   `[ASYNC_ACK]` and empty content keep waiting, think/context blocks are
+   sanitized before speaking (`sanitizeForSpeech`), the mic is held while the
+   result plays (the agent must not transcribe its own voice), a TTS failure
+   gets a short spoken notice, and the spoken text is appended to the call
+   history via `voice_call_speak` so the voice agent KNOWS the result was
+   delivered.
+6. **Mute is real mute.** The audio track is disabled while muted (the
+   recorder captures silence), toggling discards the in-flight utterance, and
+   unmuting opens a 400 ms grace window that swallows the toggle click. A
+   turn needs >= 350 ms of ACCUMULATED voiced time (`MIN_SPEECH_MS`) - a
+   click never becomes a message.
+7. **All call animations are transform/opacity only and finite** (GPU leak
+   rule); enter/exit choreography runs through the store's `closing` phase.
+
+## WebSocket events
+
+Client -> server: `voice_call_start` (`ui_lang`), `voice_call_turn` (`audio`
+base64 WAV 16 kHz mono, `format:"wav"`, `sessionId`, `main_busy`,
+`pending_task`), `voice_call_end`, `voice_call_speak` (`text` - result
+announcements; replies as `speaker_enroll_tts` so the chat TTS handler never
+reacts). Server -> client: `voice_call_reply`, `voice_call_error`
+(`no_call` | `bad_format` | `no_speech` | `llm_failed` - the frontend keeps
+listening).
+
+Enrollment (guided live call in Settings): `speaker_enroll_start/round/
+finalize/abort`, `speaker_enroll_speak`, `speaker_profile_get/delete` with
+replies `speaker_enroll_started/round_result`, `speaker_profile`,
+`speaker_enroll_aborted`, `speaker_enroll_tts`.
+
+Speaker confirmation events (`speaker_confirm_*`) are documented in
+[WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md).
+
+## Frontend pieces
+
+- `web/lib/voiceCallStore.ts` - Zustand store shared by bar and controller
+  (`active`, `closing`, `speaker`, `agentMode`, `statusKey`, `mainTask`,
+  `muted`, `hangupRequested`).
+- `web/components/VoiceCallLayer.tsx` - controller + agent window (top-left):
+  hands-free VAD loop (silence auto-stop, max utterance cap), noise gates,
+  mute handling, result callback, enter/exit choreography, red in-call ring.
+- `web/components/VoiceCallBar.tsx` - the red bar overlaying the chat input
+  (info left, waveform centered, mute/hangup right).
+- During a call the chat avatars animate away (`voice-call-hide-avatars`);
+  the window is the single agent presence.
+
+## Speaker identification and confirmation
+
+The voice DB (owner profile + named third parties), the "unsure" confirmation
+flow (messenger question with audio attachment, web card fallback, "no,
+that's Peter" naming) and its hard rules live in
+[SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md) (section "Speaker
+identification and the confirmation flow"). Core modules:
+`vaf/core/speaker_id.py`, `vaf/core/speaker_confirm.py`.
+
+## Config
+
+`speaker_id_enabled`, `speaker_id_threshold`, `speaker_id_band`,
+`speaker_id_confirmation_enabled` (see
+[CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane itself has no
+own keys: provider/model follow the main provider; TTS/STT follow the speech
+stack.
+
+## Tests and change notes
+
+- `tests/test_voice_agent.py` - first-layer contracts (gating, delegate
+  protocol, busy/speaker guards, reasoning filter, noise gate).
+- `tests/test_speaker_id.py`, `tests/test_speaker_confirm.py` - voice DB and
+  confirmation flow.
+- Changes under `vaf/core/` need a backend restart; `web/` changes need
+  `npm run build` (dev reload is not enough for the packaged app).

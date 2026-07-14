@@ -18,6 +18,10 @@ import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx
 import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
+import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
+import { VoiceCallLayer } from '@/components/VoiceCallLayer';
+import { VoiceCallBar } from '@/components/VoiceCallBar';
+import { useVoiceCallStore } from '@/lib/voiceCallStore';
 import { TurnActionsTimeline, type TimelineAction } from '@/components/TurnActionsTimeline';
 import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
@@ -987,6 +991,11 @@ function VAFDashboardContent() {
     const [authChecking, setAuthChecking] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [currentUser, setCurrentUser] = useState<any>(null);
+    // Voice-profile enrollment (live call)
+    const [voiceCallOpen, setVoiceCallOpen] = useState(false);
+    const [speakerProfile, setSpeakerProfile] = useState<any>(null);
+    // Live voice call (voice-agent first layer)
+    const voiceCallActive = useVoiceCallStore((s) => s.active);
     const [authError, setAuthError] = useState<string | null>(null);
     const [authRetryKey, setAuthRetryKey] = useState(0);
 
@@ -1262,6 +1271,11 @@ function VAFDashboardContent() {
     const [showChangingModelOverlay, setShowChangingModelOverlay] = useState(false);
     type PendingContactReply = { replyId: string; source: string; contactName: string; preview: string; sessionId?: string };
     const [pendingContactReplies, setPendingContactReplies] = useState<PendingContactReply[]>([]);
+    // Speaker confirmation ("was that your voice?"): web fallback card when no
+    // main messenger is configured. nameOpen/name are local UI state for the
+    // "no, that's <name>" answer.
+    type PendingSpeakerConfirm = { confirmId: string; question: string; audioPath: string; score?: number; nameOpen?: boolean; name?: string };
+    const [pendingSpeakerConfirms, setPendingSpeakerConfirms] = useState<PendingSpeakerConfirm[]>([]);
     const [tools, setTools] = useState<Array<{
         name: string;
         description: string;
@@ -2693,6 +2707,18 @@ function VAFDashboardContent() {
                 else if (data.type === 'contact_reply_result' && data.replyId) {
                     setPendingContactReplies(prev => prev.filter(p => p.replyId !== data.replyId));
                 }
+                else if (data.type === 'speaker_confirm_pending') {
+                    // Every field forwarded explicitly (unforwarded = silently dropped)
+                    setPendingSpeakerConfirms(prev => [...prev.filter(p => p.confirmId !== data.confirmId), {
+                        confirmId: data.confirmId,
+                        question: data.question || '',
+                        audioPath: data.audioPath || '',
+                        score: data.score,
+                    }]);
+                }
+                else if (data.type === 'speaker_confirm_result' && data.confirmId) {
+                    setPendingSpeakerConfirms(prev => prev.filter(p => p.confirmId !== data.confirmId));
+                }
                 else if (data.type === 'gate_required') {
                     setGateRequest({ tool: data.tool, cwd: data.cwd || '', reason: data.reason || '', args_preview: data.args_preview || '' });
                 }
@@ -3937,6 +3963,9 @@ function VAFDashboardContent() {
                     } else {
                         setTrustedSourcesError(data.error || 'Error');
                     }
+                }
+                else if (data.type === 'speaker_profile') {
+                    setSpeakerProfile(data.profile || null);
                 }
                 else if (data.type === 'config') {
                     setConfig(data.config);
@@ -5260,6 +5289,67 @@ function VAFDashboardContent() {
                     )}
                 </div>
             )}
+            {pendingSpeakerConfirms.length > 0 && (
+                <div className="shrink-0 bg-sky-50 dark:bg-sky-950/40 border-b border-sky-200 dark:border-sky-900 px-4 py-3 flex items-center gap-4 flex-wrap">
+                    {pendingSpeakerConfirms.map((p) => (
+                        <div key={p.confirmId} className="flex flex-col gap-2 bg-white dark:bg-[#1f1f1f] rounded-lg border border-sky-200 dark:border-sky-900 p-3 shadow-sm min-w-0 max-w-2xl">
+                            <p className="text-sm font-medium text-sky-900 dark:text-sky-200">{tMain('speakerConfirmTitle')}</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400">{p.question}</p>
+                            {p.audioPath && (
+                                <audio controls preload="none" className="h-8 w-64 max-w-full"
+                                    src={`${getApiBase()}/api/file?path=${encodeURIComponent(p.audioPath)}`} />
+                            )}
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <button type="button"
+                                    onClick={() => {
+                                        setPendingSpeakerConfirms(prev => prev.filter(x => x.confirmId !== p.confirmId));
+                                        ws?.send(JSON.stringify({ type: 'speaker_confirm_reply', confirmId: p.confirmId, answer: 'yes' }));
+                                    }}
+                                    className="px-3 py-1.5 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700">
+                                    {tMain('speakerConfirmYes')}
+                                </button>
+                                <button type="button"
+                                    onClick={() => {
+                                        setPendingSpeakerConfirms(prev => prev.filter(x => x.confirmId !== p.confirmId));
+                                        ws?.send(JSON.stringify({ type: 'speaker_confirm_reply', confirmId: p.confirmId, answer: 'no' }));
+                                    }}
+                                    className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">
+                                    {tMain('speakerConfirmNo')}
+                                </button>
+                                {!p.nameOpen ? (
+                                    <button type="button"
+                                        onClick={() => setPendingSpeakerConfirms(prev => prev.map(x =>
+                                            x.confirmId === p.confirmId ? { ...x, nameOpen: true } : x))}
+                                        className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600">
+                                        {tMain('speakerConfirmNamed')}
+                                    </button>
+                                ) : (
+                                    <span className="flex items-center gap-1.5">
+                                        <input type="text" autoFocus maxLength={32}
+                                            placeholder={tMain('speakerConfirmNamePlaceholder')}
+                                            value={p.name || ''}
+                                            onChange={(e) => setPendingSpeakerConfirms(prev => prev.map(x =>
+                                                x.confirmId === p.confirmId ? { ...x, name: e.target.value } : x))}
+                                            className="w-32 px-2 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#181818] text-gray-800 dark:text-gray-200" />
+                                        <button type="button" disabled={!(p.name || '').trim()}
+                                            onClick={() => {
+                                                setPendingSpeakerConfirms(prev => prev.filter(x => x.confirmId !== p.confirmId));
+                                                ws?.send(JSON.stringify({
+                                                    type: 'speaker_confirm_reply', confirmId: p.confirmId,
+                                                    answer: 'no', name: (p.name || '').trim(),
+                                                }));
+                                            }}
+                                            className="px-3 py-1.5 text-sm font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50">
+                                            {tMain('speakerConfirmSave')}
+                                        </button>
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-[11px] text-gray-400 dark:text-gray-500">{tMain('speakerConfirmHint')}</p>
+                        </div>
+                    ))}
+                </div>
+            )}
             {/* Mobile drawer scrim — tap outside to dismiss (desktop never renders it) */}
             {drawerOpen && (
                 <div className="md:hidden fixed inset-0 z-[45] bg-black/40" onClick={() => setDrawerOpen(false)} aria-hidden />
@@ -5520,7 +5610,7 @@ function VAFDashboardContent() {
                                 </div>
                             );
                         })()}
-                        <div className="flex-1 overflow-y-auto p-6 max-md:p-3" ref={containerRef}>
+                        <div className={cn("flex-1 overflow-y-auto p-6 max-md:p-3", voiceCallActive && "voice-call-hide-avatars")} ref={containerRef}>
                             <div className={cn(messagesAreaWidthClass, "mx-auto space-y-2 pb-32")}>
                                 {/* Reconnecting banner — shown when WebSocket is disconnected or reconnecting */}
                                 {!isConnected && messages.length > 0 && (
@@ -6489,8 +6579,9 @@ function VAFDashboardContent() {
                                     )}
                                     <form
                                         onSubmit={sendMessage}
-                                        className="flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden"
+                                        className="relative flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden"
                                     >
+                                        {voiceCallActive && <VoiceCallBar />}
                                         <input
                                             type="file"
                                             ref={fileInputRef}
@@ -6612,6 +6703,18 @@ function VAFDashboardContent() {
                                             ) : (
                                                 <Mic size={18} />
                                             )}
+                                        </button>
+                                        {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left) */}
+                                        <button
+                                            type="button"
+                                            onClick={() => useVoiceCallStore.getState().start()}
+                                            disabled={isRecording || isProcessingAudio}
+                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
+                                            title="Live-Call"
+                                        >
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z" />
+                                            </svg>
                                         </button>
                                         {/* Mobile-only Send button (40px square, primary) — desktop submits via Enter */}
                                         <button
@@ -7494,11 +7597,35 @@ function VAFDashboardContent() {
                 </div>
             )}
 
+            <VoiceCallLayer
+                ws={ws}
+                sessionId={currentSessionId}
+                onLocalMessage={(role, content) => {
+                    setMessages(prev => [...prev, { role, content, timestamp: Date.now() }]);
+                }}
+            />
+            <VoiceEnrollmentCall
+                open={voiceCallOpen}
+                ws={ws}
+                displayName={currentUser?.username || 'Ich'}
+                onClose={(saved) => {
+                    setVoiceCallOpen(false);
+                    if (saved) ws?.send(JSON.stringify({ type: 'speaker_profile_get' }));
+                    setIsSettingsOpen(true);
+                }}
+            />
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={handleSettingsClose}
                 config={config}
                 onSave={handleSaveConfig}
+                speakerProfile={speakerProfile}
+                onStartVoiceEnrollment={() => {
+                    setIsSettingsOpen(false);
+                    setVoiceCallOpen(true);
+                }}
+                onDeleteSpeakerProfile={() => ws?.send(JSON.stringify({ type: 'speaker_profile_delete' }))}
+                onRefreshSpeakerProfile={() => ws?.send(JSON.stringify({ type: 'speaker_profile_get' }))}
                 availableModels={availableModels}
                 apiModels={apiModels}
                 onFetchApiModels={fetchApiModels}

@@ -193,7 +193,7 @@ const LITE: Partial<Record<AvatarMode, string>> = {
     confused: 'emoConfused 2.8s ease-in-out infinite',   // emoConfused is transform-only; drop the morph half
 };
 
-export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, tint }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; tint?: { body?: string; dot?: string } }) {
+export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite = false, tint, eyePulseRef }: { mode?: AvatarMode; dim?: boolean; invert?: boolean; lite?: boolean; tint?: { body?: string; dot?: string }; eyePulseRef?: React.Ref<HTMLSpanElement> }) {
     // Settle-to-neutral transition (docs/web-ui/AgentAvatar.md "Same-position switches"): the agent stays
     // persistent and in one piece. On a mode change we briefly DROP the animation so the body+eye
     // ease back to their rest pose (via `transition: transform`), then start the new mode's
@@ -578,15 +578,27 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
                         animation: settling ? 'none' : bodyAnimation,
                         transition: 'transform 0.2s ease',
                     }}>
-                        <span style={{
+                        {/* Voice-pulse wrapper: an external caller (the enrollment call)
+                            drives this span's transform per frame from the REAL TTS
+                            amplitude via eyePulseRef, so only the EYE breathes with the
+                            voice - the body never moves. rAF + inline transform only
+                            (same leak-safe pattern as livingOrbitRef above); inert when
+                            no ref is passed. The eye's own keyframes run on the inner
+                            span, so both compose. */}
+                        <span ref={eyePulseRef} style={{
                             position: 'absolute', left: '50%', top: '50%', width: eyeSize, height: eyeSize,
-                            marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2), borderRadius: '50%',
-                            backgroundColor: tint?.dot ?? (dim ? dimDot : dotColor),
-                            boxShadow: (active && !dim) ? glow : 'none',
-                            transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
-                            animation: settling ? 'none' : eyeAnimation,
-                            transition: 'transform 0.2s ease',
-                        }} />
+                            marginLeft: -(eyeSize / 2), marginTop: -(eyeSize / 2),
+                            transformOrigin: 'center', transition: 'transform 70ms linear',
+                        }}>
+                            <span style={{
+                                position: 'absolute', inset: 0, borderRadius: '50%',
+                                backgroundColor: tint?.dot ?? (dim ? dimDot : dotColor),
+                                boxShadow: (active && !dim) ? glow : 'none',
+                                transformOrigin: ORIGIN_BOTTOM.has(shown) ? 'center bottom' : 'center',
+                                animation: settling ? 'none' : eyeAnimation,
+                                transition: 'transform 0.2s ease',
+                            }} />
+                        </span>
                     </div>
                 </div>
                 )}

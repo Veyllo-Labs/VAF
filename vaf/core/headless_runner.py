@@ -816,6 +816,50 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     tq.task_done()
                     continue
 
+                # Speaker-confirmation reply (messenger lane): if a voice
+                # confirmation is pending for THIS OWNER's scope and the
+                # message parses as an answer (yes / no / "no, that's Peter"),
+                # consume it deterministically - no LLM turn, ack sent back on
+                # the same channel. Owner-only: never for contact-relay
+                # messages, and only for the scope the bridge authenticated.
+                if (
+                    getattr(task, "source", None) in ("telegram", "whatsapp", "discord")
+                    and not (task.metadata or {}).get("from_contact")
+                    and (task.metadata or {}).get("user_scope_id")
+                ):
+                    try:
+                        from vaf.core import speaker_confirm as _spc
+                        _ack = _spc.try_consume_channel_reply(
+                            str(meta.get("user_scope_id")), str(input_text))
+                    except Exception:
+                        _ack = None
+                    if _ack:
+                        try:
+                            if task.source == "telegram" and meta.get("telegram_chat_id"):
+                                from vaf.core.telegram_reply import send_telegram_reply
+                                send_telegram_reply(str(meta["telegram_chat_id"]), _ack)
+                            elif task.source == "whatsapp" and meta.get("whatsapp_chat_jid"):
+                                from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                send_whatsapp_reply(meta.get("username") or "admin",
+                                                    str(meta["whatsapp_chat_jid"]), _ack,
+                                                    user_scope_id=meta.get("user_scope_id"))
+                            elif task.source == "discord":
+                                from vaf.core.messaging_connections import send_to_main_messenger
+                                send_to_main_messenger(str(meta.get("user_scope_id")),
+                                                       meta.get("username") or "admin",
+                                                       _ack, record=False)
+                        except Exception as _sc_e:
+                            print(f"[Headless] speaker_confirm ack send failed: {_sc_e}")
+                        try:
+                            if is_debug_logging_enabled():
+                                from datetime import datetime as _dt
+                                with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
+                                    f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (speaker_confirm)\n")
+                        except Exception:
+                            pass
+                        tq.task_done()
+                        continue
+
                 # Compaction task: run session compaction (same serialized LLM as chat when local)
                 is_compaction = (task.metadata or {}).get("compaction") is True
                 if is_compaction:

@@ -227,6 +227,45 @@ Read Aloud button is the test path.
 
 ---
 
+## Speaker identification and the confirmation flow
+
+Voice utterances (Web UI mic and live calls) can be labeled against the owner's
+enrolled voice profile (`vaf/core/speaker_id.py`, sherpa-onnx, local CPU lane):
+the LLM sees transcripts prefixed `[<owner>]: `, `[<named person>]: `,
+`[anderer_Sprecher]: ` or `[unsicher]: `. Enrollment is an explicit guided live
+call (Settings > Voice); without a stored profile the feature is inert.
+
+Hard rules:
+
+- Identity comes from the VOICE, never from spoken claims; on live calls only a
+  verified owner turn may trigger delegation (code guard, not just prompt).
+- The owner profile is NEVER modified outside explicit re-enrollment.
+
+Confirmation flow (`vaf/core/speaker_confirm.py`, gated by
+`speaker_id_confirmation_enabled`): when an utterance lands in the "unsure"
+band, the owner is asked once (max one pending question per user, cooldown,
+1 h expiry). Delivery: main messenger first (question text + the audio segment
+as attachment via `send_to_main_messenger`), else a web-chat card (audio
+player + buttons; events `speaker_confirm_pending` / `speaker_confirm_reply` /
+`speaker_confirm_result`, see WEBUI_WEBSOCKET_FLOW.md). Answers:
+
+- yes: the segment was the owner; nothing is stored (profile untouched).
+- no: another speaker; nothing is stored.
+- "no, that's Peter": the segment embedding is stored as (or merged into) the
+  NAMED third-party profile "Peter" in the per-user voice DB
+  (`~/.vaf/speaker_profiles/<scope>/others/`). Future utterances by that voice
+  are labeled `[Peter]: `. Named speakers are known but never authorized:
+  delegation still requires the owner.
+
+Messenger replies are consumed deterministically before any agent turn
+(headless runner) - only for the owner's authenticated scope, never for
+contact-relay messages; anything that does not parse as yes/no flows into the
+normal chat turn. Segment audio is stored under the user's own
+`VAF_Projects/<uid8>/voice_confirm/` (served by `/api/file` with ownership
+enforcement) and deleted on resolve/expiry.
+
+---
+
 ## Web UI Voice Integration
 
 ### Architecture

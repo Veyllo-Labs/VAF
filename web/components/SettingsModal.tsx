@@ -285,6 +285,11 @@ export interface SettingsModalProps {
     userTimeFormat?: '24h' | '12h';
     /** Called when automation calendar is opened (e.g. to load notes/todos). */
     onOpenAutomationCalendar?: () => void;
+    // Voice-profile (speaker identification)
+    speakerProfile?: any;
+    onStartVoiceEnrollment?: () => void;
+    onDeleteSpeakerProfile?: () => void;
+    onRefreshSpeakerProfile?: () => void;
 }
 
 const CATEGORIES = [
@@ -526,7 +531,7 @@ function AccessPresetSection({
     );
 }
 
-export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
     const tCommon = useTranslations('common');
@@ -589,6 +594,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, localConfig.speech_tts_provider, localConfig.api_key_elevenlabs, currentUser?.role]);
+    // Voice-profile status is served over WS; refresh it when the tab opens.
+    useEffect(() => {
+        if (activeTab === 'voice') onRefreshSpeakerProfile?.();
+        setProfileConfirm(null);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab]);
+    // Two-step inline confirmation for destructive voice-profile actions.
+    const [profileConfirm, setProfileConfirm] = useState<null | 'delete' | 'redo'>(null);
     const [settingsSearch, setSettingsSearch] = useState('');
     // Searchable index of settings: every accessible category (jumps to its top) plus each of its
     // sections (jumps + scrolls), all localized via the same translation hooks the UI uses.
@@ -2883,6 +2896,80 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     ) : (
                                         <p className="text-xs text-gray-500">{tVoice('managedByAdmin')}</p>
                                     )}
+                                </Section>
+
+                                <Section title={tVoice('voiceProfile')}>
+                                    {speakerProfile ? (
+                                        <div>
+                                            <div className="flex items-center justify-between gap-3 flex-wrap border border-gray-200 dark:border-[#2c2c2c] rounded-xl px-4 py-3">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-amber-800 dark:text-amber-400 bg-amber-500/10 border border-amber-600">
+                                                        {(speakerProfile.display_name || '?')[0].toUpperCase()}
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-sm font-semibold">
+                                                            {speakerProfile.display_name}
+                                                            <span className="ml-2 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-300 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/40">
+                                                                {tVoice('profileActive')}
+                                                            </span>
+                                                        </div>
+                                                        <div className="text-xs text-gray-400">
+                                                            {speakerProfile.created_at} &middot; {speakerProfile.net_speech_seconds}s &middot; {tVoice('profileRounds', { n: String(speakerProfile.rounds ?? 0) })}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-[#2c2c2c] dark:hover:bg-[#363636] dark:text-gray-200"
+                                                        onClick={() => setProfileConfirm('redo')}>{tVoice('profileRedo')}</button>
+                                                    <button className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-red-600 dark:bg-[#2c2c2c] dark:hover:bg-[#363636] dark:text-gray-200"
+                                                        onClick={() => setProfileConfirm('delete')}>{tVoice('profileDelete')}</button>
+                                                </div>
+                                            </div>
+                                            {profileConfirm && (
+                                                <div className={`mt-2 rounded-xl border px-4 py-3 flex items-center justify-between gap-3 flex-wrap ${profileConfirm === 'delete'
+                                                    ? 'border-red-300 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10'
+                                                    : 'border-yellow-300 bg-yellow-50 dark:border-amber-500/40 dark:bg-amber-500/10'}`}>
+                                                    <span className={`text-xs ${profileConfirm === 'delete'
+                                                        ? 'text-red-700 dark:text-red-400'
+                                                        : 'text-yellow-700 dark:text-amber-400'}`}>
+                                                        {profileConfirm === 'delete' ? tVoice('profileDeleteConfirmText') : tVoice('profileRedoConfirmText')}
+                                                    </span>
+                                                    <div className="flex gap-2">
+                                                        <button className={`px-3 py-1.5 text-xs font-medium rounded-lg text-white ${profileConfirm === 'delete'
+                                                            ? 'bg-red-600 hover:bg-red-700'
+                                                            : 'bg-gray-900 hover:bg-black dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818]'}`}
+                                                            onClick={() => {
+                                                                if (profileConfirm === 'delete') onDeleteSpeakerProfile?.();
+                                                                else onStartVoiceEnrollment?.();
+                                                                setProfileConfirm(null);
+                                                            }}>
+                                                            {profileConfirm === 'delete' ? tVoice('profileDeleteConfirmYes') : tVoice('profileRedoConfirmYes')}
+                                                        </button>
+                                                        <button className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-[#2c2c2c] dark:hover:bg-[#363636] dark:text-gray-200"
+                                                            onClick={() => setProfileConfirm(null)}>{tCommon('cancel')}</button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <p className="text-xs text-gray-500 max-w-xl mb-3">{tVoice('profileIntro')}</p>
+                                            <button className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818] transition-colors"
+                                                onClick={onStartVoiceEnrollment}>{tVoice('profileSetup')}</button>
+                                            <p className="text-xs text-gray-400 mt-2">{tVoice('profileSetupHint')}</p>
+                                        </div>
+                                    )}
+                                    {currentUser?.role === 'admin' && (
+                                        <div className="mt-4">
+                                            <Switch
+                                                label={tVoice('speakerIdEnable')}
+                                                description={tVoice('speakerIdEnableDesc')}
+                                                checked={localConfig.speaker_id_enabled || false}
+                                                onChange={(v: boolean) => handleChange('speaker_id_enabled', v)}
+                                            />
+                                        </div>
+                                    )}
+                                    <p className="text-xs text-gray-400 mt-3">{tVoice('profileSecurity')}</p>
                                 </Section>
 
                                 <Section title={tVoice('tts')}>

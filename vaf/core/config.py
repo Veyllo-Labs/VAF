@@ -328,6 +328,15 @@ class Config:
                 "speech_tts_docker_url_fr": "http://localhost:5006",   # French voice (optional)
                 "speech_tts_chatterbox_url": "http://localhost:4123",  # When engine=chatterbox (HTTP TTS server)
 
+                # Speaker identification (enroll-and-verify, sherpa-onnx local lane).
+                # ON by default as a kill-switch only: the REAL opt-in is the explicit
+                # enrollment - without a stored voice profile this flag is inert and
+                # no model is ever loaded (fail-closed per profile, not per flag).
+                "speaker_id_enabled": True,            # Master gate for voice-profile labeling
+                "speaker_id_threshold": 0.60,          # Cosine score >= threshold -> the enrolled user
+                "speaker_id_band": 0.05,               # Uncertainty band below threshold -> "unsure"
+                "speaker_id_confirmation_enabled": True,  # Ask the owner on "unsure" (messenger/web card)
+
                 # Cloud TTS provider lane (mirrors vision_provider). "" = local engine above.
                 "speech_tts_provider": "",             # "" | "elevenlabs" | "openai"
                 "speech_tts_api_model": "",            # "" = provider default (eleven_flash_v2_5 / gpt-4o-mini-tts)
@@ -648,6 +657,7 @@ class Config:
         "github_oauth_",
         "speech_stt_",
         "speech_tts_",
+        "speaker_id_",
         "subagent_",
         "thinking_",
         "librarian_",

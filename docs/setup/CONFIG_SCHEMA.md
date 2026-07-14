@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (261 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (265 keys).
 
 ## How configuration is set
 
@@ -257,6 +257,10 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. |
 | `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
 | `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Base64 on disk; redacted for non-admin reads. |
+| `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |
+| `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. |
+| `speaker_id_band` | `0.05` | Band below the threshold labeled "unsure" (triggers confirmation). |
+| `speaker_id_confirmation_enabled` | `true` | On "unsure": ask the owner to confirm (main messenger, else web card). Answers never modify the owner profile; "no, that's NAME" stores a named third-party profile. |
 | `tts_auto_speak` | `False` | Auto-speak replies. |
 
 ## Network & server mode

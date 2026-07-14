@@ -91,7 +91,7 @@ user input
     ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 11. FINALIZE                                                │
-│    compress turn · append answer · TTS ·                    │
+│    compress turn · append answer · host TTS (opt-in) ·      │
 │    _clean_reasoning() → return                              │
 └─────────────────────────────────────────────────────────────┘
     │
@@ -117,6 +117,13 @@ grep the symbol names to find them.
 | 9 | Empty-response recovery + final-answer validation | `_validate_final_answer` |
 | 10 | Pending-task auto-continue | `_reply_needs_user`, `_task_stuck_step` |
 | 11 | Finalize (compress / append / TTS / clean) | `summarize_tool_turn`, `_clean_reasoning` |
+
+Host-speaker TTS (final answer, thinking fillers, answer chime) only fires for agents
+constructed with `host_audio=True`, which is exclusively the interactive CLI
+(`_make_cli_agent`). Headless queue turns, automations, thinking runs, the gateway,
+`vaf run -p`, and embedders are fail-closed silent on the host; browser TTS is a
+separate frontend-pulled lane (`message_complete` -> `speak` WebSocket command) and
+is not affected by this gate.
 
 ## Loop budgets (so a turn can never spin forever)
 

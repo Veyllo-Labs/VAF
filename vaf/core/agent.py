@@ -325,7 +325,8 @@ class Agent:
 
             return True
 
-    def __init__(self, verbose=False, register_signals=True, config_overrides=None, run_kind=None):
+    def __init__(self, verbose=False, register_signals=True, config_overrides=None, run_kind=None,
+                 host_audio=False):
         self.verbose = verbose
         # Per-instance run kind: 'thinking' | 'automation' | 'chat' | None.
         # Tool registration and dispatch decisions MUST use this instance truth,
@@ -341,6 +342,12 @@ class Agent:
             elif os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
                 run_kind = "automation"
         self._run_kind = run_kind
+        # Positive opt-in for host-speaker audio (TTS, fillers, answer chime).
+        # Only the interactive CLI passes True; every other construction site
+        # (headless web/channel queue, automations, thinking runs, gateway,
+        # vaf run -p, embedders) stays fail-closed and must never play sound
+        # on the machine the server happens to run on.
+        self._host_audio_allowed = bool(host_audio)
         self.config = Config.load()
         # Programmatic config injection for embedding VAF as a library.
         # Merges on top of the on-disk config without writing ~/.vaf/config.json,
@@ -1081,7 +1088,9 @@ class Agent:
 
 
     def _speak(self, text: str):
-        """Helper to speak response via SpeechManager."""
+        """Helper to speak response via SpeechManager (host speakers; opt-in only)."""
+        if not self._host_audio_allowed:
+            return
         try:
             from vaf.core.speech import get_speech_manager
             sm = get_speech_manager()
@@ -1120,6 +1129,8 @@ class Agent:
             tool_name: Name of the tool being executed (for tool fillers)
             query: Search query or task description (for context-aware fillers)
         """
+        if not self._host_audio_allowed:
+            return
         try:
             from vaf.core.speech import get_speech_manager
             sm = get_speech_manager()
@@ -5087,7 +5098,7 @@ class Agent:
                 import random
                 
                 sm = get_speech_manager()
-                if sm.is_tts_enabled():
+                if sm.is_tts_enabled() and self._host_audio_allowed:
                     # Get generic thinking fillers for current language
                     fillers = THINKING_FILLERS.get(lang, THINKING_FILLERS.get("en", []))
                     if fillers:
@@ -9482,7 +9493,7 @@ class Agent:
         tts_source = full_content if full_content.strip() else full_response
         
         # Play "answer ready" sound before TTS starts (after thinking is complete)
-        if tts_source.strip():  # Only if we have actual content to speak
+        if tts_source.strip() and self._host_audio_allowed:  # host-speaker opt-in only
             try:
                 from vaf.core.speech import get_speech_manager
                 sm = get_speech_manager()

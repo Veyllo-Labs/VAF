@@ -20,7 +20,7 @@ from vaf.core.web_interface import get_web_interface
 import threading
 
 
-def _make_cli_agent(verbose: bool = False) -> Agent:
+def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
     """Create the interactive CLI agent and bind it to the local-admin identity.
 
     Why this exists
@@ -47,7 +47,9 @@ def _make_cli_agent(verbose: bool = False) -> Agent:
     CLI-only. The Web/Channel paths keep their server-validated JWT scope and are NOT
     affected; the multi-user separation there is untouched.
     """
-    a = Agent(verbose=verbose, run_kind="chat")
+    # host_audio: the interactive CLI is the only lane with a human at this
+    # machine's speakers; run_prompt (-p) passes False (machine/script lane).
+    a = Agent(verbose=verbose, run_kind="chat", host_audio=host_audio)
     try:
         from uuid import UUID
         from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
@@ -728,7 +730,8 @@ def run_prompt(
         except FileNotFoundError:
             loaded_session = None
 
-    agent = _make_cli_agent(verbose=False)
+    # Non-interactive machine lane: never play audio on this host's speakers.
+    agent = _make_cli_agent(verbose=False, host_audio=False)
     agent.init_chat()
 
     if loaded_session:

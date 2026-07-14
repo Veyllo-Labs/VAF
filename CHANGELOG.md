@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Host-speaker TTS is now opt-in per agent (fail-closed).** With TTS enabled, every
+  background turn (web/Telegram/WhatsApp/Discord queue, automations, proactive thinking
+  runs, `vaf run -p`, the gateway) used to synthesize and play the answer, a thinking
+  filler, and the answer chime on the server machine's speakers, where nobody is
+  listening. Agents now carry a `host_audio` construction flag; only the interactive
+  CLI sets it. Browser TTS (Read Aloud, auto-speak) is a separate lane and is
+  unchanged.
+
 ### Added
 - **New tool: schedule_reminder - persistent one-shot reminders without an agent run.**
   The daily calendar check was designed to create one-off reminder automations, but

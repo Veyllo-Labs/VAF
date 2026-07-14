@@ -27,7 +27,6 @@ Docs are grouped into category folders. Full index by category:
 - [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md) — Network-mode security model, doctor checks.
 
 ### llm/ — models, providers, backend
-- [LLM_BACKEND_FACTS.md](llm/LLM_BACKEND_FACTS.md) — Backend selection (API/server/library), local model facts.
 - [API_INTEGRATION.md](llm/API_INTEGRATION.md) — API providers and keys.
 - [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) — Catalog of provider/model-specific behavior (DeepSeek, Gemma local mode) and the additive/gated principle.
 - [DYNAMIC_MODEL_SELECTION.md](llm/DYNAMIC_MODEL_SELECTION.md) — Live model discovery per API provider.
@@ -53,6 +52,7 @@ Docs are grouped into category folders. Full index by category:
 - [TOOL_SUPERVISION.md](agents/TOOL_SUPERVISION.md) — Tool supervision/safety.
 - [ACTION_TAG.md](agents/ACTION_TAG.md) — The `<Action>` declaration tag.
 - [CODER_ARCHITECTURE.md](agents/CODER_ARCHITECTURE.md) — Coder sub-agent design.
+- [VOICE_AGENT.md](agents/VOICE_AGENT.md) - Live-call first layer: turn pipeline, delegation protocol, voice-gated guards, call UI.
 - [SUBAGENT_IPC.md](agents/SUBAGENT_IPC.md) — Inter-process communication between agents.
 - [SUBAGENT_FILE_EXTRACTION.md](agents/SUBAGENT_FILE_EXTRACTION.md) — File handling in sub-agents.
 - [BROWSER_AGENT.md](agents/BROWSER_AGENT.md) — Browser automation agent.

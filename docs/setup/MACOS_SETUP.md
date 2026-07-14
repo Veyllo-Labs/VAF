@@ -46,7 +46,7 @@ GPU handling is automatic and depends on your chip:
 | Intel | CPU mode (Metal is not used). |
 
 No manual driver setup is required on macOS. For cloud providers (OpenAI, Anthropic, …)
-the local GPU is irrelevant — see [LLM_BACKEND_FACTS.md](../llm/LLM_BACKEND_FACTS.md).
+the local GPU is irrelevant.
 
 ## Running
 

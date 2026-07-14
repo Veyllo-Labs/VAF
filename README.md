@@ -326,7 +326,8 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 | Write a tool (BaseTool, pip packaging) | [vaf/tools/README.md](vaf/tools/README.md) |
 | Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) |
 | Linux setup & GPU | [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) |
-| LLM backend (local vs API) | [docs/llm/LLM_BACKEND_FACTS.md](docs/llm/LLM_BACKEND_FACTS.md) |
+| LLM backend (local vs API) | [docs/llm/PROVIDER_MODES.md](docs/llm/PROVIDER_MODES.md) |
+| Voice agent (live call) | [docs/agents/VOICE_AGENT.md](docs/agents/VOICE_AGENT.md) |
 | Memory system | [docs/memory/MEMORY_SYSTEM.md](docs/memory/MEMORY_SYSTEM.md) |
 | Web UI & API reference | [docs/web-ui/WEB_UI.md](docs/web-ui/WEB_UI.md) |
 | Context management | [docs/memory/CONTEXT_MANAGEMENT.md](docs/memory/CONTEXT_MANAGEMENT.md) |

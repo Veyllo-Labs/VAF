@@ -177,7 +177,7 @@ All API providers support **streaming responses** for real-time output.
 - **Anthropic** - Full support (`tool_use`/`tool_result` roundtrip via the native SDK)
 - **Google** - Full support (`function_call`/`function_response` via the native google-genai SDK)
 - **OpenRouter** - Provider-dependent
-- **DeepSeek** - `tool_choice` limited to `auto`/`none` (see LLM_BACKEND_FACTS.md)
+- **DeepSeek** - `tool_choice` limited to `auto`/`none` (see the DeepSeek rows in PROVIDER_MODES.md)
 
 ### Vision / Image Input
 

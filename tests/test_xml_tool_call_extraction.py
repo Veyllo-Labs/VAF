@@ -81,8 +81,11 @@ def test_valid_names_filter_for_main_agent():
 
 def test_coder_wrapper_delegates_to_shared_parser():
     content = '<｜｜DSML｜｜invoke name="list_files"><｜｜DSML｜｜parameter name="path" string="true">.</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke>'
-    assert _extract_xml_tool_call(content) == extract_xml_tool_call(content)
-    assert _extract_xml_tool_call(content)["function"]["name"] == "list_files"
+    a, b = _extract_xml_tool_call(content), extract_xml_tool_call(content)
+    # ids are random per call (uniqueness fix) - compare everything else
+    assert a["function"] == b["function"] and a["type"] == b["type"]
+    assert a["id"].startswith("call_synth_") and b["id"].startswith("call_synth_")
+    assert a["function"]["name"] == "list_files"
 
 
 def test_morph_tool_use_format():

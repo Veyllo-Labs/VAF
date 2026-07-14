@@ -13,6 +13,7 @@ call never runs. Both the coding agent and the main agent route content through 
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from typing import Any, Dict, Optional
@@ -48,8 +49,13 @@ def _child_params(block: str) -> Dict[str, Any]:
 
 
 def _mk(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    # Synthetic id: the model leaked this call as TEXT, no provider-issued id
+    # exists. The call_synth_ prefix marks it so providers that only accept
+    # their own ids on replay (Veyllo) get the exchange downgraded to plain
+    # text pre-send; the random tail keeps two recoveries within the same
+    # second unique (the old extracted_<epoch> ids collided).
     return {
-        "id": f"extracted_{int(time.time())}",
+        "id": f"call_synth_{int(time.time())}_{os.urandom(2).hex()}",
         "type": "function",
         "function": {"name": name, "arguments": json.dumps(args)},
     }

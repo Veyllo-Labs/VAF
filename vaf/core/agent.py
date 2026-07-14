@@ -106,6 +106,104 @@ _PROACTIVE_DECIDE_NUDGE = (
 )
 
 
+def _synth_tool_call_id() -> str:
+    """Mint an id for a tool call VAF created ITSELF (text-recovery fallbacks,
+    streams that never delivered an id, sanitizer repairs). The provider never
+    issued this call, so the id carries a recognizable prefix: providers that
+    only accept their own ids on replay (Veyllo) get such exchanges converted
+    to plain text by _downgrade_synthetic_tool_exchanges() pre-send.
+    """
+    return f"call_synth_{os.urandom(4).hex()}"
+
+
+# Matches every id VAF ever minted itself: the current call_synth_ prefix and
+# the legacy shapes still found in persisted sessions (extracted_<epoch> from
+# tool_call_recovery, call_<8hex> from the old inline mints - genuine gateway
+# ids are call_00_<...> at 32 chars, so the 8-hex form cannot collide).
+_SYNTHETIC_TC_ID_RE = re.compile(r"^(call_synth_|extracted_\d|call_[0-9a-f]{8}$)")
+
+
+def _downgrade_synthetic_tool_exchanges(messages):
+    """Veyllo: replace tool exchanges with VAF-minted ids by plain text on the
+    OUTBOUND copy.
+
+    The provider rejects a replayed tool_call id it did not issue itself.
+    Recovered calls (deepseek-v4 leaks calls as content) and
+    id-less streams only ever have synthetic ids, so their structured replay is
+    guaranteed to fail. This folds exactly those exchanges into the same
+    summary shape the end-of-turn squash uses - the model keeps call + result
+    as context - while provider-issued exchanges replay untouched. A batch
+    mixing genuine and synthetic ids is downgraded whole to keep the pairing
+    consistent.
+
+    The folded note goes into SYSTEM messages only (squash precedent). An
+    earlier version put it into the assistant message - the model then
+    PARROTED "[Context: ...]" blocks as its own answer style, and a live call
+    read one aloud. The assistant message keeps only its real prose (if any).
+    """
+    out = []
+    synth_calls = {}  # id -> "name(args)" of downgraded calls awaiting results
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            calls = msg["tool_calls"]
+            if any(_SYNTHETIC_TC_ID_RE.match(str(tc.get("id") or "")) for tc in calls):
+                for tc in calls:
+                    fn = tc.get("function", {}) or {}
+                    args = str(fn.get("arguments") or "")[:300]
+                    synth_calls[tc.get("id")] = f"{fn.get('name')}({args})"
+                text = str(msg.get("content") or "").strip()
+                if text:
+                    out.append({"role": "assistant", "content": text})
+                continue
+        if msg.get("role") == "tool" and msg.get("tool_call_id") in synth_calls:
+            call = synth_calls.pop(msg["tool_call_id"])
+            content = " ".join(str(msg.get("content") or "").split())[:600]
+            out.append({"role": "system",
+                        "content": f"[Context: recovered tool call] {call} -> {content}"})
+            continue
+        out.append(msg)
+    return out
+
+
+def _parse_paren_tool_calls(text: str, tools) -> list:
+    """Fallback 3: 'name(...)' style tool calls written as TEXT.
+
+    Covers the classic 'web_search("query")' hallucination AND leaked plan
+    bullets like '- find_mail({"query": "x", "limit": 20})' - deepseek-v4
+    intermittently writes its next calls as a markdown list instead of
+    structured tool_calls; unrecovered they never execute and the bare plan
+    becomes the FINAL ANSWER (live incident: read aloud on a voice call).
+    Only names present in `tools` are recovered. Returns [(name, args_dict)].
+    """
+    out = []
+    for func_name, args_str in re.findall(
+            r'(?:^|\n)\s*(?:Answer:)?\s*(?:\d+\.\s*|[-*]\s+)?([a-zA-Z0-9_]+)\s*\((.*?)\)', text):
+        if func_name not in tools:
+            continue
+        args = {}
+        s = args_str.strip()
+        if s.startswith("{"):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except Exception:
+                args = {}
+        elif s.startswith('"') or s.startswith("'"):
+            # Heuristic: map a single string argument to the first parameter
+            clean_arg = s.strip("\"'")
+            tool_def = tools[func_name]
+            params = getattr(tool_def, "parameters", None)
+            if params is None and isinstance(tool_def, dict):
+                params = tool_def.get("parameters")
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if props:
+                args[list(props.keys())[0]] = clean_arg
+        if args:
+            out.append((func_name, args))
+    return out
+
+
 def _parse_qwen_tool_calls(text: str, valid_names=None):
     """Parse Qwen / Hermes style tool calls that a reasoning model sometimes emits as TEXT (often inside
     `<think>`) instead of a native call, so the server never converts them and the call is silently
@@ -6996,7 +7094,7 @@ class Agent:
                                     tc["type"] = "function"
                                 # Fix missing 'id'
                                 if isinstance(tc, dict) and ("id" not in tc or tc.get("id") is None):
-                                    tc["id"] = f"call_{os.urandom(4).hex()}"
+                                    tc["id"] = _synth_tool_call_id()
                     
                     
                     # Prepare messages
@@ -7111,7 +7209,7 @@ class Agent:
                                     elif "tool_use" in data:
                                         # Anthropic format
                                         tool_calls_detected.append({
-                                            "id": data["tool_use"].get("id", f"call_{os.urandom(4).hex()}"),
+                                            "id": data["tool_use"].get("id", _synth_tool_call_id()),
                                             "type": "function",
                                             "function": {
                                                 "name": data["tool_use"].get("name"),
@@ -7175,7 +7273,7 @@ class Agent:
                     for idx, tc_data in sorted(tool_call_accumulator.items()):
                         # Ensure ID and Type
                         if not tc_data.get("id"): 
-                            tc_data["id"] = f"call_{os.urandom(4).hex()}"
+                            tc_data["id"] = _synth_tool_call_id()
                         if not tc_data.get("type"): 
                             tc_data["type"] = "function"
                             
@@ -8107,7 +8205,7 @@ class Agent:
                                     pass
                         
                         tool_calls_detected.append({
-                            "id": tool_data['id'] or f"call_{os.urandom(4).hex()}",
+                            "id": tool_data['id'] or _synth_tool_call_id(),
                             "type": "function",
                             "function": {"name": tool_name, "arguments": tool_data['arguments']}
                         })
@@ -8125,7 +8223,7 @@ class Agent:
                         tool_data = json.loads(tool_str)
                         if "name" in tool_data and "arguments" in tool_data:
                             tool_calls_detected.append({
-                                "id": f"call_{os.urandom(4).hex()}",
+                                "id": _synth_tool_call_id(),
                                 "type": "function",
                                 "function": {"name": tool_data["name"], "arguments": json.dumps(tool_data["arguments"]) if isinstance(tool_data["arguments"], dict) else tool_data["arguments"]}
                             })
@@ -8141,39 +8239,22 @@ class Agent:
                             for item in data:
                                 if "name" in item and "arguments" in item:
                                      tool_calls_detected.append({
-                                        "id": f"call_{os.urandom(4).hex()}",
+                                        "id": _synth_tool_call_id(),
                                         "type": "function",
                                         "function": {"name": item["name"], "arguments": json.dumps(item["arguments"]) if isinstance(item["arguments"], dict) else item["arguments"]}
                                     })
                     except: pass
 
-                # 3. Text Pattern: "1. web_search(...)" or "Answer: web_search(...)"
-                # This catches models (like VQ-1) that hallucinate text formats instead of JSON
+                # 3. Text Pattern: "1. web_search(...)", "Answer: web_search(...)"
+                # or leaked plan bullets '- find_mail({"query": ...})' (deepseek-v4).
+                # Shared parser _parse_paren_tool_calls (module level, tested).
                 if not tool_calls_detected:
-                    text_tools = re.findall(r'(?:^|\n)(?:Answer:)?\s*(?:\d+\.\s*)?([a-zA-Z0-9_]+)\s*\((.*?)\)', text_to_search)
-                    for func_name, args_str in text_tools:
-                        if func_name in self.tools:
-                            # Parse arguments (simple quote extraction)
-                            # web_search("query") -> {"query": "query"}
-                            args = {}
-                            
-                            # Heuristic: try to map single string argument to first parameter
-                            if args_str.strip().startswith('"') or args_str.strip().startswith("'"):
-                                clean_arg = args_str.strip().strip('"\'')
-                                # Get first parameter name from tool definition
-                                tool_def = self.tools[func_name]
-                                params = getattr(tool_def, 'parameters', {}).get('properties', {})
-                                if params:
-                                    first_param = list(params.keys())[0]
-                                    args[first_param] = clean_arg
-                            
-                            # If parsing succeeded, add it
-                            if args:
-                                tool_calls_detected.append({
-                                    "id": f"call_{os.urandom(4).hex()}",
-                                    "type": "function",
-                                    "function": {"name": func_name, "arguments": json.dumps(args)}
-                                })
+                    for _p_name, _p_args in _parse_paren_tool_calls(text_to_search, self.tools):
+                        tool_calls_detected.append({
+                            "id": _synth_tool_call_id(),
+                            "type": "function",
+                            "function": {"name": _p_name, "arguments": json.dumps(_p_args)},
+                        })
 
                 # 4. Gemma-4 native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
                 # Additive defensive net: only for a local Gemma-4 model and only when nothing matched
@@ -8182,7 +8263,7 @@ class Agent:
                 if not tool_calls_detected and getattr(self, "model_mode", None) == "gemma4":
                     for _g_name, _g_args in _parse_gemma4_tool_calls(text_to_search, self.tools):
                         tool_calls_detected.append({
-                            "id": f"call_{os.urandom(4).hex()}",
+                            "id": _synth_tool_call_id(),
                             "type": "function",
                             "function": {"name": _g_name, "arguments": json.dumps(_g_args)},
                         })
@@ -8196,7 +8277,7 @@ class Agent:
                 if not tool_calls_detected:
                     for _q_name, _q_args in _parse_qwen_tool_calls(text_to_search, self.tools):
                         tool_calls_detected.append({
-                            "id": f"call_{os.urandom(4).hex()}",
+                            "id": _synth_tool_call_id(),
                             "type": "function",
                             "function": {"name": _q_name, "arguments": json.dumps(_q_args)},
                         })
@@ -10738,6 +10819,12 @@ class Agent:
                             msg["content"] = remaining or ""
                 fixed.append(msg)
             messages = fixed
+        elif _provider == "veyllo":
+            # Veyllo rejects replayed tool_call ids it did not issue itself.
+            # Exchanges whose ids VAF minted (text-recovered calls, id-less
+            # streams) are folded into plain text pre-send; genuine exchanges
+            # replay byte-identical. See _downgrade_synthetic_tool_exchanges.
+            messages = _downgrade_synthetic_tool_exchanges(messages)
 
         is_gemma = getattr(self, "is_gemma_local", "gemma" in self.filename.lower())
         if not is_gemma:

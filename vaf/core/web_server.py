@@ -318,6 +318,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount TTS routes: {e}")
 
+# Mount voice provider catalog routes (admin-only; ElevenLabs model/voice pickers)
+try:
+    from vaf.api.voice_routes import router as voice_router
+    app.include_router(voice_router)
+    log("WebServer", "Voice catalog routes mounted at /api/voice")
+except Exception as e:
+    log("WebServer", f"Failed to mount voice catalog routes: {e}")
+
 # Mount Email connection routes (OAuth2 PKCE + accounts CRUD)
 try:
     from vaf.api.email_routes import router as email_router
@@ -5622,53 +5630,26 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         stt_engine = Config.get("speech_stt_engine", "docker")
                         text = ""
 
-                        if stt_engine == "docker":
-                            # Docker STT: POST audio file to whisper-asr-webservice (onerahmet image)
-                            stt_url = (Config.get("speech_stt_docker_url") or "").strip().rstrip("/") or "http://localhost:5003"
-                            try:
-                                import requests
-                                loop = asyncio.get_running_loop()
-                                def _post(endpoint: str):
-                                    with open(temp_path, "rb") as f:
-                                        # whisper-asr-webservice expects "audio_file" field name
-                                        # Add encode=true to let ffmpeg handle the format conversion
-                                        # Add output=json to get JSON response
-                                        filename = f"audio{suffix}"
-                                        return requests.post(
-                                            endpoint,
-                                            files={"audio_file": (filename, f, mime_type)},
-                                            params={"encode": "true", "output": "json"},
-                                            timeout=60,
-                                        )
-                                asr_endpoint = f"{stt_url}/asr"
-                                resp = await loop.run_in_executor(None, lambda: _post(asr_endpoint))
-                                if resp.status_code == 404:
-                                    transcribe_endpoint = f"{stt_url}/transcribe"
-                                    resp = await loop.run_in_executor(None, lambda: _post(transcribe_endpoint))
-
-                                # Check for errors before parsing JSON
-                                if resp.status_code >= 400:
-                                    error_text = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-                                    raise Exception(f"STT service error: {error_text}")
-
-                                # Try to parse JSON response
-                                try:
-                                    data = resp.json()
-                                except Exception:
-                                    # If response is plain text, use it directly
-                                    text = resp.text.strip() if resp.text else ""
-                                    data = {}
-
-                                if not text:
-                                    text = (data.get("text") or data.get("transcript") or "").strip()
-                                if not text and isinstance(data.get("results"), list) and data["results"]:
-                                    text = (data["results"][0].get("transcript") or "").strip()
-                            except Exception as docker_err:
+                        from vaf.core import speech_api as _speech_api
+                        if stt_engine == "docker" or _speech_api.select_stt_backend()[0]:
+                            # Shared speech client: cloud provider lane first when
+                            # speech_stt_provider is set, then Docker Whisper
+                            # (/asr with /transcribe fallback, parsing inside).
+                            from vaf.core import speech_client
+                            loop = asyncio.get_running_loop()
+                            filename = f"audio{suffix}"
+                            stt_text, _stt_lang = await loop.run_in_executor(
+                                None,
+                                lambda: speech_client.transcribe(temp_path, mime=mime_type, filename=filename),
+                            )
+                            if not stt_text:
+                                # Detail is in the server log (speech_client warns).
                                 await websocket.send_json({
                                     "type": "stt_error",
-                                    "error": f"Docker STT failed: {docker_err}. Is the STT container running (e.g. docker compose -f docker-compose.memory.yml up -d)?"
+                                    "error": "Docker STT failed. Is the STT container running (e.g. docker compose -f docker-compose.memory.yml up -d)?"
                                 })
                                 continue
+                            text = stt_text
                         else:
                             # Local STT: faster-whisper (SINGLETON)
                             try:
@@ -5723,7 +5704,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             import base64
                             # asyncio is already imported at top of file
                             loop = asyncio.get_running_loop()
-                            _TTS_SYNTH_TIMEOUT = 35.0  # seconds; avoid blocking WebSocket if Docker TTS hangs
+                            # Local Docker TTS answers within seconds (LAN); cloud
+                            # providers legitimately need longer for long texts
+                            # (observed: gpt-4o-mini-tts ~45s for a 4-minute answer),
+                            # so the budget scales with the configured lane.
+                            from vaf.core import speech_api as _sa
+                            _TTS_SYNTH_TIMEOUT = 130.0 if _sa.select_tts_backend()[0] else 35.0
                             try:
                                 configured_engine = Config.get("speech_tts_engine", "docker")
                                 if configured_engine not in ("docker", "chatterbox"):

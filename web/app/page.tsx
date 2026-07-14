@@ -2880,9 +2880,17 @@ function VAFDashboardContent() {
                         currentAudioRef.current.pause();
                     }
 
-                    // Play new audio
-                    const audioSrc = `data:audio/wav;base64,${data.audio}`;
-                    console.log('[TTS] Creating Audio element with data URL length:', audioSrc.length);
+                    // Play new audio. Decode base64 into a Blob object URL instead of a
+                    // data: URI - cloud TTS answers can be 10+ MB WAV and giant data
+                    // URIs are slow/fragile as Audio sources.
+                    const byteString = atob(data.audio);
+                    const byteArray = new Uint8Array(byteString.length);
+                    for (let i = 0; i < byteString.length; i++) {
+                        byteArray[i] = byteString.charCodeAt(i);
+                    }
+                    const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
+                    const audioSrc = URL.createObjectURL(audioBlob);
+                    console.log('[TTS] Creating Audio element from blob, bytes:', byteArray.length);
                     const audio = new Audio(audioSrc);
                     currentAudioRef.current = audio;
 
@@ -2899,6 +2907,7 @@ function VAFDashboardContent() {
                         console.log('[TTS] Audio ended');
                         setPlayingMessageId(null);
                         currentAudioRef.current = null;
+                        URL.revokeObjectURL(audioSrc);
                     };
 
                     audio.onerror = (e) => {
@@ -2906,6 +2915,7 @@ function VAFDashboardContent() {
                         setPlayingMessageId(null);
                         setLoadingMessageId(null);
                         currentAudioRef.current = null;
+                        URL.revokeObjectURL(audioSrc);
                     };
 
                     audio.play().then(() => {

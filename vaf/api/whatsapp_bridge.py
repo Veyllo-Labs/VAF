@@ -20,8 +20,6 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import requests
-
 from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import save_whatsapp_chat_jid
@@ -342,23 +340,12 @@ def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
     """Synthesize TTS to temp file. Returns path or None."""
     try:
         import tempfile
-        tts_url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
-        if not tts_url:
-            logger.warning("WhatsApp TTS: no speech_tts_docker_url configured")
+        from vaf.core import speech_client
+        logger.info("WhatsApp TTS: synthesizing lang=%s text_len=%d", lang, len(text))
+        data = speech_client.synthesize(text[:4000], lang, want_format="ogg")
+        if not data:
+            logger.warning("WhatsApp TTS: no audio returned")
             return None
-        logger.info("WhatsApp TTS: synthesizing lang=%s text_len=%d url=%s", lang, len(text), tts_url)
-        resp = requests.post(
-            f"{tts_url}/synthesize",
-            json={"text": text[:4000], "language": lang[:2].lower(), "format": "ogg"},
-            timeout=60,
-        )
-        if not resp.ok:
-            logger.warning("WhatsApp TTS failed: %s - %s", resp.status_code, resp.text[:200])
-            return None
-        if not resp.content:
-            logger.warning("WhatsApp TTS: empty response body")
-            return None
-        data = resp.content
         if data[:4] not in (b"OggS", b"RIFF"):
             logger.warning("WhatsApp TTS: unknown audio format (magic: %s)", data[:4].hex())
             return None
@@ -383,43 +370,17 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
             logger.warning("WhatsApp STT: voice file not found: %s", voice_path)
             return None, None
         file_size = path_obj.stat().st_size
-        stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
-        asr_endpoint = f"{stt_url}/asr"
         # Use MIME type from extension (Node sends .ogg for PTT, .opus for other audio)
         ext = (path_obj.suffix or "").lower()
         mime = "audio/ogg" if ext == ".ogg" else ("audio/opus" if ext == ".opus" else "audio/ogg")
         filename = f"voice{ext}" if ext else "voice.ogg"
-        logger.info("WhatsApp STT: transcribing %s (%d bytes) via %s", voice_path, file_size, asr_endpoint)
-        with open(voice_path, "rb") as f:
-            stt_resp = requests.post(
-                asr_endpoint,
-                files={"audio_file": (filename, f, mime)},
-                params={"encode": "true", "output": "json"},
-                timeout=60,
-            )
-        if stt_resp.status_code == 404:
-            transcribe_endpoint = f"{stt_url}/transcribe"
-            with open(voice_path, "rb") as f:
-                stt_resp = requests.post(
-                    transcribe_endpoint,
-                    files={"audio_file": (filename, f, mime)},
-                    params={"encode": "true", "output": "json"},
-                    timeout=60,
-                )
-        if not stt_resp.ok:
-            logger.warning("WhatsApp STT failed: %s - %s", stt_resp.status_code, (stt_resp.text or "")[:200])
+        logger.info("WhatsApp STT: transcribing %s (%d bytes)", voice_path, file_size)
+        from vaf.core import speech_client
+        text, language = speech_client.transcribe(voice_path, mime=mime, filename=filename)
+        if not text:
             return None, None
-        try:
-            data = stt_resp.json()
-        except Exception:
-            text = (stt_resp.text or "").strip()
-            data = {}
-        text = (data.get("text") or data.get("transcript") or "").strip()
-        if not text and isinstance(data.get("results"), list) and data["results"]:
-            text = (data["results"][0].get("transcript") or "").strip()
-        language = data.get("language", "en")
         logger.info("WhatsApp voice transcribed: lang=%s, text=%s...", language, (text or "")[:50])
-        return text or None, language
+        return text, language or "en"
     except Exception as e:
         logger.warning("WhatsApp voice transcription error: %s", e)
         return None, None

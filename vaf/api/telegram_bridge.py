@@ -231,28 +231,14 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
             temp_path = temp_file.name
 
         try:
-            # 4. Send to Whisper STT
-            stt_url = (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
-            asr_endpoint = f"{stt_url}/asr"
-
-            with open(temp_path, "rb") as f:
-                stt_resp = requests.post(
-                    asr_endpoint,
-                    files={"audio_file": ("voice.ogg", f, "audio/ogg")},
-                    params={"encode": "true", "output": "json"},
-                    timeout=60,
-                )
-
-            if not stt_resp.ok:
-                logger.warning(f"STT request failed: {stt_resp.status_code} - {stt_resp.text[:200]}")
+            # 4. Transcribe via the shared speech client (Docker Whisper STT)
+            from vaf.core import speech_client
+            text, language = speech_client.transcribe(
+                temp_path, mime="audio/ogg", filename="voice.ogg"
+            )
+            if not text:
                 return None, None
-
-            data = stt_resp.json()
-            text = (data.get("text") or "").strip()
-            language = data.get("language", "en")
-
-            logger.info(f"Voice transcribed: lang={language}, text={text[:50]}...")
-            return text, language
+            return text, language or "en"
 
         finally:
             # Cleanup temp file
@@ -272,46 +258,29 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
     Returns True on success.
     """
     try:
-        # 1. Synthesize audio via Docker TTS - request OGG format directly
-        #    The TTS container has ffmpeg installed and can convert internally
-        tts_url = (Config.get("speech_tts_docker_url") or "http://localhost:5002").strip().rstrip("/")
-        synth_endpoint = f"{tts_url}/synthesize"
+        # 1. Synthesize via the shared speech client (OGG preferred; the client
+        #    already tries container-side and local ffmpeg conversion).
+        from vaf.core import speech_client
+        audio_data = speech_client.synthesize(text, language, want_format="ogg")
 
-        tts_resp = requests.post(
-            synth_endpoint,
-            json={"text": text, "language": language[:2].lower(), "format": "ogg"},
-            timeout=60,  # OGG conversion takes longer
-        )
-
-        if not tts_resp.ok:
-            logger.warning(f"TTS request failed: {tts_resp.status_code}")
-            return False
-
-        audio_data = tts_resp.content
         if not audio_data:
-            logger.warning("TTS returned empty audio")
+            logger.warning("TTS returned no audio")
             return False
 
-        # Check if we got OGG (starts with "OggS") or WAV (starts with "RIFF")
         if audio_data[:4] == b"OggS":
-            # Got OGG directly - perfect!
             ogg_data = audio_data
         elif audio_data[:4] == b"RIFF":
-            # Got WAV - try local ffmpeg conversion
-            logger.info("TTS returned WAV, attempting local ffmpeg conversion")
-            ogg_data = await _convert_wav_to_ogg_local(audio_data)
-            if not ogg_data:
-                # Fallback: send as document
-                with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".wav", delete=False) as wav_file:
-                    wav_file.write(audio_data)
-                    wav_path = wav_file.name
+            # Client could not convert (no ffmpeg): send the WAV as a document.
+            with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".wav", delete=False) as wav_file:
+                wav_file.write(audio_data)
+                wav_path = wav_file.name
+            try:
+                return await _send_audio_as_document(bot_token, chat_id, wav_path)
+            finally:
                 try:
-                    return await _send_audio_as_document(bot_token, chat_id, wav_path)
-                finally:
-                    try:
-                        os.unlink(wav_path)
-                    except Exception:
-                        pass
+                    os.unlink(wav_path)
+                except Exception:
+                    pass
         else:
             logger.warning(f"TTS returned unknown format: {audio_data[:10]}")
             return False
@@ -349,46 +318,6 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
     except Exception as e:
         logger.exception(f"Voice reply error: {e}")
         return False
-
-
-async def _convert_wav_to_ogg_local(wav_data: bytes) -> Optional[bytes]:
-    """Try to convert WAV to OGG using local ffmpeg (if available)."""
-    import subprocess
-
-    try:
-        with tempfile.NamedTemporaryFile(prefix="vaf_", suffix=".wav", delete=False) as wav_file:
-            wav_file.write(wav_data)
-            wav_path = wav_file.name
-
-        ogg_path = wav_path.replace(".wav", ".ogg")
-
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "64k", ogg_path],
-                capture_output=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                logger.warning(f"Local ffmpeg conversion failed: {result.stderr.decode()[:200]}")
-                return None
-
-            with open(ogg_path, "rb") as f:
-                return f.read()
-
-        finally:
-            for path in [wav_path, ogg_path]:
-                try:
-                    if os.path.exists(path):
-                        os.unlink(path)
-                except Exception:
-                    pass
-
-    except FileNotFoundError:
-        logger.warning("ffmpeg not found locally")
-        return None
-    except Exception as e:
-        logger.warning(f"Local WAV to OGG conversion failed: {e}")
-        return None
 
 
 async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = "") -> Optional[str]:

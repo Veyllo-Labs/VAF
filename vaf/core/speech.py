@@ -505,6 +505,16 @@ $player.Close()
 
         print(f"[TTS Debug] Synthesizing: engine={preferred_engine}, lang={lang_short}, text_len={len(clean_text)}")
 
+        # Cloud provider lane (speech_tts_provider) - consulted BEFORE the engine
+        # dispatch, mirroring vision_provider. force_engine only selects the local
+        # fallback engine; a configured provider takes precedence. Never raises;
+        # None falls through to the local engine below.
+        from vaf.core import speech_api
+        api_audio = speech_api.synthesize(clean_text, lang_short, want_format="wav")
+        if api_audio:
+            print(f"[TTS Debug] Cloud provider TTS SUCCESS ({len(api_audio)} bytes)")
+            return api_audio
+
         # Docker/Chatterbox TTS: HTTP service (e.g. Piper in Docker or Chatterbox).
         # New: Multi-language All-in-One container uses /synthesize endpoint with language auto-detection.
         if preferred_engine in ("docker", "chatterbox"):
@@ -518,61 +528,14 @@ $player.Close()
             print(f"[TTS Debug] Docker TTS URL: {url}")
 
             if url:
-                try:
-                    import urllib.request
-                    import json as json_module
-
-                    # New multi-lang container uses /synthesize endpoint
-                    synth_url = f"{url}/synthesize"
-                    data = json_module.dumps({"text": clean_text, "language": lang_short}).encode("utf-8")
-                    print(f"[TTS Debug] Calling {synth_url}")
-                    req = urllib.request.Request(
-                        synth_url,
-                        data=data,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-
-                    try:
-                        with urllib.request.urlopen(req, timeout=30) as resp:
-                            body = resp.read()
-                        print(f"[TTS Debug] Response size: {len(body)} bytes, starts with: {body[:4]}")
-                        # Response is raw WAV bytes
-                        if body[:4] == b"RIFF":
-                            print(f"[TTS Debug] SUCCESS - returning WAV audio")
-                            return body
-                        else:
-                            print(f"[TTS Debug] Response is not WAV, first bytes: {body[:50]}")
-                    except urllib.error.HTTPError as he:
-                        print(f"[TTS Debug] HTTPError: {he.code} - {he.reason}")
-                        # Fallback: Try old-style direct POST (for backwards compatibility)
-                        data = json_module.dumps({"text": clean_text, "lang": lang_short}).encode("utf-8")
-                        req = urllib.request.Request(
-                            url,
-                            data=data,
-                            headers={"Content-Type": "application/json"},
-                            method="POST",
-                        )
-                        with urllib.request.urlopen(req, timeout=30) as resp:
-                            body = resp.read()
-                        if body[:4] == b"RIFF":
-                            return body
-                        # Try JSON response
-                        try:
-                            out = json_module.loads(body.decode("utf-8"))
-                            if isinstance(out.get("audio_base64"), str):
-                                import base64
-                                return base64.b64decode(out["audio_base64"])
-                            if isinstance(out.get("audio"), str):
-                                import base64
-                                return base64.b64decode(out["audio"])
-                        except (ValueError, KeyError, TypeError):
-                            pass
-                    return None
-                except Exception as e:
-                    print(f"[TTS Debug] Docker TTS failed: {e}")
-                    import traceback
-                    traceback.print_exc()
+                # Shared client: /synthesize POST with legacy direct-POST +
+                # base64-JSON fallback preserved (never raises, returns None).
+                from vaf.core import speech_client
+                body = speech_client.synthesize_docker(clean_text, lang_short, want_format="wav", base_url=url)
+                if body:
+                    print(f"[TTS Debug] SUCCESS - returning WAV audio ({len(body)} bytes)")
+                    return body
+                print("[TTS Debug] Docker TTS returned no audio")
             return None
 
         if preferred_engine == "piper" and self._check_piper():
@@ -682,8 +645,17 @@ $player.Close()
                 preferred_engine = Config.get("speech_tts_engine", "docker")
 
                 # 1a. Docker/Chatterbox TTS (HTTP service – no local model, good for Docker stack)
-                # "chatterbox" is also HTTP-based, treat it like docker
-                if preferred_engine in ("docker", "chatterbox"):
+                # "chatterbox" is also HTTP-based, treat it like docker.
+                # A configured cloud provider (speech_tts_provider) also takes this
+                # path even when the local engine is piper/system: synthesize_audio
+                # consults the provider first and degrades to the engine on failure.
+                _cloud_tts_configured = False
+                try:
+                    from vaf.core import speech_api
+                    _cloud_tts_configured = bool(speech_api.select_tts_backend()[0])
+                except Exception:
+                    pass
+                if preferred_engine in ("docker", "chatterbox") or _cloud_tts_configured:
                     audio_bytes = self.synthesize_audio(clean_text, lang)
                     if audio_bytes:
                         try:
@@ -917,6 +889,21 @@ $player.Close()
                     return None
                 frame_data = b"".join(frames)
                 audio = sr.AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
+
+                # Cloud STT provider lane: honour speech_stt_provider for the CLI
+                # mic too (otherwise mic audio silently goes to Google's free Web
+                # API below). Falls back to recognize_google on None.
+                try:
+                    from vaf.core import speech_api
+                    if speech_api.select_stt_backend()[0]:
+                        api_text, _api_lang = speech_api.transcribe(
+                            audio.get_wav_data(), mime="audio/wav", filename="mic.wav"
+                        )
+                        if api_text:
+                            self._play_success_sound()
+                            return api_text
+                except Exception:
+                    pass
 
                 try:
                     text = self.stt_recognizer.recognize_google(audio, language=locale)

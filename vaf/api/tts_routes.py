@@ -6,6 +6,11 @@ TTS (Text-to-Speech) API Routes for VAF.
 
 Provides proxy endpoints to the TTS Docker container and manages TTS configuration.
 Supports multi-language TTS with automatic language detection.
+
+Scope: this router is Docker-container administration (voice install/uninstall,
+container config, container test synthesis) for the LOCAL speech lane only.
+Runtime speech synthesis/transcription goes through vaf/core/speech_client.py
+(and the cloud provider lane in vaf/core/speech_api.py), not through here.
 """
 
 import logging

@@ -21,6 +21,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged.
 
 ### Added
+- **Cloud voice providers: ElevenLabs and OpenAI for speech output and speech input.**
+  Settings > Voice gains an admin-only Voice provider section: the TTS and STT
+  providers are selectable independently (Local Docker remains the default), with
+  per-provider voice and model fields and a new admin-only, read-redacted
+  `api_key_elevenlabs` (the OpenAI lane reuses `api_key_openai`). The provider lane
+  never breaks a turn: quota, rate-limit and network errors degrade to the local
+  engine. The WebSocket audio contract is unchanged (clients still receive WAV),
+  Telegram/WhatsApp voice notes honor the provider selection (ElevenLabs answers
+  voice replies natively as OGG/Opus), the CLI microphone uses the selected STT
+  provider instead of Google's free Web Speech API when one is configured, and the
+  local speech containers are only required for the local lane. All speech HTTP
+  now goes through a shared client (`vaf/core/speech_client.py`, CI-guarded), and
+  the non-admin write hole on the global `stt_enabled` toggle is closed.
+  The ElevenLabs model and voice pickers are populated live via an admin-only
+  backend proxy (`/api/voice/elevenlabs/*`; the key stays server-side, responses
+  cached, hardcoded fallback when unreachable). OpenAI catalogs are current as of
+  2026-07: 13 TTS voices (`ballad`, `verse`, `marin`, `cedar` on `gpt-4o-mini-tts`
+  only), input capped at 4096 characters, and `verbose_json` language detection
+  restricted to `whisper-1`.
 - **New tool: schedule_reminder - persistent one-shot reminders without an agent run.**
   The daily calendar check was designed to create one-off reminder automations, but
   create_automation is deliberately stripped from automation runs (runaway guard) -

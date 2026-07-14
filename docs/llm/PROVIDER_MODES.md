@@ -9,6 +9,13 @@ the full detail. Add a row here whenever you introduce provider- or model-specif
 VAF keeps one shared code path and isolates every provider/model specialization behind a gate. New
 support is **added** as a gated branch; the shared path and other providers are never altered.
 
+Scope: this catalog covers LLM chat providers only. Voice (TTS/STT) providers such as
+ElevenLabs are configured separately via `speech_tts_provider` / `speech_stt_provider` and
+implemented in `vaf/core/speech_api.py`; audio-only vendors are intentionally NOT added to
+`PROVIDER_MODELS` (they must not appear in the LLM provider UI or the coder endpoint map;
+CI-guarded by `tests/test_speech_config_schema_sync.py`). See
+[SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
+
 The gates:
 
 | Gate | Meaning | Set in |

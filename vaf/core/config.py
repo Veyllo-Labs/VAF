@@ -106,6 +106,9 @@ class Config:
         "api_key_deepseek": "",
         "api_key_google": "",
         "api_key_openrouter": "",
+        # ElevenLabs: speech only (TTS/STT via speech_api.py). NOT an LLM
+        # provider - never add it to PROVIDER_MODELS or the LLM provider UI.
+        "api_key_elevenlabs": "",
         # Web Search API Keys (optional; when set, used before scrape/DDG)
         "api_key_brave_search": "",
         "api_key_google_search": "",
@@ -302,9 +305,16 @@ class Config:
                 "mcp_discovery_timeout_seconds": 5,            # per-batch discovery deadline
 
                 # Voice / STT Settings
-                "stt_enabled": False,                  # Enable Speech-to-Text
+                "stt_enabled": False,                  # Legacy STT toggle (kept: ORed with speech_stt_enabled in speech.py)
+                "speech_stt_enabled": False,           # Enable Speech-to-Text (canonical; admin-only via speech_stt_ prefix)
                 "speech_stt_engine": "docker",         # STT engine: "docker" (default) or "local" (faster-whisper)
                 "speech_stt_docker_url": "http://localhost:5003",  # When engine=docker; STT container port 5003 (maps to 9000)
+
+                # Cloud STT provider lane (mirrors vision_provider). "" = local engine above.
+                # Consulted BEFORE speech_stt_engine; on API failure (402/429/timeout)
+                # the local lane is used automatically (speech_api.py never raises).
+                "speech_stt_provider": "",             # "" | "elevenlabs" | "openai"
+                "speech_stt_api_model": "",            # "" = provider default (scribe_v2 / whisper-1)
 
                 # STT (Whisper) - only when engine=local; keep "base" to avoid 20GB+ spikes
                 "speech_stt_whisper_model": "base",    # faster-whisper: tiny, base, small, medium, large-v3
@@ -316,6 +326,12 @@ class Config:
                 "speech_tts_docker_url_de": "http://localhost:5002",   # German voice (optional)
                 "speech_tts_docker_url_en": "http://localhost:5004",   # English voice (optional)
                 "speech_tts_docker_url_fr": "http://localhost:5006",   # French voice (optional)
+                "speech_tts_chatterbox_url": "http://localhost:4123",  # When engine=chatterbox (HTTP TTS server)
+
+                # Cloud TTS provider lane (mirrors vision_provider). "" = local engine above.
+                "speech_tts_provider": "",             # "" | "elevenlabs" | "openai"
+                "speech_tts_api_model": "",            # "" = provider default (eleven_flash_v2_5 / gpt-4o-mini-tts)
+                "speech_tts_api_voice": "",            # "" = provider default (ElevenLabs Rachel / OpenAI alloy)
                 "tts_auto_speak": False,               # Auto-speak agent responses in browser
                 
                 # Librarian Agent settings
@@ -648,6 +664,10 @@ class Config:
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",
+        # Legacy STT toggle: enables the shared backend STT service for everyone
+        # (soon a metered cloud lane), so it must not be user-writable. The
+        # canonical speech_stt_enabled is already covered by the prefix list.
+        "stt_enabled",
     ])
 
     @classmethod

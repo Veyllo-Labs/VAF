@@ -10,8 +10,8 @@ VAF uses **one** Docker Compose file for auxiliary services: **`docker-compose.m
 | Redis | `vaf-redis` | 6379 | Cache (embeddings, sessions) |
 | Sandbox | `vaf-sandbox` | — | Python sandbox for safe code execution |
 | Gotenberg | `vaf-gotenberg` | 5005 | LibreOffice-based Office→PDF (DOCX, XLSX, PPTX, ODT, ODS, ODP) |
-| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install) |
-| STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text |
+| TTS Multi-Lang | `vaf-tts` | 5002 | Piper TTS (single container, multi-language, on-demand model install; local speech lane only) |
+| STT | `vaf-stt` | 5003 | Whisper ASR for speech-to-text (local speech lane only) |
 | **Browser** | `vaf-browser` | 9222 | Headed Chromium under Xvfb (CDP, anti-bot hardened) for the `browser_agent` tool — see [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md) |
 
 All services start by default when you run `docker compose up -d`.
@@ -317,6 +317,11 @@ VAF configuration for Docker services (`~/.vaf/config.json`):
   "redis_enabled": true
 }
 ```
+
+The `vaf-tts` and `vaf-stt` containers are required only for the local speech lane
+(`speech_tts_provider` / `speech_stt_provider` empty). When a cloud voice provider
+(ElevenLabs or OpenAI) is selected in Settings > Voice, speech works without these
+containers. See [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
 
 ---
 

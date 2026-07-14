@@ -87,7 +87,7 @@ Docs are grouped into category folders. Full index by category:
 - [WelcomeGreeting.md](web-ui/WelcomeGreeting.md) — Welcome greeting.
 - [WINDOW_TILING_DESIGN.md](web-ui/WINDOW_TILING_DESIGN.md) — Window tiling design.
 - [DESIGN.md](web-ui/DESIGN.md) — UI design tokens and component styles.
-- [SPEECH_FEATURES.md](web-ui/SPEECH_FEATURES.md) — TTS/STT integration.
+- [SPEECH_FEATURES.md](web-ui/SPEECH_FEATURES.md) — TTS/STT integration (local Docker lane and cloud voice providers).
 - [NETWORK_TAB.md](web-ui/NETWORK_TAB.md) — Network tab UI.
 
 ### animations/ — avatar & animation showcase

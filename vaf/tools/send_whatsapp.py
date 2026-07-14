@@ -200,20 +200,15 @@ class SendWhatsAppTool(BaseTool):
     def _synthesize_voice(self, text: str, lang: str):
         """Synthesize TTS to OGG file, return path. Returns None on failure."""
         try:
-            import requests
+            from vaf.core import speech_client
             from vaf.core.config import Config
+            # Unique legacy fallback chain for this tool: default URL -> German
+            # per-language URL -> hardcoded default.
             tts_url = (Config.get("speech_tts_docker_url") or Config.get("speech_tts_docker_url_de") or "http://localhost:5002").strip().rstrip("/")
             if not tts_url:
                 return None
-            resp = requests.post(
-                f"{tts_url}/synthesize",
-                json={"text": text[:4000], "language": lang, "format": "ogg"},
-                timeout=60,
-            )
-            if not resp.ok or not resp.content:
-                return None
-            data = resp.content
-            if data[:4] != b"OggS" and data[:4] != b"RIFF":
+            data = speech_client.synthesize(text[:4000], lang, want_format="ogg", docker_url=tts_url)
+            if not data or data[:4] not in (b"OggS", b"RIFF"):
                 return None
             suffix = ".ogg" if data[:4] == b"OggS" else ".wav"
             with tempfile.NamedTemporaryFile(prefix="vaf_wa_", suffix=suffix, delete=False) as f:

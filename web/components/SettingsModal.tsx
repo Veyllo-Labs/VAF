@@ -568,6 +568,27 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [localConfig, setLocalConfig] = useState<any>(config || {});
     const [appVersion, setAppVersion] = useState<string>('');
     const [activeTab, setActiveTab] = useState('general');
+    // ElevenLabs catalogs, fetched via the admin-only backend proxy
+    // (/api/voice/elevenlabs/*; the API key never reaches the browser).
+    // Empty arrays = fetch unavailable -> the UI falls back to hardcoded
+    // model options and a plain voice-ID input.
+    const [elevenVoices, setElevenVoices] = useState<Array<{ voice_id: string; name: string; category?: string }>>([]);
+    const [elevenModels, setElevenModels] = useState<Array<{ model_id: string; name: string }>>([]);
+    useEffect(() => {
+        if (activeTab !== 'voice' || currentUser?.role !== 'admin') return;
+        if (localConfig.speech_tts_provider !== 'elevenlabs') return;
+        let cancelled = false;
+        fetch('/api/voice/elevenlabs/voices')
+            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then(d => { if (!cancelled) setElevenVoices(d.voices || []); })
+            .catch(() => { if (!cancelled) setElevenVoices([]); });
+        fetch('/api/voice/elevenlabs/models')
+            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then(d => { if (!cancelled) setElevenModels(d.models || []); })
+            .catch(() => { if (!cancelled) setElevenModels([]); });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, localConfig.speech_tts_provider, localConfig.api_key_elevenlabs, currentUser?.role]);
     const [settingsSearch, setSettingsSearch] = useState('');
     // Searchable index of settings: every accessible category (jumps to its top) plus each of its
     // sections (jumps + scrolls), all localized via the same translation hooks the UI uses.
@@ -579,7 +600,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         addSecs('general', [tGeneral('apiKeys'), tGeneral('webSearch'), tGeneral('centralCredentials')]);
         addSecs('persona', [tPersona('identity'), tPersona('soul'), tPersona('longTermMemory')]);
         addSecs('ai', [tAi('provider'), tAi('localModelSettings'), tAi('visionModel'), tAdvanced('subAgents'), tAdvanced('thinker')]);
-        addSecs('voice', [tVoice('stt'), tVoice('tts')]);
+        addSecs('voice', currentUser?.role === 'admin'
+            ? [tVoice('provider'), tVoice('stt'), tVoice('tts')]
+            : [tVoice('stt'), tVoice('tts')]);
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
         addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system')]);
         addSecs('automations', [tAutomations('scheduled')]);
@@ -1423,6 +1446,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             // Auto-fetch model list when an API key looks complete (length > 20)
             if (key.startsWith('api_key_') && typeof value === 'string' && value.length > 20) {
                 const provider = key.replace('api_key_', '');
+                // LLM providers only - never add 'elevenlabs' here (speech-only
+                // vendor; a model fetch against it would always fail).
                 const dynamicProviders = ['veyllo', 'openai', 'anthropic', 'google', 'openrouter', 'deepseek'];
                 const prevKey = prev[key] || '';
                 // Only trigger when key changes from empty/short to long (not on every keystroke)
@@ -1980,6 +2005,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: string) => handleChange('api_key_openrouter', v)}
                                         type="password"
                                         link="https://openrouter.ai/settings/keys"
+                                    />
+                                    <Input
+                                        label={tGeneral('elevenlabsKey')}
+                                        value={localConfig.api_key_elevenlabs || ''}
+                                        onChange={(v: string) => handleChange('api_key_elevenlabs', v)}
+                                        type="password"
+                                        placeholder="sk_..."
+                                        link="https://elevenlabs.io/app/settings/api-keys"
                                     />
                                 </Section>
                                 <Section title={tGeneral('webSearch')}>
@@ -2667,53 +2700,219 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'voice' && (
                             <div className="space-y-6">
-                                <Section title={tVoice('stt')}>
-                                    <Switch
-                                        label={tVoice('enableVoiceInput')}
-                                        checked={localConfig.stt_enabled || false}
-                                        onChange={(v: boolean) => handleChange('stt_enabled', v)}
-                                    />
-                                    {localConfig.stt_enabled && (
-                                        <div className="mt-4 space-y-4">
+                                {currentUser?.role === 'admin' && (
+                                    <Section title={tVoice('provider')}>
+                                        <div className="space-y-4">
                                             <Select
-                                                label={tVoice('sttEngine')}
-                                                value={localConfig.speech_stt_engine ?? 'docker'}
-                                                onChange={(v: string) => handleChange('speech_stt_engine', v)}
+                                                label={tVoice('ttsProvider')}
+                                                value={localConfig.speech_tts_provider || 'local'}
+                                                onChange={(v: string) => {
+                                                    if (v === 'local') {
+                                                        handleChange('speech_tts_provider', '');
+                                                    } else {
+                                                        // Model/voice defaults must match speech_api.py
+                                                        // (_DEFAULT_TTS_MODEL / _DEFAULT_TTS_VOICE).
+                                                        handleChange('speech_tts_provider', v);
+                                                        handleChange('speech_tts_api_model', v === 'elevenlabs' ? 'eleven_flash_v2_5' : 'gpt-4o-mini-tts');
+                                                        handleChange('speech_tts_api_voice', v === 'elevenlabs' ? '' : 'alloy');
+                                                    }
+                                                }}
                                                 options={[
-                                                    { value: 'docker', label: tVoice('dockerStt') },
-                                                    { value: 'local', label: tVoice('localStt') },
+                                                    { value: 'local', label: tVoice('providerLocal') },
+                                                    { value: 'elevenlabs', label: 'ElevenLabs' },
+                                                    { value: 'openai', label: 'OpenAI' },
                                                 ]}
                                             />
-                                            {(localConfig.speech_stt_engine ?? 'docker') === 'docker' && (
-                                                <Input
-                                                    label={tVoice('dockerSttUrl')}
-                                                    placeholder="http://localhost:5003"
-                                                    value={localConfig.speech_stt_docker_url || 'http://localhost:5003'}
-                                                    onChange={(v: string) => handleChange('speech_stt_docker_url', v)}
+                                            {(localConfig.speech_tts_provider || 'local') === 'elevenlabs' && (
+                                                <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                                                    {elevenVoices.length > 0 ? (
+                                                        <Select
+                                                            label={tVoice('elevenVoiceId')}
+                                                            value={localConfig.speech_tts_api_voice || '21m00Tcm4TlvDq8ikWAM'}
+                                                            onChange={(v: string) => handleChange('speech_tts_api_voice', v)}
+                                                            options={elevenVoices.map(v => ({
+                                                                value: v.voice_id,
+                                                                label: v.category ? `${v.name} (${v.category})` : v.name,
+                                                            }))}
+                                                        />
+                                                    ) : (
+                                                        <Input
+                                                            label={tVoice('elevenVoiceId')}
+                                                            value={localConfig.speech_tts_api_voice || ''}
+                                                            onChange={(v: string) => handleChange('speech_tts_api_voice', v)}
+                                                            placeholder="21m00Tcm4TlvDq8ikWAM"
+                                                            link="https://elevenlabs.io/app/voice-library"
+                                                        />
+                                                    )}
+                                                    <Select
+                                                        label={tVoice('ttsModel')}
+                                                        value={localConfig.speech_tts_api_model || 'eleven_flash_v2_5'}
+                                                        onChange={(v: string) => handleChange('speech_tts_api_model', v)}
+                                                        options={elevenModels.length > 0
+                                                            ? elevenModels.map(m => ({ value: m.model_id, label: m.name }))
+                                                            : [
+                                                                { value: 'eleven_flash_v2_5', label: 'Eleven Flash v2.5' },
+                                                                { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
+                                                            ]}
+                                                    />
+                                                </div>
+                                            )}
+                                            {(localConfig.speech_tts_provider || 'local') === 'openai' && (() => {
+                                                // Voice availability is model-dependent (verified 2026-07-14):
+                                                // tts-1/tts-1-hd accept only the 9 classic voices; gpt-4o-mini-tts
+                                                // additionally accepts ballad/verse/marin/cedar (marin and cedar
+                                                // are OpenAI's quality recommendation).
+                                                const openaiModel = localConfig.speech_tts_api_model || 'gpt-4o-mini-tts';
+                                                const classicVoices = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
+                                                const openaiVoices = openaiModel === 'gpt-4o-mini-tts'
+                                                    ? [...classicVoices, 'ballad', 'verse', 'marin', 'cedar']
+                                                    : classicVoices;
+                                                return (
+                                                    <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                                                        <Select
+                                                            label={tVoice('openaiVoice')}
+                                                            value={localConfig.speech_tts_api_voice || 'alloy'}
+                                                            onChange={(v: string) => handleChange('speech_tts_api_voice', v)}
+                                                            options={openaiVoices.map(v => ({ value: v, label: v }))}
+                                                        />
+                                                        <Select
+                                                            label={tVoice('ttsModel')}
+                                                            value={openaiModel}
+                                                            onChange={(v: string) => {
+                                                                handleChange('speech_tts_api_model', v);
+                                                                // The 4 new voices only exist on gpt-4o-mini-tts.
+                                                                if (v !== 'gpt-4o-mini-tts'
+                                                                    && !classicVoices.includes(localConfig.speech_tts_api_voice)) {
+                                                                    handleChange('speech_tts_api_voice', 'alloy');
+                                                                }
+                                                            }}
+                                                            options={[
+                                                                { value: 'gpt-4o-mini-tts', label: 'gpt-4o-mini-tts' },
+                                                                { value: 'tts-1', label: 'tts-1' },
+                                                                { value: 'tts-1-hd', label: 'tts-1-hd' },
+                                                            ]}
+                                                        />
+                                                    </div>
+                                                );
+                                            })()}
+
+                                            <Select
+                                                label={tVoice('sttProvider')}
+                                                value={localConfig.speech_stt_provider
+                                                    ? localConfig.speech_stt_provider
+                                                    : ((localConfig.speech_stt_engine ?? 'docker') === 'local' ? 'local_whisper' : 'local_docker')}
+                                                onChange={(v: string) => {
+                                                    if (v === 'local_docker') {
+                                                        handleChange('speech_stt_provider', '');
+                                                        handleChange('speech_stt_engine', 'docker');
+                                                    } else if (v === 'local_whisper') {
+                                                        handleChange('speech_stt_provider', '');
+                                                        handleChange('speech_stt_engine', 'local');
+                                                    } else {
+                                                        // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
+                                                        handleChange('speech_stt_provider', v);
+                                                        handleChange('speech_stt_api_model', v === 'elevenlabs' ? 'scribe_v2' : 'whisper-1');
+                                                    }
+                                                }}
+                                                options={[
+                                                    { value: 'local_docker', label: tVoice('dockerStt') },
+                                                    { value: 'local_whisper', label: tVoice('localStt') },
+                                                    { value: 'elevenlabs', label: 'ElevenLabs' },
+                                                    { value: 'openai', label: 'OpenAI' },
+                                                ]}
+                                            />
+                                            {localConfig.speech_stt_provider === 'elevenlabs' && (
+                                                <Select
+                                                    label={tVoice('sttModel')}
+                                                    value={localConfig.speech_stt_api_model || 'scribe_v2'}
+                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                                                    options={[{ value: 'scribe_v2', label: 'Scribe v2' }]}
                                                 />
                                             )}
-                                            <p className="text-xs text-gray-500">
-                                                {tVoice('sttDesc')}
-                                            </p>
+                                            {localConfig.speech_stt_provider === 'openai' && (
+                                                <Select
+                                                    label={tVoice('sttModel')}
+                                                    value={localConfig.speech_stt_api_model || 'whisper-1'}
+                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                                                    options={[
+                                                        { value: 'whisper-1', label: 'whisper-1' },
+                                                        { value: 'gpt-4o-mini-transcribe', label: 'gpt-4o-mini-transcribe' },
+                                                        { value: 'gpt-4o-transcribe', label: 'gpt-4o-transcribe' },
+                                                    ]}
+                                                />
+                                            )}
+
+                                            {(localConfig.speech_tts_provider === 'elevenlabs' || localConfig.speech_stt_provider === 'elevenlabs')
+                                                && !localConfig.api_key_elevenlabs && (
+                                                <p className="text-xs text-amber-600">{tVoice('elevenKeyHint')}</p>
+                                            )}
+                                            {(localConfig.speech_tts_provider === 'openai' || localConfig.speech_stt_provider === 'openai')
+                                                && !localConfig.api_key_openai && (
+                                                <p className="text-xs text-amber-600">{tVoice('openaiKeyHint')}</p>
+                                            )}
+                                            <p className="text-xs text-gray-500">{tVoice('providerDesc')}</p>
                                         </div>
+                                    </Section>
+                                )}
+
+                                <Section title={tVoice('stt')}>
+                                    {currentUser?.role === 'admin' ? (
+                                        <>
+                                            <Switch
+                                                label={tVoice('enableVoiceInput')}
+                                                checked={localConfig.stt_enabled || false}
+                                                onChange={(v: boolean) => handleChange('stt_enabled', v)}
+                                            />
+                                            {localConfig.stt_enabled && (
+                                                <div className="mt-4 space-y-4">
+                                                    {!localConfig.speech_stt_provider
+                                                        && (localConfig.speech_stt_engine ?? 'docker') === 'docker' && (
+                                                        <Input
+                                                            label={tVoice('dockerSttUrl')}
+                                                            placeholder="http://localhost:5003"
+                                                            value={localConfig.speech_stt_docker_url || 'http://localhost:5003'}
+                                                            onChange={(v: string) => handleChange('speech_stt_docker_url', v)}
+                                                        />
+                                                    )}
+                                                    <p className="text-xs text-gray-500">
+                                                        {tVoice('sttDesc')}
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p className="text-xs text-gray-500">{tVoice('managedByAdmin')}</p>
                                     )}
                                 </Section>
 
                                 <Section title={tVoice('tts')}>
-                                    <TTSSettings
-                                        ttsEnabled={localConfig.speech_tts_enabled || false}
-                                        ttsUrl={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
-                                        autoSpeak={localConfig.tts_auto_speak || false}
-                                        onTtsEnabledChange={(v: boolean) => {
-                                            handleChange('speech_tts_enabled', v);
-                                            if (v) handleChange('speech_tts_engine', 'docker');
-                                        }}
-                                        onTtsUrlChange={(v: string) => {
-                                            handleChange('speech_tts_docker_url', v);
-                                            handleChange('speech_tts_engine', 'docker');
-                                        }}
-                                        onAutoSpeakChange={(v: boolean) => handleChange('tts_auto_speak', v)}
-                                    />
+                                    {(localConfig.speech_tts_provider || 'local') === 'local' ? (
+                                        <TTSSettings
+                                            ttsEnabled={localConfig.speech_tts_enabled || false}
+                                            ttsUrl={localConfig.speech_tts_docker_url || 'http://localhost:5002'}
+                                            autoSpeak={localConfig.tts_auto_speak || false}
+                                            onTtsEnabledChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
+                                            onTtsUrlChange={(v: string) => handleChange('speech_tts_docker_url', v)}
+                                            onAutoSpeakChange={(v: boolean) => handleChange('tts_auto_speak', v)}
+                                        />
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <Switch
+                                                label={tVoice('enableTts')}
+                                                checked={localConfig.speech_tts_enabled || false}
+                                                onChange={(v: boolean) => handleChange('speech_tts_enabled', v)}
+                                            />
+                                            <Switch
+                                                label={tVoice('autoSpeak')}
+                                                description={tVoice('autoSpeakDesc')}
+                                                checked={localConfig.tts_auto_speak || false}
+                                                onChange={(v: boolean) => handleChange('tts_auto_speak', v)}
+                                            />
+                                            {currentUser?.role !== 'admin' && (
+                                                <p className="text-xs text-gray-500">{tVoice('managedByAdmin')}</p>
+                                            )}
+                                        </div>
+                                    )}
                                 </Section>
                             </div>
                         )}

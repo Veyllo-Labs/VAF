@@ -4,11 +4,12 @@ This document provides comprehensive documentation for VAF's Text-to-Speech (TTS
 
 ## Overview
 
-VAF supports fully offline speech processing using Docker containers for high-quality neural TTS and Whisper-based STT. The system supports multiple languages and interfaces.
+VAF's speech processing is local by default: Docker containers provide high-quality neural TTS (Piper) and Whisper-based STT. Optionally, an admin can select a cloud voice provider (ElevenLabs or OpenAI) per direction; the local lane remains the fallback. The system supports multiple languages and interfaces.
 
 ### Key Features
 
-- **Offline Operation**: No cloud dependencies; all processing runs locally via Docker
+- **Local by Default**: All processing runs locally via Docker unless an admin selects a cloud voice provider
+- **Optional Cloud Providers**: ElevenLabs and OpenAI for TTS and STT, selectable independently (`speech_tts_provider` / `speech_stt_provider`), with automatic fallback to the local lane on any API error
 - **Multi-Language Support**: Automatic language detection and routing to appropriate TTS voices
 - **Multi-Interface**: Speech works across CLI, Web UI, and Telegram
 - **Bidirectional Voice**: Telegram and WhatsApp support receiving and sending voice messages (STT for incoming, TTS for outgoing)
@@ -55,8 +56,14 @@ VAF supports multiple TTS engines configured via `speech_tts_engine`:
 | Engine | Description | Use Case |
 |--------|-------------|----------|
 | `docker` | HTTP TTS service (Piper in container) | **Recommended** - Best quality |
+| `chatterbox` | Chatterbox-style HTTP TTS server (`speech_tts_chatterbox_url`) | Alternative HTTP TTS backend |
 | `piper` | Local Piper binary | Offline without Docker |
 | `system` | macOS `say` command only (pyttsx3 removed — caused 1-4 GB RAM explosion on Windows via SAPI/comtypes) | macOS fallback only |
+
+When `speech_tts_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
+precedence over `speech_tts_engine`. On any provider error (quota, rate limit,
+network) the request falls back to the configured local engine. See
+[Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
 
 ### Multi-Language Docker TTS
 
@@ -120,6 +127,10 @@ Before TTS playback, content is cleaned via `_clean_markdown()`:
 | `docker` | Whisper via HTTP API | **Recommended** |
 | `local` | faster-whisper + ffmpeg | Requires local installation |
 
+When `speech_stt_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
+precedence over `speech_stt_engine`, with automatic fallback to the local lane on
+any API error. See [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
+
 ### Docker Whisper STT
 
 VAF uses the `onerahmet/openai-whisper-asr-webservice` container.
@@ -146,6 +157,76 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 ---
 
+## Cloud provider lane (ElevenLabs / OpenAI)
+
+Implemented in `vaf/core/speech_api.py` (mirroring the vision pattern in
+`vaf/core/vision_infer.py`): a never-raise choke point that is consulted BEFORE
+the local engine dispatch. Selection is explicit opt-in only; an empty provider
+key means the local Docker lane. On ANY provider problem (missing key, quota
+402, rate limit 429, timeout, non-audio response) the functions return `None`
+and the caller degrades to the local engine - a voice turn never breaks because
+a cloud API is down. All call sites go through `vaf/core/speech_client.py`, so
+the Web UI, Telegram, WhatsApp, and the CLI mic all honour the same provider
+selection.
+
+### Configuration keys (admin-write-only)
+
+| Key | Values | Meaning |
+|-----|--------|---------|
+| `speech_tts_provider` | `""`, `elevenlabs`, `openai` | Cloud TTS provider; `""` = local engine |
+| `speech_tts_api_model` | model ID | `""` = default (`eleven_flash_v2_5` / `gpt-4o-mini-tts`) |
+| `speech_tts_api_voice` | voice ID / name | `""` = default (ElevenLabs Rachel / OpenAI `alloy`) |
+| `speech_stt_provider` | `""`, `elevenlabs`, `openai` | Cloud STT provider; `""` = local engine |
+| `speech_stt_api_model` | model ID | `""` = default (`scribe_v2` / `whisper-1`) |
+| `api_key_elevenlabs` | key | ElevenLabs API key (read-redacted for non-admins) |
+
+The OpenAI lane reuses the existing `api_key_openai`. ElevenLabs is an
+audio-only vendor and is deliberately NOT part of the LLM provider catalog
+(see [PROVIDER_MODES.md](../llm/PROVIDER_MODES.md)).
+
+### Request contracts
+
+- **ElevenLabs TTS**: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}`
+  with header `xi-api-key` and query `output_format=wav_24000` (browser/CLI) or
+  `opus_48000_64` (messenger voice notes). `language_code` is sent only for the
+  flash models; `eleven_multilingual_v2` auto-detects from the text.
+- **ElevenLabs STT (Scribe)**: `POST https://api.elevenlabs.io/v1/speech-to-text`
+  with multipart field `file` (the local Whisper container uses `audio_file`) and
+  `model_id`. The response carries `text` and `language_code`, which keeps the
+  reply-in-same-language pairing for voice notes working.
+- **OpenAI TTS**: `POST https://api.openai.com/v1/audio/speech` with
+  `response_format: "wav"`. OGG requests are converted locally via ffmpeg.
+  The endpoint caps `input` at 4096 characters; longer texts are truncated.
+  Voice availability is model-dependent: `tts-1`/`tts-1-hd` accept the 9
+  classic voices, `gpt-4o-mini-tts` additionally accepts `ballad`, `verse`,
+  `marin`, `cedar` (OpenAI recommends `marin`/`cedar` for quality).
+- **OpenAI STT**: `POST https://api.openai.com/v1/audio/transcriptions`.
+  `response_format: "verbose_json"` (which carries the detected language) is
+  supported by `whisper-1` only; the `gpt-4o-*-transcribe` models are called
+  with plain `json` and return no language, so voice replies default to
+  English with them. For the reply-in-same-language pairing, `whisper-1` is
+  the recommended STT model.
+
+### Settings catalogs (fetched vs hardcoded)
+
+The Settings UI fetches the ElevenLabs model and voice catalogs live through
+an admin-only backend proxy (`GET /api/voice/elevenlabs/models` and
+`/api/voice/elevenlabs/voices` in `vaf/api/voice_routes.py`): the stored API
+key never reaches the browser, responses are cached for 5 minutes per key,
+and restricted ElevenLabs keys need the `voices_read`/`models_read` scopes.
+When the fetch is unavailable the UI falls back to hardcoded model options
+and a plain voice-ID input. OpenAI lists are hardcoded by necessity: OpenAI
+has no API that enumerates TTS voices or tags audio models. ElevenLabs STT
+models (`scribe_v2`) are also hardcoded because they do not appear in
+`GET /v1/models`.
+
+The backend always returns WAV to the web client regardless of the provider, so
+the browser playback path is provider-agnostic. With a cloud TTS provider
+selected, the Piper language manager in Settings is hidden; the per-message
+Read Aloud button is the test path.
+
+---
+
 ## Web UI Voice Integration
 
 ### Architecture
@@ -156,15 +237,15 @@ Browser (page.tsx)          WebSocket          Backend (web_server.py)
      ├─ MediaRecorder ──────────┼──────────────────────► │
      │  (WebM/Opus)             │                        │
      ├─ convertToWav() ─────────┼──────────────────────► │
-     │  (16-bit PCM WAV)        │   stt_stream           │
-     │                          │                        ├─► Docker STT
-     │ ◄────────────────────────┼────────────────────────┤
-     │    {text, language}      │                        │
+     │  (16-bit PCM WAV)        │   process_audio        │
+     │                          │                        ├─► cloud STT provider
+     │ ◄────────────────────────┼────────────────────────┤   or Docker STT
+     │    stt_result {text}     │                        │
      │                          │                        │
      ├─ Request TTS ────────────┼──────────────────────► │
-     │                          │   tts_stream           ├─► Docker TTS
-     │ ◄────────────────────────┼────────────────────────┤
-     │    audio/wav (base64)    │                        │
+     │                          │   speak                ├─► cloud TTS provider
+     │ ◄────────────────────────┼────────────────────────┤   or Docker TTS
+     │  tts_audio (base64 WAV)  │                        │
      ▼                          ▼                        ▼
 ```
 
@@ -199,38 +280,40 @@ async function convertToWav(blob: Blob): Promise<Blob> {
 
 ### WebSocket Protocol
 
-**STT Request:**
+**STT Request** (the `format` field is omitted when the client falls back to
+sending the raw WebM/OGG recording):
 ```json
 {
-  "type": "stt_stream",
-  "data": "<base64-encoded-wav>",
+  "type": "process_audio",
+  "audio": "<base64-encoded-wav>",
   "format": "wav"
 }
 ```
 
-**STT Response:**
+**STT Responses:**
 ```json
-{
-  "type": "stt_result",
-  "text": "Transcribed text here",
-  "language": "de"
-}
+{ "type": "stt_result", "text": "Transcribed text here" }
+{ "type": "stt_error", "error": "..." }
 ```
 
 **TTS Request:**
 ```json
 {
-  "type": "tts_stream",
+  "type": "speak",
   "text": "Text to speak"
 }
 ```
 
-**TTS Response:**
+**TTS Responses** (audio is always WAV, regardless of the configured voice
+provider; `tts_state` drives the loading/playing indicators):
 ```json
-{
-  "type": "tts_audio",
-  "audio": "<base64-encoded-wav>"
-}
+{ "type": "tts_audio", "audio": "<base64-encoded-wav>", "format": "wav" }
+{ "type": "tts_state", "status": "loading|playing|stopped" }
+```
+
+**Stop playback:**
+```json
+{ "type": "stop_speech" }
 ```
 
 ---
@@ -353,36 +436,48 @@ Requires `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5
   "speech_tts_engine": "docker",
   "speech_tts_docker_url": "http://localhost:5002",
   "speech_tts_docker_url_de": "http://localhost:5002",
-  "speech_tts_docker_url_en": "http://localhost:5002",
-  "speech_tts_docker_url_fr": "http://localhost:5002",
+  "speech_tts_docker_url_en": "http://localhost:5004",
+  "speech_tts_docker_url_fr": "http://localhost:5006",
+  "speech_tts_provider": "",
+  "speech_tts_api_model": "",
+  "speech_tts_api_voice": "",
 
   "speech_stt_enabled": true,
   "speech_stt_engine": "docker",
   "speech_stt_docker_url": "http://localhost:5003",
+  "speech_stt_provider": "",
+  "speech_stt_api_model": "",
 
   "speech_language": "de-DE",
-  "speech_mic_index": 0,
-
-  "stt_wake_word_enabled": true,
-  "stt_wake_word": "hey_jarvis"
+  "speech_mic_index": 0
 }
 ```
+
+`speech_language` and `speech_mic_index` are runtime keys written by the CLI
+wizard (not part of `Config.DEFAULTS`).
 
 ### Configuration Options
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `speech_tts_enabled` | bool | `false` | Enable TTS output |
-| `speech_tts_engine` | string | `"docker"` | TTS engine: `docker`, `piper`, `system` |
-| `speech_tts_docker_url` | string | `""` | Default Docker TTS URL |
-| `speech_tts_docker_url_de` | string | `""` | German TTS URL |
-| `speech_tts_docker_url_en` | string | `""` | English TTS URL |
-| `speech_tts_docker_url_fr` | string | `""` | French TTS URL |
-| `speech_stt_enabled` | bool | `false` | Enable STT input |
+| `speech_tts_engine` | string | `"docker"` | TTS engine: `docker`, `chatterbox`, `piper`, `system` |
+| `speech_tts_docker_url` | string | `http://localhost:5002` | Default Docker TTS URL |
+| `speech_tts_docker_url_de` | string | `http://localhost:5002` | German TTS URL (optional) |
+| `speech_tts_docker_url_en` | string | `http://localhost:5004` | English TTS URL (optional) |
+| `speech_tts_docker_url_fr` | string | `http://localhost:5006` | French TTS URL (optional) |
+| `speech_tts_chatterbox_url` | string | `http://localhost:4123` | Chatterbox-style HTTP TTS server |
+| `speech_tts_provider` | string | `""` | Cloud TTS provider: `""`, `elevenlabs`, `openai` |
+| `speech_tts_api_model` | string | `""` | Cloud TTS model (`""` = provider default) |
+| `speech_tts_api_voice` | string | `""` | Cloud TTS voice (`""` = provider default) |
+| `speech_stt_enabled` | bool | `false` | Enable STT input (canonical; legacy `stt_enabled` is ORed in) |
 | `speech_stt_engine` | string | `"docker"` | STT engine: `docker`, `local` |
-| `speech_stt_docker_url` | string | `""` | Docker STT URL |
-| `speech_language` | string | `"de-DE"` | Default language |
-| `speech_mic_index` | int | `0` | Microphone device index |
+| `speech_stt_docker_url` | string | `http://localhost:5003` | Docker STT URL |
+| `speech_stt_provider` | string | `""` | Cloud STT provider: `""`, `elevenlabs`, `openai` |
+| `speech_stt_api_model` | string | `""` | Cloud STT model (`""` = provider default) |
+| `api_key_elevenlabs` | string | `""` | ElevenLabs API key (speech only) |
+| `speech_language` | string | `"de-DE"` | Default language (CLI wizard runtime key) |
+| `speech_mic_index` | int | `0` | Microphone device index (CLI wizard runtime key) |
 
 ---
 

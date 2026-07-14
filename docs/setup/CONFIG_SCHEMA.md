@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (253 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (261 keys).
 
 ## How configuration is set
 
@@ -239,14 +239,24 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `stt_enabled` | `False` | Enable speech-to-text. |
+| `stt_enabled` | `False` | Legacy STT toggle (ORed with `speech_stt_enabled`; admin-only). |
+| `speech_stt_enabled` | `False` | Enable speech-to-text (canonical key). |
 | `speech_stt_engine` | `"docker"` | `docker` or `local` (faster-whisper). |
 | `speech_stt_docker_url` | `http://localhost:5003` | STT container URL. |
 | `speech_stt_whisper_model` | `"base"` | Local Whisper model size. |
 | `speech_tts_enabled` | `False` | Enable text-to-speech. |
 | `speech_tts_engine` | `"docker"` | TTS engine. |
 | `speech_tts_docker_url` | `http://localhost:5002` | Default TTS container URL. |
-| `speech_tts_docker_url_de/en/fr` | ports 5002/5004/5006 | Per-language TTS URLs. |
+| `speech_tts_docker_url_de` | `http://localhost:5002` | German TTS URL (optional). |
+| `speech_tts_docker_url_en` | `http://localhost:5004` | English TTS URL (optional). |
+| `speech_tts_docker_url_fr` | `http://localhost:5006` | French TTS URL (optional). |
+| `speech_tts_chatterbox_url` | `http://localhost:4123` | Chatterbox-style HTTP TTS server (engine `chatterbox`). |
+| `speech_tts_provider` | `""` | Cloud TTS provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_tts_engine`; falls back to the local engine on API errors. |
+| `speech_tts_api_model` | `""` | Model for the cloud TTS provider (`""` = default: ElevenLabs `eleven_flash_v2_5`, OpenAI `gpt-4o-mini-tts`). |
+| `speech_tts_api_voice` | `""` | Voice for the cloud TTS provider: ElevenLabs voice ID or OpenAI voice name (`""` = default). |
+| `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. |
+| `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
+| `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Base64 on disk; redacted for non-admin reads. |
 | `tts_auto_speak` | `False` | Auto-speak replies. |
 
 ## Network & server mode

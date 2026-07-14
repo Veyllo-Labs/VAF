@@ -7,8 +7,8 @@ VAF provides a full-featured Telegram bot integration with support for text mess
 The Telegram bridge allows users to interact with VAF through Telegram, supporting:
 
 - **Text Messages**: Standard text-based conversations
-- **Voice Messages**: Automatic transcription via Whisper STT
-- **Voice Replies**: Agent responses as voice messages (TTS)
+- **Voice Messages**: Automatic transcription via the configured STT lane (local Whisper container by default, or a cloud provider via `speech_stt_provider` - see [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md))
+- **Voice Replies**: Agent responses as voice messages (TTS; local Piper container or a cloud provider via `speech_tts_provider`)
 - **Incoming Documents**: PDF, DOCX, XLSX, PPTX, TXT, MD, CSV, JSON, XML – downloaded, text extracted via Librarian, passed to agent as context
 - **Photos**: Placeholder – replies with "coming soon"; full OCR/Vision implementation planned
 - **Multi-User Support**: User whitelisting with scope isolation

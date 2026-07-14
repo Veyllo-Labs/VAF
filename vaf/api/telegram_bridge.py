@@ -675,6 +675,29 @@ def _run_bot():
 
     application = Application.builder().token(bot_token).build()
 
+    async def _on_polling_error(update: object, context) -> None:
+        """Keep known polling errors to one actionable line instead of full
+        tracebacks ('No error handlers are registered' spam)."""
+        err = context.error
+        try:
+            from telegram.error import Conflict, NetworkError, TimedOut
+            if isinstance(err, Conflict):
+                logger.warning(
+                    "Telegram polling conflict (409): another instance is polling this "
+                    "bot token (stale VAF process from a restart, or a second install). "
+                    "Ensure only ONE VAF instance runs; rotate the token via @BotFather "
+                    "if the conflict persists."
+                )
+                return
+            if isinstance(err, (NetworkError, TimedOut)):
+                logger.warning("Telegram polling network hiccup: %s", err)
+                return
+        except Exception:
+            pass
+        logger.error("Telegram bridge error: %s", err, exc_info=err)
+
+    application.add_error_handler(_on_polling_error)
+
     debounce_seconds = max(1, int(Config.get("telegram_debounce_seconds", 5)))
 
     async def _delayed_flush(chat_id: str) -> None:

@@ -173,7 +173,7 @@ async def _check_embedding_dim(conn) -> None:
             logger.warning("Embedding-dimension check on %s skipped: %s", tname, e)
 
 
-async def _run_schema_migrations(engine: AsyncEngine) -> None:
+async def _run_schema_migrations(engine: AsyncEngine) -> bool:
     """Reconcile the live DB schema with the models (runs once per process; the restart after an
     update triggers it). Three idempotent, phase-isolated parts: (1) ordered explicit migrations
     from ``db_migrations.py`` (indexes/renames/backfills, e.g. memories.user_scope_id + its index);
@@ -181,7 +181,20 @@ async def _run_schema_migrations(engine: AsyncEngine) -> None:
     applied without boilerplate; (3) an embedding-dimension mismatch check. Failures are logged
     LOUDLY (ERROR) — not swallowed — so an out-of-date/half-applied schema is visible rather than
     breaking queries silently. Phases run in separate transactions so one failure can't undo another.
+
+    Returns False when the database was UNREACHABLE (nothing was attempted) so the caller can
+    release its once-per-process latch and retry on a later call; True once the phases actually
+    ran against a live database (individual phase errors still count as attempted - retrying a
+    genuinely failing DDL on every call would only spam the log).
     """
+    # 0. Reachability probe - a down/starting container must not consume the one attempt.
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as e:
+        logger.error("DB migrations skipped - database unreachable, will retry on next use: %s", e)
+        return False
+
     # 1. Ordered explicit migrations (indexes / renames / backfills).
     try:
         from vaf.memory import db_migrations as _dbm
@@ -208,6 +221,8 @@ async def _run_schema_migrations(engine: AsyncEngine) -> None:
             await _check_embedding_dim(conn)
     except Exception as e:
         logger.warning("Embedding-dimension check skipped: %s", e)
+
+    return True
 
 
 async def get_engine() -> AsyncEngine:
@@ -256,13 +271,21 @@ async def get_engine() -> AsyncEngine:
             _migrations_attempted = True
             run_migrations = True
 
-    # Run migrations only once per process (best effort). DDL must run as the OWNER, not the app data
+    # Run migrations only once per SUCCESSFUL attempt. DDL must run as the OWNER, not the app data
     # role, so it keeps working after the app DSN is cut over to a non-superuser RLS role.
+    # If the database was UNREACHABLE the latch is released so a later call retries: a VAF start
+    # racing the DB container must not leave the process on a stale schema for its whole lifetime
+    # (live incident 2026-07-15: migrations "ran" against a down container once, were never
+    # retried, and every chunk query then failed on the missing user_scope_id column).
     if run_migrations and _main_engine is not None:
+        reachable = False
         try:
-            await _run_schema_migrations(await get_owner_engine())
+            reachable = await _run_schema_migrations(await get_owner_engine())
         except Exception:
-            pass  # Already migrated or error - continue anyway
+            reachable = False
+        if not reachable:
+            with _engine_lock:
+                _migrations_attempted = False
 
     return _main_engine
 
@@ -469,6 +492,19 @@ async def init_db(drop_existing: bool = False):
         await conn.execute(text("DROP POLICY IF EXISTS user_isolation_memories ON memories"))
         await conn.execute(text("""
             CREATE POLICY user_isolation_memories ON memories
+                USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+                WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+        """))
+
+        # Chunks carry the searchable plaintext and the (invertible) embedding
+        # vectors - they get the SAME fail-closed forced policy (mirrors
+        # scripts/rls_enforce.sql and db_migrations v2, which also backfills
+        # the scope column on existing installs).
+        await conn.execute(text("ALTER TABLE chunks ENABLE ROW LEVEL SECURITY"))
+        await conn.execute(text("ALTER TABLE chunks FORCE ROW LEVEL SECURITY"))
+        await conn.execute(text("DROP POLICY IF EXISTS user_isolation_chunks ON chunks"))
+        await conn.execute(text("""
+            CREATE POLICY user_isolation_chunks ON chunks
                 USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
                 WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
         """))

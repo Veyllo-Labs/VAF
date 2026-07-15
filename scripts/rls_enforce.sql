@@ -26,5 +26,19 @@ CREATE POLICY user_isolation_memories ON memories
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memories FORCE  ROW LEVEL SECURITY;
 
+-- Chunks carry the searchable plaintext AND the embedding vectors (which are practically invertible back
+-- to text), so they need their OWN fail-closed policy - the parent's RLS does not protect direct chunk
+-- access. Column + backfill happen in db_migrations v2 on startup; this script mirrors the policy so the
+-- manual cutover and init_db produce the same enforced state.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS user_scope_id UUID NULL;
+UPDATE chunks c SET user_scope_id = m.user_scope_id
+    FROM memories m WHERE m.id = c.memory_id AND c.user_scope_id IS NULL;
+DROP POLICY IF EXISTS user_isolation_chunks ON chunks;
+CREATE POLICY user_isolation_chunks ON chunks
+    USING      (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid)
+    WITH CHECK (user_scope_id = NULLIF(current_setting('app.current_user_scope_id', true), '')::uuid);
+ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks FORCE  ROW LEVEL SECURITY;
+
 -- Sanity (run as vaf_app afterwards, NOT here): a scoped session sees only its own rows; an unscoped session
 -- sees zero. As the owner (this script's session) you still see all rows because superuser bypasses RLS.

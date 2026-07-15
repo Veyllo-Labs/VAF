@@ -119,6 +119,13 @@ class Chunk(Base):
     
     # Reference to parent memory
     memory_id = Column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="CASCADE"), nullable=False)
+
+    # Owner scope, denormalized from the parent memory: chunks carry the
+    # searchable plaintext and the (invertible) embedding vectors, so they
+    # need their OWN fail-closed RLS policy - the parent's RLS does not
+    # protect direct chunk access. Stamped at creation, backfilled by
+    # migration v2, enforced by policy user_isolation_chunks.
+    user_scope_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     
     # Chunk text (stored encrypted in the memory, decrypted for embedding)
     # This is stored in plain text for RAG retrieval efficiency

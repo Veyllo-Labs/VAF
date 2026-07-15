@@ -108,7 +108,8 @@ Settings are available in:
 │                 PostgreSQL + pgvector                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │ memories    │  │ chunks      │  │ connections         │ │
-│  │ (encrypted) │  │ (vectors)   │  │ (graph edges)       │ │
+│  │ (encrypted) │  │ (enc text + │  │ (graph edges)       │ │
+│  │             │  │  vectors)   │  │                     │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -150,10 +151,22 @@ async with get_db() as db:
 
 ## Security
 
-- **Encryption**: All memory content is encrypted with AES-256-GCM before storage
-- **Key Management**: Encryption key is auto-generated and stored in config
-- **Metadata**: Stays unencrypted for searchability (title, tags)
-- **Decryption**: Content is decrypted on-the-fly when accessed
+- **Encryption**: Memory TEXT is encrypted with AES-256-GCM at rest - the
+  parent content (`memories.encrypted_content`) and the chunk texts
+  (`chunks.text`, "enc:gcm:" field format). Decrypted on the fly when read.
+- **Key Management**: The key is generated on first run and stored in config.
+  A present-but-corrupt key is a hard error, never silently replaced (that
+  would orphan all encrypted content). Back the key up separately from data.
+- **Unencrypted by necessity**: embedding VECTORS (search needs them), tags,
+  dates, and titles (no longer content-derived by default). Be aware that
+  modern text embeddings are practically invertible - an attacker with
+  database access can approximately reconstruct text from the vectors alone.
+  Column encryption therefore protects against file/dump exposure, not
+  against a fully compromised database. For complete at-rest protection use
+  full-disk/volume encryption in addition.
+- **Isolation**: fail-closed forced Row-Level Security on `memories` AND
+  `chunks` (each row carries its owner scope; an unscoped session sees
+  nothing), enforced for the non-superuser app role.
 
 ## Troubleshooting
 

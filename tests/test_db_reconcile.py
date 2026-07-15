@@ -43,6 +43,10 @@ class _Result:
     def fetchall(self):
         return self._rows
 
+    def all(self):
+        # v3 (chunk encryption backfill) iterates .all() over selected rows
+        return self._rows
+
     def first(self):
         return self._rows[0] if self._rows else None
 

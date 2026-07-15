@@ -85,6 +85,17 @@ def pick(key: str, lang: Optional[str], scope: Optional[str] = None, **fmt) -> s
         return text
 
 
+def phrasings(key: str, lang: Optional[str]) -> List[str]:
+    """The FULL ordered phrasing list for `key` in `lang` (same language
+    fallback as pick). For callers that need the whole set - e.g. the guided
+    enrollment serves its question list to the client in order."""
+    data = _load(key)
+    if not data:
+        return []
+    base = _norm_lang(lang)
+    return list(data.get(base) or data.get("en") or next(iter(data.values()), []))
+
+
 def available_languages(key: str) -> List[str]:
     """Languages a phrase key currently has phrasings for (for the generation script / diagnostics)."""
     return sorted(_load(key).keys())

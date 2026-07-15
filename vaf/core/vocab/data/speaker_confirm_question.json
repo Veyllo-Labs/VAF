@@ -1,0 +1,8 @@
+{
+  "de": [
+    "Ich habe gerade eine Stimme nicht sicher erkannt (Score {score}). War das deine Stimme? Antworte mit Ja, Nein, oder z.B. 'Nein, das ist Peter', dann merke ich mir die Stimme unter dem Namen. Wichtig: Dein eigenes Stimmprofil wird dadurch nie veraendert."
+  ],
+  "en": [
+    "I could not confidently recognize a voice just now (score {score}). Was that you? Reply with yes, no, or e.g. 'No, that's Peter' and I will remember the voice under that name. Note: your own voice profile is never changed by this."
+  ]
+}

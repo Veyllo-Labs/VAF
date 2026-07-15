@@ -38,15 +38,21 @@ runtime**.
 
 ```
 vaf/core/vocab/
-├── __init__.py          # API: pick(), resolve_user_language(), available_languages()
+├── __init__.py          # API: pick(), phrasings(), resolve_user_language(), available_languages()
 ├── source/
-│   └── nudge.json       # hand-authored seed (en + de) — the translation source
+│   └── <key>.json       # hand-authored seed (en) — the translation source
 └── data/
-    └── nudge.json       # generated: { "en": [...], "de": [...], "es": [...], ... }
+    └── <key>.json       # generated: { "en": [...], "de": [...], "es": [...], ... }
 
 scripts/
 └── generate_vocab.py    # dev-time: translate the seed into many languages via the configured LLM
 ```
+
+Current keys: `nudge` (thinking-run "are you there?"), the voice stack's
+spoken lines (`voice_greeting`, `voice_greeting_anon`, `voice_tangled`,
+`voice_delegate_ack`), the speaker-confirmation texts (`speaker_confirm_*`)
+and the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
+consumed as a FULL ordered list via `phrasings()`, not `pick()`).
 
 ## API
 

@@ -1,0 +1,34 @@
+{
+  "de": [
+    "Hey {name}!",
+    "Na, {name}?"
+  ],
+  "en": [
+    "Hey {name}!",
+    "Hi {name}!"
+  ],
+  "es": [
+    "¡Hola, {name}!"
+  ],
+  "fr": [
+    "Salut {name} !"
+  ],
+  "it": [
+    "Ciao {name}!"
+  ],
+  "nl": [
+    "Hé {name}!"
+  ],
+  "pl": [
+    "Hej {name}!"
+  ],
+  "pt": [
+    "Olá, {name}!"
+  ],
+  "ru": [
+    "Привет, {name}!"
+  ],
+  "tr": [
+    "Selam {name}!"
+  ]
+}

@@ -5953,7 +5953,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     _lang = str(_pref).strip()[:2].lower()
                         except Exception:
                             pass
-                        _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang, "scope": _scope}
+                        # Chat context: a compact structural digest of the OPEN
+                        # chat so the voice agent knows what "here" refers to.
+                        # Ownership-gated: never build it from another user's
+                        # session (fail-closed skip).
+                        _chat_ctx = ""
+                        try:
+                            _vc_sid = (cmd.get("sessionId") or "").strip()
+                            if _vc_sid:
+                                _ok_sess, _sess = _ws_session_owner_ok(websocket, _vc_sid)
+                                if _ok_sess and _sess is not None:
+                                    _chat_ctx = _va.build_chat_digest(
+                                        getattr(_sess, "messages", None) or [])
+                        except Exception:
+                            _chat_ctx = ""
+                        _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang,
+                                                   "scope": _scope, "chat_context": _chat_ctx}
                         await websocket.send_json({
                             "type": "voice_call_started",
                             "ok": _va.available(),
@@ -6101,6 +6116,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 user_name=_display, history=_call["history"],
                                 main_busy=_busy, pending_task=_pending,
                                 speaker_ok=_speaker_ok,
+                                chat_context=_call.get("chat_context", ""),
                             ),
                         )
                         if _res is None:

@@ -379,7 +379,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 endCall();
                 return;
             }
-            ws?.send(JSON.stringify({ type: 'voice_call_start', ui_lang: locale }));
+            ws?.send(JSON.stringify({ type: 'voice_call_start', ui_lang: locale, sessionId }));
             playEarcon('start');
             later(listenLoop, 600);
         })();
@@ -393,11 +393,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
     const ss = String(store.seconds % 60).padStart(2, '0');
 
     return (<>
-        {/* In-call indicator: subtle red inset ring around the whole surface.
-            z-[15]: above all chat surfaces (which covered parts of it at z-5),
-            below the session sidebar (z-20) and the agent window overlays.
-            Fades in on call start and out during the closing phase. */}
-        <div className={`fixed inset-2 rounded-2xl border-[1.5px] border-red-500/40 shadow-[inset_0_0_24px_rgba(220,38,38,0.06)] pointer-events-none z-[15] transition-opacity duration-300 animate-[voiceFadeIn_0.4s_ease] ${store.closing ? 'opacity-0' : 'opacity-100'}`} />
+        {/* In-call indicator: red inset ring around the whole surface with an
+            INWARD glow. z-[45]: the input dock is z-40 with an opaque bottom
+            gradient that swallowed the ring's bottom edge; modals (z-50) stay
+            above. pointer-events-none, static shadow (only opacity animates -
+            GPU-safe). Fades in on call start, out during the closing phase. */}
+        <div className={`fixed inset-2 rounded-2xl border-[1.5px] border-red-500/40 shadow-[inset_0_0_48px_10px_rgba(220,38,38,0.16)] pointer-events-none z-[45] transition-opacity duration-300 animate-[voiceFadeIn_0.4s_ease] ${store.closing ? 'opacity-0' : 'opacity-100'}`} />
         {/* Agent window: equal 16px gap to the top edge and the collapsed rail
             (w-16); z-10 keeps it BELOW the session sidebar (z-20), so the
             expanding list slides over it by design. Animates in on call start

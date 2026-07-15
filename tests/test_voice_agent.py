@@ -345,6 +345,39 @@ def test_greeting_line_short_and_from_vocab_book():
     assert va.greeting_line("tr", "Mert") == "Selam Mert!"  # vocab book has tr
 
 
+def test_chat_digest_structure_and_caps():
+    msgs = [
+        {"role": "system", "content": "internal prompt stuff"},           # skipped
+        {"role": "user", "content": "Plan mir den Tag"},
+        {"role": "assistant", "content": "<think>hmm</think>Gerne, hier der Plan: " + "x" * 400},
+        {"role": "system", "content": "[Context: tools used this turn] - calendar -> OK"},
+        {"role": "tool", "content": "raw tool json"},                      # skipped
+        {"role": "user", "content": "Und verschieb den Zahnarzt"},
+    ]
+    d = va.build_chat_digest(msgs)
+    lines = d.split("\n")
+    assert lines[0] == "User: Plan mir den Tag"                # oldest first
+    assert lines[1].startswith("You: Gerne, hier der Plan:")   # think stripped
+    assert lines[1].endswith("...") and len(lines[1]) < 240    # per-item cap
+    assert lines[2].startswith("Activity: [Context: tools used this turn]")
+    assert lines[3] == "User: Und verschieb den Zahnarzt"
+    assert "internal prompt stuff" not in d and "raw tool json" not in d
+    assert va.build_chat_digest([]) == ""
+
+
+def test_chat_context_reaches_prompt_with_lookup_rule(monkeypatch):
+    _cfg(monkeypatch)
+    va.voice_reply("Worum ging es hier nochmal?", scope_id="s",
+                   chat_context="User: Plan mir den Tag\nYou: Hier der Plan ...")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "CURRENT CHAT" in system
+    assert "Plan mir den Tag" in system
+    assert "delegate a lookup" in system
+    # Without context the block is absent
+    va.voice_reply("Hi", scope_id="s")
+    assert "CURRENT CHAT" not in _FakeBackend.last_messages[0]["content"]
+
+
 def test_empty_input_returns_none(monkeypatch):
     _cfg(monkeypatch)
     assert va.voice_reply("   ", scope_id="s") is None

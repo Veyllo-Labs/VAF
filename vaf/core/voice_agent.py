@@ -76,7 +76,13 @@ Rules for this call:
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
 - Only claim a task is running if this prompt explicitly says the main agent is currently working. Otherwise nothing is running: results you already announced are done, and new work needs a new <delegate>.
 {busy_block}
+{chat_block}
 {memory_block}"""
+
+_CHAT_BLOCK = """
+CURRENT CHAT (summary of the conversation open on screen, oldest first - the user may refer to it as "here" or "our chat"):
+{digest}
+If the user asks for details from this chat that are not covered above, do not guess - delegate a lookup, the main agent can read the full conversation."""
 
 _BUSY_BLOCK = """
 IMPORTANT - the main agent is CURRENTLY WORKING on a delegated task: "{task}".
@@ -140,6 +146,39 @@ def should_engage(text: str, label: Optional[str]):
     return True, "ok"
 
 
+def build_chat_digest(messages, max_items: int = 8, per_item: int = 220,
+                      total_cap: int = 1400) -> str:
+    """Compact structural digest of the OPEN CHAT for the voice prompt.
+
+    Deterministic (no LLM call at call start): the last few user/assistant
+    exchanges, each truncated, oldest first. End-of-turn squash notes
+    ("[Context: tools used this turn] ...") are included as activity hints -
+    they compress whole tool runs into one line. Tool/plain-system messages
+    are skipped. Returns "" for an empty chat.
+    """
+    picked = []
+    for msg in reversed(list(messages or [])):
+        role = msg.get("role")
+        content = " ".join(str(msg.get("content") or "").split())
+        if not content:
+            continue
+        if role == "system" and not content.startswith("[Context:"):
+            continue
+        if role not in ("user", "assistant", "system"):
+            continue
+        content = _strip_reasoning(content)
+        if not content:
+            continue
+        if len(content) > per_item:
+            content = content[:per_item].rstrip() + "..."
+        tag = {"user": "User", "assistant": "You", "system": "Activity"}[role]
+        picked.append(f"{tag}: {content}")
+        if len(picked) >= max_items:
+            break
+    digest = "\n".join(reversed(picked))
+    return digest[:total_cap]
+
+
 def greeting_line(lang: str = "de", user_name: str = "", scope_id: str = "") -> str:
     """Call-opening line (2-3 words), spoken on connect. No LLM round-trip:
     phrasings come from the vocabulary book (vaf/core/vocab), which rotates
@@ -197,6 +236,7 @@ def voice_reply(
     main_busy: bool = False,
     pending_task: str = "",
     speaker_ok: bool = True,
+    chat_context: str = "",
 ) -> Optional[Dict]:
     """One first-layer turn. Returns {'reply': spoken_text, 'delegate': task|None}
     or None on any failure (no provider, API error) - the caller degrades.
@@ -223,6 +263,7 @@ def voice_reply(
             user_name=user_name,
             silent=_SILENT_MARKER,
             busy_block=_BUSY_BLOCK.format(task=(pending_task or "")[:200]) if main_busy else "",
+            chat_block=_CHAT_BLOCK.format(digest=chat_context[:1400]) if chat_context.strip() else "",
             memory_block=_memory_block(user_text, scope_id),
         ).strip()
 

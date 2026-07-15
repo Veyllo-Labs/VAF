@@ -43,7 +43,10 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
    (invariant 8).
 5. **First-layer reply**: `voice_agent.voice_reply()` - one
    `chat_completion` with `tools=None`, system prompt + RAG memory block +
-   last call turns as history. The model may append
+   a structural digest of the OPEN CHAT (built ownership-gated at call
+   start via `build_chat_digest`; the prompt tells the model to DELEGATE a
+   lookup for details beyond the digest instead of guessing) + last call
+   turns as history. The model may append
    `<delegate>task</delegate>` (parsed out, never spoken) or answer with
    exactly `<silent/>` (silence protocol: no TTS, keep listening). Spoken
    replies are capped at a sentence boundary (`_cap_spoken`).

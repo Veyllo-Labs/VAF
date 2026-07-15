@@ -80,6 +80,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   persona now: it introduces itself with the configured agent name (Settings >
   Persona) instead of a generic "VAF", and a compact excerpt of the Soul
   keeps it in character on the call.
+- **The call bar waveform is a real level meter now, with a draggable noise
+  gate.** The red bars during a live call show your actual microphone
+  amplitude (same mechanism as the recognition test) instead of a random
+  animation - muting flattens them naturally. A slider line sits inline in
+  the meter, exactly on the color boundary: everything left of it is gray
+  and IGNORED (not recorded), only audio that swings past it is red and
+  processed. Drag the line (it lights up on hover, chevron handles, with an
+  inline explanation below the bar) to tune out background noise; the
+  setting persists and takes effect live, mid-call. Also fixed on the way:
+  the call UI re-rendered on every animation frame while speaking (the
+  voice-activity loop wrote the store per frame), which made the whole call
+  feel laggy - state now only updates on real speaker transitions, and the
+  meter keeps one audio pipeline for the whole call.
 - **The live call follows your spoken language.** Speak Turkish and the
   agent answers in Turkish with the Turkish voice - per turn, whenever the
   language is installed in the text-to-speech stack (cloud voices count as

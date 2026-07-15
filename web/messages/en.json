@@ -382,7 +382,7 @@
       "speakerIdEnableDesc": "Label voice input with the recognized speaker before it reaches the model.",
       "profileSecurity": "Your profile only changes through this explicit setup, never automatically from live conversations.",
       "testTitle": "Test recognition",
-      "testIntro": "Record a few seconds and see who the system detects. Your verdict (correct/wrong) only feeds the threshold calibration, never your voice profile.",
+      "testIntro": "Record a few seconds and see who the system detects. Your verdict feeds the threshold calibration - and when you confirm a recording as your own voice, it also sharpens your voice profile (bounded, and reset any time by re-enrolling).",
       "testThreshold": "Threshold",
       "testBandInfo": "Score ≥ {t} = you · {low}-{t} = unsure (confirmation) · below {low} = another voice",
       "testRecord": "Record test (4s)",
@@ -1045,6 +1045,9 @@
     "status_speaking": "Agent speaking",
     "status_deaf": "Not listening - no model available for the live call",
     "status_loading_model": "Loading the model...",
+    "gateBelow": "not recorded",
+    "gateAbove": "recorded",
+    "gateHint": "Move the slider so background noise is not picked up.",
     "status_deaf_busy": "Not listening right now - the model is working for the main agent",
     "resultReady": "The task is done. The details are in the chat."
   }

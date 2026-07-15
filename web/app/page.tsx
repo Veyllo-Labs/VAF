@@ -5303,8 +5303,8 @@ function VAFDashboardContent() {
                    messenger fallback may already have it). */
                 <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 px-4 pointer-events-none">
                     {pendingSpeakerConfirms.map((p) => (
-                        <div key={p.confirmId} className="pointer-events-auto flex flex-col gap-2.5 bg-white dark:bg-[#1f1f1f] rounded-2xl border border-sky-200 dark:border-sky-900 p-5 shadow-2xl w-full max-w-md">
-                            <p className="text-sm font-medium text-sky-900 dark:text-sky-200">{tMain('speakerConfirmTitle')}</p>
+                        <div key={p.confirmId} className="pointer-events-auto flex flex-col gap-2.5 bg-white dark:bg-[#1f1f1f] rounded-2xl border border-black/10 dark:border-white/10 p-5 shadow-2xl w-full max-w-md">
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{tMain('speakerConfirmTitle')}</p>
                             <p className="text-xs text-gray-600 dark:text-gray-400">{p.question}</p>
                             {p.audioPath && (
                                 <audio controls preload="none" className="h-8 w-64 max-w-full"
@@ -5350,7 +5350,7 @@ function VAFDashboardContent() {
                                                     answer: 'no', name: (p.name || '').trim(),
                                                 }));
                                             }}
-                                            className="px-3 py-1.5 text-sm font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50">
+                                            className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-800 dark:bg-amber-600 text-white hover:bg-gray-700 dark:hover:bg-amber-500 disabled:opacity-50">
                                             {tMain('speakerConfirmSave')}
                                         </button>
                                     </span>

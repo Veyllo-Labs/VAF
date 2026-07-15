@@ -382,7 +382,7 @@
       "speakerIdEnableDesc": "Spracheingaben vor der Übergabe ans Modell mit dem erkannten Sprecher labeln.",
       "profileSecurity": "Dein Profil wird nur über diese ausdrückliche Einrichtung verändert, niemals automatisch aus laufenden Gesprächen.",
       "testTitle": "Erkennung testen",
-      "testIntro": "Nimm ein paar Sekunden auf und sieh, wen das System erkennt. Dein Urteil (richtig/falsch) fließt nur in die Threshold-Kalibrierung ein, nie in dein Stimmprofil.",
+      "testIntro": "Nimm ein paar Sekunden auf und sieh, wen das System erkennt. Dein Urteil fließt in die Threshold-Kalibrierung ein - und bestätigst du eine Aufnahme als deine Stimme, schärft sie zusätzlich dein Stimmprofil (begrenzt und jederzeit per Neu-Registrierung zurücksetzbar).",
       "testThreshold": "Threshold",
       "testBandInfo": "Score ≥ {t} = du · {low}-{t} = unsicher (Rückfrage) · unter {low} = andere Stimme",
       "testRecord": "Test aufnehmen (4s)",
@@ -1045,6 +1045,9 @@
     "status_speaking": "Agent spricht",
     "status_deaf": "Hört nicht - kein Modell für den Live-Call verfügbar",
     "status_loading_model": "Modell wird geladen...",
+    "gateBelow": "wird nicht aufgenommen",
+    "gateAbove": "wird aufgenommen",
+    "gateHint": "Verschiebe den Regler, damit Störgeräusche nicht aufgenommen werden.",
     "status_deaf_busy": "Hört gerade nicht - das Modell arbeitet für den Main-Agent",
     "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat."
   }

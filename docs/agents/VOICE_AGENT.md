@@ -233,7 +233,12 @@ Speaker confirmation events (`speaker_confirm_*`) are documented in
   hands-free VAD loop (silence auto-stop, max utterance cap), noise gates,
   mute handling, result callback, enter/exit choreography, red in-call ring.
 - `web/components/VoiceCallBar.tsx` - the red bar overlaying the chat input
-  (info left, waveform centered, mute/hangup right).
+  (info left, waveform centered, mute/hangup right). The user-side waveform
+  is a REAL mic level meter (AnalyserNode on the shared stream from
+  `web/lib/voiceCallAudio.ts`) with a draggable noise-gate marker: bars left
+  of the line are gray (ignored), right of it red (recorded); the marker
+  sets `store.gateLevel`, which IS the live VAD threshold in
+  `VoiceCallLayer` (persisted in localStorage, effective mid-call).
 - During a call the chat avatars animate away (`voice-call-hide-avatars`);
   the window is the single agent presence.
 

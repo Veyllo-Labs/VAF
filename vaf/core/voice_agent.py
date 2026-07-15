@@ -33,7 +33,13 @@ _MAX_REPLY_TOKENS = 600          # spoken answers are short, but reasoning model
                                   # (deepseek/veyllo v4) burn tokens on thinking
                                   # FIRST - too small a cap truncates mid-reasoning
                                   # and leaves no answer at all
-_MAX_HISTORY_TURNS = 8           # last voice-call turns fed back as context
+_MAX_HISTORY_TURNS = 16          # history ENTRIES (user+assistant pairs -> 8
+                                 # exchanges) fed back as context. Was 8: the
+                                 # slice counts ENTRIES, not turns, so the
+                                 # model only saw the last 4 exchanges and
+                                 # "forgot" things said moments earlier
+                                 # (live report). Matches the 16-entry store
+                                 # cap in web_server.
 _SILENT_MARKER = "<silent/>"     # model-facing: "this was not addressed to me"
 # deepseek-v4 sometimes emits its chain-of-thought as PLAIN content (no
 # <think> sentinels, so the stream filter cannot catch it) - in English,

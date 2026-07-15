@@ -39,6 +39,10 @@ interface VoiceCallState {
   /** running main-agent delegation, shown as substatus ('' = none) */
   mainTask: string;
   muted: boolean;
+  /** Noise-gate level (mean-frequency scale 0..255-ish): audio below it is
+   *  IGNORED by the VAD (not recorded); the call-bar threshold marker sets
+   *  it and it persists in localStorage. */
+  gateLevel: number;
   /** bar -> controller intents */
   hangupRequested: boolean;
 
@@ -48,6 +52,19 @@ interface VoiceCallState {
   set: (patch: Partial<VoiceCallState>) => void;
   requestHangup: () => void;
   toggleMute: () => void;
+  setGateLevel: (v: number) => void;
+}
+
+const GATE_DEFAULT = 20;   // the old fixed SPEECH_THRESHOLD
+const GATE_MIN = 4;        // never fully open (clicks would pass)
+const GATE_MAX = 80;       // never gate real speech away entirely
+
+function loadGate(): number {
+  try {
+    const v = parseFloat(window.localStorage.getItem('vaf_voice_gate') || '');
+    if (Number.isFinite(v)) return Math.min(GATE_MAX, Math.max(GATE_MIN, v));
+  } catch { /* SSR / storage off */ }
+  return GATE_DEFAULT;
 }
 
 export const useVoiceCallStore = create<VoiceCallState>((set) => ({
@@ -62,6 +79,7 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   statusKey: 'connecting',
   mainTask: '',
   muted: false,
+  gateLevel: loadGate(),
   hangupRequested: false,
 
   start: () => set({
@@ -74,4 +92,9 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   set: (patch) => set(patch as VoiceCallState),
   requestHangup: () => set({ hangupRequested: true }),
   toggleMute: () => set((s) => ({ muted: !s.muted })),
+  setGateLevel: (v: number) => {
+    const clamped = Math.min(GATE_MAX, Math.max(GATE_MIN, v));
+    try { window.localStorage.setItem('vaf_voice_gate', String(clamped)); } catch { /* noop */ }
+    set({ gateLevel: clamped });
+  },
 }));

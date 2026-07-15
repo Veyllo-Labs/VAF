@@ -8,6 +8,7 @@ import { MicOff } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useVoiceCallStore } from '@/lib/voiceCallStore';
+import { voiceCallAudio } from '@/lib/voiceCallAudio';
 import { useLocaleStore } from '@/lib/localeStore';
 
 // ── Live-call controller + agent window ──
@@ -27,7 +28,9 @@ interface Props {
 
 const MAX_UTTER_MS = 20000;
 const SILENCE_MS = 1500;
-const SPEECH_THRESHOLD = 20;
+// VAD noise gate: level (mean frequency energy) must exceed the USER-SET
+// gate (store.gateLevel, call-bar threshold marker, persisted; old fixed
+// value 20). Everything below is ignored - not spoken over, not recorded.
 const MIN_SPEECH_MS = 350;    // noise gate: a click is 1-2 voiced frames, real words accumulate
 const UNMUTE_GRACE_MS = 400;  // swallow the click/pop of the unmute toggle itself
 
@@ -68,6 +71,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
         try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* noop */ }
         recorderRef.current = null;
         streamRef.current?.getTracks().forEach(tr => tr.stop());
+        voiceCallAudio.stream = null;
         streamRef.current = null;
         try { agentAudioRef.current?.pause(); } catch { /* noop */ }
         agentAudioRef.current = null;
@@ -214,11 +218,19 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             lastTick = now;
             const gated = mutedRef.current || now < graceUntilRef.current;
             const level = gated ? 0 : buf.reduce((a, b) => a + b, 0) / buf.length;
-            useVoiceCallStore.getState().set({
-                speaker: level > SPEECH_THRESHOLD ? 'user'
-                    : useVoiceCallStore.getState().speaker === 'user' && heardSpeech ? 'user' : null,
-            });
-            if (level > SPEECH_THRESHOLD) { heardSpeech = true; voicedMs += dt; silenceStart = 0; }
+            const gate = useVoiceCallStore.getState().gateLevel;
+            // Only write the store on a REAL transition: this tick runs per
+            // animation frame, and every zustand set() re-renders all
+            // whole-store subscribers (call bar, agent window) - a set per
+            // frame made the entire call UI re-render ~60x/s while speaking
+            // (live report: "laggy, stutters when I talk").
+            const prevSpeaker = useVoiceCallStore.getState().speaker;
+            const nextSpeaker = level > gate ? 'user'
+                : prevSpeaker === 'user' && heardSpeech ? 'user' : null;
+            if (nextSpeaker !== prevSpeaker) {
+                useVoiceCallStore.getState().set({ speaker: nextSpeaker });
+            }
+            if (level > gate) { heardSpeech = true; voicedMs += dt; silenceStart = 0; }
             else if (heardSpeech) {
                 if (!silenceStart) silenceStart = now;
                 else if (now - silenceStart > SILENCE_MS) { stop(); return; }
@@ -413,6 +425,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
         (async () => {
             try {
                 streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Hand the stream to the call bar: its waveform is a REAL
+                // level meter on this stream (user decision - like the
+                // recognition test, not an animation).
+                voiceCallAudio.stream = streamRef.current;
                 streamRef.current.getAudioTracks().forEach(
                     tr => { tr.enabled = !useVoiceCallStore.getState().muted; });
             } catch {

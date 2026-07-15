@@ -237,9 +237,13 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             // Noise gate: a click/pop arms heardSpeech for a frame or two but
             // never accumulates real voiced time - discard, keep listening.
             if (!heardSpeech || voicedMs < MIN_SPEECH_MS) { later(listenLoop, 400); return; }
-            // Deaf (no live LLM): don't send turns that can only fail - the
-            // window shows the muted-mic state explaining why.
-            if (!useVoiceCallStore.getState().voiceReady) { later(listenLoop, 600); return; }
+            // Deaf (no live LLM) or temporarily mute (local time-sharing
+            // while the main agent holds the one model): don't send turns
+            // that can only fail/stall - the muted-mic state explains why.
+            const stNow = useVoiceCallStore.getState();
+            if (!stNow.voiceReady || (stNow.exclusive && stNow.mainTask)) {
+                later(listenLoop, 600); return;
+            }
             // Utterance accepted for processing: give the user an audible "heard you"
             playEarcon('accept');
             useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking' });
@@ -294,10 +298,15 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 }
             }
             else if (data.type === 'voice_call_started') {
-                // ok:false = no live LLM for the voice lane (local mode):
-                // the agent is DEAF - show the muted-mic state instead of
-                // silently eating the user's words.
-                useVoiceCallStore.getState().set({ voiceReady: data.ok !== false });
+                // ok:false = no live LLM for the voice lane: the agent is
+                // DEAF - show the muted-mic state instead of silently eating
+                // the user's words. exclusive = local time-sharing: the
+                // voice agent goes temporarily mute while the main agent
+                // holds the one model (mainTask set).
+                useVoiceCallStore.getState().set({
+                    voiceReady: data.ok !== false,
+                    exclusive: data.exclusive === true,
+                });
             }
             else if (data.type === 'voice_call_error') {
                 // no_speech and friends: just keep listening
@@ -408,35 +417,40 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 <i className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
                 {t('liveCall')}&nbsp;{mm}:{ss}
             </div>
-            <div className="my-auto py-6 relative" style={{ transform: 'scale(3)' }}>
-                {/* Canonical-avatar mode mapping (approved mockup states):
-                    listening = slow organic morph+breathe -> 'waiting',
-                    thinking  = fast morph+breathe        -> 'working',
-                    talking   = agentAvatarTalk           -> 'talking'.
-                    The literal 'listening'/'thinking' avatar modes are ear/
-                    gaze EMOTES and look wrong as call states. Deaf (no live
-                    LLM, local mode): dimmed avatar + muted-mic badge. */}
-                <AgentAvatar
-                    mode={!store.voiceReady ? 'waiting'
-                        : store.agentMode === 'talking' ? 'talking'
-                        : store.agentMode === 'thinking' ? 'working' : 'waiting'}
-                    dim={!store.voiceReady}
-                    eyePulseRef={eyePulseRef} />
-                {!store.voiceReady && (
-                    <span className="absolute -right-1.5 -bottom-1 flex h-[15px] w-[15px] items-center justify-center rounded-full bg-red-600 text-white shadow-sm">
-                        <MicOff size={9} strokeWidth={2.5} />
+            {/* deaf = no model at all; muteBusy = local time-sharing, the
+                main agent currently holds the one model (temporary). */}
+            <div className="my-auto py-6 relative">
+                <div style={{ transform: 'scale(3)' }}>
+                    {/* Canonical-avatar mode mapping (approved mockup states):
+                        listening = slow organic morph+breathe -> 'waiting',
+                        thinking  = fast morph+breathe        -> 'working',
+                        talking   = agentAvatarTalk           -> 'talking'.
+                        The literal 'listening'/'thinking' avatar modes are
+                        ear/gaze EMOTES and look wrong as call states. */}
+                    <AgentAvatar
+                        mode={(!store.voiceReady || (store.exclusive && store.mainTask)) ? 'waiting'
+                            : store.agentMode === 'talking' ? 'talking'
+                            : store.agentMode === 'thinking' ? 'working' : 'waiting'}
+                        dim={!store.voiceReady || (store.exclusive && !!store.mainTask)}
+                        eyePulseRef={eyePulseRef} />
+                </div>
+                {(!store.voiceReady || (store.exclusive && store.mainTask)) && (
+                    <span className="absolute left-1/2 -translate-x-1/2 -bottom-4 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white shadow-md">
+                        <MicOff size={15} strokeWidth={2.5} />
                     </span>
                 )}
             </div>
             <div className="w-full mt-auto border-t border-black/10 dark:border-white/10 pt-2.5 flex flex-col gap-1">
                 <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
                     <i className={`w-[7px] h-[7px] rounded-full flex-none ${
-                        !store.voiceReady ? 'bg-red-500'
+                        (!store.voiceReady || (store.exclusive && store.mainTask)) ? 'bg-red-500'
                         : store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
                         : store.statusKey === 'speaking' ? 'bg-gray-100 animate-pulse'
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
                         : 'bg-gray-400'}`} />
-                    <span>{!store.voiceReady ? t('status_deaf') : t('status_' + store.statusKey)}</span>
+                    <span>{!store.voiceReady ? t('status_deaf')
+                        : (store.exclusive && store.mainTask) ? t('status_deaf_busy')
+                        : t('status_' + store.statusKey)}</span>
                 </div>
                 {store.mainTask && (
                     <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">

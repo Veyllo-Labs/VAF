@@ -191,27 +191,72 @@ def greeting_line(lang: str = "de", user_name: str = "", scope_id: str = "") -> 
     return vocab.pick("voice_greeting_anon", lang, scope=scope_id)
 
 
-def _resolve_backend():
-    """(provider, model) via the configured API provider, or (None, None).
+_LOCAL_SERVER = "http://127.0.0.1:8080"   # the ONE llama server (same as compaction)
 
-    Like vision_infer: the voice lane rides the main provider. Local-only
-    installs get None (spoken calls need API-level latency for now).
+
+def _resolve_backend():
+    """(provider, model) via the configured provider, or (None, None).
+
+    Like vision_infer: the voice lane rides the main provider. Local mode
+    returns ("local", None): the lane talks to the single llama server in
+    TIME-SHARING with the main agent (never concurrently - the caller shows
+    a muted state while the main agent holds the model).
     """
     from vaf.core.config import Config
     provider = (Config.get("provider", "local") or "local").strip().lower()
     if provider == "local":
-        return None, None
+        return "local", None
     if not Config.get_api_key(provider):
         return None, None
     model = (Config.get(f"api_model_{provider}", "") or "").strip() or None
     return provider, model
 
 
-def available() -> bool:
+def is_exclusive() -> bool:
+    """True when the voice lane shares ONE local model with the main agent
+    (local mode): turns must pause while the main agent works."""
     try:
-        return _resolve_backend()[0] is not None
+        return _resolve_backend()[0] == "local"
     except Exception:
         return False
+
+
+def available() -> bool:
+    try:
+        provider, _ = _resolve_backend()
+        if provider is None:
+            return False
+        if provider == "local":
+            # Honest probe: local mode without a running llama server has no
+            # live LLM (in-process library mode cannot serve the call lane).
+            import requests
+            r = requests.get(f"{_LOCAL_SERVER}/v1/models", timeout=2)
+            return r.status_code == 200
+        return True
+    except Exception:
+        return False
+
+
+def _local_chat(messages) -> Optional[str]:
+    """One non-streaming completion against the single llama server.
+    Returns the raw content (reasoning included - the shared post-processing
+    strips it) or None on any failure."""
+    import requests
+    try:
+        r = requests.post(
+            f"{_LOCAL_SERVER}/v1/chat/completions",
+            json={"messages": messages, "temperature": 0.6,
+                  "max_tokens": _MAX_REPLY_TOKENS, "stream": False},
+            timeout=60,
+        )
+        if r.status_code != 200:
+            return None
+        msg = ((r.json().get("choices") or [{}])[0].get("message") or {})
+        content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or ""
+        return (f"<think>{reasoning}</think>{content}" if reasoning else content) or None
+    except Exception:
+        return None
 
 
 def _memory_block(user_text: str, scope_id: str) -> str:
@@ -275,6 +320,15 @@ def voice_reply(
                 messages.append({"role": role, "content": content[:800]})
         messages.append({"role": "user", "content": user_text.strip()[:2000]})
 
+        if provider == "local":
+            # Time-shared single llama server: one non-streaming call. The
+            # caller pauses turns while the main agent holds the model.
+            _local = _local_chat(messages)
+            if _local is None:
+                return None
+            return _postprocess_reply(_local, lang=lang, main_busy=main_busy,
+                                       speaker_ok=speaker_ok)
+
         from vaf.core.api_backend import APIBackendManager
         backend = APIBackendManager(provider)
         text = ""
@@ -317,6 +371,19 @@ def voice_reply(
                 text += piece
         if saw_error:
             return None
+        return _postprocess_reply(text, lang=lang, main_busy=main_busy,
+                                  speaker_ok=speaker_ok)
+    except Exception as e:
+        _log.warning("voice_agent: voice_reply failed: %s", e)
+        return None
+
+
+def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
+                       speaker_ok: bool) -> Dict:
+    """Shared reply post-processing for BOTH backends (API stream and local
+    non-streaming): reasoning strip, silence protocol, delegate parsing, the
+    CoT-leak guards, busy/speaker gates, ack fallback and the spoken cap."""
+    try:
         if not text.strip():
             # The model burned the whole budget on reasoning: give the user a
             # spoken nudge instead of silence.
@@ -379,8 +446,9 @@ def voice_reply(
         text = _cap_spoken(text.strip())
         return {"reply": text, "delegate": delegate}
     except Exception as e:
-        _log.warning("voice_agent: voice_reply failed: %s", e)
-        return None
+        _log.warning("voice_agent: reply post-processing failed: %s", e)
+        from vaf.core import vocab
+        return {"reply": vocab.pick("voice_tangled", lang), "delegate": None}
 
 
 def active_speech_seconds(wav_bytes: bytes) -> float:

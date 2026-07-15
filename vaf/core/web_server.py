@@ -5969,16 +5969,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _chat_ctx = ""
                         _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang,
                                                    "scope": _scope, "chat_context": _chat_ctx}
+                        _lane_ok = _va.available()
                         await websocket.send_json({
                             "type": "voice_call_started",
-                            "ok": _va.available(),
+                            "ok": _lane_ok,
                             "lang": _lang,
-                            "reason": None if _va.available() else "no_api_provider",
+                            # exclusive: ONE local model time-shared with the
+                            # main agent - the frontend mutes the voice agent
+                            # while a delegated task runs.
+                            "exclusive": _va.is_exclusive(),
+                            "reason": None if _lane_ok else "no_model",
                         })
                         # Greeting: the agent opens the call (deterministic
                         # line, no LLM round-trip) - also an audio check for
                         # the user. Skipped when the voice lane is deaf.
-                        if _va.available():
+                        if _lane_ok:
                             try:
                                 _gname = ""
                                 try:
@@ -6031,6 +6036,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         _wav = _b64v.b64decode(_audio_b64)
                         loop = asyncio.get_running_loop()
+
+                        # 0a. Exclusive-model belt (local time-sharing): while
+                        # the main agent holds the ONE local model, a voice
+                        # turn must not queue behind it (it would stall the
+                        # call for the whole tool run) - the frontend shows
+                        # the muted state and normally never sends these.
+                        if _va.is_exclusive() and cmd.get("main_busy"):
+                            await websocket.send_json({
+                                "type": "voice_call_error", "error": "busy_local"})
+                            continue
 
                         # 0. Noise gate (backend belt to the frontend VAD gate):
                         # clicks/near-silence never reach STT - Whisper-class

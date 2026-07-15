@@ -1032,6 +1032,7 @@
     "status_thinking": "Agent thinking",
     "status_speaking": "Agent speaking",
     "status_deaf": "Not listening - no model available for the live call",
+    "status_deaf_busy": "Not listening right now - the model is working for the main agent",
     "delegationPrefix": "Voice agent to main agent",
     "resultReady": "The task is done. The details are in the chat."
   }

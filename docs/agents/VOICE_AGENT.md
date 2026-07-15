@@ -16,9 +16,15 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
 
 ## Requirements
 
-- An API provider (`provider != "local"` with a key): the lane rides the main
-  provider like `vision_infer.py`; pure-local calls are a later iteration.
-  `voice_agent.available()` gates the UI button.
+- A live LLM: an API provider (`provider != "local"` with a key, riding the
+  main provider like `vision_infer.py`), or local mode with the llama server
+  reachable (`voice_agent.available()` probes `/v1/models`; in-process
+  library mode has no voice lane). Local mode is TIME-SHARED: the one model
+  serves the voice agent first, and while a delegated task runs the voice
+  agent goes temporarily mute (see invariant 9). `available()` is checked
+  at call start: when it is false the call opens deaf (`voice_call_started`
+  with `ok: false`, `reason: "no_model"`) and the window shows the
+  muted-mic state instead of silently eating turns.
 - The speech stack (STT + TTS, local Docker or a cloud voice provider - see
   [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
 - Optional but strongly recommended: an enrolled speaker profile
@@ -26,6 +32,11 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
 
 ## Turn pipeline (server side, `voice_call_turn`)
 
+0. **Exclusive-model belt** (local time-sharing): when
+   `voice_agent.is_exclusive()` and the turn carries `main_busy`, the server
+   answers `voice_call_error "busy_local"` immediately, before the noise
+   gate and STT (invariant 9). The frontend normally never sends these
+   turns; this is the server-side belt.
 1. **Noise gate**: `voice_agent.active_speech_seconds()` - clips with less
    than 0.3 s of audible 30 ms frames never reach STT (Whisper-class models
    hallucinate text on silence). Convenience gate, fail-open on analysis
@@ -109,6 +120,18 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    it - no TTS, keep listening. Spoken replies are additionally capped in
    code at a sentence boundary (`_cap_spoken`) so a derailed model can never
    fill the token budget with a monologue.
+9. **Local mode time-shares ONE model, it never runs two inferences.**
+   `voice_agent.is_exclusive()` is True on the local provider; the backend
+   sends `exclusive` in `voice_call_started` and the frontend mirrors it in
+   the store. While a delegated task runs (`mainTask` set) the voice agent
+   is temporarily mute: the recorder loop stops sending turns, the window
+   shows the dimmed avatar + muted-mic badge with `status_deaf_busy`, and a
+   server-side belt answers any turn that slips through with
+   `voice_call_error "busy_local"` before the noise gate and STT (pipeline
+   step 0). When the result callback fires, listening resumes and the
+   result is spoken as usual. This applies the repo-wide local-mode rule to
+   the call: ONE llama server, never a second concurrent inference
+   (time-sharing, not parallelism).
 
 ## WebSocket events
 
@@ -116,9 +139,10 @@ Client -> server: `voice_call_start` (`ui_lang`), `voice_call_turn` (`audio`
 base64 WAV 16 kHz mono, `format:"wav"`, `sessionId`, `main_busy`,
 `pending_task`), `voice_call_end`, `voice_call_speak` (`text` - result
 announcements; replies as `speaker_enroll_tts` so the chat TTS handler never
-reacts). Server -> client: `voice_call_reply`, `voice_call_error`
-(`no_call` | `bad_format` | `no_speech` | `llm_failed` - the frontend keeps
-listening).
+reacts). Server -> client: `voice_call_started` (`ok`, `lang`, `exclusive`,
+`reason: "no_model"` when ok is false), `voice_call_reply`, `voice_call_error`
+(`no_call` | `bad_format` | `no_speech` | `llm_failed` | `busy_local` - the
+frontend keeps listening).
 
 Enrollment (guided live call in Settings): `speaker_enroll_start/round/
 finalize/abort`, `speaker_enroll_speak`, `speaker_profile_get/delete` with

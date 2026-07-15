@@ -41,6 +41,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the agent knows what happens in the room. For the owner's own side talk the
   model can answer with a silence marker in the same call that would have
   answered anyway (no extra LLM turns, no added latency).
+- **Live calls work in local mode by time-sharing the one model.** Without an
+  API provider the voice agent now talks to the local llama server directly,
+  and the single model is shared instead of doubled: the voice agent has it
+  first, and while a delegated task runs for the main agent the call goes
+  temporarily mute - dimmed avatar, centered muted-mic badge and a "the model
+  is working for the main agent" status, with turns paused on both ends until
+  the result is spoken. A call started with no model at all keeps the
+  distinct "no model available" state.
 
 ### Fixed
 - **Natural questions now find memories by name.** "Kannst du dich noch an

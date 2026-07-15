@@ -42,10 +42,55 @@ def _wire(monkeypatch):
     yield
 
 
-def test_local_provider_unavailable(monkeypatch):
+class _NoServer:
+    """requests stub: the llama server is down (never hit the real network)."""
+    @staticmethod
+    def get(*a, **kw):
+        raise ConnectionError("down")
+
+    @staticmethod
+    def post(*a, **kw):
+        raise ConnectionError("down")
+
+
+def test_local_without_server_is_unavailable(monkeypatch):
     _cfg(monkeypatch, provider="local")
+    import sys
+    monkeypatch.setitem(sys.modules, "requests", _NoServer)
     assert va.available() is False
     assert va.voice_reply("Hi", scope_id="s") is None
+    assert va.is_exclusive() is True  # local = time-shared single model
+
+
+def test_local_with_server_serves_the_call(monkeypatch):
+    """Local mode talks to the ONE llama server (time-sharing with the main
+    agent): non-streaming call, reasoning stripped, shared post-processing."""
+    _cfg(monkeypatch, provider="local")
+    import sys
+
+    class _FakeResp:
+        status_code = 200
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {
+                "content": "Klar, mache ich!",
+                "reasoning_content": "user asks, I should answer briefly",
+            }}]}
+
+    class _FakeRequests:
+        @staticmethod
+        def get(*a, **kw):
+            return _FakeResp()
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            assert "127.0.0.1:8080" in url and json["stream"] is False
+            return _FakeResp()
+
+    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    assert va.available() is True
+    res = va.voice_reply("Machst du das?", scope_id="s", lang="de")
+    assert res == {"reply": "Klar, mache ich!", "delegate": None}
+    assert va.is_exclusive() is True
 
 
 def test_missing_key_unavailable(monkeypatch):

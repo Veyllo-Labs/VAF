@@ -996,6 +996,7 @@ function VAFDashboardContent() {
     const [speakerProfile, setSpeakerProfile] = useState<any>(null);
     // Live voice call (voice-agent first layer)
     const voiceCallActive = useVoiceCallStore((s) => s.active);
+    const voiceCallClosing = useVoiceCallStore((s) => s.closing);
     const [authError, setAuthError] = useState<string | null>(null);
     const [authRetryKey, setAuthRetryKey] = useState(0);
 
@@ -6579,7 +6580,12 @@ function VAFDashboardContent() {
                                     )}
                                     <form
                                         onSubmit={sendMessage}
-                                        className="relative flex-1 min-w-0 flex items-end bg-white rounded-2xl border border-gray-200 shadow-xl focus-within:border-gray-400 transition-all overflow-hidden"
+                                        className={cn(
+                                            "relative flex-1 min-w-0 flex items-end rounded-2xl border shadow-xl transition-all overflow-hidden",
+                                            voiceCallActive && !voiceCallClosing
+                                                ? "border-red-500/60 bg-[#fdecec] dark:bg-[#2a1a1a]"
+                                                : "bg-white border-gray-200 focus-within:border-gray-400"
+                                        )}
                                     >
                                         {voiceCallActive && <VoiceCallBar />}
                                         <input

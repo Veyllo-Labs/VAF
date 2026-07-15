@@ -206,6 +206,145 @@ def test_noise_gate_click_vs_speech():
     assert va.active_speech_seconds(b"") == 0.0  # degenerate input is "no speech"
 
 
+def test_overlong_reply_capped_at_sentence_boundary(monkeypatch):
+    """Live incident: garbled local-STT input made the model fill the whole
+    token budget with a 2342-char monologue (minutes of TTS). Replies are
+    capped in CODE at the last sentence boundary before the limit."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Erster Satz. " * 60]  # ~780 chars
+    res = va.voice_reply("Kauderwelsch?", scope_id="s", lang="de")
+    assert len(res["reply"]) <= va._MAX_SPOKEN_CHARS
+    assert res["reply"].endswith(".")  # sentence-boundary cut, no mid-word chop
+
+
+def test_short_reply_not_touched_by_cap(monkeypatch):
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Kurz und knapp."]
+    assert va.voice_reply("Hi", scope_id="s")["reply"] == "Kurz und knapp."
+
+
+def test_garbled_transcript_rule_in_prompt(monkeypatch):
+    _cfg(monkeypatch)
+    va.voice_reply("Hi", scope_id="s")
+    assert "garbled" in _FakeBackend.last_messages[0]["content"]
+
+
+def test_should_engage_matrix():
+    """Tier-1 addressee gate: side talk and STT junk never reach the LLM."""
+    # Other speakers without address forms = side talk
+    assert va.should_engage("[anderer_Sprecher]: Und dann sind wir essen gegangen", "other")[0] is False
+    assert va.should_engage("[Peter]: Ich glaube der Zug faehrt um acht", "named")[0] is False
+    # Other speakers ADDRESSING the agent get through (reply, never delegation)
+    assert va.should_engage("[anderer_Sprecher]: Warum ist deine Stimme anders?", "other")[0] is True
+    assert va.should_engage("[Peter]: VAF, wie spaet ist es?", "named")[0] is True
+    # Garbled STT noise (real incident string) from unverified speakers drops
+    assert va.should_engage("4x8. Wan2 4x8. WeiTai", None)[0] is False
+    # The owner always reaches the LLM - even garbled (prompt asks to re-ask)
+    assert va.should_engage("[Mert]: Wan2 4x8 dings", "self")[0] is True
+    assert va.should_engage("[Mert]: Wie wird das Wetter?", "self")[0] is True
+    # Unlabeled normal speech (no profile) engages
+    assert va.should_engage("Wie wird das Wetter morgen?", None)[0] is True
+
+
+def test_looks_garbled_heuristic():
+    assert va.looks_garbled("4x8. Wan2 4x8. WeiTai") is True
+    assert va.looks_garbled("la la la la la") is True          # heavy repetition
+    assert va.looks_garbled("Wie wird das Wetter morgen?") is False
+    assert va.looks_garbled("Der Termin ist um 15 Uhr") is False  # pure numbers are fine
+
+
+def test_silence_protocol(monkeypatch):
+    """Model answers <silent/> for owner side talk: no reply, no delegation."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["<silent/>"]
+    res = va.voice_reply("[Mert]: Schatz, machst du das Fenster zu?", scope_id="s")
+    assert res == {"reply": "", "delegate": None, "silent": True}
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "<silent/>" in system and "ALWAYS open" in system
+    # Marker plus real text: the text wins (model was half-sure)
+    _FakeBackend.script = ["<silent/> Meintest du mich?"]
+    res2 = va.voice_reply("Hm?", scope_id="s")
+    assert res2["reply"] == "Meintest du mich?"
+    assert not res2.get("silent")
+
+
+def test_plain_cot_leak_dropped_to_fallback(monkeypatch):
+    """Live incident 16:24: deepseek-v4 emitted its chain-of-thought as PLAIN
+    content (no <think> sentinels) - 'We need to parse the user's utterance'
+    was read aloud. On non-English calls such meta openers are never answers."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ['We need to parse the user\'s utterance: "[Mert]: Okay cool" ...']
+    res = va.voice_reply("Okay cool", scope_id="s", lang="de")
+    assert "verzettelt" in res["reply"]
+    assert "parse" not in res["reply"]
+
+
+def test_plain_cot_with_trailing_answer_salvages_answer(monkeypatch):
+    _cfg(monkeypatch)
+    _FakeBackend.script = [
+        "We need to parse this carefully. The user asks about weather.\n\n"
+        "Morgen wird es sonnig bei 25 Grad."
+    ]
+    res = va.voice_reply("Wetter?", scope_id="s", lang="de")
+    assert res["reply"] == "Morgen wird es sonnig bei 25 Grad."
+
+
+def test_german_meta_reply_about_labels_dropped(monkeypatch):
+    """Live incident 20:18: German CoT-as-content quoting the label machinery
+    ('Wir haben einen Sprecher mit dem Label "[unsicher]"...') was read aloud.
+    Internal-vocabulary replies are dropped in any language."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = [
+        'Wir haben einen Sprecher mit dem Label "[unsicher]". Der Nutzer ist '
+        'Mert, aber der aktuelle Sprecher ist nicht verifiziert.'
+    ]
+    res = va.voice_reply("[unsicher]: blabla", scope_id="s", lang="de")
+    assert "verzettelt" in res["reply"]
+    assert "[unsicher]" not in res["reply"]
+    # A normal sentence using 'unsicher' as a WORD must not trigger the guard
+    _FakeBackend.script = ["Da bin ich mir unsicher, magst du das praezisieren?"]
+    res2 = va.voice_reply("Hm?", scope_id="s", lang="de")
+    assert res2["reply"].startswith("Da bin ich mir unsicher")
+
+
+def test_english_call_keeps_plausible_we_need_answers(monkeypatch):
+    """On an ENGLISH call 'We need to...' can be a legitimate answer - the
+    drop additionally requires a third-person signal there."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["We need to check your calendar first."]
+    res = va.voice_reply("Can you plan my day?", scope_id="s", lang="en")
+    assert res["reply"] == "We need to check your calendar first."
+
+
+def test_english_call_cot_with_third_person_dropped(monkeypatch):
+    """Live incident 21:13: the CALL language follows the UI locale (English
+    for a German speaker), so the leak passed the language gate. CoT talks
+    ABOUT the user ('User is Mert', 'respond to this user query') - that
+    signal drops it on English calls too. The delegation survives."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = [
+        "We need to respond to this user query. User is Mert, asking about "
+        "the weather today. Since we are on a call...\n"
+        "<delegate>Wetter heute pruefen</delegate>"
+    ]
+    res = va.voice_reply("[Mert]: Wie wird das Wetter?", scope_id="s", lang="en")
+    assert "user query" not in res["reply"].lower()
+    assert "tangled" in res["reply"]           # english fallback text
+    assert res["delegate"] == "Wetter heute pruefen"
+
+
+def test_greeting_line_short_and_from_vocab_book():
+    """The greeting is 2-3 words max and comes from the vocabulary book
+    (vaf/core/vocab), which rotates variants and covers many languages."""
+    for _ in range(6):
+        g = va.greeting_line("de", "Mert")
+        assert g in ("Hey Mert!", "Na, Mert?")
+        assert len(g.split()) <= 3
+    assert va.greeting_line("en", "") == "Hey!"
+    assert va.greeting_line("de", "Ich") == "Hey!"        # placeholder name is not spoken
+    assert va.greeting_line("tr", "Mert") == "Selam Mert!"  # vocab book has tr
+
+
 def test_empty_input_returns_none(monkeypatch):
     _cfg(monkeypatch)
     assert va.voice_reply("   ", scope_id="s") is None

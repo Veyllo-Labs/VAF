@@ -19,6 +19,10 @@ interface VoiceCallState {
   active: boolean;
   /** true while the end-of-call exit animation plays (active stays true) */
   closing: boolean;
+  /** false when the backend reported no live LLM for the voice lane (local
+   *  mode): the agent is DEAF - the window shows a muted-mic state and no
+   *  turns are sent. */
+  voiceReady: boolean;
   seconds: number;
   speaker: VoiceSpeaker;
   agentMode: VoiceAgentMode;
@@ -41,6 +45,7 @@ interface VoiceCallState {
 export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   active: false,
   closing: false,
+  voiceReady: true,
   seconds: 0,
   speaker: null,
   agentMode: 'idle',
@@ -50,8 +55,9 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   hangupRequested: false,
 
   start: () => set({
-    active: true, closing: false, seconds: 0, speaker: null, agentMode: 'idle',
-    statusKey: 'connecting', mainTask: '', muted: false, hangupRequested: false,
+    active: true, closing: false, voiceReady: true, seconds: 0, speaker: null,
+    agentMode: 'idle', statusKey: 'connecting', mainTask: '', muted: false,
+    hangupRequested: false,
   }),
   stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false }),
   tick: () => set((s) => ({ seconds: s.seconds + 1 })),

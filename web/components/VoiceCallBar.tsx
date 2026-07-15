@@ -42,7 +42,10 @@ export function VoiceCallBar() {
     const ss = String(store.seconds % 60).padStart(2, '0');
 
     return (
-        <div className={`absolute inset-0 z-20 flex items-center justify-between gap-3 rounded-2xl border border-red-500/60 bg-[#fdecec] dark:bg-[#2a1a1a] px-4 pr-2 ${store.closing ? 'animate-[voiceBarOut_0.3s_ease_forwards]' : 'animate-[voiceBarIn_0.3s_ease]'}`}>
+        // No own border: the chat-input FORM morphs its border/background to
+        // the call colors (mockup mechanic "the line becomes the call bar");
+        // this overlay only crossfades the content on top of it.
+        <div className={`absolute inset-0 z-20 flex items-center justify-between gap-3 rounded-2xl bg-[#fdecec] dark:bg-[#2a1a1a] px-4 pr-2 ${store.closing ? 'animate-[voiceBarOut_0.25s_ease_forwards]' : 'animate-[voiceBarIn_0.25s_ease]'}`}>
             {/* Info (left) */}
             <span className="flex items-center gap-2 flex-none">
                 <i className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />

@@ -4,6 +4,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 import React, { useCallback, useEffect, useRef } from 'react';
+import { MicOff } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useVoiceCallStore } from '@/lib/voiceCallStore';
@@ -83,6 +84,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
         // window and ring animate out, and because `active` stays true until
         // stop(), the chat avatars fade back in only AFTER the window is gone.
         if (useVoiceCallStore.getState().closing) return;
+        playEarcon('end');
         try { ws?.send(JSON.stringify({ type: 'voice_call_end' })); } catch { /* noop */ }
         cleanup();
         useVoiceCallStore.getState().set({ closing: true });
@@ -235,6 +237,11 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             // Noise gate: a click/pop arms heardSpeech for a frame or two but
             // never accumulates real voiced time - discard, keep listening.
             if (!heardSpeech || voicedMs < MIN_SPEECH_MS) { later(listenLoop, 400); return; }
+            // Deaf (no live LLM): don't send turns that can only fail - the
+            // window shows the muted-mic state explaining why.
+            if (!useVoiceCallStore.getState().voiceReady) { later(listenLoop, 600); return; }
+            // Utterance accepted for processing: give the user an audible "heard you"
+            playEarcon('accept');
             useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking' });
             try {
                 const blob = new Blob(chunks, { type: mime });
@@ -271,10 +278,26 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                     onLocalMessage('user', `${t('delegationPrefix')}: ${data.delegated}`, 'voice_delegation');
                 }
                 if (data.audio) {
-                    playAgentAudio(data.audio, () => later(listenLoop, 300));
+                    // The mic may be LIVE when unsolicited audio arrives (the
+                    // greeting lands mid-listen): hold + discard so the agent
+                    // never transcribes its own voice. No-op for normal turns
+                    // (recorder is already stopped there).
+                    holdLoopRef.current = true;
+                    const recNow = recorderRef.current;
+                    if (recNow && recNow.state === 'recording') {
+                        discardNextRef.current = true;
+                        try { recNow.stop(); } catch { /* noop */ }
+                    }
+                    playAgentAudio(data.audio, () => { holdLoopRef.current = false; later(listenLoop, 300); });
                 } else {
                     later(listenLoop, 600);
                 }
+            }
+            else if (data.type === 'voice_call_started') {
+                // ok:false = no live LLM for the voice lane (local mode):
+                // the agent is DEAF - show the muted-mic state instead of
+                // silently eating the user's words.
+                useVoiceCallStore.getState().set({ voiceReady: data.ok !== false });
             }
             else if (data.type === 'voice_call_error') {
                 // no_speech and friends: just keep listening
@@ -357,6 +380,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 return;
             }
             ws?.send(JSON.stringify({ type: 'voice_call_start', ui_lang: locale }));
+            playEarcon('start');
             later(listenLoop, 600);
         })();
         return () => cleanup();
@@ -383,17 +407,35 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 <i className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
                 {t('liveCall')}&nbsp;{mm}:{ss}
             </div>
-            <div className="my-auto py-6" style={{ transform: 'scale(3)' }}>
-                <AgentAvatar mode={store.agentMode === 'idle' ? 'idle' : store.agentMode} eyePulseRef={eyePulseRef} />
+            <div className="my-auto py-6 relative" style={{ transform: 'scale(3)' }}>
+                {/* Canonical-avatar mode mapping (approved mockup states):
+                    listening = slow organic morph+breathe -> 'waiting',
+                    thinking  = fast morph+breathe        -> 'working',
+                    talking   = agentAvatarTalk           -> 'talking'.
+                    The literal 'listening'/'thinking' avatar modes are ear/
+                    gaze EMOTES and look wrong as call states. Deaf (no live
+                    LLM, local mode): dimmed avatar + muted-mic badge. */}
+                <AgentAvatar
+                    mode={!store.voiceReady ? 'waiting'
+                        : store.agentMode === 'talking' ? 'talking'
+                        : store.agentMode === 'thinking' ? 'working' : 'waiting'}
+                    dim={!store.voiceReady}
+                    eyePulseRef={eyePulseRef} />
+                {!store.voiceReady && (
+                    <span className="absolute -right-1.5 -bottom-1 flex h-[15px] w-[15px] items-center justify-center rounded-full bg-red-600 text-white shadow-sm">
+                        <MicOff size={9} strokeWidth={2.5} />
+                    </span>
+                )}
             </div>
             <div className="w-full mt-auto border-t border-black/10 dark:border-white/10 pt-2.5 flex flex-col gap-1">
                 <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
                     <i className={`w-[7px] h-[7px] rounded-full flex-none ${
-                        store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
+                        !store.voiceReady ? 'bg-red-500'
+                        : store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
                         : store.statusKey === 'speaking' ? 'bg-gray-100 animate-pulse'
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
                         : 'bg-gray-400'}`} />
-                    <span>{t('status_' + store.statusKey)}</span>
+                    <span>{!store.voiceReady ? t('status_deaf') : t('status_' + store.statusKey)}</span>
                 </div>
                 {store.mainTask && (
                     <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
@@ -404,6 +446,39 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             </div>
         </div>
     </>);
+}
+
+// ── earcons: tiny synthesized audio cues (no asset files) ──
+// start = gentle ascending two-tone, end = descending twin, accept = one soft
+// blip the moment an utterance is accepted for processing ("I heard you").
+// A short-lived AudioContext per cue; calls originate from a user gesture
+// (call button) so autoplay policy is satisfied.
+function playEarcon(kind: 'start' | 'end' | 'accept') {
+    try {
+        const ctx = new AudioContext();
+        const gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        const tones: Array<[number, number, number]> =
+            kind === 'start' ? [[440, 0, 0.10], [660, 0.10, 0.12]]
+            : kind === 'end' ? [[660, 0, 0.10], [440, 0.10, 0.12]]
+            : [[880, 0, 0.06]];
+        const vol = kind === 'accept' ? 0.10 : 0.16;
+        const t0 = ctx.currentTime;
+        const total = tones[tones.length - 1][1] + tones[tones.length - 1][2];
+        for (const [freq, off, dur] of tones) {
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            osc.start(t0 + off);
+            osc.stop(t0 + off + dur);
+        }
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(vol, t0 + 0.015);
+        gain.gain.setValueAtTime(vol, t0 + Math.max(0.02, total - 0.05));
+        gain.gain.linearRampToValueAtTime(0, t0 + total);
+        setTimeout(() => { try { ctx.close(); } catch { /* noop */ } }, total * 1000 + 200);
+    } catch { /* audio cues are optional */ }
 }
 
 // Strip everything that must never reach TTS: think blocks, sentinel tokens,

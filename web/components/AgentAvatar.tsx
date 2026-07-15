@@ -355,7 +355,11 @@ export function AgentAvatar({ mode = 'idle', dim = false, invert = false, lite =
     const eyeSize = dim ? 14 : shown === 'talking' ? 15 : 14;
 
     return (
-        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: leanLeft ? 36 : undefined, marginLeft: leanLeft ? -leanLeft : undefined, marginRight: leanLeft ? leanLeft : undefined, transition: 'margin 0.25s ease' }}>
+        // transition includes opacity+transform: the live-call enter/exit
+        // (.voice-call-hide-avatars) animates these via CSS class - an inline
+        // transition listing only margin would OVERRIDE the stylesheet and
+        // make the avatars snap in/out instead of scaling away.
+        <div className="w-9 h-9 rounded-xl shrink-0" data-agent-avatar style={{ position: 'relative', width: leanLeft ? 36 : undefined, marginLeft: leanLeft ? -leanLeft : undefined, marginRight: leanLeft ? leanLeft : undefined, transition: 'margin 0.25s ease, opacity 0.4s ease, transform 0.4s cubic-bezier(0.34, 1.3, 0.64, 1)' }}>
             {/* The agent is PERSISTENT — never destroyed, hidden, scaled or faded on a state
                 change. Only the running animation (body/eye) and the surrounding props swap, so the
                 figure stays in one piece. */}

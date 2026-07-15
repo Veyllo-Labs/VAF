@@ -1558,6 +1558,81 @@ async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: R
 # workspaces. Opaque session-id handles are returned, never absolute paths (keeps the /api/file surface
 # closed). Orphans = workspace folders whose chat session JSON was deleted (left on disk by design).
 
+@app.post("/api/speaker/test")
+async def speaker_recognition_test(request: Request):
+    """Live recognition test (Settings > Voice): score a short recording
+    against the requesting user's voice DB. Strictly read-only."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core import speaker_id as _sid
+    import base64 as _b64t
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or get_local_admin_scope_id())
+    body = await request.json()
+    try:
+        wav = _b64t.b64decode(body.get("audio") or "")
+    except Exception:
+        wav = b""
+    if not wav:
+        return {"ok": False, "error": "no_audio"}
+    if not _sid.is_enabled() or _sid.load_profile(scope) is None:
+        return {"ok": False, "error": "no_profile"}
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, lambda: _sid.score_wav(wav, scope))
+    if res is None:
+        return {"ok": False, "error": "no_speech"}
+    segs = await loop.run_in_executor(None, lambda: _sid.analyze_segments(wav, scope))
+    prof = _sid.load_profile(scope)
+    return {
+        "ok": True, **res,
+        "display_name": ((prof or {}).get("meta") or {}).get("display_name", "Ich"),
+        "segments": segs or [],
+        "threshold": _sid._threshold(), "band": _sid._band(),
+    }
+
+
+@app.post("/api/speaker/feedback")
+async def speaker_recognition_feedback(request: Request):
+    """Verdict on a recognition test ('correct'|'wrong'). Feeds the per-user
+    threshold-calibration store. Optionally, a WRONG verdict may carry a name
+    plus the test audio: the voice is then stored as a NAMED third-party
+    profile (same explicit-owner-action rule as the confirmation flow). The
+    OWNER profile is never touched; naming the owner is ignored on purpose."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core import speaker_id as _sid
+    import base64 as _b64f
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or get_local_admin_scope_id())
+    body = await request.json()
+    verdict = body.get("verdict")
+    if verdict not in ("correct", "wrong"):
+        return {"ok": False, "error": "bad_verdict"}
+    try:
+        score = float(body.get("score"))
+    except Exception:
+        return {"ok": False, "error": "bad_score"}
+    stats = _sid.record_test_feedback(scope, score, str(body.get("label") or ""), verdict)
+    saved_profile = None
+    _name = (body.get("name") or "").strip()
+    if verdict == "wrong" and _name and body.get("audio"):
+        prof = _sid.load_profile(scope)
+        owner_name = ((prof or {}).get("meta") or {}).get("display_name", "")
+        if owner_name.strip().lower() != _name.lower():
+            try:
+                wav = _b64f.b64decode(body["audio"])
+                loop = asyncio.get_running_loop()
+                got = await loop.run_in_executor(None, lambda: _sid.embed_wav(wav))
+                if got is not None:
+                    meta = _sid.save_named_profile(scope, _name, got["embedding"],
+                                                   got["net_seconds"])
+                    if meta:
+                        saved_profile = meta["display_name"]
+            except Exception as _sf_e:
+                log("WebServer", f"speaker feedback named save failed: {_sf_e}")
+    return {"ok": True, "stats": stats, "saved_profile": saved_profile}
+
+
 @app.get("/api/workspaces")
 async def list_my_workspaces(request: Request):
     """List ALL of the requesting user's chat workspaces (live + orphaned) for the central Data Explorer."""
@@ -5841,7 +5916,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     _conn_key = id(websocket)
 
                     if type == "voice_call_start":
+                        # Call language: the user's SPOKEN language, not the
+                        # browser locale - identity preferred_language first,
+                        # ui_lang as fallback (a German speaker with an
+                        # English UI kept getting English fallback texts).
                         _lang = (cmd.get("ui_lang") or "de")[:2].lower()
+                        try:
+                            from vaf.auth.user_workspace import get_user_workspace
+                            _vuser = manager.get_connection_username(websocket)
+                            if _vuser:
+                                _pref = ((get_user_workspace(_vuser).get_user_identity() or {})
+                                         .get("preferred_language") or "")
+                                if str(_pref).strip():
+                                    _lang = str(_pref).strip()[:2].lower()
+                        except Exception:
+                            pass
                         _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang, "scope": _scope}
                         await websocket.send_json({
                             "type": "voice_call_started",
@@ -5849,6 +5938,45 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "lang": _lang,
                             "reason": None if _va.available() else "no_api_provider",
                         })
+                        # Greeting: the agent opens the call (deterministic
+                        # line, no LLM round-trip) - also an audio check for
+                        # the user. Skipped when the voice lane is deaf.
+                        if _va.available():
+                            try:
+                                _gname = ""
+                                try:
+                                    from vaf.core import speaker_id as _gsid
+                                    _gprof = _gsid.load_profile(_scope)
+                                    _gname = ((_gprof or {}).get("meta") or {}).get("display_name", "")
+                                except Exception:
+                                    pass
+                                _greet = _va.greeting_line(_lang, _gname, scope_id=_scope)
+                                from vaf.core.speech import SpeechManager
+                                _gsm = SpeechManager.get_instance()
+                                loop = asyncio.get_running_loop()
+                                _gaudio = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        None,
+                                        lambda: _gsm.synthesize_audio(_greet, _lang, force_engine="docker"),
+                                    ),
+                                    timeout=30.0,
+                                )
+                                _call_rec = _VOICE_CALLS.get(_conn_key)
+                                if _gaudio and _call_rec is not None:
+                                    import base64 as _b64g
+                                    _call_rec["history"].append(
+                                        {"role": "assistant", "content": _greet})
+                                    await websocket.send_json({
+                                        "type": "voice_call_reply",
+                                        "user_text": "",
+                                        "speaker_label": None,
+                                        "reply": _greet,
+                                        "audio": _b64g.b64encode(_gaudio).decode("utf-8"),
+                                        "delegated": None,
+                                        "greeting": True,
+                                    })
+                            except Exception as _greet_e:
+                                log("WebServer", f"voice_call greeting failed: {_greet_e}")
 
                     elif type == "voice_call_end":
                         _VOICE_CALLS.pop(_conn_key, None)
@@ -5921,6 +6049,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception:
                             pass
 
+                        # 2b. Addressee gate (tier 1, no LLM): side talk from
+                        # other speakers and garbled non-owner input never
+                        # reach the LLM - the text still enters the call
+                        # history as room context (the labels exist for this).
+                        _engage, _gate_reason = _va.should_engage(_text, _label)
+                        if not _engage:
+                            _call["history"].append({"role": "user", "content": _text[:200]})
+                            _call["history"] = _call["history"][-16:]
+                            log("WebServer",
+                                f"voice_call: not engaging ({_gate_reason}) text={_text[:60]!r}")
+                            await websocket.send_json({
+                                "type": "voice_call_reply", "user_text": _text,
+                                "speaker_label": _label, "reply": "", "audio": None,
+                                "delegated": None, "silent": True,
+                            })
+                            continue
+
                         # 3. First-layer reply (one step + RAG; may delegate).
                         # While the main agent works on an earlier delegation,
                         # further delegation is suppressed - casual talk must
@@ -5939,10 +6084,25 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if _res is None:
                             await websocket.send_json({"type": "voice_call_error", "error": "llm_failed"})
                             continue
+                        if _res.get("silent"):
+                            # Tier 2: the model itself judged this as not
+                            # addressed to it. Keep the utterance as context,
+                            # skip TTS, keep listening.
+                            _call["history"].append({"role": "user", "content": _text[:400]})
+                            _call["history"] = _call["history"][-16:]
+                            log("WebServer",
+                                f"voice_call: model chose silence text={_text[:60]!r}")
+                            await websocket.send_json({
+                                "type": "voice_call_reply", "user_text": _text,
+                                "speaker_label": _label, "reply": "", "audio": None,
+                                "delegated": None, "silent": True,
+                            })
+                            continue
                         log("WebServer",
                             f"voice_call turn: active={_active_s:.1f}s label={_label or '-'} "
                             f"speaker_ok={_speaker_ok} text={_text[:80]!r} -> "
-                            f"reply_len={len(_res['reply'])} delegate={'yes' if _res.get('delegate') else 'no'}")
+                            f"reply_len={len(_res['reply'])} delegate={'yes' if _res.get('delegate') else 'no'} "
+                            f"reply={_res['reply'][:100]!r}")
 
                         # 4. Delegation -> normal main-agent task in this session
                         _delegated = None

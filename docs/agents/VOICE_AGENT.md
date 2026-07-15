@@ -37,15 +37,22 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
    (`_speaker_ok`, see invariants). An "unsure" score queues a confirmation
    question (`speaker_confirm.maybe_request_confirmation`) without
    interrupting the call.
-4. **First-layer reply**: `voice_agent.voice_reply()` - one
+4. **Addressee gate** (`voice_agent.should_engage`, no LLM): side talk from
+   other/named speakers and garbled non-owner STT noise stop here - the text
+   enters the call history as room context and the reply is `silent`
+   (invariant 8).
+5. **First-layer reply**: `voice_agent.voice_reply()` - one
    `chat_completion` with `tools=None`, system prompt + RAG memory block +
    last call turns as history. The model may append
-   `<delegate>task</delegate>`; the marker is parsed out and never spoken.
-5. **Delegation**: the task text goes into the TaskQueue for the CALLING
+   `<delegate>task</delegate>` (parsed out, never spoken) or answer with
+   exactly `<silent/>` (silence protocol: no TTS, keep listening). Spoken
+   replies are capped at a sentence boundary (`_cap_spoken`).
+6. **Delegation**: the task text goes into the TaskQueue for the CALLING
    session (`origin_channel: "voice_call"`); the main agent runs it as a
    normal turn.
-6. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
-   `reply`, `audio`, `delegated`).
+7. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
+   `reply`, `audio`, `delegated`, `silent` - a silent reply has no audio and
+   the frontend simply keeps listening).
 
 Every turn writes one forensic log line (`voice_call turn: active=... label=...
 speaker_ok=... text=... -> reply_len=... delegate=...`).
@@ -89,6 +96,16 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    click never becomes a message.
 7. **All call animations are transform/opacity only and finite** (GPU leak
    rule); enter/exit choreography runs through the store's `closing` phase.
+8. **Addressee gating on the always-open mic, without extra LLM turns.**
+   Tier 1 (no LLM, `voice_agent.should_engage`): another/named speaker who
+   does not address the agent (no name, no second-person form) is side talk,
+   and garbled STT noise from anyone but the verified owner is dropped - the
+   text still enters the call history as room context. Tier 2 (same LLM call
+   that would answer anyway): the prompt's silence protocol lets the model
+   reply with exactly `<silent/>` when an owner utterance is not directed at
+   it - no TTS, keep listening. Spoken replies are additionally capped in
+   code at a sentence boundary (`_cap_spoken`) so a derailed model can never
+   fill the token budget with a monologue.
 
 ## WebSocket events
 
@@ -129,6 +146,19 @@ that's Peter" naming) and its hard rules live in
 [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md) (section "Speaker
 identification and the confirmation flow"). Core modules:
 `vaf/core/speaker_id.py`, `vaf/core/speaker_confirm.py`.
+
+## Spoken strings
+
+Every fixed line the voice stack speaks or sends (call greeting, spoken
+fallbacks, the confirmation question and acks, the enrollment script) lives
+in the vocabulary book (`vaf/core/vocab`, see
+[VOCABULARY_BOOK.md](../platform/VOCABULARY_BOOK.md)) under the keys
+`voice_*`, `speaker_confirm_*` and `speaker_enroll_*`. Adding a language
+means adding phrasings there (or running `scripts/generate_vocab.py`);
+missing languages fall back to English per phrase. Never hardcode a spoken
+string in voice code. Detection heuristics (reasoning-leak patterns) stay in
+`voice_agent.py` on purpose: they track the language the MODEL thinks in,
+not the user's.
 
 ## Config
 

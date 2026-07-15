@@ -24,6 +24,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+# SECURITY: the Telegram Bot API carries the BOT TOKEN in the URL path
+# (api.telegram.org/bot<TOKEN>/getUpdates), and httpx logs every request URL
+# at INFO level - so the default logging printed the token to the terminal
+# and into the log files on every polling tick (live incident: a user
+# copy-pasted it from there twice; the token had to be revoked). Silence
+# httpx/httpcore request logging BEFORE any client is created.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 from vaf.core.config import Config
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.task_queue import TaskQueue

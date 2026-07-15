@@ -520,6 +520,14 @@ Each whitelisted user is mapped to a VAF user scope, ensuring:
 - Store bot tokens securely in `~/.vaf/config.json`
 - Never commit tokens to version control
 - Use environment variables in production
+- The Bot API carries the token in every request URL
+  (`api.telegram.org/bot<TOKEN>/...`). VAF sets the `httpx`/`httpcore`
+  loggers to WARNING in the Telegram bridge so request URLs (and the token)
+  never reach the terminal or log files - do not raise these loggers back to
+  INFO/DEBUG when debugging.
+- If you ever shared terminal or log output containing
+  `api.telegram.org/bot...`, revoke the token via @BotFather and enter the
+  new one in Settings.
 
 ---
 

@@ -89,6 +89,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and news requests delegate; clock questions and small talk do not).
 
 ### Fixed
+- **The Telegram bot token no longer leaks into terminal and log files.**
+  The Telegram Bot API carries the token in the request URL, and the HTTP
+  client's default INFO logging printed that URL on every polling tick -
+  into the console and the log files. Request-URL logging is silenced now
+  (warnings and errors still come through). If you ever copied terminal
+  output containing `api.telegram.org/bot...`, revoke the token via
+  @BotFather and set the new one in Settings.
 - **Local voice turns answer instead of thinking.** A local reasoning model
   (Qwen) burned its entire voice token budget on internal reasoning: the turn
   ended with nothing to speak, no delegation was created, and the code then

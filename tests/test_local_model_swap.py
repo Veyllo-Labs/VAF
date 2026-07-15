@@ -181,6 +181,10 @@ def test_stop_server_kills_swap_owned_server_too(monkeypatch, tmp_path):
 
     killed = []
     monkeypatch.setattr(mgr, "_is_process_running", lambda pid: pid == 222)
+    # Force the Unix kill branch: on Windows stop_server uses taskkill via
+    # subprocess and the os.kill recorder below never fires (CI failure on
+    # the windows-latest runner).
+    monkeypatch.setattr(mgr, "system", "Linux")
     monkeypatch.setattr(backend.os, "kill",
                         lambda pid, sig: killed.append((pid, sig)))
     mgr.stop_server(force_external=True)

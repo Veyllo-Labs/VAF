@@ -488,11 +488,23 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
                     pass
 
             # 1) Search: Brave API -> Google CSE API -> scrape Google -> DuckDuckGo
+            reset_search_provider_errors()
             results, search_source, fallback_hint = get_web_search_results(query_with_filter, max_results)
-            # If no results with filter, retry without filter
-            if not results and query_with_filter != query:
-                UI.event("Smart Search", "No results with source filter - retrying without filter", style="dim")
+            # If the filtered query found no real web results, retry without
+            # the filter. A site: filter can legitimately have zero hits (live
+            # incident: a weather query against a trusted-sources list without
+            # weather sites) - and the internal-knowledge fallback inside
+            # get_web_search_results makes `results` non-empty, which used to
+            # silently skip this retry and report "web unreachable" while the
+            # web was fine. Memory snippets never preempt the plain-query web
+            # search; they remain the fallback if that also finds nothing.
+            if query_with_filter != query and (
+                    not results or search_source == "Internal Knowledge (RAG)"):
+                UI.event("Smart Search", "No web results with source filter - retrying without filter", style="dim")
+                _filtered_pass = (results, search_source, fallback_hint)
                 results, search_source, fallback_hint = get_web_search_results(query, max_results)
+                if not results:
+                    results, search_source, fallback_hint = _filtered_pass
             
             if not results:
                 return [] if return_raw else "No results found. (All search APIs returned empty — possible rate limit or network issue)"
@@ -504,12 +516,27 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
             if search_source == "Internal Knowledge (RAG)":
                 # Unmistakable header: a user once read this as a working web
                 # search because the generic "Web Search Results" framing buried
-                # the fallback label.
+                # the fallback label. The reason line must be HONEST: claim an
+                # outage only when providers actually errored - a clean
+                # zero-hit search is "no results", and the model repeats
+                # whatever this banner says to the user (live incident:
+                # "Das Web ist gerade nicht erreichbar" for a fine network).
+                _prov_errors = get_search_provider_errors()
+                if _prov_errors:
+                    _rag_reason = (
+                        "The web search providers are unreachable (rate limit / network / missing API keys): "
+                        + "; ".join(_prov_errors[:3]) + ". "
+                        "Tell the user explicitly that the web could not be reached and these are memory results."
+                    )
+                else:
+                    _rag_reason = (
+                        "The web search ran fine but found NO results for this query. "
+                        "Tell the user the search came up empty, not that the web is down."
+                    )
                 title = (
-                    "### INTERNAL KNOWLEDGE — NOT WEB RESULTS\n"
-                    "**The web search providers are unreachable (rate limit / network / missing API keys). "
-                    "The following snippets come from VAF's own long-term memory. "
-                    "Tell the user explicitly that the web could not be reached and these are memory results.**\n\n"
+                    "### INTERNAL KNOWLEDGE - NOT WEB RESULTS\n"
+                    f"**{_rag_reason} "
+                    "The following snippets come from VAF's own long-term memory.**\n\n"
                 )
             else:
                 title = f"### Web Search Results ({search_source})\n"

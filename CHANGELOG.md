@@ -72,6 +72,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the same activity trigger a chat message feeds, the window shows "loading
   the model" instead of the muted-mic state, and the call comes alive by
   itself (greeting included) once the model is up.
+- **web_search no longer claims the web is down when a filtered search finds
+  nothing.** With a source filter (trusted sources or smart intent) that had
+  zero hits, the internal-memory fallback silently prevented the retry
+  without the filter, and a hard-coded banner told the model "the web
+  providers are unreachable" on a healthy network - which the model repeated
+  to the user. The plain query is now always retried on the real web before
+  memory snippets are accepted, and the fallback banner only claims an
+  outage when providers actually errored (including the recorded errors);
+  otherwise it says the search found nothing.
 - **Natural questions now find memories by name.** "Kannst du dich noch an
   Kai erinnern?" returned nothing while a bare "Kai" search hit - filler
   words diluted the lexical score of the one signal word. Query tokens are

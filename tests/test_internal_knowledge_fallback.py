@@ -55,9 +55,11 @@ def test_internal_results_get_unmistakable_header(monkeypatch):
         ),
     )
     out = search_mod.WebSearchTool().run(query="VAF", max_results=2, open_in_browser=False)
-    assert out.startswith("### INTERNAL KNOWLEDGE — NOT WEB RESULTS")
+    assert out.startswith("### INTERNAL KNOWLEDGE - NOT WEB RESULTS")
     assert "long-term memory" in out
-    assert "Tell the user explicitly" in out
+    # Honest reason line: without recorded provider errors the banner says
+    # "found nothing", never "web unreachable" (live incident 18:25).
+    assert "Tell the user the search came up empty" in out
 
 
 def test_internal_knowledge_error_is_collected_not_raised(monkeypatch):

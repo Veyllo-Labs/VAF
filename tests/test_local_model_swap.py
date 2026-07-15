@@ -121,7 +121,21 @@ def test_mmproj_found_on_disk_no_download(monkeypatch, tmp_path):
     _cfg_map(monkeypatch, {"vision_provider": "local"})
     model = tmp_path / "qwen3.5-4b-test.gguf"
     model.write_bytes(b"g")
-    mmproj = tmp_path / "mmproj-F16.gguf"
+    # Auto path uses a PER-MODEL local name: Qwen and Gemma repos both ship
+    # "mmproj-F16.gguf", a shared name would pair the wrong projector.
+    mmproj = tmp_path / "mmproj-qwen3.5-4b-test.gguf"
+    mmproj.write_bytes(b"m")
+    assert backend.resolve_mmproj_for(str(model)) == str(mmproj)
+
+
+def test_mmproj_for_dedicated_voice_model_uses_voice_ref_repo(monkeypatch, tmp_path):
+    """Vision during a live call: the voice GGUF's repo (from the voice ref)
+    resolves its own projector even though it is not in _KNOWN_MODEL_REPOS."""
+    _cfg_map(monkeypatch, {"vision_provider": "local",
+                           "voice_agent_model": "owner/gemma-repo/gemma-voice.gguf"})
+    model = tmp_path / "gemma-voice.gguf"
+    model.write_bytes(b"g")
+    mmproj = tmp_path / "mmproj-gemma-voice.gguf"
     mmproj.write_bytes(b"m")
     assert backend.resolve_mmproj_for(str(model)) == str(mmproj)
 
@@ -147,3 +161,28 @@ def test_mmproj_explicit_ref_wins(monkeypatch, tmp_path):
 def test_vision_local_mmproj_is_admin_only():
     from vaf.core.config import Config
     assert Config.is_global_config_key("vision_local_mmproj")
+
+
+def test_stop_server_kills_swap_owned_server_too(monkeypatch, tmp_path):
+    """Tray Quit regression: after a model swap the live server belongs to a
+    throwaway manager; THIS manager's self.process is a stale handle. The old
+    elif skipped the pid file and the real server survived Quit - both the
+    own handle AND the pid-file process must be stopped on force_external."""
+    mgr = backend.ServerManager(skip_cleanup=True)
+    mgr.pid_file = str(tmp_path / "server.pid")
+    (tmp_path / "server.pid").write_text("222")
+
+    class _StaleProc:
+        pid = 111
+        def terminate(self): pass
+        def kill(self): pass
+        def wait(self, timeout=None): return 0
+    mgr.process = _StaleProc()
+
+    killed = []
+    monkeypatch.setattr(mgr, "_is_process_running", lambda pid: pid == 222)
+    monkeypatch.setattr(backend.os, "kill",
+                        lambda pid, sig: killed.append((pid, sig)))
+    mgr.stop_server(force_external=True)
+    assert (222, 9) in killed          # the swap-owned live server dies
+    assert not (tmp_path / "server.pid").exists()

@@ -43,10 +43,15 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
   `voice_call_start` once the `model_state` push reports loaded, so the
   call heals itself and greets (live incident: the call button never
   triggered the lazy load and the call opened dead until the user sent a
-  chat message). Without the tray watchdog (headless mode) the inherit
-  flavor stays honest but nothing loads - known limitation. A non-local
-  provider that is unavailable keeps `reason: "no_model"` and the muted-mic
-  state.
+  chat message). The inherit flavor loads the MAIN model directly in a
+  worker thread (`ServerManager.ensure_model_present` +
+  `ensure_local_model`), so this works WITHOUT the desktop tray too
+  (headless/server installs); the tray heartbeat is still fed, and the
+  lock/reuse semantics prevent a second server either way. With local
+  vision enabled the dedicated voice model also loads its OWN projector
+  (its repo comes from the voice ref), so vision keeps working mid-call.
+  A non-local provider that is unavailable keeps `reason: "no_model"` and
+  the muted-mic state.
 - The speech stack (STT + TTS, local Docker or a cloud voice provider - see
   [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
 - Optional but strongly recommended: an enrolled speaker profile
@@ -196,7 +201,16 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    mute: the recorder loop stops sending turns, the window shows the dimmed
    avatar + muted-mic badge with `status_deaf_busy`, and a server-side belt
    answers any turn that slips through with `voice_call_error "busy_local"`
-   before the noise gate and STT (pipeline step 0). When the result
+   before the noise gate and STT (pipeline step 0). The belt has its own
+   server-side truth on top of the frontend flag: live SUB-AGENTS (any
+   session, `subagent_ipc.get_active_tasks`) also hold the one model - the
+   main turn may already have ended, but a swap mid-inference crashed a
+   sub-agent live. The frontend additionally passes a `mainBusy` hint
+   (chat generation / workflow / sub-agent, the stop-button condition) into
+   the layer, so ANY main-lane work mutes the call - not only
+   voice-delegated tasks. Call-start load/pre-warm paths are guarded the
+   same way, and the call is pinned to its ORIGIN session (chat switches
+   must not re-route turns or results). When the result
    callback fires, listening resumes; with a dedicated voice model the
    first turn after the result pays the swap back to the voice GGUF
    (seconds, warm). This applies the repo-wide local-mode rule to the call:

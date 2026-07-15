@@ -113,8 +113,16 @@ export const useWorkflowStore = create<WorkflowState>()(
 
   appendWorkflowLine: (line) => {
     if (!line && line !== '') return;
+    // Hard cap PER ENTRY: a single sub-agent output block arrives as one
+    // "line" and can be tens of KB - 400 of those ballooned the DOM until
+    // the page lagged (live report). 500 chars each, tail dropped; the
+    // full output still lives in the logs/session, the terminal is a
+    // ticker, not an archive.
+    const entry = line.length > 500
+      ? line.slice(0, 500) + ` [... +${(line.length - 500).toLocaleString()} chars]`
+      : line;
     set(state => {
-      const next = [...state.consoleLines, line];
+      const next = [...state.consoleLines, entry];
       const capped = next.length > 400 ? next.slice(-400) : next;
       return { consoleLines: capped };
     });

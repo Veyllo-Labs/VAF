@@ -80,6 +80,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   persona now: it introduces itself with the configured agent name (Settings >
   Persona) instead of a generic "VAF", and a compact excerpt of the Soul
   keeps it in character on the call.
+- **Vision keeps working during a live call, calls load the model without
+  the desktop tray, and the agent's bars are real too.** With local vision
+  enabled, the dedicated voice model (Gemma 4 E4B can see) now loads its own
+  vision projector when it takes the server, so image questions work
+  mid-call; auto-downloaded projectors get per-model filenames (Qwen and
+  Gemma both ship "mmproj-F16.gguf" - a shared name would have paired the
+  wrong projector after a model swap). Starting a call now loads the local
+  model directly in the backend instead of relying on the desktop tray's
+  activity watchdog - headless/server installs get the self-healing call
+  start too. And the gray bars while the agent speaks now show the agent's
+  actual output level (shared analyser with the avatar's eye pulse) instead
+  of an animation.
 - **The call bar waveform is a real level meter now, with a draggable noise
   gate.** The red bars during a live call show your actual microphone
   amplitude (same mechanism as the recognition test) instead of a random
@@ -121,6 +133,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   write (kill switch: `speaker_id_adaptive_enabled`). The voice agent also
   remembers twice as much of the call now - a slicing bug fed the model
   only the last 4 exchanges instead of the stored 8.
+- **The call bar keeps one size, and the workflow terminal stops flooding
+  the page.** The live-call bar no longer jumps 44 pixels wider when no
+  stop button is shown (the button slot stays reserved during a call), and
+  the workflow window's terminal caps every output entry at 500 characters
+  (a single sub-agent output block could be tens of kilobytes; hundreds of
+  those made the whole page lag - full outputs remain in the logs).
+- **Three live-call bugs on local single-model setups.** Quitting the tray
+  now really stops the llama server: after a model swap the running server
+  belonged to a helper, and the quit path only looked at its own stale
+  process handle, so the model survived until `vaf stop`. A live call is
+  pinned to the chat it started in: switching chats mid-call no longer
+  routes turns, delegation bubbles or the spoken result into the newly
+  opened chat. And sub-agents are safe from the voice model swap: while a
+  sub-agent computes on the one local model, the server itself now reports
+  the call busy (the frontend flag alone dropped too early once the main
+  turn ended) and no model swap can start - a voice turn during a sub-agent
+  run used to swap the model out mid-inference and crash the sub-agent. The
+  call window shows "background task running" during that window and heals
+  afterwards. The same protection covers ALL main-lane work now: chat
+  generations and running workflows also mute the call on single-model
+  setups, not only voice-delegated tasks (a workflow's document generation
+  could otherwise be swap-interrupted mid-write).
 - **The Telegram bot token no longer leaks into terminal and log files.**
   The Telegram Bot API carries the token in the request URL, and the HTTP
   client's default INFO logging printed that URL on every polling tick -

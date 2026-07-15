@@ -6002,9 +6002,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                    "scope": _scope, "chat_context": _chat_ctx,
                                                    "agent_name": _agent_name,
                                                    "agent_soul": _agent_soul}
+                        def _any_live_subagents() -> bool:
+                            """A live sub-agent (any session) holds the ONE
+                            local model - no model swap may run then (a swap
+                            mid-inference crashed a sub-agent live)."""
+                            try:
+                                from vaf.core.subagent_ipc import get_ipc as _gi
+                                return bool(_gi().get_active_tasks())
+                            except Exception:
+                                return False
+
                         _lane_ok = _va.available()
                         _lane_reason = None
-                        if _lane_ok and _va.dedicated_local_model():
+                        if _lane_ok and _va.dedicated_local_model() and not _any_live_subagents():
                             # Server up but possibly holding the MAIN model
                             # (e.g. right after a chat): pre-warm the swap so
                             # the first voice turn does not pay it.
@@ -6015,7 +6025,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 pass
                         if not _lane_ok:
                             _vm_ref = _va.dedicated_local_model()
-                            if _vm_ref:
+                            if _any_live_subagents():
+                                # Never load/swap while a sub-agent computes
+                                # on the one model: the call opens in the
+                                # busy state and heals after the result.
+                                _lane_reason = "model_loading"
+                            elif _vm_ref:
                                 # Dedicated voice model configured: load THAT
                                 # (download on first use), not the main model.
                                 # On success push model_state so the frontend
@@ -6039,14 +6054,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                                 _vvm.ensure_voice_model_async(on_ready=_vm_ready)
                             elif _va.is_exclusive():
-                                # Local mode with the llama server down: the
-                                # model loads LAZILY on activity, and the call
-                                # button never fed that trigger (live incident:
-                                # call opened deaf until a chat message loaded
-                                # the model). Feed the same heartbeat a chat
-                                # message feeds - the tray watchdog then runs
-                                # its locked start_model_async path (never a
-                                # second server). The frontend shows "loading"
+                                # Local mode with the llama server down: load
+                                # the MAIN model directly in a worker thread
+                                # (closes the former headless gap - the tray
+                                # watchdog is desktop-only and register_
+                                # activity alone did nothing without it).
+                                # ensure_local_model is lock-serialized and
+                                # start_server reuses/waits, so a tray that
+                                # also reacts to the heartbeat cannot spawn a
+                                # second server. The frontend shows "loading"
                                 # and re-sends voice_call_start once the
                                 # model_state push reports loaded.
                                 _lane_reason = "model_loading"
@@ -6054,6 +6070,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     tray_context.register_activity()
                                 except Exception:
                                     pass
+
+                                def _main_load_work():
+                                    try:
+                                        from vaf.core.backend import (ServerManager,
+                                                                      ensure_local_model)
+                                        _mgr = ServerManager(skip_cleanup=True)
+                                        _mpath = _mgr.ensure_model_present()
+                                        if _mpath and os.path.exists(_mpath) and \
+                                                ensure_local_model(_mpath, reason="voice call start"):
+                                            tray_context.set_model_loaded(True)
+                                            get_web_interface().push_update({
+                                                "type": "model_state",
+                                                "loaded": True,
+                                                "persistent": tray_context.is_persistent(),
+                                                "provider": "local",
+                                            })
+                                    except Exception as _ml_e:
+                                        log("WebServer", f"voice_call main-model load failed: {_ml_e}")
+
+                                threading.Thread(target=_main_load_work,
+                                                 name="voice-main-model-load",
+                                                 daemon=True).start()
                             else:
                                 _lane_reason = "no_model"
                             log("WebServer",
@@ -6130,10 +6168,26 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # turn must not queue behind it (it would stall the
                         # call for the whole tool run) - the frontend shows
                         # the muted state and normally never sends these.
-                        if _va.is_exclusive() and cmd.get("main_busy"):
-                            await websocket.send_json({
-                                "type": "voice_call_error", "error": "busy_local"})
-                            continue
+                        # SERVER-SIDE truth on top of the frontend flag: live
+                        # SUB-AGENTS of this session also hold the one model
+                        # (the main turn may have ended, clearing the
+                        # frontend's mainTask) - a voice turn then would swap
+                        # the server to the voice GGUF mid-inference and
+                        # crash the sub-agent (live incident).
+                        if _va.is_exclusive():
+                            _busy_belt = bool(cmd.get("main_busy"))
+                            if not _busy_belt:
+                                try:
+                                    from vaf.core.subagent_ipc import get_ipc as _gipc
+                                    # ANY session's live sub-agent holds the
+                                    # one model - a swap would crash it.
+                                    _busy_belt = bool(_gipc().get_active_tasks())
+                                except Exception:
+                                    _busy_belt = False
+                            if _busy_belt:
+                                await websocket.send_json({
+                                    "type": "voice_call_error", "error": "busy_local"})
+                                continue
 
                         # 0. Noise gate (backend belt to the frontend VAD gate):
                         # clicks/near-silence never reach STT - Whisper-class

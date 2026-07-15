@@ -1045,6 +1045,7 @@
     "status_speaking": "Agent spricht",
     "status_deaf": "Hört nicht - kein Modell für den Live-Call verfügbar",
     "status_loading_model": "Modell wird geladen...",
+    "backgroundWork": "Hintergrund-Aufgabe läuft",
     "gateBelow": "wird nicht aufgenommen",
     "gateAbove": "wird aufgenommen",
     "gateHint": "Verschiebe den Regler, damit Störgeräusche nicht aufgenommen werden.",

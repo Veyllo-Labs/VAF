@@ -1045,6 +1045,7 @@
     "status_speaking": "Agent speaking",
     "status_deaf": "Not listening - no model available for the live call",
     "status_loading_model": "Loading the model...",
+    "backgroundWork": "background task running",
     "gateBelow": "not recorded",
     "gateAbove": "recorded",
     "gateHint": "Move the slider so background noise is not picked up.",

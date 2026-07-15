@@ -77,14 +77,32 @@ export function VoiceCallBar() {
         let ctx: AudioContext | null = null;
         let analyser: AnalyserNode | null = null;
         let buf: Uint8Array<ArrayBuffer> | null = null;
+        let agentBuf: Uint8Array<ArrayBuffer> | null = null;
         let lastAgentFrame = 0;
         const tick = (now: number) => {
             const speaker = useVoiceCallStore.getState().speaker;
             const els = bars();
             const n = els.length;
             if (speaker === 'agent') {
-                // Animated gray bars, throttled to the old 90ms cadence.
-                if (now - lastAgentFrame > 90) {
+                const agentAn = voiceCallAudio.agentAnalyser;
+                if (agentAn) {
+                    // REAL agent level (shared analyser from the layer's
+                    // eye-pulse pipeline), same VU fill as the user side.
+                    if (!agentBuf || agentBuf.length !== agentAn.frequencyBinCount) {
+                        agentBuf = new Uint8Array(agentAn.frequencyBinCount);
+                    }
+                    const abuf = agentBuf;
+                    agentAn.getByteFrequencyData(abuf);
+                    const alevel = abuf.reduce((a, b) => a + b, 0) / abuf.length;
+                    const afill = Math.min(1, alevel / 100);
+                    for (let i = 0; i < n; i++) {
+                        const lit = (i + 0.5) / n <= afill;
+                        const v = abuf[Math.floor((i / n) * abuf.length)] / 255;
+                        els[i].style.transform =
+                            `scaleY(${(lit ? Math.max(0.35, v) : 0.1).toFixed(2)})`;
+                    }
+                } else if (now - lastAgentFrame > 90) {
+                    // Fallback: the old animation when no analyser exists.
                     lastAgentFrame = now;
                     for (let i = 0; i < n; i++) {
                         els[i].style.transform =

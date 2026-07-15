@@ -6563,10 +6563,14 @@ function VAFDashboardContent() {
                                     </div>
                                 </div>
 
-                                {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active */}
+                                {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active.
+                                    During a live call the SLOT stays reserved even without a button:
+                                    otherwise the call bar jumps 44px wider/narrower whenever the
+                                    stop button appears (live report: bar "too long" until stop shows). */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center")}>
-                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
+                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing || (voiceCallActive && !voiceCallClosing)) && (
                                         <div className="w-9 mr-2 shrink-0 flex items-center justify-center">
+                                        {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
                                             <div className="relative flex items-center justify-center">
                                                 {/* Hover aura — inline, only needs to surround the button itself */}
                                                 {stopHovered && !stopPulsing && (
@@ -6595,6 +6599,7 @@ function VAFDashboardContent() {
                                                     )}
                                                 </button>
                                             </div>
+                                        )}
                                         </div>
                                     )}
                                     <form
@@ -7633,6 +7638,7 @@ function VAFDashboardContent() {
             <VoiceCallLayer
                 ws={ws}
                 sessionId={currentSessionId}
+                mainBusy={isGenerating || isWorkflowRunning || isSubAgentRunning || loading}
                 onLocalMessage={(role, content, kind) => {
                     setMessages(prev => [...prev, { role, content, timestamp: Date.now(), kind }]);
                 }}

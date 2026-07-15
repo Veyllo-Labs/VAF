@@ -23,6 +23,11 @@ import { useLocaleStore } from '@/lib/localeStore';
 interface Props {
     ws: WebSocket | null;
     sessionId: string | null;
+    /** ANY main-lane work running (chat generation, workflow, sub-agent):
+     *  on the exclusive single local model, voice turns must pause then -
+     *  not only for voice-delegated tasks (a workflow generation was
+     *  swap-interrupted live). */
+    mainBusy?: boolean;
     onLocalMessage: (role: 'user' | 'assistant', content: string, kind?: string) => void;
 }
 
@@ -34,7 +39,11 @@ const SILENCE_MS = 1500;
 const MIN_SPEECH_MS = 350;    // noise gate: a click is 1-2 voiced frames, real words accumulate
 const UNMUTE_GRACE_MS = 400;  // swallow the click/pop of the unmute toggle itself
 
-export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
+export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false }: Props) {
+    // Ref mirror: the recorder/turn closures are long-lived and must read
+    // the CURRENT busy state, not the value at closure creation.
+    const mainBusyRef = useRef(mainBusy);
+    useEffect(() => { mainBusyRef.current = mainBusy; }, [mainBusy]);
     const t = useTranslations('voiceCall');
     const locale = useLocaleStore((s) => s.locale);
     const store = useVoiceCallStore();
@@ -57,6 +66,11 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
     // HELD: the mic must not run while the agent reads the result, or the next
     // turn would transcribe the agent's own voice.
     const holdLoopRef = useRef(false);
+    // The call is PINNED to the session it started in: the sessionId prop
+    // follows chat switches, but turns, delegations and the result callback
+    // belong to the origin chat (live incident: switching chats mid-call
+    // routed the call into the newly opened chat).
+    const callSessionRef = useRef<string | null>(null);
 
     const later = useCallback((fn: () => void, ms: number) => {
         const id = setTimeout(fn, ms);
@@ -164,9 +178,13 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                     agentRafRef.current = requestAnimationFrame(pulse);
                 };
                 agentRafRef.current = requestAnimationFrame(pulse);
+                // Share the analyser: the call bar drives its gray bars from
+                // the agent's REAL output level (same as the user side).
+                voiceCallAudio.agentAnalyser = an;
                 stopPulse = () => {
                     cancelAnimationFrame(agentRafRef.current);
                     if (eyePulseRef.current) eyePulseRef.current.style.transform = 'scale(1)';
+                    if (voiceCallAudio.agentAnalyser === an) voiceCallAudio.agentAnalyser = null;
                 };
             } catch { /* analyser optional */ }
             const done = () => {
@@ -263,7 +281,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             // while the main agent holds the one model): don't send turns
             // that can only fail/stall - the muted-mic state explains why.
             const stNow = useVoiceCallStore.getState();
-            if (!stNow.voiceReady || (stNow.exclusive && stNow.mainTask)) {
+            if (!stNow.voiceReady || (stNow.exclusive && (stNow.mainTask || mainBusyRef.current))) {
                 later(listenLoop, 600); return;
             }
             // Utterance accepted for processing: give the user an audible "heard you"
@@ -275,8 +293,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 const b64 = await blobToBase64(wav);
                 const st2 = useVoiceCallStore.getState();
                 ws?.send(JSON.stringify({
-                    type: 'voice_call_turn', audio: b64, format: 'wav', sessionId,
-                    main_busy: !!st2.mainTask, pending_task: st2.mainTask || '',
+                    type: 'voice_call_turn', audio: b64, format: 'wav',
+                    sessionId: callSessionRef.current ?? sessionId,
+                    main_busy: !!st2.mainTask || mainBusyRef.current,
+                    pending_task: st2.mainTask || '',
                 }));
                 // reply handled in the WS effect below
             } catch {
@@ -302,9 +322,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 if (data.delegated) {
                     useVoiceCallStore.getState().set({ mainTask: data.delegated });
                     // Bare task text: the red-bordered bubble + "voice agent"
-                    // tag next to the timestamp identify the sender - no
-                    // prefix inside the bubble needed.
-                    onLocalMessage('user', data.delegated, 'voice_delegation');
+                    // tag next to the timestamp identify the sender. Only
+                    // render locally when the ORIGIN chat is on screen - the
+                    // persisted message lands in the pinned session anyway.
+                    if (!callSessionRef.current || callSessionRef.current === sessionId) {
+                        onLocalMessage('user', data.delegated, 'voice_delegation');
+                    }
                 }
                 if (data.audio) {
                     // The mic may be LIVE when unsolicited audio arrives (the
@@ -347,11 +370,19 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 if (data.loaded === true && stM.active && !stM.voiceReady) {
                     try {
                         ws.send(JSON.stringify({
-                            type: 'voice_call_start', ui_lang: locale, sessionId }));
+                            type: 'voice_call_start', ui_lang: locale,
+                            sessionId: callSessionRef.current ?? sessionId }));
                     } catch { /* noop */ }
                 }
             }
             else if (data.type === 'voice_call_error') {
+                // busy_local without a known mainTask = a SUB-AGENT of this
+                // session holds the one model (server-side belt): flip the
+                // mute UI on so the user sees WHY the agent is not
+                // listening. The result callback clears it as usual.
+                if (data.error === 'busy_local' && !useVoiceCallStore.getState().mainTask) {
+                    useVoiceCallStore.getState().set({ mainTask: t('backgroundWork') });
+                }
                 // no_speech and friends: just keep listening
                 later(listenLoop, 500);
             }
@@ -370,7 +401,8 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 // - the mic is held while the result plays (the agent must not
                 //   transcribe its own voice as a user turn),
                 // - a TTS failure gets a short spoken notice instead of silence.
-                if (data.sessionId && sessionId && data.sessionId !== sessionId) return;
+                if (data.sessionId && callSessionRef.current
+                    && data.sessionId !== callSessionRef.current) return;
                 const raw = String(data.content || '');
                 if (!raw.trim() || raw.startsWith('[ASYNC_ACK]')) return;
                 const text = sanitizeForSpeech(raw).slice(0, 1200);
@@ -435,6 +467,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 endCall();
                 return;
             }
+            callSessionRef.current = sessionId;
             ws?.send(JSON.stringify({ type: 'voice_call_start', ui_lang: locale, sessionId }));
             playEarcon('start');
             later(listenLoop, 600);
@@ -475,13 +508,13 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                         The literal 'listening'/'thinking' avatar modes are
                         ear/gaze EMOTES and look wrong as call states. */}
                     <AgentAvatar
-                        mode={(!store.voiceReady || (store.exclusive && store.mainTask)) ? 'waiting'
+                        mode={(!store.voiceReady || (store.exclusive && (store.mainTask || mainBusy))) ? 'waiting'
                             : store.agentMode === 'talking' ? 'talking'
                             : store.agentMode === 'thinking' ? 'working' : 'waiting'}
-                        dim={!store.voiceReady || (store.exclusive && !!store.mainTask)}
+                        dim={!store.voiceReady || (store.exclusive && !!(store.mainTask || mainBusy))}
                         eyePulseRef={eyePulseRef} />
                 </div>
-                {((!store.voiceReady && !store.loadingModel) || (store.exclusive && store.mainTask)) && (
+                {((!store.voiceReady && !store.loadingModel) || (store.exclusive && (store.mainTask || mainBusy))) && (
                     <span className="absolute left-1/2 -translate-x-1/2 -bottom-4 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white shadow-md">
                         <MicOff size={15} strokeWidth={2.5} />
                     </span>
@@ -491,14 +524,14 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
                     <i className={`w-[7px] h-[7px] rounded-full flex-none ${
                         !store.voiceReady ? (store.loadingModel ? 'bg-amber-500 animate-pulse' : 'bg-red-500')
-                        : (store.exclusive && store.mainTask) ? 'bg-red-500'
+                        : (store.exclusive && (store.mainTask || mainBusy)) ? 'bg-red-500'
                         : store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
                         : store.statusKey === 'speaking' ? 'bg-gray-100 animate-pulse'
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
                         : 'bg-gray-400'}`} />
                     <span>{!store.voiceReady
                         ? (store.loadingModel ? t('status_loading_model') : t('status_deaf'))
-                        : (store.exclusive && store.mainTask) ? t('status_deaf_busy')
+                        : (store.exclusive && (store.mainTask || mainBusy)) ? t('status_deaf_busy')
                         : t('status_' + store.statusKey)}</span>
                 </div>
                 {store.mainTask && (

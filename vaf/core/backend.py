@@ -236,10 +236,31 @@ def resolve_mmproj_for(model_path: str) -> str:
                 if base.startswith(prefix):
                     repo_id = repo
                     break
+            if not repo_id:
+                # Dedicated VOICE model (e.g. Gemma 4 E4B): its source repo is
+                # known from the voice ref, and it ships its own projector -
+                # with it loaded, vision keeps working DURING a live call
+                # while the voice GGUF holds the one server.
+                try:
+                    from vaf.core import voice_model as _vvm
+                    v_repo, v_file = _resolve_model_ref(_vvm.voice_model_ref())
+                    if v_repo and v_file and v_file.lower() == os.path.basename(model_path).lower():
+                        repo_id = v_repo
+                except Exception:
+                    repo_id = None
             filename = "mmproj-F16.gguf"
         if not filename:
             return ""
-        local = os.path.join(models_dir, filename)
+        if ref:
+            # Explicit ref: the user manages the filename.
+            local = os.path.join(models_dir, filename)
+        else:
+            # Auto path: PER-MODEL local name. Qwen and Gemma repos both ship
+            # "mmproj-F16.gguf" - a shared name in the one models/ dir would
+            # pair the wrong projector with the wrong model after a voice
+            # swap (broken vision or a crashed server for ALL lanes).
+            stem = os.path.splitext(os.path.basename(model_path))[0]
+            local = os.path.join(models_dir, f"mmproj-{stem}.gguf")
         if os.path.exists(local):
             return local
         if not repo_id:
@@ -247,7 +268,11 @@ def resolve_mmproj_for(model_path: str) -> str:
         from huggingface_hub import hf_hub_download
         UI.event("System", f"Downloading vision projector {filename} ({repo_id})...", style="dim")
         got = hf_hub_download(repo_id=repo_id, filename=filename, local_dir=models_dir)
-        return got if got and os.path.exists(got) else ""
+        if not got or not os.path.exists(got):
+            return ""
+        if os.path.abspath(got) != os.path.abspath(local):
+            os.replace(got, local)
+        return local
     except Exception as e:
         UI.event("System", f"Vision projector unavailable: {e}", style="yellow")
         return ""
@@ -1284,15 +1309,21 @@ class ServerManager:
                     pass
             
             self.process = None
-        elif os.path.exists(self.pid_file) and force_external:
-            # Server wurde von anderem Prozess gestartet, lese PID aus Datei
-            # Nur stoppen, wenn force_external=True (z.B. bei Neustart oder Tray Exit)
+        if os.path.exists(self.pid_file) and force_external:
+            # ALSO check the pid file (no elif): after a model SWAP the live
+            # server belongs to a throwaway ensure_local_model manager, and
+            # THIS manager's self.process is a stale handle to the old, dead
+            # process - the elif skipped the file and the real server
+            # survived Tray Quit (live incident). The pid file always holds
+            # the CURRENT server's pid (_save_pid on every spawn).
             try:
                 with open(self.pid_file, 'r', encoding='utf-8') as f:
-                    pid_to_kill = int(f.read().strip())
+                    _file_pid = int(f.read().strip())
+                if _file_pid != pid_to_kill and self._is_process_running(_file_pid):
+                    pid_to_kill = _file_pid
             except (ValueError, FileNotFoundError):
                 pass
-        
+
         # Kill process by PID (wenn noch nicht beendet)
         if pid_to_kill and self._is_process_running(pid_to_kill):
             # Windows: Use taskkill (most reliable)

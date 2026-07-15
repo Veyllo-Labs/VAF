@@ -27,6 +27,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Judging results as correct or wrong feeds a per-user calibration store that
   suggests a threshold from your own voice data - and never touches any voice
   profile.
+- **First-call enrollment offer.** Clicking the call button without a voice
+  profile now offers the guided enrollment (with the security rationale) or a
+  remembered "call without profile" skip; after a successful setup the call
+  starts directly. The voice profile is loaded on connect, and the
+  recognition-test verdict flow is click-only: "Who was it then?" with
+  Me / Someone else buttons - a name is only typed (optionally) for someone
+  else, and every path now feeds the threshold calibration.
 - **The voice agent knows when NOT to answer.** The live-call mic is always
   open, so utterances are now gated before they cost anything: side talk from
   other speakers (no agent address) and garbled speech-recognition noise never

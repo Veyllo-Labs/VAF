@@ -994,6 +994,11 @@ function VAFDashboardContent() {
     // Voice-profile enrollment (live call)
     const [voiceCallOpen, setVoiceCallOpen] = useState(false);
     const [speakerProfile, setSpeakerProfile] = useState<any>(null);
+    // First call without a voice profile: OFFER enrollment (never force it) -
+    // the voice-gated delegation guard only works with a profile. A skip is
+    // remembered per browser so the offer never nags.
+    const [showEnrollOffer, setShowEnrollOffer] = useState(false);
+    const enrollThenCallRef = useRef(false);
     // Live voice call (voice-agent first layer)
     const voiceCallActive = useVoiceCallStore((s) => s.active);
     const voiceCallClosing = useVoiceCallStore((s) => s.closing);
@@ -2411,6 +2416,7 @@ function VAFDashboardContent() {
             socket.send(JSON.stringify({ type: 'get_workflows' })); // Fetch workflows for autocomplete
             socket.send(JSON.stringify({ type: 'get_skills' }));    // Fetch skills (second routing tier)
             socket.send(JSON.stringify({ type: 'get_tools' }));     // Fetch tools for reference
+            socket.send(JSON.stringify({ type: 'speaker_profile_get' })); // Voice profile (call button offers enrollment without one)
         };
         socket.onmessage = (event) => {
             try {
@@ -6710,10 +6716,18 @@ function VAFDashboardContent() {
                                                 <Mic size={18} />
                                             )}
                                         </button>
-                                        {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left) */}
+                                        {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left).
+                                            Without a voice profile the first click OFFERS the guided enrollment
+                                            (voice-gated delegation needs a profile); a skip is remembered. */}
                                         <button
                                             type="button"
-                                            onClick={() => useVoiceCallStore.getState().start()}
+                                            onClick={() => {
+                                                if (!speakerProfile && !localStorage.getItem('vaf_voice_enroll_skipped')) {
+                                                    setShowEnrollOffer(true);
+                                                } else {
+                                                    useVoiceCallStore.getState().start();
+                                                }
+                                            }}
                                             disabled={isRecording || isProcessingAudio}
                                             className="shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
                                             title="Live-Call"
@@ -7617,9 +7631,50 @@ function VAFDashboardContent() {
                 onClose={(saved) => {
                     setVoiceCallOpen(false);
                     if (saved) ws?.send(JSON.stringify({ type: 'speaker_profile_get' }));
-                    setIsSettingsOpen(true);
+                    if (enrollThenCallRef.current) {
+                        // Enrollment was offered from the call button: on
+                        // success go straight into the call the user wanted;
+                        // on abort just return to the chat (no Settings).
+                        enrollThenCallRef.current = false;
+                        if (saved) useVoiceCallStore.getState().start();
+                    } else {
+                        setIsSettingsOpen(true);
+                    }
                 }}
             />
+            {showEnrollOffer && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                    onClick={() => setShowEnrollOffer(false)}>
+                    <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#1f1f1f] shadow-2xl p-5"
+                        onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-3 mb-2">
+                            <AgentAvatar mode="permission" />
+                            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">{tMain('voiceEnrollOfferTitle')}</p>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-gray-400">{tMain('voiceEnrollOfferText')}</p>
+                        <div className="flex items-center justify-end gap-2 mt-4">
+                            <button type="button"
+                                onClick={() => {
+                                    localStorage.setItem('vaf_voice_enroll_skipped', '1');
+                                    setShowEnrollOffer(false);
+                                    useVoiceCallStore.getState().start();
+                                }}
+                                className="px-3 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10">
+                                {tMain('voiceEnrollOfferSkip')}
+                            </button>
+                            <button type="button"
+                                onClick={() => {
+                                    setShowEnrollOffer(false);
+                                    enrollThenCallRef.current = true;
+                                    setVoiceCallOpen(true);
+                                }}
+                                className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818]">
+                                {tMain('voiceEnrollOfferSetup')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={handleSettingsClose}

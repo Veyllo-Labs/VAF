@@ -639,8 +639,15 @@ def _feedback_path(scope_id: str):
     return _profile_dir(scope_id) / "feedback.json"
 
 
-def record_test_feedback(scope_id: str, score: float, label: str, verdict: str) -> Dict:
-    """Store one test verdict ('correct'|'wrong') and return feedback_stats."""
+def record_test_feedback(scope_id: str, score: float, label: str, verdict: str,
+                         was: Optional[str] = None) -> Dict:
+    """Store one test verdict ('correct'|'wrong') and return feedback_stats.
+
+    `was` ("owner"|"other") resolves cases the (label, verdict) pair alone
+    cannot: e.g. an "unsure" result where the user then NAMES the speaker -
+    naming the owner means "that was me" (a false reject, owner-side data),
+    naming a third party means other-side data.
+    """
     try:
         import os
         p = _feedback_path(scope_id)
@@ -648,8 +655,11 @@ def record_test_feedback(scope_id: str, score: float, label: str, verdict: str) 
         items = []
         if p.exists():
             items = json.loads(p.read_text(encoding="utf-8"))
-        items.append({"score": float(score), "label": str(label),
-                      "verdict": str(verdict), "at": time.strftime("%Y-%m-%d %H:%M")})
+        item = {"score": float(score), "label": str(label),
+                "verdict": str(verdict), "at": time.strftime("%Y-%m-%d %H:%M")}
+        if was in ("owner", "other"):
+            item["was"] = was
+        items.append(item)
         items = items[-100:]
         p.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
         try:
@@ -675,12 +685,17 @@ def feedback_stats(scope_id: str) -> Dict:
         if not p.exists():
             return {"n": 0}
         items = json.loads(p.read_text(encoding="utf-8"))
+        # An explicit `was` wins; otherwise derive the side from (label, verdict)
         owner = [i["score"] for i in items
-                 if (i["label"] == "self" and i["verdict"] == "correct")
-                 or (i["label"] in ("other", "named") and i["verdict"] == "wrong")]
+                 if i.get("was") == "owner"
+                 or (not i.get("was")
+                     and ((i["label"] == "self" and i["verdict"] == "correct")
+                          or (i["label"] in ("other", "named") and i["verdict"] == "wrong")))]
         others = [i["score"] for i in items
-                  if (i["label"] in ("other", "named") and i["verdict"] == "correct")
-                  or (i["label"] == "self" and i["verdict"] == "wrong")]
+                  if i.get("was") == "other"
+                  or (not i.get("was")
+                      and ((i["label"] in ("other", "named") and i["verdict"] == "correct")
+                           or (i["label"] == "self" and i["verdict"] == "wrong")))]
         stats: Dict = {"n": len(items), "n_owner": len(owner), "n_other": len(others)}
         if owner:
             stats["owner_avg"] = round(sum(owner) / len(owner), 3)

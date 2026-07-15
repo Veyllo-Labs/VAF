@@ -229,6 +229,21 @@ def test_feedback_calibration_store_and_suggestion():
     assert sid.feedback_stats("scope-b") == {"n": 0}
 
 
+def test_feedback_owner_claim_resolves_ambiguous_unsure():
+    """'Unsure' + wrong verdict is ambiguous UNTIL the user names the speaker:
+    naming the OWNER ('that was me' - a false reject) counts as owner-side
+    calibration data via was='owner'; naming a third party as other-side."""
+    scope = "scope-a"
+    stats = sid.record_test_feedback(scope, 0.58, "unsure", "wrong", was="owner")
+    assert stats["n_owner"] == 1 and stats["n_other"] == 0
+    assert stats["owner_avg"] == pytest.approx(0.58)
+    stats = sid.record_test_feedback(scope, 0.57, "unsure", "wrong", was="other")
+    assert stats["n_owner"] == 1 and stats["n_other"] == 1
+    # Without `was`, unsure stays skipped (unchanged behavior)
+    stats = sid.record_test_feedback(scope, 0.59, "unsure", "wrong")
+    assert stats["n_owner"] == 1 and stats["n_other"] == 1
+
+
 def test_feedback_suggestion_needs_both_sides_and_clamps():
     scope = "scope-b"
     sid.record_test_feedback(scope, 0.95, "self", "correct")

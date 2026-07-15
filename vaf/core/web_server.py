@@ -1612,25 +1612,47 @@ async def speaker_recognition_feedback(request: Request):
         score = float(body.get("score"))
     except Exception:
         return {"ok": False, "error": "bad_score"}
-    stats = _sid.record_test_feedback(scope, score, str(body.get("label") or ""), verdict)
+    label = str(body.get("label") or "")
     saved_profile = None
+    owner_claim = False
     _name = (body.get("name") or "").strip()
-    if verdict == "wrong" and _name and body.get("audio"):
-        prof = _sid.load_profile(scope)
-        owner_name = ((prof or {}).get("meta") or {}).get("display_name", "")
-        if owner_name.strip().lower() != _name.lower():
-            try:
-                wav = _b64f.b64decode(body["audio"])
-                loop = asyncio.get_running_loop()
-                got = await loop.run_in_executor(None, lambda: _sid.embed_wav(wav))
-                if got is not None:
-                    meta = _sid.save_named_profile(scope, _name, got["embedding"],
-                                                   got["net_seconds"])
-                    if meta:
-                        saved_profile = meta["display_name"]
-            except Exception as _sf_e:
-                log("WebServer", f"speaker feedback named save failed: {_sf_e}")
-    return {"ok": True, "stats": stats, "saved_profile": saved_profile}
+    _who = (body.get("who") or "").strip().lower()  # "owner" | "other" | ""
+    _was = None
+    if verdict == "wrong":
+        if _who == "owner":
+            # "It was me" button: a false reject - owner-side calibration
+            # data. NEVER a profile write (the owner profile only changes
+            # through explicit enrollment).
+            owner_claim = True
+            _was = "owner"
+        elif _name:
+            prof = _sid.load_profile(scope)
+            owner_name = ((prof or {}).get("meta") or {}).get("display_name", "")
+            if owner_name and owner_name.strip().lower() == _name.lower():
+                # Typed the owner's name (case-insensitive): same as the
+                # "me" button - and no owner-double as a named profile.
+                owner_claim = True
+                _was = "owner"
+            else:
+                _was = "other"
+                if body.get("audio"):
+                    try:
+                        wav = _b64f.b64decode(body["audio"])
+                        loop = asyncio.get_running_loop()
+                        got = await loop.run_in_executor(None, lambda: _sid.embed_wav(wav))
+                        if got is not None:
+                            meta = _sid.save_named_profile(scope, _name, got["embedding"],
+                                                           got["net_seconds"])
+                            if meta:
+                                saved_profile = meta["display_name"]
+                    except Exception as _sf_e:
+                        log("WebServer", f"speaker feedback named save failed: {_sf_e}")
+        elif _who == "other":
+            # "Someone else" without a name: still resolves the side.
+            _was = "other"
+    stats = _sid.record_test_feedback(scope, score, label, verdict, was=_was)
+    return {"ok": True, "stats": stats, "saved_profile": saved_profile,
+            "owner_claim": owner_claim}
 
 
 @app.get("/api/workspaces")

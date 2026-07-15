@@ -47,8 +47,9 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
     const [result, setResult] = useState<TestResult | null>(null);
     const [error, setError] = useState<string>('');
     const [stats, setStats] = useState<Stats | null>(null);
-    const [verdictPhase, setVerdictPhase] = useState<'ask' | 'name' | 'done'>('ask');
+    const [verdictPhase, setVerdictPhase] = useState<'ask' | 'who' | 'name' | 'done'>('ask');
     const [savedName, setSavedName] = useState<string>('');
+    const [ownerClaim, setOwnerClaim] = useState(false);
     const [nameInput, setNameInput] = useState('');
     const [countdown, setCountdown] = useState(0);
     const busyRef = useRef(false);
@@ -61,7 +62,7 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
         if (busyRef.current) return;
         busyRef.current = true;
         setError(''); setResult(null); setStats(null);
-        setVerdictPhase('ask'); setSavedName(''); setNameInput('');
+        setVerdictPhase('ask'); setSavedName(''); setNameInput(''); setOwnerClaim(false);
         let ctx: AudioContext | null = null;
         let rafId = 0;
         try {
@@ -127,7 +128,8 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
         }
     };
 
-    const sendVerdict = async (verdict: 'correct' | 'wrong', name?: string) => {
+    const sendVerdict = async (verdict: 'correct' | 'wrong',
+        opts: { name?: string; who?: 'owner' | 'other' } = {}) => {
         if (!result) return;
         setVerdictPhase('done');
         try {
@@ -136,13 +138,15 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     score: result.score, label: result.label, verdict,
-                    ...(name ? { name, audio: audioB64Ref.current } : {}),
+                    ...(opts.who ? { who: opts.who } : {}),
+                    ...(opts.name ? { name: opts.name, audio: audioB64Ref.current } : {}),
                 }),
             });
             const data = await resp.json();
             if (data.ok) {
                 setStats(data.stats || null);
                 if (data.saved_profile) setSavedName(data.saved_profile);
+                if (data.owner_claim) setOwnerClaim(true);
             }
         } catch { /* calibration is best-effort */ }
     };
@@ -225,7 +229,7 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#232323] text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#2c2c2c]">
                                     <ThumbsUp size={13} className="text-green-600" />{yesText}
                                 </button>
-                                <button type="button" onClick={() => setVerdictPhase('name')}
+                                <button type="button" onClick={() => setVerdictPhase('who')}
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#232323] text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#2c2c2c]">
                                     <ThumbsDown size={13} className="text-red-500" />{noText}
                                 </button>
@@ -233,20 +237,36 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
                         </div>
                     )}
 
-                    {verdictPhase === 'name' && (
+                    {verdictPhase === 'who' && (
                         <div className="mt-3">
                             <p className="text-sm text-gray-700 dark:text-gray-300">{t('testWhoWas')}</p>
+                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                <button type="button" onClick={() => sendVerdict('wrong', { who: 'owner' })}
+                                    className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818]">
+                                    {ownerName ? t('testWhoMeName', { name: ownerName }) : t('testWhoMe')}
+                                </button>
+                                <button type="button" onClick={() => setVerdictPhase('name')}
+                                    className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#232323] text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-[#2c2c2c]">
+                                    {t('testWhoOther')}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {verdictPhase === 'name' && (
+                        <div className="mt-3">
+                            <p className="text-sm text-gray-700 dark:text-gray-300">{t('testWhoOtherName')}</p>
                             <div className="flex items-center gap-2 mt-2 flex-wrap">
                                 <input type="text" autoFocus maxLength={32} value={nameInput}
                                     placeholder={t('testWhoWasPlaceholder')}
                                     onChange={(e) => setNameInput(e.target.value)}
                                     className="w-40 px-2 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#181818] text-gray-800 dark:text-gray-200" />
                                 <button type="button" disabled={!nameInput.trim()}
-                                    onClick={() => sendVerdict('wrong', nameInput.trim())}
-                                    className="px-3 py-1.5 text-sm font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50">
+                                    onClick={() => sendVerdict('wrong', { name: nameInput.trim() })}
+                                    className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818] disabled:opacity-50">
                                     {t('testSaveName')}
                                 </button>
-                                <button type="button" onClick={() => sendVerdict('wrong')}
+                                <button type="button" onClick={() => sendVerdict('wrong', { who: 'other' })}
                                     className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
                                     {t('testSkipName')}
                                 </button>
@@ -257,7 +277,9 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
 
                     {verdictPhase === 'done' && (
                         <p className="text-xs text-gray-400 mt-2">
-                            {savedName ? t('testSavedName', { name: savedName }) : t('testVerdictThanks')}
+                            {ownerClaim ? t('testSavedOwner')
+                                : savedName ? t('testSavedName', { name: savedName })
+                                : t('testVerdictThanks')}
                         </p>
                     )}
 

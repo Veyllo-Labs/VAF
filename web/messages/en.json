@@ -120,6 +120,7 @@
     "conversation": "Conversation",
     "tokens": "tokens",
     "attachmentsShort": "Attachments",
+    "voiceAgentTag": "Voice agent",
     "documentViewerTitle": "Document Viewer",
     "contactReplyTitle": "Approve contact reply",
     "contactReplyTo": "Reply to {name} ({channel})",
@@ -1034,7 +1035,6 @@
     "status_deaf": "Not listening - no model available for the live call",
     "status_loading_model": "Loading the model...",
     "status_deaf_busy": "Not listening right now - the model is working for the main agent",
-    "delegationPrefix": "Voice agent to main agent",
     "resultReady": "The task is done. The details are in the chat."
   }
 }

@@ -49,6 +49,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is working for the main agent" status, with turns paused on both ends until
   the result is spoken. A call started with no model at all keeps the
   distinct "no model available" state.
+- **Voice delegations are marked in the chat.** A task the voice agent hands
+  to the main agent now renders as its own message: a red-ringed bubble with
+  a soft glow and a "voice agent" tag next to the timestamp, instead of
+  looking like a typed user message. The tag is persisted with the session,
+  so the styling survives reloads. The delegation prompt rule is also a
+  blanket one now - every request that needs a tool, live data or an action
+  goes to the main agent (verified against the local model: weather, mail
+  and news requests delegate; clock questions and small talk do not).
 
 ### Fixed
 - **Local voice turns answer instead of thinking.** A local reasoning model

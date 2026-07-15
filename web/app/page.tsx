@@ -6033,7 +6033,11 @@ function VAFDashboardContent() {
                                                                     })() : (
                                                                         <div className="relative group flex items-end">
                                                                             <div className={cn("px-5 py-3 rounded-2xl shadow-sm text-[15px] leading-relaxed",
-                                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 dark:bg-[#242424] text-white rounded-tr-none")}>
+                                                                                isBot ? "bg-white text-gray-800 rounded-tl-none border border-transparent" : "bg-gray-800 dark:bg-[#242424] text-white rounded-tr-none",
+                                                                                // Voice-call delegation: the voice agent (not the
+                                                                                // user) wrote this - red ring + soft STATIC glow
+                                                                                // (never an animated shadow, GPU-leak rule).
+                                                                                !isBot && msg.kind === 'voice_delegation' && "border border-red-500/60 shadow-[0_0_10px_2px_rgba(239,68,68,0.22)]")}>
                                                                                 {!isBot && displayAnswer.length > 1169 ? (
                                                                                     <>
                                                                                         <div className="chat-markdown">
@@ -6149,9 +6153,14 @@ function VAFDashboardContent() {
                                                                 </div>
                                                             )}
 
-                                                            {/* Subtle timestamp below the bubble (messenger style) */}
+                                                            {/* Subtle timestamp below the bubble (messenger style);
+                                                                voice-call delegations carry a "voice agent" tag left
+                                                                of the time so the sender is obvious. */}
                                                             {(msg.role === 'user' || msg.role === 'assistant') && (
                                                                 <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
+                                                                    {!isBot && msg.kind === 'voice_delegation' && (
+                                                                        <span className="text-[10px] font-medium text-red-500/80 mr-1.5">{tMain('voiceAgentTag')}</span>
+                                                                    )}
                                                                     <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
                                                                 </div>
                                                             )}
@@ -7620,8 +7629,8 @@ function VAFDashboardContent() {
             <VoiceCallLayer
                 ws={ws}
                 sessionId={currentSessionId}
-                onLocalMessage={(role, content) => {
-                    setMessages(prev => [...prev, { role, content, timestamp: Date.now() }]);
+                onLocalMessage={(role, content, kind) => {
+                    setMessages(prev => [...prev, { role, content, timestamp: Date.now(), kind }]);
                 }}
             />
             <VoiceEnrollmentCall

@@ -1973,7 +1973,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _chan_msg_id = (task.metadata or {}).get("channel_message_id")
                                 if _chan_msg_id:
                                     _user_meta["channel_message_id"] = str(_chan_msg_id)
-                                session.add_message(role="user", content=_user_input.strip(), metadata=(_user_meta or None))
+                                # Voice-call delegations keep their origin across
+                                # reloads: kind drives the red-bordered
+                                # "voice agent" bubble in the Web UI (same
+                                # persisted-kind mechanism as timer/thinking).
+                                _msg_kind = ("voice_delegation"
+                                             if (task.metadata or {}).get("origin_channel") == "voice_call"
+                                             else None)
+                                session.add_message(role="user", content=_user_input.strip(),
+                                                    metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state
                                 if not hasattr(session, 'runtime_state') or session.runtime_state is None:
                                     session.runtime_state = {}

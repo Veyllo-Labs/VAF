@@ -99,9 +99,13 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    and close in one chunk), `_strip_reasoning` also removes UNCLOSED blocks
    (truncation), the token budget leaves room to finish thinking, and an
    all-reasoning reply degrades to a short spoken fallback.
-4. **Small talk stays out of the chat.** Only delegations appear in the chat
-   (as the voice agent's message to the main agent); the conversation itself
-   lives in audio.
+4. **Small talk stays out of the chat.** Only delegations appear in the chat;
+   the conversation itself lives in audio. A delegation renders as its own
+   thing, not as a typed user message: a red-ringed bubble with a soft static
+   glow and a "voice agent" tag left of the timestamp. The marker is
+   `kind="voice_delegation"` - set live by the frontend and persisted by the
+   headless runner on the session message (same mechanism as the
+   timer/thinking bubble tags), so the styling survives reloads.
 5. **Result callback is anchored on `message_complete`** (the same event that
    plays the completion chime): only THIS session's completion counts,
    `[ASYNC_ACK]` and empty content keep waiting, think/context blocks are
@@ -140,11 +144,13 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    user-local current time (timezone SSOT `user_time.py`), so clock/date
    questions are answered by the first layer instead of being delegated or
    refused. The delegation rule is phrased capability-first with a worked
-   marker example and an explicit "never claim you have no tools" line: a
-   small local model read the old "you CANNOT use tools" opener as a reason
-   to refuse a weather request instead of delegating it (live incident,
-   fix verified 3/3 delegations + no false delegation on small talk against
-   Qwen3.5-4B).
+   marker example, an explicit "never claim you have no tools" line and a
+   blanket rule of thumb (EVERY request needing a tool, live data or an
+   action goes to the main agent): a small local model read the old "you
+   CANNOT use tools" opener as a reason to refuse a weather request instead
+   of delegating it (live incident; verified against Qwen3.5-4B that
+   weather/mail/news requests delegate while clock questions and small talk
+   do not).
 10. **Local mode time-shares ONE model, it never runs two inferences.**
    `voice_agent.is_exclusive()` is True on the local provider; the backend
    sends `exclusive` in `voice_call_started` and the frontend mirrors it in

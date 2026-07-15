@@ -279,7 +279,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                 // agent - that is what actually entered the session.
                 if (data.delegated) {
                     useVoiceCallStore.getState().set({ mainTask: data.delegated });
-                    onLocalMessage('user', `${t('delegationPrefix')}: ${data.delegated}`, 'voice_delegation');
+                    // Bare task text: the red-bordered bubble + "voice agent"
+                    // tag next to the timestamp identify the sender - no
+                    // prefix inside the bubble needed.
+                    onLocalMessage('user', data.delegated, 'voice_delegation');
                 }
                 if (data.audio) {
                     // The mic may be LIVE when unsolicited audio arrives (the

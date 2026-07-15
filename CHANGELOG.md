@@ -43,6 +43,33 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answered anyway (no extra LLM turns, no added latency).
 
 ### Fixed
+- **Natural questions now find memories by name.** "Kannst du dich noch an
+  Kai erinnern?" returned nothing while a bare "Kai" search hit - filler
+  words diluted the lexical score of the one signal word. Query tokens are
+  now filtered against per-language stopword lists (maintained in the
+  vocabulary book for reuse), and the lexical tokenizer finally keeps
+  umlauts, so German words and names like "Müller" are matchable at all.
+- **Memory chunk text and the profile cache are now encrypted at rest.** Chunk
+  texts (what RAG actually reads) are AES-256-GCM encrypted in place and
+  decrypted on read; a startup migration encrypts existing rows, removes the
+  unencrypted content previews from memory metadata and neutralizes
+  content-derived titles of learned facts. The on-disk user-profile prompt
+  cache is encrypted the same way. Docs now state the residual risk honestly:
+  embedding vectors stay unencrypted by necessity and are practically
+  invertible, so full-disk encryption remains the recommended complement.
+- **Memory chunk rows are now row-level-security protected, and the encryption
+  key is never silently replaced.** Chunks (the searchable text and embedding
+  vectors the RAG actually reads) now carry their own owner scope and the same
+  fail-closed forced RLS policy as the parent memories table, stamped at ingest
+  and backfilled by a startup migration. A present but corrupt
+  `memory_encryption_key` is now a hard startup error instead of being silently
+  regenerated, which would have permanently orphaned all encrypted memories.
+- **Memory learning produces higher-quality facts.** The extraction prompt now
+  enforces self-contained facts (subjects named explicitly instead of "the
+  patent"), absolute dating of drifting snapshot facts ("as of {date}"), and
+  excludes short-lived conversation state; model-independent gates between
+  parse and ingest add length bounds, junk-marker rejection, a per-run cap and
+  a near-duplicate check, so a weak model can no longer flood the memory store.
 - **Spoken voice-agent replies are capped at a sentence boundary.** A model
   derailed by garbled input could fill its whole token budget with a monologue
   (minutes of TTS); replies are now cut in code, and the prompt tells the

@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (268 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (269 keys).
 
 ## How configuration is set
 
@@ -263,7 +263,8 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |
 | `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. |
 | `speaker_id_band` | `0.05` | Band below the threshold labeled "unsure" (triggers confirmation). |
-| `speaker_id_confirmation_enabled` | `true` | On "unsure": ask the owner to confirm (main messenger, else web card). Answers never modify the owner profile; "no, that's NAME" stores a named third-party profile. |
+| `speaker_id_confirmation_enabled` | `true` | On "unsure": ask the owner to confirm (main messenger, else web card). "No, that's NAME" stores a named third-party profile. |
+| `speaker_id_adaptive_enabled` | `true` | Owner-approved adaptive learning: a YES answer to the confirmation (authenticated web/messenger channel) feeds the confirmed segment into the owner profile as an adaptive sample (similarity floor, 10-sample FIFO cap, enrollment centroid keeps 70% weight; re-enrollment resets all adaptive state). The voice itself can never trigger a profile write. |
 | `tts_auto_speak` | `False` | Auto-speak replies. |
 
 ## Network & server mode

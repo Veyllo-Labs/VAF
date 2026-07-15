@@ -139,6 +139,12 @@ class Config:
         #           voice model during the call, main model while a delegated task runs
         #           - never two servers, never two concurrent inferences);
         # any API provider id = the call runs on that API regardless of the main provider.
+        # Owner-approved adaptive voice learning: a YES to "was that your
+        # voice?" (authenticated web/messenger answer) feeds the confirmed
+        # segment into the owner profile (speaker_id.add_owner_sample:
+        # similarity floor, sample cap, enrollment-weighted blend). The
+        # voice itself can never trigger this. Kill switch, default on.
+        "speaker_id_adaptive_enabled": True,
         "voice_agent_provider": "",
         # For "local": model ref "owner/repo/file.gguf" (empty = recommended default,
         # see voice_model.py). For an API provider: model name (empty = provider default).

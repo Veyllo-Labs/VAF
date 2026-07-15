@@ -139,7 +139,11 @@ export function SpeakerTest({ apiBase, threshold, band, isAdmin, onThresholdChan
                 body: JSON.stringify({
                     score: result.score, label: result.label, verdict,
                     ...(opts.who ? { who: opts.who } : {}),
-                    ...(opts.name ? { name: opts.name, audio: audioB64Ref.current } : {}),
+                    // Audio rides along on EVERY verdict: owner-confirmed
+                    // clips train the profile (adaptive learning), named
+                    // ones become third-party profiles.
+                    audio: audioB64Ref.current,
+                    ...(opts.name ? { name: opts.name } : {}),
                 }),
             });
             const data = await resp.json();

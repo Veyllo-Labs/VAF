@@ -34,6 +34,7 @@ import json
 import logging
 import threading
 import time
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -306,7 +307,8 @@ def delete_profile(scope_id: str) -> bool:
     try:
         d = _profile_dir(scope_id)
         removed = False
-        for name in ("profile.json", "centroid.npy"):
+        for name in ("profile.json", "centroid.npy",
+                     "enroll_centroid.npy", "adaptive.npy"):
             p = d / name
             if p.exists():
                 p.unlink()
@@ -330,6 +332,13 @@ def _save_profile(scope_id: str, display_name: str, centroid, net_seconds: float
         "dim": int(centroid.shape[0]),
     }
     np.save(d / "centroid.npy", centroid.astype(np.float32))
+    # Fresh enrollment resets ALL adaptive state (the pristine-centroid copy
+    # and confirmed samples belong to the previous enrollment).
+    for _stale in ("enroll_centroid.npy", "adaptive.npy"):
+        try:
+            (d / _stale).unlink(missing_ok=True)
+        except Exception:
+            pass
     (d / "profile.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         import os
@@ -376,6 +385,81 @@ def _enroll_lang(ui_lang: str) -> str:
         return ui if ui in available else "en"
     except Exception:
         return "en"
+
+
+_ADAPTIVE_MAX_SAMPLES = 10        # FIFO cap: old adaptive samples age out
+_ADAPTIVE_MIN_SIMILARITY = 0.30   # a confirmed segment WILDLY unlike the
+                                  # profile is rejected even on a Yes (guards
+                                  # against misclicks and noise segments)
+_ADAPTIVE_ENROLL_WEIGHT = 0.7     # centroid = 0.7*enrollment + 0.3*adaptive
+                                  # mean: bounded drift - confirmations can
+                                  # sharpen the profile, never replace it
+
+
+def add_owner_sample(scope_id: str, wav_bytes: bytes) -> bool:
+    """OWNER-CONFIRMED adaptive learning (user decision 2026-07-15).
+
+    When the owner answers YES to "was that your voice?" over an
+    AUTHENTICATED channel (web session / main messenger), the confirmed
+    segment is added to the profile as an adaptive sample and the centroid
+    is re-blended. The voice itself still cannot modify anything: only the
+    owner's authenticated answer triggers this, embed_wav enforces the
+    minimum-speech gate, a similarity floor rejects absurd segments, and the
+    enrollment centroid keeps 70% weight (kept separately in
+    enroll_centroid.npy, so drift is bounded and re-enrollment resets all
+    adaptive state).
+    """
+    try:
+        import numpy as np
+        profile = load_profile(scope_id)
+        if profile is None:
+            return False
+        got = embed_wav(wav_bytes)
+        if got is None:
+            return False
+        emb = np.asarray(got["embedding"], dtype=np.float32)
+        emb = emb / (np.linalg.norm(emb) or 1.0)
+        d = _profile_dir(scope_id)
+        enroll_path = d / "enroll_centroid.npy"
+        if not enroll_path.exists():
+            # First adaptive add: preserve the pristine enrollment centroid.
+            np.save(enroll_path, np.asarray(profile["centroid"], dtype=np.float32))
+        enroll_centroid = np.load(enroll_path)
+        enroll_centroid = enroll_centroid / (np.linalg.norm(enroll_centroid) or 1.0)
+        if float(np.dot(emb, enroll_centroid)) < _ADAPTIVE_MIN_SIMILARITY:
+            _log.info("speaker_id: adaptive sample rejected (similarity floor)")
+            return False
+        adaptive_path = d / "adaptive.npy"
+        samples = []
+        if adaptive_path.exists():
+            arr = np.load(adaptive_path)
+            samples = [arr[i] for i in range(arr.shape[0])]
+        samples.append(emb)
+        samples = samples[-_ADAPTIVE_MAX_SAMPLES:]
+        stacked = np.stack(samples).astype(np.float32)
+        np.save(adaptive_path, stacked)
+        adaptive_mean = stacked.mean(axis=0)
+        adaptive_mean = adaptive_mean / (np.linalg.norm(adaptive_mean) or 1.0)
+        centroid = (_ADAPTIVE_ENROLL_WEIGHT * enroll_centroid
+                    + (1.0 - _ADAPTIVE_ENROLL_WEIGHT) * adaptive_mean)
+        centroid = (centroid / (np.linalg.norm(centroid) or 1.0)).astype(np.float32)
+        np.save(d / "centroid.npy", centroid)
+        meta = dict(profile["meta"])
+        meta["adaptive_samples"] = len(samples)
+        meta["adaptive_updated_at"] = time.strftime("%Y-%m-%d")
+        (d / "profile.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(adaptive_path, 0o600)
+            os.chmod(enroll_path, 0o600)
+        except Exception:
+            pass
+        _log.info("speaker_id: owner profile sharpened (adaptive sample %d/%d)",
+                  len(samples), _ADAPTIVE_MAX_SAMPLES)
+        return True
+    except Exception as e:
+        _log.warning("speaker_id: add_owner_sample failed: %s", e)
+        return False
 
 
 def enroll_start(scope_id: str, ui_lang: str = "en") -> Dict:
@@ -702,7 +786,19 @@ def feedback_stats(scope_id: str) -> Dict:
         if others:
             stats["other_avg"] = round(sum(others) / len(others), 3)
         if len(owner) >= 2 and len(others) >= 2:
-            mid = (sum(owner) / len(owner) + sum(others) / len(others)) / 2
+            owner_mean = sum(owner) / len(owner)
+            other_mean = sum(others) / len(others)
+            mid = (owner_mean + other_mean) / 2
+            # Security-aware floor (user question 2026-07-15: "wouldn't the
+            # midpoint let voices through that sound LESS like me?"): the
+            # midpoint only separates the SAMPLED impostors - an untested
+            # similar voice could land between it and the owner's range, and
+            # the threshold gates DELEGATION AUTHORITY (false accept >>
+            # false reject). Never suggest below owner_mean - 0.15: enough
+            # slack to stop the owner's everyday false rejects, but the gate
+            # stays anchored to the owner's own score range instead of
+            # drifting toward whoever happened to be tested.
+            mid = max(mid, owner_mean - 0.15)
             stats["suggested_threshold"] = round(min(0.75, max(0.35, mid)), 2)
         return stats
     except Exception as e:

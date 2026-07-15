@@ -239,7 +239,14 @@ Hard rules:
 
 - Identity comes from the VOICE, never from spoken claims; on live calls only a
   verified owner turn may trigger delegation (code guard, not just prompt).
-- The owner profile is NEVER modified outside explicit re-enrollment.
+- The owner profile is written only by explicit re-enrollment or by
+  OWNER-APPROVED adaptive learning (`speaker_id_adaptive_enabled`, default
+  on): a YES answer to the confirmation question over an authenticated
+  channel feeds that segment into the profile (`add_owner_sample`:
+  similarity floor, 10-sample FIFO cap, the enrollment centroid keeps 70%
+  weight, re-enrollment resets the adaptive state). The VOICE itself can
+  never trigger a profile write - authorization always comes from the
+  authenticated owner, not from audio.
 
 Confirmation flow (`vaf/core/speaker_confirm.py`, gated by
 `speaker_id_confirmation_enabled`): when an utterance lands in the "unsure"
@@ -271,8 +278,15 @@ markers; admins get a live threshold slider. The correct/wrong verdict goes to
 `POST /api/speaker/feedback` into a per-user calibration store
 (`speaker_id.record_test_feedback` / `feedback_stats`, capped at 100 entries)
 from which a threshold suggestion is derived (midpoint of owner vs non-owner
-averages, needs 2+ samples per side, clamped 0.35-0.75). Calibration data
-never modifies any voice profile.
+averages, needs 2+ samples per side, clamped 0.35-0.75, and floored at
+owner_mean - 0.15: the midpoint only separates SAMPLED impostors, and the
+threshold gates delegation authority - the suggestion must never drift far
+below the owner's own score range just because only very unlike voices were
+tested). Owner-confirmed test
+clips ("correct" on a self label, or the "it was me" false-reject path) also
+train the owner profile adaptively via `add_owner_sample` (same guardrails
+and kill switch as the confirmation flow); other calibration data never
+modifies any voice profile.
 
 ---
 

@@ -266,10 +266,14 @@ def resolve(scope_id: str, answer: str, name: Optional[str] = None,
             confirm_id: Optional[str] = None) -> Dict:
     """Apply an owner's answer. Returns {'ok', 'outcome', 'ack'[, 'name']}.
 
-    'yes' relabels ONLY the segment (informational) - the owner profile is
-    never modified here, by design. 'no' + name stores/merges the segment as
-    a named third-party profile via speaker_id (the only write this flow can
-    ever do, and never to the owner files).
+    'yes' relabels the segment AND (user decision 2026-07-15,
+    speaker_id_adaptive_enabled, default on) feeds it into the owner profile
+    as an adaptive sample via speaker_id.add_owner_sample - the answer
+    arrives over an AUTHENTICATED owner channel (web session / main
+    messenger), so this is owner-approved learning, not voice-approved:
+    the voice itself still cannot modify anything, and quality gates plus
+    the enrollment-weighted blend bound the drift. 'no' + name stores/merges
+    the segment as a named third-party profile via speaker_id.
     """
     from vaf.core import vocab
     rec = _pop_pending(scope_id, confirm_id)
@@ -280,6 +284,14 @@ def resolve(scope_id: str, answer: str, name: Optional[str] = None,
     try:
         if answer == "yes":
             outcome, ack = "self", vocab.pick("speaker_confirm_yes", lang)
+            try:
+                from vaf.core.config import Config
+                if Config.get("speaker_id_adaptive_enabled", True):
+                    from vaf.core import speaker_id
+                    wav = Path(rec["audio_path"]).read_bytes()
+                    speaker_id.add_owner_sample(scope_id, wav)
+            except Exception as _ae:
+                _log.warning("speaker_confirm: adaptive learn failed: %s", _ae)
         elif name:
             from vaf.core import speaker_id
             meta = None

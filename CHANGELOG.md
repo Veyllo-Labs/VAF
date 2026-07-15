@@ -25,8 +25,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   few seconds and see who the system detects, with score, threshold and
   uncertainty band visualized; admins tune the threshold with a live slider.
   Judging results as correct or wrong feeds a per-user calibration store that
-  suggests a threshold from your own voice data - and never touches any voice
-  profile.
+  suggests a threshold from your own voice data. (Owner-confirmed clips
+  additionally sharpen the voice profile since the adaptive-learning change
+  below.)
 - **First-call enrollment offer.** Clicking the call button without a voice
   profile now offers the guided enrollment (with the security rationale) or a
   remembered "call without profile" skip; after a successful setup the call
@@ -96,6 +97,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and news requests delegate; clock questions and small talk do not).
 
 ### Fixed
+- **Confirming "yes, that was my voice" now actually teaches the system your
+  voice.** Answering the confirmation question (web card or main messenger)
+  previously only relabeled the segment; now the confirmed segment flows
+  into your voice profile as an adaptive sample - with guardrails: a
+  similarity floor rejects noise segments, at most ten adaptive samples
+  count (oldest age out), the original enrollment keeps 70 percent of the
+  weight, and re-enrolling resets everything. Authorization still never
+  comes from audio: only your authenticated answer can trigger a profile
+  write (kill switch: `speaker_id_adaptive_enabled`). The voice agent also
+  remembers twice as much of the call now - a slicing bug fed the model
+  only the last 4 exchanges instead of the stored 8.
 - **The Telegram bot token no longer leaks into terminal and log files.**
   The Telegram Bot API carries the token in the request URL, and the HTTP
   client's default INFO logging printed that URL on every polling tick -

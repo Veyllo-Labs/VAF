@@ -1594,10 +1594,12 @@ async def speaker_recognition_test(request: Request):
 @app.post("/api/speaker/feedback")
 async def speaker_recognition_feedback(request: Request):
     """Verdict on a recognition test ('correct'|'wrong'). Feeds the per-user
-    threshold-calibration store. Optionally, a WRONG verdict may carry a name
-    plus the test audio: the voice is then stored as a NAMED third-party
-    profile (same explicit-owner-action rule as the confirmation flow). The
-    OWNER profile is never touched; naming the owner is ignored on purpose."""
+    threshold-calibration store. A WRONG verdict may carry a name: the voice
+    is stored as a NAMED third-party profile. OWNER-CONFIRMED clips
+    ('correct' on a self label, or the "it was me" false-reject path) also
+    train the owner profile adaptively (add_owner_sample guardrails;
+    speaker_id_adaptive_enabled) - the verdict comes from the authenticated
+    owner session, never from the audio itself."""
     from vaf.api.config_routes import get_current_user_or_local_admin
     from vaf.core.config import get_local_admin_scope_id
     from vaf.core import speaker_id as _sid
@@ -1621,8 +1623,8 @@ async def speaker_recognition_feedback(request: Request):
     if verdict == "wrong":
         if _who == "owner":
             # "It was me" button: a false reject - owner-side calibration
-            # data. NEVER a profile write (the owner profile only changes
-            # through explicit enrollment).
+            # data AND (below) the most valuable adaptive sample there is:
+            # exactly the border cases the profile misses today.
             owner_claim = True
             _was = "owner"
         elif _name:
@@ -1650,6 +1652,19 @@ async def speaker_recognition_feedback(request: Request):
         elif _who == "other":
             # "Someone else" without a name: still resolves the side.
             _was = "other"
+    # Owner-approved adaptive learning (user decision): a clip the
+    # authenticated owner confirmed as THEIR OWN voice trains the profile.
+    _owner_confirmed = (verdict == "correct" and label == "self") or owner_claim
+    if _owner_confirmed and body.get("audio"):
+        try:
+            from vaf.core.config import Config as _CfgA
+            if _CfgA.get("speaker_id_adaptive_enabled", True):
+                wav = _b64f.b64decode(body["audio"])
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, lambda: _sid.add_owner_sample(scope, wav))
+        except Exception as _ad_e:
+            log("WebServer", f"speaker feedback adaptive learn failed: {_ad_e}")
     stats = _sid.record_test_feedback(scope, score, label, verdict, was=_was)
     return {"ok": True, "stats": stats, "saved_profile": saved_profile,
             "owner_claim": owner_claim}

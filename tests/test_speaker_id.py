@@ -252,3 +252,59 @@ def test_feedback_suggestion_needs_both_sides_and_clamps():
     sid.record_test_feedback(scope, 0.90, "other", "correct")
     stats = sid.record_test_feedback(scope, 0.88, "other", "correct")
     assert stats["suggested_threshold"] == 0.75  # midpoint 0.915 clamped
+
+
+def test_adaptive_owner_sample_blends_and_caps(monkeypatch, tmp_path):
+    """Owner-approved adaptive learning: YES-confirmed segments sharpen the
+    centroid with bounded drift (0.7 enrollment weight), FIFO cap, and a
+    similarity floor; re-enrollment wipes the adaptive state."""
+    import numpy as np
+    base = np.zeros(8, dtype=np.float32); base[0] = 1.0
+    sid._save_profile("s1", "Mert", base, 20.0, 3)
+
+    near = np.zeros(8, dtype=np.float32); near[0] = 0.9; near[1] = 0.45
+    monkeypatch.setattr(sid, "embed_wav",
+                        lambda wav: {"embedding": near, "net_seconds": 2.0})
+    assert sid.add_owner_sample("s1", b"wav") is True
+    prof = sid.load_profile("s1")
+    assert prof["meta"]["adaptive_samples"] == 1
+    # Centroid moved toward the sample but the enrollment axis dominates.
+    assert prof["centroid"][0] > abs(prof["centroid"][1]) > 0
+    # Enrollment centroid was preserved pristine.
+    assert (sid._profile_dir("s1") / "enroll_centroid.npy").exists()
+
+    # Similarity floor: an absurd segment is rejected even on a Yes.
+    far = np.zeros(8, dtype=np.float32); far[3] = 1.0
+    monkeypatch.setattr(sid, "embed_wav",
+                        lambda wav: {"embedding": far, "net_seconds": 2.0})
+    assert sid.add_owner_sample("s1", b"wav") is False
+    assert sid.load_profile("s1")["meta"]["adaptive_samples"] == 1
+
+    # FIFO cap holds.
+    monkeypatch.setattr(sid, "embed_wav",
+                        lambda wav: {"embedding": near, "net_seconds": 2.0})
+    for _ in range(15):
+        assert sid.add_owner_sample("s1", b"wav") is True
+    assert sid.load_profile("s1")["meta"]["adaptive_samples"] == sid._ADAPTIVE_MAX_SAMPLES
+
+    # Fresh enrollment resets all adaptive state.
+    sid._save_profile("s1", "Mert", base, 25.0, 3)
+    d = sid._profile_dir("s1")
+    assert not (d / "adaptive.npy").exists()
+    assert not (d / "enroll_centroid.npy").exists()
+
+
+def test_no_profile_no_adaptive_write(monkeypatch, tmp_path):
+    assert sid.add_owner_sample("nobody", b"wav") is False
+
+
+def test_suggested_threshold_has_security_floor(monkeypatch, tmp_path):
+    """Mert's exact case: owner mean 0.61 vs others 0.15 - the naive midpoint
+    (0.38) would accept untested similar voices; the suggestion is floored at
+    owner_mean - 0.15 (delegation authority: false accept >> false reject)."""
+    for s in (0.60, 0.62):
+        sid.record_test_feedback("s9", s, "self", "correct")
+    for s in (0.14, 0.16):
+        sid.record_test_feedback("s9", s, "other", "correct")
+    stats = sid.feedback_stats("s9")
+    assert stats["suggested_threshold"] == 0.46  # max(0.38, 0.61-0.15)

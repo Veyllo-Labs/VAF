@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (265 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (268 keys).
 
 ## How configuration is set
 
@@ -77,8 +77,11 @@ print(agent.run("In one sentence, what is Python?"))
 | `veyllo_base_url` | `"https://api.veyllo.app/v1"` | Veyllo API base URL (OpenAI-compatible wire protocol); override for staging or self-host. |
 | `vision_mode` | `"description_tool"` | How attached images reach the model. `description_tool` (default): the main model is text-only — an image is run once through the vision backend to a base description that is injected as text, and the model calls the `analyze_image` tool to inspect it on demand (token-efficient; works even with a non-vision main provider). `inline_multimodal`: legacy — send the raw image straight to a multimodal main model. See the vision section in [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
 | `vision_description_max_tokens` | `1024` | Output bound for the one-time base description and for each `analyze_image` call. |
-| `vision_provider` | `""` | Provider used for vision (base description + `analyze_image`). Empty = use the main provider if it is vision-capable, else none. Set it (e.g. `google`) to use a different provider for seeing when the main one cannot (e.g. DeepSeek). |
-| `vision_model` | `""` | Model for the vision provider; empty = that provider's default. |
+| `vision_provider` | `""` | Provider used for vision (base description + `analyze_image`). Empty = use the main provider if it is vision-capable, else none. Set an API id (e.g. `google`) to use a different provider for seeing, or `local`: the llama server launches with the model's mmproj projector and sees images itself (no cloud). |
+| `vision_model` | `""` | Model for the vision provider; empty = that provider's default. Unused for `local` (the loaded GGUF sees). |
+| `vision_local_mmproj` | `""` | Local vision projector ref `owner/repo/file.gguf` (admin-only: server launch argument). Empty = derived from the model's known repo (`mmproj-F16.gguf`, e.g. from `unsloth/Qwen3.5-4B-GGUF`). |
+| `voice_agent_provider` | `""` | LLM lane for the live-call voice agent (admin-only). Empty = ride the main provider (local main = time-share the one llama server). `local` = a dedicated local voice GGUF: the ONE server swaps models (voice model during the call, main model while a delegated task runs) - never two servers. Any API provider id = the call runs on that API regardless of the main provider. |
+| `voice_agent_model` | `""` | For `local`: GGUF ref `owner/repo/file.gguf` (empty = the recommended default in `voice_model.py`, Gemma 4 E4B). For an API provider: model name (empty = provider default). |
 | `vision_image_max_edge` | `2000` | Downscale an image before send if its longest edge exceeds this (px); prevents provider 500s on full-res photos and cuts tokens. Smaller images are sent unchanged. |
 | `vision_image_jpeg_quality` | `85` | Re-encode quality (1–95) used when an image is downscaled. |
 | `api_retry_attempts` | `2` | VAF-level retries on a transient error at request initiation — **HTTP 429 (rate limit)**, 5xx, timeout or connection drop — for **all** providers (atop each SDK's own retries; only before any token is streamed, so output is never duplicated). Admin-only. |

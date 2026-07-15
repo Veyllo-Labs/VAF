@@ -96,6 +96,16 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
         if (active && store.hangupRequested) endCall();
     }, [active, store.hangupRequested, endCall]);
 
+    // Phone-ring while the model loads ("dialing"): a soft 425 Hz tone every
+    // 2.5 s until the lane comes alive - then the greeting takes over. Audio
+    // only, no animated visuals (GPU rule).
+    useEffect(() => {
+        if (!active || !store.loadingModel) return;
+        playEarcon('dial');
+        const iv = setInterval(() => playEarcon('dial'), 2500);
+        return () => clearInterval(iv);
+    }, [active, store.loadingModel]);
+
     // Mute is REAL mute: the track goes silent, so the recorder cannot keep
     // capturing the room while muted. Toggling also invalidates the in-flight
     // utterance - buffered audio from the muted period must never ride into
@@ -491,7 +501,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
 // blip the moment an utterance is accepted for processing ("I heard you").
 // A short-lived AudioContext per cue; calls originate from a user gesture
 // (call button) so autoplay policy is satisfied.
-function playEarcon(kind: 'start' | 'end' | 'accept') {
+function playEarcon(kind: 'start' | 'end' | 'accept' | 'dial') {
     try {
         const ctx = new AudioContext();
         const gain = ctx.createGain();
@@ -499,8 +509,9 @@ function playEarcon(kind: 'start' | 'end' | 'accept') {
         const tones: Array<[number, number, number]> =
             kind === 'start' ? [[440, 0, 0.10], [660, 0.10, 0.12]]
             : kind === 'end' ? [[660, 0, 0.10], [440, 0.10, 0.12]]
+            : kind === 'dial' ? [[425, 0, 0.45]]  // phone ringing tone while the model loads
             : [[880, 0, 0.06]];
-        const vol = kind === 'accept' ? 0.10 : 0.16;
+        const vol = kind === 'accept' ? 0.10 : kind === 'dial' ? 0.08 : 0.16;
         const t0 = ctx.currentTime;
         const total = tones[tones.length - 1][1] + tones[tones.length - 1][2];
         for (const [freq, off, dur] of tones) {

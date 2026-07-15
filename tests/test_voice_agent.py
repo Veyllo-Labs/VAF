@@ -25,9 +25,10 @@ class _FakeBackend:
             yield piece
 
 
-def _cfg(monkeypatch, provider="openai", key="sk-x", model="gpt-x"):
+def _cfg(monkeypatch, provider="openai", key="sk-x", model="gpt-x", **extra):
     from vaf.core.config import Config
     cfg = {"provider": provider, f"api_model_{provider}": model}
+    cfg.update(extra)
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: cfg.get(k, d)))
     monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: key))
 
@@ -506,3 +507,70 @@ def test_memory_block_failure_is_safe(monkeypatch):
     monkeypatch.setattr(rag, "run_memory_search_sync", boom, raising=False)
     res = va.voice_reply("Hi", scope_id="not-a-uuid")
     assert res is not None  # RAG failure never kills the turn
+
+
+# ---------------------------------------------------------------------------
+# Configurable voice lane (voice_agent_provider / voice_agent_model)
+# ---------------------------------------------------------------------------
+
+def test_dedicated_local_voice_model_swaps_and_serves(monkeypatch):
+    """voice_agent_provider=local: the turn ensures the VOICE model on the one
+    server (swap), then talks to :8080. With a local main provider the lane
+    stays exclusive (the swap must never race a main task)."""
+    _cfg(monkeypatch, provider="local",
+         voice_agent_provider="local", voice_agent_model="owner/repo/gemma-test.gguf")
+    import sys
+    from vaf.core import voice_model as vm
+    calls = {"ensure": 0}
+    monkeypatch.setattr(vm, "ensure_voice_model", lambda reason="": calls.__setitem__("ensure", calls["ensure"] + 1) or True)
+
+    class _FakeResp:
+        status_code = 200
+        @staticmethod
+        def json():
+            return {"choices": [{"finish_reason": "stop",
+                                 "message": {"content": "Klar!"}}]}
+
+    class _FakeRequests:
+        @staticmethod
+        def get(*a, **kw):
+            return _FakeResp()
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            assert "127.0.0.1:8080" in url
+            return _FakeResp()
+
+    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    assert va.dedicated_local_model() == "owner/repo/gemma-test.gguf"
+    assert va.is_exclusive() is True
+    res = va.voice_reply("Hi", scope_id="s", lang="de")
+    assert res == {"reply": "Klar!", "delegate": None}
+    assert calls["ensure"] == 1
+
+
+def test_dedicated_local_voice_with_api_main_is_not_exclusive(monkeypatch):
+    """Dedicated local voice + API main: the llama server serves ONLY the
+    call - the voice agent keeps listening while the main agent works."""
+    _cfg(monkeypatch, provider="openai", voice_agent_provider="local")
+    from vaf.core import voice_model as vm
+    assert va.dedicated_local_model() == vm.DEFAULT_VOICE_MODEL
+    assert va.is_exclusive() is False
+
+
+def test_api_voice_override_rides_that_provider(monkeypatch):
+    """voice_agent_provider=<api id>: the call runs on that API even when the
+    main provider is local - and the lane is not exclusive."""
+    _cfg(monkeypatch, provider="local",
+         voice_agent_provider="openai", voice_agent_model="gpt-mini")
+    assert va._resolve_backend() == ("openai", "gpt-mini")
+    assert va.is_exclusive() is False
+    assert va.dedicated_local_model() is None
+    _FakeBackend.script = ["Na klar!"]
+    res = va.voice_reply("Hi", scope_id="s", lang="de")
+    assert res == {"reply": "Na klar!", "delegate": None}
+
+
+def test_api_voice_override_without_key_is_unavailable(monkeypatch):
+    _cfg(monkeypatch, provider="local", key="", voice_agent_provider="openai")
+    assert va._resolve_backend() == (None, None)
+    assert va.available() is False

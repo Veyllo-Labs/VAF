@@ -22,7 +22,10 @@ _SCHEMA = _REPO_ROOT / "docs" / "setup" / "CONFIG_SCHEMA.md"
 
 def test_every_speech_default_has_a_schema_row():
     doc = _SCHEMA.read_text(encoding="utf-8")
-    keys = [k for k in Config.DEFAULTS if k.startswith(("speech_", "stt_", "tts_"))]
+    # voice_agent_ = the live-call LLM lane; documented in the same schema
+    # (and admin-gated like the speech provider keys, see below).
+    keys = [k for k in Config.DEFAULTS
+            if k.startswith(("speech_", "stt_", "tts_", "voice_agent_"))]
     keys.append("api_key_elevenlabs")
     missing = [k for k in keys if f"`{k}`" not in doc]
     assert not missing, f"CONFIG_SCHEMA.md is missing rows for: {missing}"
@@ -47,6 +50,9 @@ def test_speech_provider_keys_admin_write_only():
         "speech_tts_provider", "speech_tts_api_model", "speech_tts_api_voice",
         "speech_stt_provider", "speech_stt_api_model",
         "speech_stt_enabled", "stt_enabled",
+        # Voice-agent LLM lane: a LAN user must never redirect the call's
+        # inference or burn the admin's API quota.
+        "voice_agent_provider", "voice_agent_model",
     ):
         assert Config.is_global_config_key(key), f"{key} must be admin-write-only"
         assert Config.filter_for_non_admin({key: "x"}) == {}, f"{key} escapes filter_for_non_admin"

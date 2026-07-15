@@ -49,6 +49,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is working for the main agent" status, with turns paused on both ends until
   the result is spoken. A call started with no model at all keeps the
   distinct "no model available" state.
+- **The voice agent can run its own model.** Settings > Voice (admin) now
+  offers three choices for the live call's language model: same as the main
+  agent (default, unchanged), a dedicated local model - recommended and
+  preset: Gemma 4 E4B, whose spoken German third-party tests rate as
+  noticeably more natural than Qwen's - or a separate API provider. With a
+  dedicated local model the single llama server swaps models instead of
+  running two: the voice model holds it during the call, the main model
+  takes it back while a delegated task runs, and a safety belt makes sure a
+  main-agent turn never runs on the voice model. The voice model downloads
+  on the first call (about 5.4 GB for the default) with the usual progress
+  banner.
+- **Local vision: the local model can see images itself.** Settings > AI >
+  Vision now offers "Local": the llama server is launched with the model's
+  vision encoder (mmproj, about 650 MB, downloaded automatically from the
+  model's own repo), and image descriptions plus the analyze_image tool run
+  fully on-device - no cloud provider needed. Works with the Qwen3.5 default
+  models and Gemma 4; the encoder size is budgeted into the VRAM context
+  math and per-image context cost is capped. Takes effect on the next model
+  start after enabling.
 - **Voice delegations are marked in the chat.** A task the voice agent hands
   to the main agent now renders as its own message: a red-ringed bubble with
   a soft glow and a "voice agent" tag next to the timestamp, instead of

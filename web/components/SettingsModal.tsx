@@ -2486,11 +2486,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 }}
                                                 options={[
                                                     { value: '', label: tAi('visionNone') },
+                                                    /* 'local' added HERE, not in VISION_PROVIDERS:
+                                                       the voice-agent select reuses that array and
+                                                       adds its own local entry (would duplicate). */
+                                                    { value: 'local', label: tAi('visionLocal') },
                                                     { value: 'veyllo', label: 'Veyllo' },
                                                     ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
                                                 ]}
                                             />
-                                            {selectedVisionProvider && (
+                                            {selectedVisionProvider === 'local' && (
+                                                <p className="text-xs text-gray-400 mt-2">{tAi('visionLocalHint')}</p>
+                                            )}
+                                            {selectedVisionProvider && selectedVisionProvider !== 'local' && (
                                                 <div className="mt-3">
                                                     <div className="flex gap-2 items-end">
                                                         <div className="flex-1">
@@ -2864,6 +2871,51 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 && !localConfig.api_key_openai && (
                                                 <p className="text-xs text-amber-600">{tVoice('openaiKeyHint')}</p>
                                             )}
+
+                                            {/* Voice-agent LLM lane (live call first layer): same as
+                                                main / dedicated local GGUF (one-server model swap) /
+                                                own API provider. Backend: voice_agent.py + voice_model.py. */}
+                                            <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-4">
+                                                <Select
+                                                    label={tVoice('agentLlm')}
+                                                    value={localConfig.voice_agent_provider || ''}
+                                                    onChange={(v: string) => {
+                                                        handleChange('voice_agent_provider', v);
+                                                        handleChange('voice_agent_model', '');
+                                                    }}
+                                                    options={[
+                                                        { value: '', label: tVoice('agentLlmMain') },
+                                                        { value: 'local', label: tVoice('agentLlmLocal') },
+                                                        { value: 'veyllo', label: 'Veyllo' },
+                                                        ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label })),
+                                                    ]}
+                                                />
+                                                {(localConfig.voice_agent_provider || '') === 'local' && (
+                                                    <>
+                                                        <Input
+                                                            label={tVoice('agentLlmGguf')}
+                                                            value={localConfig.voice_agent_model || ''}
+                                                            onChange={(v: string) => handleChange('voice_agent_model', v)}
+                                                            placeholder="bartowski/google_gemma-4-E4B-it-GGUF/google_gemma-4-E4B-it-Q4_K_M.gguf"
+                                                        />
+                                                        <p className="text-xs text-gray-400">{tVoice('agentLlmLocalHint')}</p>
+                                                    </>
+                                                )}
+                                                {!!(localConfig.voice_agent_provider || '') && localConfig.voice_agent_provider !== 'local' && (
+                                                    <>
+                                                        <Input
+                                                            label={tVoice('agentLlmApiModel')}
+                                                            value={localConfig.voice_agent_model || ''}
+                                                            onChange={(v: string) => handleChange('voice_agent_model', v)}
+                                                            placeholder={tVoice('agentLlmApiModelHint')}
+                                                        />
+                                                        {!localConfig[`api_key_${localConfig.voice_agent_provider}`] && (
+                                                            <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
+                                                        )}
+                                                    </>
+                                                )}
+                                                <p className="text-xs text-gray-500">{tVoice('agentLlmDesc')}</p>
+                                            </div>
                                             <p className="text-xs text-gray-500">{tVoice('providerDesc')}</p>
                                         </div>
                                     </Section>

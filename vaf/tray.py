@@ -1103,7 +1103,20 @@ def check_activity_loop(update_icon_callback):
         # below is gated on `not is_cloud_provider`, so a model loaded BEFORE a switch to a cloud/API
         # provider would otherwise stay warm forever. Free it here (level-triggered: retried each tick, and
         # deferred only while a thinking run is active), and (re)load it when switching back to local.
-        if is_cloud_provider and tray_context.model_loaded and not thinking_defer:
+        # Dedicated local VOICE model (voice_agent_provider=local): the llama
+        # server legitimately runs next to a cloud MAIN provider - it serves
+        # only the live call. The cloud-unload must spare it while websockets
+        # are connected (a possible call); the normal ws-idle unload below
+        # still frees it when the UI is gone.
+        voice_local_lane = False
+        if is_cloud_provider and tray_context.model_loaded:
+            try:
+                voice_local_lane = (
+                    (Config.get("voice_agent_provider", "") or "").strip().lower() == "local"
+                    and has_websocket)
+            except Exception:
+                voice_local_lane = False
+        if is_cloud_provider and tray_context.model_loaded and not thinking_defer and not voice_local_lane:
             log("Tray", f"Cloud provider '{provider}' active — unloading local model to free memory.")
             try:
                 server_mgr.stop_server(force_external=True)

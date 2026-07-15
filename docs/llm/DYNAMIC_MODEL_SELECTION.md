@@ -252,8 +252,8 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 
 | Setting | Description |
 |---------|-------------|
-| `vision_provider` | Provider to use for vision tasks (`veyllo`, `openai`, `anthropic`, `google`, `openrouter`). Leave empty to show an error when images are attached. |
-| `vision_model` | Specific model for vision. Leave empty to use the provider's default. |
+| `vision_provider` | Provider to use for vision tasks (`veyllo`, `openai`, `anthropic`, `google`, `openrouter`, or `local`). Empty = use the main provider if it is vision-capable, else none (images degrade to an "automatic analysis is unavailable" marker). `local` launches the llama server with the model's mmproj projector so the local model sees images itself (no cloud); takes effect on the next model start. |
+| `vision_model` | Specific model for vision. Leave empty to use the provider's default. Unused for `local` (the loaded GGUF sees). |
 
 ### How it works
 
@@ -263,7 +263,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
    - VAF makes a short auxiliary call to the vision provider to analyse the image.
    - The description is injected into the message as `[Vision (provider/model): ...]`.
    - The primary model (DeepSeek etc.) then answers based on the text description.
-4. If no `vision_provider` is set → the user sees an error and is told to configure one.
+4. If no `vision_provider` is set, the main provider serves vision when it is vision-capable; otherwise the image degrades to an "automatic analysis is unavailable" marker (no hard error).
 
 ### Vision-capable providers
 
@@ -274,7 +274,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 | Google | Yes, all Gemini | `gemini-2.5-flash` |
 | OpenRouter | Yes, varies | `openai/gpt-4o` |
 | DeepSeek | No | — |
-| Local | depends on model | — |
+| Local | Yes, via `vision_provider = local` (llama server + mmproj projector) | loaded GGUF |
 
 ### Image persistence in chat
 

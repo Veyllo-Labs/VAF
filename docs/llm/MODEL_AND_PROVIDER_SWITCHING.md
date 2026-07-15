@@ -14,7 +14,7 @@ The overlay mirrors the behavior when toggling the network settings (Local Netwo
 ## Backend behavior (memory / VRAM)
 
 - **Local to API:**
-  Saving the config triggers a `RELOAD_CONFIG` path in the headless runner (the agent switches to API operation and the local agent LLM instance is reset). In addition, the tray's activity loop (`check_activity_loop`) reads the provider live every tick and, on a cloud/API provider, **unloads the local model immediately** (`server_mgr.stop_server` + `set_model_loaded(False)`) to free VRAM/RAM — it no longer waits for the idle window. The unload is deferred only while a thinking run is active.
+  Saving the config triggers a `RELOAD_CONFIG` path in the headless runner (the agent switches to API operation and the local agent LLM instance is reset). In addition, the tray's activity loop (`check_activity_loop`) reads the provider live every tick and, on a cloud/API provider, **unloads the local model immediately** (`server_mgr.stop_server` + `set_model_loaded(False)`) to free VRAM/RAM - it no longer waits for the idle window. The unload is deferred while a thinking run is active, and it is skipped while `voice_agent_provider = "local"` with websockets connected (the dedicated voice model legitimately serves the live call next to a cloud main provider; the normal ws-idle unload still frees it once the UI is gone).
 
 - **API to Local:**
   On the switch back the activity loop detects the local provider and **(re)loads the local model** right away (`start_model_async`). After `RELOAD_CONFIG` the local path is active again.

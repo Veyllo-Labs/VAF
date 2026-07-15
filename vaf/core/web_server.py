@@ -5971,8 +5971,41 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                    "scope": _scope, "chat_context": _chat_ctx}
                         _lane_ok = _va.available()
                         _lane_reason = None
+                        if _lane_ok and _va.dedicated_local_model():
+                            # Server up but possibly holding the MAIN model
+                            # (e.g. right after a chat): pre-warm the swap so
+                            # the first voice turn does not pay it.
+                            try:
+                                from vaf.core import voice_model as _vvm_warm
+                                _vvm_warm.ensure_voice_model_async()
+                            except Exception:
+                                pass
                         if not _lane_ok:
-                            if _va.is_exclusive():
+                            _vm_ref = _va.dedicated_local_model()
+                            if _vm_ref:
+                                # Dedicated voice model configured: load THAT
+                                # (download on first use), not the main model.
+                                # On success push model_state so the frontend
+                                # self-heal re-sends voice_call_start.
+                                _lane_reason = "model_loading"
+                                from vaf.core import voice_model as _vvm
+
+                                def _vm_ready(ok: bool) -> None:
+                                    if not ok:
+                                        return
+                                    try:
+                                        tray_context.set_model_loaded(True)
+                                        get_web_interface().push_update({
+                                            "type": "model_state",
+                                            "loaded": True,
+                                            "persistent": tray_context.is_persistent(),
+                                            "provider": "local",
+                                        })
+                                    except Exception:
+                                        pass
+
+                                _vvm.ensure_voice_model_async(on_ready=_vm_ready)
+                            elif _va.is_exclusive():
                                 # Local mode with the llama server down: the
                                 # model loads LAZILY on activity, and the call
                                 # button never fed that trigger (live incident:

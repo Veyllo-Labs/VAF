@@ -8,7 +8,8 @@ messages, research) is DELEGATED to the main agent through the normal
 TaskQueue; the user keeps talking while the main agent works, and the finished
 result is spoken into the call as an update.
 
-Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
+Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
+(dedicated voice GGUF + one-server swap), the `voice_call_*` /
 `speaker_enroll_*` handlers in `vaf/core/web_server.py`,
 `web/components/VoiceCallLayer.tsx`, `web/components/VoiceCallBar.tsx`,
 `web/lib/voiceCallStore.ts`, or `vaf/core/speaker_id.py` /
@@ -16,22 +17,36 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
 
 ## Requirements
 
-- A live LLM: an API provider (`provider != "local"` with a key, riding the
-  main provider like `vision_infer.py`), or local mode with the llama server
-  reachable (`voice_agent.available()` probes `/v1/models`; in-process
-  library mode has no voice lane). Local mode is TIME-SHARED: the one model
-  serves the voice agent first, and while a delegated task runs the voice
+- A live LLM. The lane is CONFIGURABLE (`voice_agent_provider`/`voice_agent_model`,
+  admin-only, Settings > Voice; `vision_infer.select_vision_backend` pattern):
+  empty = ride the main provider (API main with a key, or local main via the
+  llama server); `local` = a DEDICATED local voice GGUF (default: Gemma 4 E4B,
+  `voice_model.py` - chosen for natural spoken German), where the ONE llama
+  server SWAPS models: the voice model holds it during the call, the main
+  model takes it back while a delegated task runs (model-aware
+  `backend.ensure_local_model`; the runner has a swap-back belt so a
+  main-agent turn never runs on the voice model); or an API provider id =
+  the call runs on that API regardless of the main provider.
+  `voice_agent.available()` probes `/v1/models` for the local flavors;
+  in-process library mode has no voice lane. Inherit-local is TIME-SHARED:
+  the one model serves the voice agent first, and while a delegated task runs the voice
   agent goes temporarily mute (see invariant 10). `available()` is checked
   at call start: when it is false in local mode the handler feeds the same
   activity heartbeat a chat message feeds (`tray_context.register_activity()`,
   the tray watchdog then runs its locked model load - never a second
-  server) and replies `reason: "model_loading"`; the window shows a loading
-  state and re-sends `voice_call_start` once the `model_state` push reports
-  loaded, so the call heals itself (live incident: the call button never
+  server) and replies `reason: "model_loading"`; with a DEDICATED voice
+  model the handler instead loads the voice GGUF directly
+  (`voice_model.ensure_voice_model_async`, bypassing the tray heartbeat -
+  which would load the MAIN model - and pushing `model_state` itself when
+  ready). The window shows a loading state with a soft phone-ring tone
+  (425 Hz every 2.5 s, audio only per the GPU rule) and re-sends
+  `voice_call_start` once the `model_state` push reports loaded, so the
+  call heals itself and greets (live incident: the call button never
   triggered the lazy load and the call opened dead until the user sent a
-  chat message). Without the tray watchdog (headless mode) the state stays
-  honest but nothing loads - known limitation. A non-local provider that is
-  unavailable keeps `reason: "no_model"` and the muted-mic state.
+  chat message). Without the tray watchdog (headless mode) the inherit
+  flavor stays honest but nothing loads - known limitation. A non-local
+  provider that is unavailable keeps `reason: "no_model"` and the muted-mic
+  state.
 - The speech stack (STT + TTS, local Docker or a cloud voice provider - see
   [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
 - Optional but strongly recommended: an enrolled speaker profile
@@ -151,18 +166,24 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    of delegating it (live incident; verified against Qwen3.5-4B that
    weather/mail/news requests delegate while clock questions and small talk
    do not).
-10. **Local mode time-shares ONE model, it never runs two inferences.**
-   `voice_agent.is_exclusive()` is True on the local provider; the backend
-   sends `exclusive` in `voice_call_started` and the frontend mirrors it in
-   the store. While a delegated task runs (`mainTask` set) the voice agent
-   is temporarily mute: the recorder loop stops sending turns, the window
-   shows the dimmed avatar + muted-mic badge with `status_deaf_busy`, and a
-   server-side belt answers any turn that slips through with
-   `voice_call_error "busy_local"` before the noise gate and STT (pipeline
-   step 0). When the result callback fires, listening resumes and the
-   result is spoken as usual. This applies the repo-wide local-mode rule to
-   the call: ONE llama server, never a second concurrent inference
-   (time-sharing, not parallelism).
+10. **Local mode time-shares ONE server, it never runs two inferences.**
+   `voice_agent.is_exclusive()` is True whenever voice and main need the
+   SAME llama server: inherit + local main (time-share the one model) and
+   dedicated voice model + local main (the one server swaps GGUFs; a voice
+   turn during a main task would fight the swap). It is False for an API
+   voice lane and for dedicated-local voice + API main (there the server
+   serves ONLY the call). The backend sends `exclusive` in
+   `voice_call_started` and the frontend mirrors it in the store. While a
+   delegated task runs (`mainTask` set) the voice agent is temporarily
+   mute: the recorder loop stops sending turns, the window shows the dimmed
+   avatar + muted-mic badge with `status_deaf_busy`, and a server-side belt
+   answers any turn that slips through with `voice_call_error "busy_local"`
+   before the noise gate and STT (pipeline step 0). When the result
+   callback fires, listening resumes; with a dedicated voice model the
+   first turn after the result pays the swap back to the voice GGUF
+   (seconds, warm). This applies the repo-wide local-mode rule to the call:
+   ONE llama server, never a second concurrent inference (swapping, not
+   parallelism).
 
 ## WebSocket events
 
@@ -224,14 +245,17 @@ not the user's.
 
 `speaker_id_enabled`, `speaker_id_threshold`, `speaker_id_band`,
 `speaker_id_confirmation_enabled` (see
-[CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane itself has no
-own keys: provider/model follow the main provider; TTS/STT follow the speech
-stack.
+[CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane's own keys are
+`voice_agent_provider` and `voice_agent_model` (admin-only, empty = follow
+the main provider; see Requirements above); TTS/STT follow the speech stack.
 
 ## Tests and change notes
 
 - `tests/test_voice_agent.py` - first-layer contracts (gating, delegate
-  protocol, busy/speaker guards, reasoning filter, noise gate).
+  protocol, busy/speaker guards, reasoning filter, noise gate, the
+  configurable lane: dedicated-local swap + exclusivity, API override).
+- `tests/test_local_model_swap.py` - model-aware server reuse,
+  `ensure_local_model` swap contract, voice/vision ref resolution.
 - `tests/test_speaker_id.py`, `tests/test_speaker_confirm.py` - voice DB and
   confirmation flow.
 - Changes under `vaf/core/` need a backend restart; `web/` changes need

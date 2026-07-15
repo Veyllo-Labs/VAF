@@ -126,8 +126,23 @@ class Config:
         # Vision Model Fallback — used when the primary provider does not support image input.
         # Example: primary = deepseek (no vision) → vision_provider = google / openai / anthropic.
         # Leave empty to keep current behavior (strip images + show error to user).
-        "vision_provider": "",   # e.g. "veyllo", "google", "openai", "anthropic", "openrouter"
+        "vision_provider": "",   # "veyllo"/"google"/"openai"/"anthropic"/"openrouter", or "local":
+                                 # the llama server is launched with the model's mmproj projector
+                                 # (backend.resolve_mmproj_for) and sees images itself.
         "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-4o" — leave empty for provider default
+        # Local vision projector ref "owner/repo/file.gguf"; empty = derived from the
+        # model's known repo (mmproj-F16.gguf). Admin-only: it is a server LAUNCH argument.
+        "vision_local_mmproj": "",
+        # Voice-agent LLM lane (live call first layer) - vision_provider pattern:
+        # "" = ride the main provider (local main = time-share the one llama server);
+        # "local" = a DEDICATED local GGUF for the call (the one server SWAPS models:
+        #           voice model during the call, main model while a delegated task runs
+        #           - never two servers, never two concurrent inferences);
+        # any API provider id = the call runs on that API regardless of the main provider.
+        "voice_agent_provider": "",
+        # For "local": model ref "owner/repo/file.gguf" (empty = recommended default,
+        # see voice_model.py). For an API provider: model name (empty = provider default).
+        "voice_agent_model": "",
         # Image downscaling before send: full-res photos make providers 500 and waste tokens.
         # Only images whose longest edge exceeds max_edge are shrunk (small images untouched).
         "vision_image_max_edge": 2000,      # px; OpenAI internally caps high-detail at ~2048
@@ -658,6 +673,9 @@ class Config:
         "speech_stt_",
         "speech_tts_",
         "speaker_id_",
+        # Voice-agent LLM lane: redirecting the call's inference (or burning the
+        # admin's API quota) must never be possible for a non-admin LAN user.
+        "voice_agent_",
         "subagent_",
         "thinking_",
         "librarian_",
@@ -674,6 +692,9 @@ class Config:
         # Concurrency + rate-limit resilience: system-wide, admin-only (a LAN user must not change them).
         "parallel_main_workers", "queue_policy", "max_parallel_api_workers", "max_parallel_local_workers",
         "api_retry_attempts", "api_retry_after_max",
+        # Local vision projector: a llama-server LAUNCH argument (code execution
+        # surface) - never user-writable.
+        "vision_local_mmproj",
         # Legacy STT toggle: enables the shared backend STT service for everyone
         # (soon a metered cloud lane), so it must not be user-writable. The
         # canonical speech_stt_enabled is already covered by the prefix list.

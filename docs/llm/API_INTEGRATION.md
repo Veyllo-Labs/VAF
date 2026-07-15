@@ -188,7 +188,7 @@ Providers that support multimodal (image) input:
 - **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) — converted to `Part.from_bytes` (inline_data) parts
 - **OpenRouter** — provider-dependent (model must support vision)
 - **DeepSeek** — the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
-- **Local (Ollama)** — only if the loaded model supports vision (e.g. `llava`)
+- **Local** (`vision_provider = "local"`): VAF's own llama-server is launched with the model's mmproj projector and sees images itself, no cloud. The projector is resolved by `backend.resolve_mmproj_for` (explicit `vision_local_mmproj` ref, else `mmproj-F16.gguf` from the model's known repo); vision activates on the next model (re)start. With an external OpenAI-compatible server (`local_api_url`, e.g. Ollama) the loaded model must support vision itself (e.g. `llava`).
 
 **How it works (default `vision_mode = "description_tool"`):** the main reasoning model is **text-only** — raw image bytes never enter its context. Vision is a separate, on-demand service.
 
@@ -198,7 +198,7 @@ Providers that support multimodal (image) input:
 4. On the turn an image first arrives, `agent.chat_step` runs it **once** through the vision backend (`vaf/core/vision_infer.py` → `vision_infer()`, with a neutral comprehensive prompt) and stores the result as `base_description` on the image. This is idempotent and persisted, so it is generated once per image and survives a reload / worker-pool pickup.
 5. `_prepare_messages()` replaces each attached image with a `[VISUAL CONTEXT …]` **text** block built from that base description (`build_visual_context_text()`); no `image_url` block and no base64 reaches the main model.
 6. When the model needs more than the description covers (exact colours, positions, small text, finding an object), it calls the **`analyze_image`** tool, which re-reads the image — live agent history first, then the persisted session — and runs a fresh, targeted `vision_infer()` pass, returning text.
-7. Backend selection (`select_vision_backend()`): use `vision_provider`/`vision_model` if set, else the main provider when it is vision-capable, else none. The provider classes convert `image_url` blocks to their own wire format (OpenAI passthrough; `AnthropicProvider._convert_content()` → `source.base64`; `GoogleProvider` → `types.Part.from_bytes`).
+7. Backend selection (`select_vision_backend()`): use `vision_provider`/`vision_model` if set, else the main provider when it is vision-capable, else none. The provider classes convert `image_url` blocks to their own wire format (OpenAI passthrough; `AnthropicProvider._convert_content()` → `source.base64`; `GoogleProvider` → `types.Part.from_bytes`). `vision_provider = "local"` routes to VAF's own llama-server (OpenAI `image_url` data-URI passthrough on `:8080`); `vision_model` is unused there since the loaded GGUF does the seeing, and `_model_supports_vision("local")` probes the running server's `/v1/models` for image support so a projector-less server is not treated as vision-capable.
 
 `vision_infer()` never raises and filters provider error sentinels (`[API Error from …]`) and reasoning `<think>`/control-JSON chunks, so a failed or noisy vision call never becomes a stored description (it returns `None`, leaving the image to be re-described or inspected via `analyze_image` later).
 

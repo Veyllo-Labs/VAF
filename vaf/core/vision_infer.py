@@ -57,7 +57,23 @@ def _model_supports_vision(provider: str, model: str) -> bool:
         return False  # api.deepseek.com rejects image_url content blocks
     if provider == "openrouter":
         return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
-    return True  # local / unknown: let the model decide
+    if provider == "local":
+        # Honest capability: with vision_provider=local the llama server is
+        # launched with the mmproj projector (backend.resolve_mmproj_for) and
+        # reports image support on /v1/models; without it every image call
+        # would burn a round-trip + retries into the sentinel error. Probe
+        # defensively; an unreachable server counts as capable so the normal
+        # lazy-load/error path stays intact (mirrors stay optimistic - this
+        # is the default description path's gate).
+        try:
+            import requests as _rq
+            r = _rq.get("http://127.0.0.1:8080/v1/models", timeout=2)
+            if r.status_code == 200:
+                return "multimodal" in r.text.lower() or "image" in r.text.lower()
+        except Exception:
+            pass
+        return True
+    return True  # unknown: let the model decide
 
 
 def _default_vision_model(provider: str) -> Optional[str]:

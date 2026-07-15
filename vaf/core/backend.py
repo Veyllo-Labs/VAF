@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import zipfile
 import tarfile
+import threading
 import time
 import requests
 from pathlib import Path
@@ -53,6 +54,65 @@ def _resolve_model_ref(name: str):
     if filename and not filename.lower().endswith(".gguf"):
         filename += ".gguf"
     return repo_id, filename
+
+
+def get_loaded_model_id(port: int = 8080, timeout: float = 2.0):
+    """Basename of the GGUF the llama server currently holds, or None.
+
+    llama-server reports the -m path (or alias) as the model id on
+    /v1/models. Needed since the voice lane can hold a DIFFERENT model on
+    the ONE server (model swap): a healthy port no longer implies the
+    right model.
+    """
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=timeout)
+        if r.status_code != 200:
+            return None
+        data = (r.json().get("data") or [{}])[0]
+        model_id = str(data.get("id") or "").strip()
+        return os.path.basename(model_id) if model_id else None
+    except Exception:
+        return None
+
+
+def _loaded_model_matches(model_path: str, port: int = 8080) -> bool:
+    """True when the server on `port` holds exactly `model_path`'s file.
+    Unknown (probe failed / no id) counts as MATCH so legacy behavior
+    (reuse any healthy server) is preserved when the id is unreadable."""
+    loaded = get_loaded_model_id(port)
+    if not loaded:
+        return True
+    try:
+        return loaded.lower() == os.path.basename(model_path or "").lower()
+    except Exception:
+        return True
+
+
+_ENSURE_LOCAL_LOCK = threading.Lock()
+
+
+def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bool = False) -> bool:
+    """Make the ONE llama server hold exactly `model_path` (blocking).
+
+    The single-server invariant stays: this never spawns a second server -
+    a mismatching healthy server is stopped and restarted with the wanted
+    GGUF (start_server is model-aware). Used by the voice lane (dedicated
+    voice model) and by the main lane's swap-back check. Serialized by a
+    module lock so voice and main cannot fight over the swap.
+    """
+    if not model_path or not os.path.exists(model_path):
+        return False
+    with _ENSURE_LOCAL_LOCK:
+        try:
+            if _loaded_model_matches(model_path) and get_loaded_model_id() is not None:
+                return True
+            UI.event("Server", f"Swapping local model -> {os.path.basename(model_path)}"
+                     + (f" ({reason})" if reason else ""), style="dim")
+            mgr = ServerManager(skip_cleanup=True)
+            return bool(mgr.start_server(model_path, skip_provider_gate=skip_provider_gate))
+        except Exception as e:
+            UI.event("Server", f"Local model swap failed: {e}", style="yellow")
+            return False
 
 
 def ensure_model_available(model_name, models_dir) -> str:
@@ -147,6 +207,62 @@ def ensure_model_available(model_name, models_dir) -> str:
 
     # 3) last resort -- return the resolved path so the caller surfaces a clear missing-file error
     return str(models_dir / (filename or auto_file or "model.gguf"))
+
+
+def resolve_mmproj_for(model_path: str) -> str:
+    """Local vision: path of the mmproj (multimodal projector) to launch the
+    llama server with, or "" when local vision is off / unresolvable.
+
+    Enabled by vision_provider == "local". The mmproj ref comes from
+    `vision_local_mmproj` ("owner/repo/file.gguf"), else it is derived from
+    the model's known repo (e.g. qwen3.5-4b -> unsloth/Qwen3.5-4B-GGUF +
+    mmproj-F16.gguf). Download goes DIRECTLY through hf_hub (never through
+    ensure_model_available: its self-heal would silently substitute a CHAT
+    model for a failed mmproj fetch - fatal as a --mmproj argument).
+    Fail-open to "": a missing mmproj must never block the text server.
+    """
+    from vaf.core.config import Config
+    try:
+        if (Config.get("vision_provider", "") or "").strip().lower() != "local":
+            return ""
+        models_dir = os.path.dirname(os.path.abspath(model_path))
+        ref = (Config.get("vision_local_mmproj", "") or "").strip()
+        if ref:
+            repo_id, filename = _resolve_model_ref(ref)
+        else:
+            base = os.path.basename(model_path).lower()
+            repo_id = None
+            for prefix, repo in _KNOWN_MODEL_REPOS.items():
+                if base.startswith(prefix):
+                    repo_id = repo
+                    break
+            filename = "mmproj-F16.gguf"
+        if not filename:
+            return ""
+        local = os.path.join(models_dir, filename)
+        if os.path.exists(local):
+            return local
+        if not repo_id:
+            return ""
+        from huggingface_hub import hf_hub_download
+        UI.event("System", f"Downloading vision projector {filename} ({repo_id})...", style="dim")
+        got = hf_hub_download(repo_id=repo_id, filename=filename, local_dir=models_dir)
+        return got if got and os.path.exists(got) else ""
+    except Exception as e:
+        UI.event("System", f"Vision projector unavailable: {e}", style="yellow")
+        return ""
+
+
+def local_server_multimodal(port: int = 8080) -> bool:
+    """True when the running llama server reports image support. Defensive:
+    any unreadable/absent capability info counts as False."""
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
+        if r.status_code != 200:
+            return False
+        return "multimodal" in r.text.lower() or "image" in r.text.lower()
+    except Exception:
+        return False
 
 
 def _server_ready_budget() -> float:
@@ -603,50 +719,69 @@ class ServerManager:
             UI.error(f"Backend download failed: {e}")
             return False
 
-    def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080):
+    def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
+                     skip_provider_gate=False):
         """
         Start llama-server only if provider is 'local' and auto-start is enabled.
-        
+
         Best Practice: Skip server startup when using API providers to save resources.
+
+        skip_provider_gate: the voice lane can run a dedicated LOCAL voice
+        model while the MAIN provider is an API - it explicitly asks for a
+        local server, so the provider gate must not veto it.
+
+        Reuse is MODEL-AWARE: since the voice lane can swap the ONE server
+        to a different GGUF, a healthy port no longer implies the wanted
+        model - a mismatching server is stopped and respawned with
+        `model_path` instead of being silently reused (a main-agent turn
+        must never run on the voice model or vice versa).
         """
         from vaf.core.config import Config
-        
+
         provider = Config.get("provider", "local")
         auto_start = Config.get("auto_start_local_server", True)
-        
-        # Skip server start if using API provider
-        if provider != "local":
-            UI.event("Backend", f"Using API provider: {provider}, skipping local server", style="dim")
-            return True
-        
-        # Skip if auto-start is disabled (user wants manual control)
-        if not auto_start:
-            UI.event("Backend", "Local server auto-start disabled in settings", style="dim")
-            return True
-        
+
+        if not skip_provider_gate:
+            # Skip server start if using API provider
+            if provider != "local":
+                UI.event("Backend", f"Using API provider: {provider}, skipping local server", style="dim")
+                return True
+
+            # Skip if auto-start is disabled (user wants manual control)
+            if not auto_start:
+                UI.event("Backend", "Local server auto-start disabled in settings", style="dim")
+                return True
+
         if not self.ensure_server_exists():
             return False
 
-        # If a server is already listening, reuse it instead of spawning another.
+        # If a server is already listening WITH THE WANTED MODEL, reuse it.
         try:
             response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
             if response.status_code == 200:
-                self.process = None  # Reuse existing external process
-                UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
-                return True
+                if _loaded_model_matches(model_path, port):
+                    self.process = None  # Reuse existing external process
+                    UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                    return True
+                UI.event("Server",
+                         f"Server on :{port} holds a different model - restarting with "
+                         f"{os.path.basename(model_path)}", style="dim")
+                # fall through to the restart path below
             # If it's still loading (503), wait for it instead of killing and respawning:
             # a re-entered start (tray retry) must not restart a server that is making
             # progress. Same budget as the readiness wait below - a cold multi-GB GGUF
             # on a slow disk can legitimately need minutes.
-            if response.status_code == 503:
+            elif response.status_code == 503:
                 wait_start = time.time()
                 while time.time() - wait_start < _server_ready_budget():
                     try:
                         response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
                         if response.status_code == 200:
-                            self.process = None
-                            UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
-                            return True
+                            if _loaded_model_matches(model_path, port):
+                                self.process = None
+                                UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
+                                return True
+                            break  # loaded, but the wrong model -> restart below
                     except Exception:
                         pass
                     time.sleep(0.5)
@@ -662,10 +797,10 @@ class ServerManager:
                 
                 # Check if process is still running
                 if self._is_process_running(existing_pid):
-                    # Check if server is responding
+                    # Check if server is responding (with the wanted model)
                     try:
                         response = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
-                        if response.status_code == 200:
+                        if response.status_code == 200 and _loaded_model_matches(model_path, port):
                             # Server läuft bereits, verwende ihn
                             self.process = None  # Wir verwalten diesen Prozess nicht direkt
                             UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
@@ -678,7 +813,27 @@ class ServerManager:
         
         # Server läuft nicht oder antwortet nicht - starte neu
         # Stop existing if any (nur wenn wirklich nötig - erzwinge Kill)
+        _had_server = False
+        try:
+            _had_server = requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5).status_code in (200, 503)
+        except Exception:
+            pass
         self.stop_server(force_external=True)
+        if _had_server:
+            # Model swap: CUDA frees the old model's VRAM asynchronously after
+            # the kill. Without settling, the free-VRAM probe below still sees
+            # the OLD model resident and panics the n_ctx cap into the
+            # KV-to-CPU fallback (live incident: "only ~4096 ctx fits" right
+            # after a voice/main swap). Wait briefly until the port is dead
+            # and the driver has reclaimed the memory.
+            for _ in range(10):
+                try:
+                    requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
+                    time.sleep(0.5)
+                    continue
+                except Exception:
+                    break
+            time.sleep(1.5)
         
         # ═══════════════════════════════════════════════════════════════════
         # N_PARALLEL: DRIVEN BY MODEL SIZE (GB), NOT BY TOKENS
@@ -697,9 +852,17 @@ class ServerManager:
         total_ram_gb = psutil.virtual_memory().total / (1024**3)
         gpu = get_primary_gpu()
         
+        # Local vision (vision_provider=local): resolve the mmproj BEFORE the
+        # VRAM math - its weights (~0.6-1 GB) are resident once --mmproj is
+        # passed, and a size estimate that ignores them re-creates the exact
+        # over-allocation SIGSEGV the n_ctx cap exists to prevent.
+        mmproj_path = resolve_mmproj_for(model_path)
+
         # 2. Model size in GB (primary driver for n_parallel)
         try:
             model_file_size = os.path.getsize(model_path)
+            if mmproj_path:
+                model_file_size += os.path.getsize(mmproj_path)
             model_gb = model_file_size / (1024**3)
             # Runtime overhead: scratch buffers, compute graphs
             est_model_gb = model_gb + 1.0
@@ -843,6 +1006,14 @@ class ServerManager:
             # Verified: b9058+ Vulkan binary handles the native template without SIGABRT.
             "--jinja",
         ]
+
+        if mmproj_path:
+            # Vision lane: load the projector and cap the per-image token
+            # cost (a high-res photo can otherwise eat ~2k ctx tokens).
+            # Note: llama-server force-disables ctx_shift/cache_reuse with
+            # an mmproj loaded; VAF manages context itself, so that is
+            # acceptable - documented in PROVIDER_MODES.md.
+            cmd.extend(["--mmproj", mmproj_path, "--image-max-tokens", "1024"])
 
         # Server log verbosity is a THRESHOLD (higher = more output), not a syslog level.
         # Debug Logs on: 3 = info incl. request/response details. Off: 0 = the default,

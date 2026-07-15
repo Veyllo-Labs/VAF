@@ -199,14 +199,28 @@ _LOCAL_SERVER = "http://127.0.0.1:8080"   # the ONE llama server (same as compac
 
 
 def _resolve_backend():
-    """(provider, model) via the configured provider, or (None, None).
+    """(provider, model) for the voice lane, or (None, None).
 
-    Like vision_infer: the voice lane rides the main provider. Local mode
-    returns ("local", None): the lane talks to the single llama server in
-    TIME-SHARING with the main agent (never concurrently - the caller shows
-    a muted state while the main agent holds the model).
+    vision_infer pattern - explicit override first, else ride the main
+    provider:
+    - voice_agent_provider "" (default): main provider. Local main returns
+      ("local", None) - time-share the one llama server with the main agent.
+    - voice_agent_provider "local": a DEDICATED local voice GGUF. Returns
+      ("local", <model ref>) - the one server swaps to the voice model for
+      the call (voice_model.py); model truthy = dedicated.
+    - voice_agent_provider "<api id>": the call runs on that API regardless
+      of the main provider (key required).
     """
     from vaf.core.config import Config
+    override = (Config.get("voice_agent_provider", "") or "").strip().lower()
+    if override == "local":
+        from vaf.core import voice_model
+        return "local", voice_model.voice_model_ref()
+    if override:
+        if not Config.get_api_key(override):
+            return None, None
+        model = (Config.get("voice_agent_model", "") or "").strip() or None
+        return override, model
     provider = (Config.get("provider", "local") or "local").strip().lower()
     if provider == "local":
         return "local", None
@@ -216,11 +230,35 @@ def _resolve_backend():
     return provider, model
 
 
-def is_exclusive() -> bool:
-    """True when the voice lane shares ONE local model with the main agent
-    (local mode): turns must pause while the main agent works."""
+def dedicated_local_model():
+    """Model ref when the voice lane runs a DEDICATED local GGUF, else None.
+    Callers use this to kick the VOICE model load (not the main model)."""
     try:
-        return _resolve_backend()[0] == "local"
+        provider, model = _resolve_backend()
+        return model if provider == "local" and model else None
+    except Exception:
+        return None
+
+
+def is_exclusive() -> bool:
+    """True when voice turns must pause while the main agent works, because
+    both lanes need the SAME single llama server.
+
+    Truth table: inherit + local main -> True (time-share). Dedicated local
+    voice + local main -> True (the one server swaps models; a voice turn
+    during a main task would fight the swap). Dedicated local voice + API
+    main -> False (the llama server serves ONLY the call; the main agent
+    never touches it). Any API voice lane -> False.
+    """
+    try:
+        provider, model = _resolve_backend()
+        if provider != "local":
+            return False
+        if model:  # dedicated local voice model
+            from vaf.core.config import Config
+            main = (Config.get("provider", "local") or "local").strip().lower()
+            return main == "local"
+        return True
     except Exception:
         return False
 
@@ -361,6 +399,15 @@ def voice_reply(
         if provider == "local":
             # Time-shared single llama server: one non-streaming call. The
             # caller pauses turns while the main agent holds the model.
+            if model:
+                # Dedicated voice model: make the one server hold it (fast
+                # no-op when it already does; a ~seconds swap right after a
+                # delegated task handed the server back - the busy belt
+                # keeps turns away WHILE the task runs, so this only pays
+                # on the first turn after the result).
+                from vaf.core import voice_model
+                if not voice_model.ensure_voice_model(reason="voice turn"):
+                    return None
             _local = _local_chat(messages)
             if _local is None:
                 return None

@@ -1004,6 +1004,36 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     if not waited_for_server_ready:
                         waited_for_server_ready = True  # don't block forever
 
+                # Swap-back belt (dedicated voice model): a healthy :8080 no
+                # longer implies the MAIN model - the voice lane may have
+                # swapped the one server to its own GGUF for a live call. A
+                # main-agent turn must never run on the voice model, so make
+                # the server hold agent.model_path again (fast no-op when it
+                # already does; ~seconds when a swap is due - the caller is a
+                # queued task, not an interactive keystroke). Checked per
+                # task, not once: calls can start/end between tasks.
+                if agent.provider == "local":
+                    try:
+                        from vaf.core.backend import (_loaded_model_matches,
+                                                      ensure_local_model,
+                                                      get_loaded_model_id)
+                        import logging as _lg
+                        _main_path = getattr(agent, "model_path", "") or ""
+                        # Forensic line (tray_debug): proves per task what the
+                        # belt saw - a silent no-swap must be diagnosable.
+                        _lg.getLogger("vaf.core.headless_runner").info(
+                            "swap-back belt: use_server=%s main=%s loaded=%s",
+                            getattr(agent, "use_server", False),
+                            os.path.basename(_main_path) if _main_path else "-",
+                            get_loaded_model_id() or "-")
+                        if _main_path and not _loaded_model_matches(_main_path):
+                            get_web_interface().log(
+                                "Switching the local model back for this task...",
+                                level="info", source="System", session_id=task.session_id)
+                            ensure_local_model(_main_path, reason="main-agent task")
+                    except Exception as _swap_e:
+                        print(f"[Headless] main-model swap-back check failed: {_swap_e}")
+
                 # Normal Chat Step
                 # If user requested stop, skip starting chat_step for this queued task.
                 # NOTE: do NOT clear before checking; that would drop the stop signal.

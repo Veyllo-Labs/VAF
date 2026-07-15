@@ -201,3 +201,39 @@ def test_score_wav_with_mocked_pipeline(monkeypatch):
     assert res is not None
     assert res["label"] == "self" and res["score"] >= 0.99
     assert sid.label_prefix(res, "Mert") == "[Mert]: "
+
+
+# ---------------------------------------------------------------------------
+# Recognition-test feedback (threshold calibration only - never profiles)
+# ---------------------------------------------------------------------------
+
+def test_feedback_calibration_store_and_suggestion():
+    scope = "scope-a"
+    assert sid.feedback_stats(scope) == {"n": 0}
+    sid.record_test_feedback(scope, 0.72, "self", "correct")
+    sid.record_test_feedback(scope, 0.68, "self", "correct")
+    sid.record_test_feedback(scope, 0.48, "other", "correct")
+    stats = sid.record_test_feedback(scope, 0.52, "other", "correct")
+    assert stats["n"] == 4 and stats["n_owner"] == 2 and stats["n_other"] == 2
+    assert stats["owner_avg"] == pytest.approx(0.70)
+    assert stats["other_avg"] == pytest.approx(0.50)
+    assert stats["suggested_threshold"] == pytest.approx(0.60)
+    # A wrong verdict maps the score to the OPPOSITE side: label self but the
+    # user said wrong = someone else scored high
+    stats = sid.record_test_feedback(scope, 0.66, "self", "wrong")
+    assert stats["n_other"] == 3
+    # 'unsure' verdicts are stored but ambiguous - no side assignment
+    stats = sid.record_test_feedback(scope, 0.58, "unsure", "correct")
+    assert stats["n"] == 6 and stats["n_owner"] == 2
+    # Scope isolation: another scope sees nothing
+    assert sid.feedback_stats("scope-b") == {"n": 0}
+
+
+def test_feedback_suggestion_needs_both_sides_and_clamps():
+    scope = "scope-b"
+    sid.record_test_feedback(scope, 0.95, "self", "correct")
+    stats = sid.record_test_feedback(scope, 0.93, "self", "correct")
+    assert "suggested_threshold" not in stats  # only one side so far
+    sid.record_test_feedback(scope, 0.90, "other", "correct")
+    stats = sid.record_test_feedback(scope, 0.88, "other", "correct")
+    assert stats["suggested_threshold"] == 0.75  # midpoint 0.915 clamped

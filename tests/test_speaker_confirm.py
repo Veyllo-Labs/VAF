@@ -28,8 +28,15 @@ def _isolated(monkeypatch, tmp_path):
     from vaf.core.config import Config
     cfg = {"speaker_id_enabled": True, "speaker_id_threshold": 0.60,
            "speaker_id_band": 0.05, "speaker_id_confirmation_enabled": True,
-           "language": "de"}
+           "default_language": "de"}
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: cfg.get(k, d)))
+    # Never touch the real ~/.vaf user identities from tests
+    import vaf.auth.user_workspace as uw
+
+    class _NoIdentity:
+        def get_user_identity(self):
+            return {}
+    monkeypatch.setattr(uw, "get_user_workspace", lambda username: _NoIdentity())
     import vaf.core.session as session_mod
     monkeypatch.setattr(session_mod, "get_user_projects_root",
                         lambda scope: tmp_path / "projects" / str(scope)[:8])
@@ -192,6 +199,33 @@ def test_channel_reply_consumption(monkeypatch):
     ack = sc.try_consume_channel_reply("scope-a", "Ja")
     assert ack and "unveraendert" in ack
     assert sc.get_pending("scope-a") is None
+
+
+def test_question_language_from_user_identity(monkeypatch):
+    """Live bug: the Telegram question was always English although the user's
+    identity says preferred_language 'de' (the global config key is unset)."""
+    import vaf.auth.user_workspace as uw
+
+    class _WS:
+        def __init__(self, pref):
+            self._pref = pref
+        def get_user_identity(self):
+            return {"preferred_language": self._pref}
+
+    monkeypatch.setattr(uw, "get_user_workspace", lambda username: _WS("de"))
+    # Config 'language' unset (the _isolated fixture cfg has 'de', so drop it)
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, k, d=None: {"speaker_id_enabled": True,
+                                "speaker_id_confirmation_enabled": True}.get(k, d)))
+    assert sc._lang("Mert") == "de"
+    monkeypatch.setattr(uw, "get_user_workspace", lambda username: _WS("tr"))
+    assert sc._lang("Mert") == "tr"  # raw code - the VOCAB BOOK resolves it
+    assert sc._lang(None) == "en"    # no identity, config unset -> en
+    # Vocab gap: languages without an entry fall back to the English phrasing
+    from vaf.core import vocab
+    assert vocab.pick("speaker_confirm_yes", "tr") == vocab.pick("speaker_confirm_yes", "en")
+    assert vocab.pick("speaker_confirm_yes", "de") != vocab.pick("speaker_confirm_yes", "en")
 
 
 def test_expired_pending_resolves_gracefully(monkeypatch):

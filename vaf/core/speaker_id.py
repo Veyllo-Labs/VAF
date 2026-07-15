@@ -348,54 +348,34 @@ def _save_profile(scope_id: str, display_name: str, centroid, net_seconds: float
 # language (config "language" first, then the UI locale) - the visual UI keeps
 # its own locale. Served by enroll_start so the client never hardcodes them
 # (and a later iteration can generate questions via the LLM instead).
-_ENROLL_LINES = {
-    "de": {
-        "intro1": "Hey! Damit ich mir deine Stimme gut merken kann, lass uns kurz reden. Ich stelle dir ein paar lockere Fragen - antworte einfach frei heraus.",
-        "intro2": "Wichtig: Bitte achte darauf, dass du an einem ruhigen Ort bist, an dem niemand anderes spricht - so kann ich deine Stimme ganz genau speichern.",
-        "questions": [
-            "Erzähl mir kurz: Wie war dein Tag bisher?",
-            "Was hast du diese Woche noch vor?",
-            "Beschreib mir dein Lieblingsessen, als würdest du es einem Freund empfehlen.",
-            "Zähl einmal ganz entspannt von eins bis zehn.",
-            "Was würdest du an einem freien Tag am liebsten machen?",
-            "Erzähl mir von einem Film oder einer Serie, die dir zuletzt gefallen hat.",
-        ],
-        "done": "Fertig - ich habe deine Stimme gespeichert! Ab jetzt erkenne ich, wann du sprichst und wann jemand anderes.",
-        "q_inconsistent": "Das klang nach einer anderen Stimme - die Runde zählt nicht. Lass sie uns wiederholen, nur du sprichst.",
-        "q_no_speech": "Ich konnte keine Sprache hören. Lass uns die Runde nochmal versuchen.",
-        "q_too_short": "Das war etwas kurz - gib mir ein bis zwei ganze Sätze.",
-        "q_error": "Da ist etwas schiefgelaufen - lass es uns einfach nochmal versuchen.",
-    },
-    "en": {
-        "intro1": "Hey! So I can remember your voice well, let's talk for a moment. I will ask a few casual questions - just answer freely.",
-        "intro2": "Important: please make sure you are in a quiet place where nobody else is talking - that way I can store your voice precisely.",
-        "questions": [
-            "Tell me briefly: how has your day been so far?",
-            "What are your plans for the rest of the week?",
-            "Describe your favorite food as if recommending it to a friend.",
-            "Count slowly from one to ten.",
-            "What would you most like to do on a free day?",
-            "Tell me about a film or series you enjoyed recently.",
-        ],
-        "done": "Done - I have stored your voice! From now on I can tell when you are speaking and when someone else is.",
-        "q_inconsistent": "That sounded like a different voice - the round does not count. Let's repeat it, just you speaking.",
-        "q_no_speech": "I could not hear any speech. Let's try that round again.",
-        "q_too_short": "That was a bit short - give me one or two full sentences.",
-        "q_error": "Something went wrong with that round - let's simply try again.",
-    },
-}
+# The scripted lines live in the vocabulary book (vaf/core/vocab, keys
+# speaker_enroll_*) - new languages are added THERE, this module only selects.
+def _enroll_lines(lang: str) -> Dict:
+    from vaf.core import vocab
+    return {
+        "intro1": vocab.pick("speaker_enroll_intro1", lang),
+        "intro2": vocab.pick("speaker_enroll_intro2", lang),
+        "questions": vocab.phrasings("speaker_enroll_questions", lang),
+        "done": vocab.pick("speaker_enroll_done", lang),
+        "q_inconsistent": vocab.pick("speaker_enroll_q_inconsistent", lang),
+        "q_no_speech": vocab.pick("speaker_enroll_q_no_speech", lang),
+        "q_too_short": vocab.pick("speaker_enroll_q_too_short", lang),
+        "q_error": vocab.pick("speaker_enroll_q_error", lang),
+    }
 
 
 def _enroll_lang(ui_lang: str) -> str:
     try:
+        from vaf.core import vocab
+        available = set(vocab.available_languages("speaker_enroll_questions"))
         from vaf.core.config import Config
         cfg_lang = (Config.get("language", "auto") or "auto")[:2].lower()
-        if cfg_lang in _ENROLL_LINES:
+        if cfg_lang in available:
             return cfg_lang
+        ui = (ui_lang or "")[:2].lower()
+        return ui if ui in available else "en"
     except Exception:
-        pass
-    ui = (ui_lang or "")[:2].lower()
-    return ui if ui in _ENROLL_LINES else "en"
+        return "en"
 
 
 def enroll_start(scope_id: str, ui_lang: str = "en") -> Dict:
@@ -411,7 +391,7 @@ def enroll_start(scope_id: str, ui_lang: str = "en") -> Dict:
         "target_seconds": _ENROLL_TARGET_SECONDS,
         "max_rounds": _ENROLL_MAX_ROUNDS,
         "lang": lang,
-        "lines": _ENROLL_LINES[lang],
+        "lines": _enroll_lines(lang),
     }
 
 
@@ -644,6 +624,75 @@ def delete_named_profile(scope_id: str, name: str) -> bool:
     except Exception as e:
         _log.warning("speaker_id: delete_named_profile failed: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Recognition-test feedback (threshold calibration ONLY - never profiles)
+#
+# The Settings "test recognition" view records a snippet, shows who was
+# detected and lets the user judge the verdict. Those judgments feed a
+# per-scope calibration store from which a threshold suggestion is derived.
+# HARD RULE: this data never modifies any voice profile.
+# ---------------------------------------------------------------------------
+
+def _feedback_path(scope_id: str):
+    return _profile_dir(scope_id) / "feedback.json"
+
+
+def record_test_feedback(scope_id: str, score: float, label: str, verdict: str) -> Dict:
+    """Store one test verdict ('correct'|'wrong') and return feedback_stats."""
+    try:
+        import os
+        p = _feedback_path(scope_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        items = []
+        if p.exists():
+            items = json.loads(p.read_text(encoding="utf-8"))
+        items.append({"score": float(score), "label": str(label),
+                      "verdict": str(verdict), "at": time.strftime("%Y-%m-%d %H:%M")})
+        items = items[-100:]
+        p.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+        try:
+            os.chmod(p, 0o600)
+        except Exception:
+            pass
+    except Exception as e:
+        _log.warning("speaker_id: feedback store failed: %s", e)
+    return feedback_stats(scope_id)
+
+
+def feedback_stats(scope_id: str) -> Dict:
+    """Owner/non-owner score averages from UNambiguous verdicts plus a
+    suggested threshold (midpoint, clamped to 0.35-0.75).
+
+    Unambiguous mapping: (self, correct) and (other/named, wrong) were the
+    OWNER's voice; (other/named, correct) and (self, wrong) were someone
+    else. 'unsure' verdicts are stored but ambiguous, so they are skipped.
+    A suggestion needs at least 2 samples on each side.
+    """
+    try:
+        p = _feedback_path(scope_id)
+        if not p.exists():
+            return {"n": 0}
+        items = json.loads(p.read_text(encoding="utf-8"))
+        owner = [i["score"] for i in items
+                 if (i["label"] == "self" and i["verdict"] == "correct")
+                 or (i["label"] in ("other", "named") and i["verdict"] == "wrong")]
+        others = [i["score"] for i in items
+                  if (i["label"] in ("other", "named") and i["verdict"] == "correct")
+                  or (i["label"] == "self" and i["verdict"] == "wrong")]
+        stats: Dict = {"n": len(items), "n_owner": len(owner), "n_other": len(others)}
+        if owner:
+            stats["owner_avg"] = round(sum(owner) / len(owner), 3)
+        if others:
+            stats["other_avg"] = round(sum(others) / len(others), 3)
+        if len(owner) >= 2 and len(others) >= 2:
+            mid = (sum(owner) / len(owner) + sum(others) / len(others)) / 2
+            stats["suggested_threshold"] = round(min(0.75, max(0.35, mid)), 2)
+        return stats
+    except Exception as e:
+        _log.warning("speaker_id: feedback stats failed: %s", e)
+        return {"n": 0}
 
 
 # ---------------------------------------------------------------------------

@@ -264,6 +264,16 @@ normal chat turn. Segment audio is stored under the user's own
 `VAF_Projects/<uid8>/voice_confirm/` (served by `/api/file` with ownership
 enforcement) and deleted on resolve/expiry.
 
+Recognition test (Settings > Voice, `web/components/SpeakerTest.tsx`): record
+a few seconds, `POST /api/speaker/test` scores it against the user's voice DB
+(read-only) and shows the detected speaker with score, threshold and band
+markers; admins get a live threshold slider. The correct/wrong verdict goes to
+`POST /api/speaker/feedback` into a per-user calibration store
+(`speaker_id.record_test_feedback` / `feedback_stats`, capped at 100 entries)
+from which a threshold suggestion is derived (midpoint of owner vs non-owner
+averages, needs 2+ samples per side, clamped 0.35-0.75). Calibration data
+never modifies any voice profile.
+
 ---
 
 ## Web UI Voice Integration

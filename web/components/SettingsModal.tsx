@@ -19,6 +19,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
+import { SpeakerTest } from './SpeakerTest';
 import CustomToolEditor from './settings/CustomToolEditor';
 import McpServerEditor from './settings/McpServerEditor';
 import type { McpServerInfo } from './settings/McpServerEditor';
@@ -2968,6 +2969,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 onChange={(v: boolean) => handleChange('speaker_id_enabled', v)}
                                             />
                                         </div>
+                                    )}
+                                    {speakerProfile && (localConfig.speaker_id_enabled || false) && (
+                                        <SpeakerTest
+                                            apiBase={apiBase || ''}
+                                            threshold={Number(localConfig.speaker_id_threshold) || 0.6}
+                                            band={Number(localConfig.speaker_id_band) || 0.05}
+                                            isAdmin={currentUser?.role === 'admin'}
+                                            onThresholdChange={(v: number) => handleChange('speaker_id_threshold', v)}
+                                        />
                                     )}
                                     <p className="text-xs text-gray-400 mt-3">{tVoice('profileSecurity')}</p>
                                 </Section>

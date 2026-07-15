@@ -37,32 +37,8 @@ _log = logging.getLogger(__name__)
 _COOLDOWN_SECONDS = 10 * 60       # min gap between two confirmation questions
 _PENDING_TTL_SECONDS = 60 * 60    # unanswered questions expire after an hour
 
-_QUESTION = {
-    "de": ("Ich habe gerade eine Stimme nicht sicher erkannt (Score {score}). "
-           "War das deine Stimme? Antworte mit Ja, Nein, oder z.B. "
-           "'Nein, das ist Peter', dann merke ich mir die Stimme unter dem Namen. "
-           "Wichtig: Dein eigenes Stimmprofil wird dadurch nie veraendert."),
-    "en": ("I could not confidently recognize a voice just now (score {score}). "
-           "Was that you? Reply with yes, no, or e.g. 'No, that's Peter' and I "
-           "will remember the voice under that name. "
-           "Note: your own voice profile is never changed by this."),
-}
-_ACK = {
-    "de": {
-        "yes": "Alles klar, das warst du. Dein Stimmprofil bleibt unveraendert.",
-        "no": "Verstanden, das war eine andere Person.",
-        "named": "Verstanden, ich habe die Stimme als '{name}' gespeichert.",
-        "named_failed": "Verstanden, aber ich konnte die Stimme nicht als Profil speichern (Segment zu kurz oder unlesbar).",
-        "expired": "Diese Rueckfrage ist bereits abgelaufen.",
-    },
-    "en": {
-        "yes": "Got it, that was you. Your voice profile stays unchanged.",
-        "no": "Understood, that was another person.",
-        "named": "Understood, I saved that voice as '{name}'.",
-        "named_failed": "Understood, but I could not save the voice as a profile (segment too short or unreadable).",
-        "expired": "This confirmation has already expired.",
-    },
-}
+# Question and acknowledgment texts live in the vocabulary book
+# (vaf/core/vocab, keys speaker_confirm_*) - new languages are added THERE.
 
 _YES_RE = re.compile(r"^\s*(ja+|jo|jep|jup|yes|yep|yeah|si)\b", re.I)
 _NO_RE = re.compile(r"^\s*(nein+|ne+|noe|nö|no+|nope)\b", re.I)
@@ -75,17 +51,12 @@ _NAME_RE = re.compile(
 _VOICE_PREFIX_RE = re.compile(r"^\s*\[[^\]]*transcribed[^\]]*\]:\s*", re.I)
 
 
-def _lang() -> str:
-    try:
-        from vaf.core.config import Config
-        lang = (Config.get("language", "") or "").strip().lower()
-        if lang.startswith("de"):
-            return "de"
-        if lang:
-            return "en"
-    except Exception:
-        pass
-    return "en"
+def _lang(username: Optional[str] = None) -> str:
+    """The USER's language code, via the vocabulary book's shared resolver
+    (identity preferred_language -> config default_language -> en). Returned
+    RAW - vocab.pick resolves it and falls back per phrase."""
+    from vaf.core.vocab import resolve_user_language
+    return resolve_user_language(username=username)
 
 
 def is_enabled() -> bool:
@@ -213,8 +184,9 @@ def maybe_request_confirmation(
         except Exception:
             pass
 
-        lang = _lang()
-        question = _QUESTION[lang].format(score=score_result.get("score", "?"))
+        from vaf.core import vocab
+        question = vocab.pick("speaker_confirm_question", _lang(username),
+                              score=score_result.get("score", "?"))
         rec = {
             "id": confirm_id,
             "scope_id": str(scope_id),
@@ -299,13 +271,15 @@ def resolve(scope_id: str, answer: str, name: Optional[str] = None,
     a named third-party profile via speaker_id (the only write this flow can
     ever do, and never to the owner files).
     """
-    lang = _lang()
+    from vaf.core import vocab
     rec = _pop_pending(scope_id, confirm_id)
     if rec is None:
-        return {"ok": False, "outcome": "expired", "ack": _ACK[lang]["expired"]}
+        return {"ok": False, "outcome": "expired",
+                "ack": vocab.pick("speaker_confirm_expired", _lang())}
+    lang = _lang(rec.get("username"))
     try:
         if answer == "yes":
-            outcome, ack = "self", _ACK[lang]["yes"]
+            outcome, ack = "self", vocab.pick("speaker_confirm_yes", lang)
         elif name:
             from vaf.core import speaker_id
             meta = None
@@ -318,12 +292,12 @@ def resolve(scope_id: str, answer: str, name: Optional[str] = None,
             except Exception as e:
                 _log.warning("speaker_confirm: named save failed: %s", e)
             if meta is not None:
-                outcome, ack = "named", _ACK[lang]["named"].format(
-                    name=meta["display_name"])
+                outcome, ack = "named", vocab.pick("speaker_confirm_named", lang,
+                                                   name=meta["display_name"])
             else:
-                outcome, ack = "other", _ACK[lang]["named_failed"]
+                outcome, ack = "other", vocab.pick("speaker_confirm_named_failed", lang)
         else:
-            outcome, ack = "other", _ACK[lang]["no"]
+            outcome, ack = "other", vocab.pick("speaker_confirm_no", lang)
         result = {"ok": True, "outcome": outcome, "ack": ack}
         if outcome == "named":
             result["name"] = name

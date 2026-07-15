@@ -21,8 +21,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The owner's own profile is never modified by an answer, named speakers can
   never trigger delegations, at most one question is pending per user, and
   replies on messengers are consumed without starting an agent turn.
+- **Recognition test with threshold calibration (Settings > Voice).** Record a
+  few seconds and see who the system detects, with score, threshold and
+  uncertainty band visualized; admins tune the threshold with a live slider.
+  Judging results as correct or wrong feeds a per-user calibration store that
+  suggests a threshold from your own voice data - and never touches any voice
+  profile.
+- **The voice agent knows when NOT to answer.** The live-call mic is always
+  open, so utterances are now gated before they cost anything: side talk from
+  other speakers (no agent address) and garbled speech-recognition noise never
+  reach the LLM or the speakers - the text still enters the call context so
+  the agent knows what happens in the room. For the owner's own side talk the
+  model can answer with a silence marker in the same call that would have
+  answered anyway (no extra LLM turns, no added latency).
 
 ### Fixed
+- **Spoken voice-agent replies are capped at a sentence boundary.** A model
+  derailed by garbled input could fill its whole token budget with a monologue
+  (minutes of TTS); replies are now cut in code, and the prompt tells the
+  agent to ask for a repeat instead of guessing at garbled transcripts.
 - **Veyllo no longer 400s mid-task after a text-recovered tool call.** When a model
   leaks a tool call as text (deepseek-v4 does intermittently) or a stream loses the
   id, VAF must mint a tool_call id itself; those ids now carry a recognizable

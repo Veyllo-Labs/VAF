@@ -68,6 +68,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   models and Gemma 4; the encoder size is budgeted into the VRAM context
   math and per-image context cost is capped. Takes effect on the next model
   start after enabling.
+- **Wake word: calling the agent by name always gets an answer.** The live
+  call sometimes chose silence when the speaker was not recognized or when
+  the agent was addressed directly. An utterance that says the agent's
+  persona name (fuzzy-matched, so speech recognition garbling like "Charvis"
+  for "Jarvis" still counts) now always engages - for any speaker - and the
+  model is told it was addressed and must answer instead of staying silent.
+  The security rules are untouched: an unverified voice still cannot trigger
+  delegations or get private information. The voice agent also carries its
+  persona now: it introduces itself with the configured agent name (Settings >
+  Persona) instead of a generic "VAF", and a compact excerpt of the Soul
+  keeps it in character on the call.
 - **Voice delegations are marked in the chat.** A task the voice agent hands
   to the main agent now renders as its own message: a red-ringed bubble with
   a soft glow and a "voice agent" tag next to the timestamp, instead of

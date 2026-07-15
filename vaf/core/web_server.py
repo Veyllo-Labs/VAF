@@ -5967,8 +5967,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         getattr(_sess, "messages", None) or [])
                         except Exception:
                             _chat_ctx = ""
+                        # Agent persona name for the wake-word filter (fuzzy
+                        # "you were addressed by name" - see voice_agent.
+                        # addressed_by_name). Cached per call, fail-open "".
+                        _agent_name = ""
+                        _agent_soul = ""
+                        try:
+                            if _vuser:
+                                _ws_p = get_user_workspace(_vuser)
+                                _agent_name = str((_ws_p.get_identity() or {}).get("name") or "")
+                                # Personality for the first layer: capped, the
+                                # voice prompt is latency-bound.
+                                _agent_soul = str(_ws_p.get_soul() or "")[:500]
+                        except Exception:
+                            _agent_name, _agent_soul = "", ""
                         _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang,
-                                                   "scope": _scope, "chat_context": _chat_ctx}
+                                                   "scope": _scope, "chat_context": _chat_ctx,
+                                                   "agent_name": _agent_name,
+                                                   "agent_soul": _agent_soul}
                         _lane_ok = _va.available()
                         _lane_reason = None
                         if _lane_ok and _va.dedicated_local_model():
@@ -6160,7 +6176,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # other speakers and garbled non-owner input never
                         # reach the LLM - the text still enters the call
                         # history as room context (the labels exist for this).
-                        _engage, _gate_reason = _va.should_engage(_text, _label)
+                        _engage, _gate_reason = _va.should_engage(
+                            _text, _label, agent_name=_call.get("agent_name", ""))
                         if not _engage:
                             _call["history"].append({"role": "user", "content": _text[:200]})
                             _call["history"] = _call["history"][-16:]
@@ -6189,6 +6206,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 speaker_ok=_speaker_ok,
                                 chat_context=_call.get("chat_context", ""),
                                 username=_uname,
+                                addressed=(_gate_reason == "wake_word"
+                                           or _va.addressed_by_name(
+                                               _text, _call.get("agent_name", ""))),
+                                agent_name=_call.get("agent_name", ""),
+                                persona=_call.get("agent_soul", ""),
                             ),
                         )
                         if _res is None:

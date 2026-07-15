@@ -137,6 +137,16 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
 7. **All call animations are transform/opacity only and finite** (GPU leak
    rule); enter/exit choreography runs through the store's `closing` phase.
 8. **Addressee gating on the always-open mic, without extra LLM turns.**
+   Tier 0 wake word (no LLM, `addressed_by_name`): an utterance that says
+   the agent's persona NAME (fuzzy >= 0.59 against each token, plus exact
+   substring - STT garbles names) ALWAYS engages, for any speaker label and
+   even garbled text, and pins an "you were addressed - answer, never the
+   silence marker" block into the prompt. It authorizes NOTHING: the label
+   rules stay in force and delegations remain voice-verified. The prompt
+   also carries the persona: the configured agent name (Settings > Persona,
+   fetched per call start) replaces the generic "VAF" self-description, and
+   a hard-capped 500-char Soul excerpt keeps the first layer in character
+   without eating the latency budget.
    Tier 1 (no LLM, `voice_agent.should_engage`): another/named speaker who
    does not address the agent (no name, no second-person form) is side talk,
    and garbled STT noise from anyone but the verified owner is dropped - the

@@ -574,3 +574,50 @@ def test_api_voice_override_without_key_is_unavailable(monkeypatch):
     _cfg(monkeypatch, provider="local", key="", voice_agent_provider="openai")
     assert va._resolve_backend() == (None, None)
     assert va.available() is False
+
+
+def test_wake_word_fuzzy_match():
+    """The agent's name survives STT garbling (fuzzy >= 0.59 + substring)."""
+    assert va.addressed_by_name("Hey Jarvis, wie geht es dir?", "Jarvis") is True
+    assert va.addressed_by_name("Hey Charvis, bist du da?", "Jarvis") is True
+    assert va.addressed_by_name("kannst du mal schauen", "Jarvis") is False
+    assert va.addressed_by_name("Hey VAF!", "VAF") is True
+    assert va.addressed_by_name("", "Jarvis") is False
+    assert va.addressed_by_name("Hallo", "") is False
+
+
+def test_wake_word_engages_other_speakers_and_garble():
+    """Name-called utterances always engage - side talk and garble drops do
+    not apply when the agent was addressed by name."""
+    assert va.should_engage("[anderer_Sprecher]: Jarvis, wie spaet ist es?",
+                            "other", agent_name="Jarvis") == (True, "wake_word")
+    # Without the name, other-speaker side talk still drops.
+    ok, reason = va.should_engage("[anderer_Sprecher]: bring mal den Muell raus",
+                                  "other", agent_name="Jarvis")
+    assert (ok, reason) == (False, "side_talk")
+
+
+def test_wake_word_pins_answer_in_prompt(monkeypatch):
+    _cfg(monkeypatch)
+    va.voice_reply("Jarvis, bist du da?", scope_id="s", addressed=True)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "calls you BY NAME" in system
+    assert "no delegations" in system
+    va.voice_reply("Hi", scope_id="s")
+    assert "calls you BY NAME" not in _FakeBackend.last_messages[0]["content"]
+
+
+def test_persona_name_and_soul_reach_the_prompt(monkeypatch):
+    """The voice agent speaks AS the configured persona, not as generic VAF."""
+    _cfg(monkeypatch)
+    va.voice_reply("Hi", scope_id="s", agent_name="Jarvis",
+                   persona="Witzig, direkt, liebt kurze Antworten." + "x" * 600)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert system.startswith("You are Jarvis,")
+    assert "Witzig, direkt" in system
+    assert len(system) < 4000  # soul is hard-capped, never budget-eating
+    # Defaults stay VAF without a persona block.
+    va.voice_reply("Hi", scope_id="s")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert system.startswith("You are VAF,")
+    assert "Your personality" not in system

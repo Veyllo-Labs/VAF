@@ -60,7 +60,7 @@ _MAX_SPOKEN_CHARS = 400          # hard brevity cap: the token budget exists for
                                   # garbled STT input)
 _DELEGATE_RE = re.compile(r"<delegate>(.*?)</delegate>", re.S | re.I)
 
-_SYSTEM_PROMPT = """You are VAF, a personal assistant, currently on a LIVE VOICE CALL with your user (like a phone call). Your replies are spoken aloud via text-to-speech.
+_SYSTEM_PROMPT = """You are {agent_name}, a personal assistant, currently on a LIVE VOICE CALL with your user (like a phone call). Your replies are spoken aloud via text-to-speech.{persona_block}
 
 Rules for this call:
 - Answer in the user's language: {lang}.
@@ -79,9 +79,16 @@ Rules for this call:
 - Rule of thumb: EVERY request that needs a tool, live data or an action goes to the main agent with the marker. Small talk, opinions and things you already know (including the current time above) are answered directly, without the marker.
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
 - Only claim a task is running if this prompt explicitly says the main agent is currently working. Otherwise nothing is running: results you already announced are done, and new work needs a new <delegate>.
-{busy_block}
+{wake_block}{busy_block}
 {chat_block}
 {memory_block}"""
+
+_PERSONA_BLOCK = """
+Your personality (stay in character, expressed briefly in speech):
+{persona}"""
+
+_WAKE_BLOCK = """
+IMPORTANT - the current utterance calls you BY NAME: it is addressed to you. Answer it; do not reply with the silence marker. If it is garbled, briefly ask the speaker to repeat. The speaker-label rules above stay fully in force (an unverified speaker still gets no delegations, changes or private information)."""
 
 _CHAT_BLOCK = """
 CURRENT CHAT (summary of the conversation open on screen, oldest first - the user may refer to it as "here" or "our chat"):
@@ -130,7 +137,33 @@ def looks_garbled(text: str) -> bool:
     return False
 
 
-def should_engage(text: str, label: Optional[str]):
+def addressed_by_name(text: str, agent_name: str, threshold: float = 0.59) -> bool:
+    """Wake-word check: does the utterance say the agent's NAME?
+
+    STT garbles names ("VAF" -> "Waff", "Jarvis" -> "Charvis"), so each
+    token is fuzzy-matched against the configured persona name
+    (difflib ratio >= threshold, default 0.59 per design decision) plus an
+    exact-substring fallback. Used to (a) engage other/unsure speakers who
+    call the agent by name and (b) pin "you WERE addressed" in the prompt so
+    the model cannot flee into the silence protocol. It never authorizes
+    anything: delegations stay voice-verified (anti-spoofing invariant).
+    """
+    name = (agent_name or "").strip().lower()
+    if not name or len(name) < 2:
+        return False
+    core = _LABEL_PREFIX_RE.sub("", text or "").strip().lower()
+    if not core:
+        return False
+    if name in core:
+        return True
+    from difflib import SequenceMatcher
+    for tok in re.findall(r"[a-zA-Z0-9_äöüÄÖÜß]+", core):
+        if SequenceMatcher(None, tok, name).ratio() >= threshold:
+            return True
+    return False
+
+
+def should_engage(text: str, label: Optional[str], agent_name: str = ""):
     """Tier-1 addressee gate, BEFORE any LLM call. Returns (engage, reason).
 
     - Another (or a named) speaker who does not address the agent (no name,
@@ -143,6 +176,11 @@ def should_engage(text: str, label: Optional[str]):
     core = _LABEL_PREFIX_RE.sub("", text or "").strip()
     if not core:
         return False, "empty"
+    if agent_name and addressed_by_name(core, agent_name):
+        # Wake word: the agent was called by name - always engage, even for
+        # other/unsure speakers and garbled STT (the model can still ask to
+        # repeat; authorization stays voice-verified regardless).
+        return True, "wake_word"
     if label in ("other", "named") and not _addresses_agent(core):
         return False, "side_talk"
     if label != "self" and looks_garbled(core):
@@ -357,6 +395,9 @@ def voice_reply(
     speaker_ok: bool = True,
     chat_context: str = "",
     username: str = "",
+    addressed: bool = False,
+    agent_name: str = "",
+    persona: str = "",
 ) -> Optional[Dict]:
     """One first-layer turn. Returns {'reply': spoken_text, 'delegate': task|None}
     or None on any failure (no provider, API error) - the caller degrades.
@@ -380,9 +421,15 @@ def voice_reply(
 
         system = _SYSTEM_PROMPT.format(
             lang=lang,
+            agent_name=(agent_name or "").strip() or "VAF",
+            # Persona: the user's Soul, hard-capped - the first layer is
+            # latency-bound and a novel-length soul must not eat the budget.
+            persona_block=(_PERSONA_BLOCK.format(persona=persona.strip()[:500])
+                           if persona.strip() else ""),
             user_name=user_name,
             now=_now_line(username, lang),
             silent=_SILENT_MARKER,
+            wake_block=_WAKE_BLOCK if addressed else "",
             busy_block=_BUSY_BLOCK.format(task=(pending_task or "")[:200]) if main_busy else "",
             chat_block=_CHAT_BLOCK.format(digest=chat_context[:1400]) if chat_context.strip() else "",
             memory_block=_memory_block(user_text, scope_id),

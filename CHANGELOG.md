@@ -51,6 +51,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   distinct "no model available" state.
 
 ### Fixed
+- **Local voice turns answer instead of thinking.** A local reasoning model
+  (Qwen) burned its entire voice token budget on internal reasoning: the turn
+  ended with nothing to speak, no delegation was created, and the code then
+  wrongly spoke the "one moment" acknowledgment - a promise with nothing
+  behind it. Voice calls now disable thinking on the local server
+  (runtime-verified: the same question answers in one sentence instead of
+  timing out mid-thought), a reasoning-only reply degrades to the "please
+  repeat" nudge, and the acknowledgment is only spoken when a delegation
+  actually survived. The acknowledgment itself is now short ("Moment.",
+  "One moment.", rotating variants in ten languages) instead of one fixed
+  sentence, and the voice agent knows the user's current local date and time,
+  so clock questions are answered directly instead of being delegated. The
+  delegation instruction is also phrased capability-first with a worked
+  example now: a small model read "you cannot use tools" as a reason to
+  refuse real work ("I have no tools") instead of delegating it.
+- **Starting a live call now loads the local model.** The call button only
+  probed for a running model and opened a dead call when it was not loaded
+  yet (a chat message was needed to trigger the load). Call start now feeds
+  the same activity trigger a chat message feeds, the window shows "loading
+  the model" instead of the muted-mic state, and the call comes alive by
+  itself (greeting included) once the model is up.
 - **Natural questions now find memories by name.** "Kannst du dich noch an
   Kai erinnern?" returned nothing while a bare "Kai" search hit - filler
   words diluted the lexical score of the one signal word. Query tokens are

@@ -21,10 +21,17 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
   reachable (`voice_agent.available()` probes `/v1/models`; in-process
   library mode has no voice lane). Local mode is TIME-SHARED: the one model
   serves the voice agent first, and while a delegated task runs the voice
-  agent goes temporarily mute (see invariant 9). `available()` is checked
-  at call start: when it is false the call opens deaf (`voice_call_started`
-  with `ok: false`, `reason: "no_model"`) and the window shows the
-  muted-mic state instead of silently eating turns.
+  agent goes temporarily mute (see invariant 10). `available()` is checked
+  at call start: when it is false in local mode the handler feeds the same
+  activity heartbeat a chat message feeds (`tray_context.register_activity()`,
+  the tray watchdog then runs its locked model load - never a second
+  server) and replies `reason: "model_loading"`; the window shows a loading
+  state and re-sends `voice_call_start` once the `model_state` push reports
+  loaded, so the call heals itself (live incident: the call button never
+  triggered the lazy load and the call opened dead until the user sent a
+  chat message). Without the tray watchdog (headless mode) the state stays
+  honest but nothing loads - known limitation. A non-local provider that is
+  unavailable keeps `reason: "no_model"` and the muted-mic state.
 - The speech stack (STT + TTS, local Docker or a cloud voice provider - see
   [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
 - Optional but strongly recommended: an enrolled speaker profile
@@ -35,7 +42,7 @@ Read this before changing: `vaf/core/voice_agent.py`, the `voice_call_*` /
 0. **Exclusive-model belt** (local time-sharing): when
    `voice_agent.is_exclusive()` and the turn carries `main_busy`, the server
    answers `voice_call_error "busy_local"` immediately, before the noise
-   gate and STT (invariant 9). The frontend normally never sends these
+   gate and STT (invariant 10). The frontend normally never sends these
    turns; this is the server-side belt.
 1. **Noise gate**: `voice_agent.active_speech_seconds()` - clips with less
    than 0.3 s of audible 30 ms frames never reach STT (Whisper-class models
@@ -120,7 +127,25 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    it - no TTS, keep listening. Spoken replies are additionally capped in
    code at a sentence boundary (`_cap_spoken`) so a derailed model can never
    fill the token budget with a monologue.
-9. **Local mode time-shares ONE model, it never runs two inferences.**
+9. **A local voice turn must answer, not think.** `_local_chat` sends
+   `chat_template_kwargs: {enable_thinking: false}`: a local reasoning model
+   (Qwen) otherwise burns the whole token budget on `reasoning_content` and
+   the turn ends with nothing to speak or delegate (live incident 18:39,
+   runtime-verified both ways against Qwen3.5-4B; 7.6 s of the 8 s turn was
+   silent thinking). Defense in depth for models that think anyway: a
+   reply that is empty after reasoning-strip degrades to the tangled nudge,
+   and the delegate-ack line ("one moment") is spoken ONLY when a delegation
+   actually survived the gates - an empty reply without a surviving delegate
+   must never sound like a promise. The system prompt also carries the
+   user-local current time (timezone SSOT `user_time.py`), so clock/date
+   questions are answered by the first layer instead of being delegated or
+   refused. The delegation rule is phrased capability-first with a worked
+   marker example and an explicit "never claim you have no tools" line: a
+   small local model read the old "you CANNOT use tools" opener as a reason
+   to refuse a weather request instead of delegating it (live incident,
+   fix verified 3/3 delegations + no false delegation on small talk against
+   Qwen3.5-4B).
+10. **Local mode time-shares ONE model, it never runs two inferences.**
    `voice_agent.is_exclusive()` is True on the local provider; the backend
    sends `exclusive` in `voice_call_started` and the frontend mirrors it in
    the store. While a delegated task runs (`mainTask` set) the voice agent
@@ -140,9 +165,11 @@ base64 WAV 16 kHz mono, `format:"wav"`, `sessionId`, `main_busy`,
 `pending_task`), `voice_call_end`, `voice_call_speak` (`text` - result
 announcements; replies as `speaker_enroll_tts` so the chat TTS handler never
 reacts). Server -> client: `voice_call_started` (`ok`, `lang`, `exclusive`,
-`reason: "no_model"` when ok is false), `voice_call_reply`, `voice_call_error`
-(`no_call` | `bad_format` | `no_speech` | `llm_failed` | `busy_local` - the
-frontend keeps listening).
+and when ok is false `reason: "model_loading"` - local model load kicked,
+the frontend shows a loading state and re-sends `voice_call_start` on the
+`model_state {loaded:true}` push - or `"no_model"`), `voice_call_reply`,
+`voice_call_error` (`no_call` | `bad_format` | `no_speech` | `llm_failed` |
+`busy_local` - the frontend keeps listening).
 
 Enrollment (guided live call in Settings): `speaker_enroll_start/round/
 finalize/abort`, `speaker_enroll_speak`, `speaker_profile_get/delete` with

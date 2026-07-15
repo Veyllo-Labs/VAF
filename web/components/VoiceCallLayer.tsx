@@ -300,13 +300,31 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             else if (data.type === 'voice_call_started') {
                 // ok:false = no live LLM for the voice lane: the agent is
                 // DEAF - show the muted-mic state instead of silently eating
-                // the user's words. exclusive = local time-sharing: the
-                // voice agent goes temporarily mute while the main agent
-                // holds the one model (mainTask set).
+                // the user's words. reason 'model_loading' = local model is
+                // being loaded right now (the backend kicked the lazy load):
+                // show a loading state and heal via the model_state push.
+                // exclusive = local time-sharing: the voice agent goes
+                // temporarily mute while the main agent holds the one model
+                // (mainTask set).
                 useVoiceCallStore.getState().set({
                     voiceReady: data.ok !== false,
                     exclusive: data.exclusive === true,
+                    loadingModel: data.ok === false && data.reason === 'model_loading',
                 });
+            }
+            else if (data.type === 'model_state') {
+                // Self-heal for the "call started before the local model was
+                // loaded" case: once the model reports loaded, re-send
+                // voice_call_start - the fresh voice_call_started {ok:true}
+                // flips the store and the backend greets, so the call comes
+                // alive without user action.
+                const stM = useVoiceCallStore.getState();
+                if (data.loaded === true && stM.active && !stM.voiceReady) {
+                    try {
+                        ws.send(JSON.stringify({
+                            type: 'voice_call_start', ui_lang: locale, sessionId }));
+                    } catch { /* noop */ }
+                }
             }
             else if (data.type === 'voice_call_error') {
                 // no_speech and friends: just keep listening
@@ -434,7 +452,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
                         dim={!store.voiceReady || (store.exclusive && !!store.mainTask)}
                         eyePulseRef={eyePulseRef} />
                 </div>
-                {(!store.voiceReady || (store.exclusive && store.mainTask)) && (
+                {((!store.voiceReady && !store.loadingModel) || (store.exclusive && store.mainTask)) && (
                     <span className="absolute left-1/2 -translate-x-1/2 -bottom-4 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white shadow-md">
                         <MicOff size={15} strokeWidth={2.5} />
                     </span>
@@ -443,12 +461,14 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage }: Props) {
             <div className="w-full mt-auto border-t border-black/10 dark:border-white/10 pt-2.5 flex flex-col gap-1">
                 <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
                     <i className={`w-[7px] h-[7px] rounded-full flex-none ${
-                        (!store.voiceReady || (store.exclusive && store.mainTask)) ? 'bg-red-500'
+                        !store.voiceReady ? (store.loadingModel ? 'bg-amber-500 animate-pulse' : 'bg-red-500')
+                        : (store.exclusive && store.mainTask) ? 'bg-red-500'
                         : store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
                         : store.statusKey === 'speaking' ? 'bg-gray-100 animate-pulse'
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
                         : 'bg-gray-400'}`} />
-                    <span>{!store.voiceReady ? t('status_deaf')
+                    <span>{!store.voiceReady
+                        ? (store.loadingModel ? t('status_loading_model') : t('status_deaf'))
                         : (store.exclusive && store.mainTask) ? t('status_deaf_busy')
                         : t('status_' + store.statusKey)}</span>
                 </div>

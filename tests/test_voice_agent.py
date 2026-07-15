@@ -84,6 +84,12 @@ def test_local_with_server_serves_the_call(monkeypatch):
         @staticmethod
         def post(url, json=None, timeout=None):
             assert "127.0.0.1:8080" in url and json["stream"] is False
+            # Voice turns must never burn the budget on thinking (live
+            # incident: 600 tokens of reasoning, nothing spoken).
+            assert json["chat_template_kwargs"] == {"enable_thinking": False}
+            # The first layer answers time questions itself: the system
+            # prompt carries the user-local current time.
+            assert "Current date and time" in json["messages"][0]["content"]
             return _FakeResp()
 
     monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
@@ -91,6 +97,69 @@ def test_local_with_server_serves_the_call(monkeypatch):
     res = va.voice_reply("Machst du das?", scope_id="s", lang="de")
     assert res == {"reply": "Klar, mache ich!", "delegate": None}
     assert va.is_exclusive() is True
+
+
+def test_local_reasoning_only_reply_never_speaks_the_ack(monkeypatch):
+    """A local reasoning model truncated mid-thinking returns content="" plus
+    a reasoning_content blob. That must degrade to the tangled nudge - the
+    live incident spoke the delegate ack ('one moment') with delegate=None,
+    a false promise with nothing enqueued."""
+    _cfg(monkeypatch, provider="local")
+    import sys
+
+    class _FakeResp:
+        status_code = 200
+        @staticmethod
+        def json():
+            return {"choices": [{"finish_reason": "length", "message": {
+                "content": "",
+                "reasoning_content": "We need to figure out what the user wants...",
+            }}]}
+
+    class _FakeRequests:
+        @staticmethod
+        def get(*a, **kw):
+            return _FakeResp()
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            return _FakeResp()
+
+    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    res = va.voice_reply("Wie spaet ist es?", scope_id="s", lang="de")
+    assert res is not None and res["delegate"] is None
+    from vaf.core import vocab
+    assert res["reply"] in vocab.phrasings("voice_tangled", "de")
+    assert res["reply"] not in vocab.phrasings("voice_delegate_ack", "de")
+
+
+def test_marker_only_reply_speaks_ack_and_delegates(monkeypatch):
+    """The ack line is reserved for a SURVIVING delegation: marker-only reply
+    -> ack spoken, task delegated."""
+    _cfg(monkeypatch, provider="local")
+    import sys
+
+    class _FakeResp:
+        status_code = 200
+        @staticmethod
+        def json():
+            return {"choices": [{"finish_reason": "stop", "message": {
+                "content": "<delegate>Nach dem Wetter fuer morgen schauen</delegate>",
+            }}]}
+
+    class _FakeRequests:
+        @staticmethod
+        def get(*a, **kw):
+            return _FakeResp()
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            return _FakeResp()
+
+    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    res = va.voice_reply("Schau nach dem Wetter", scope_id="s", lang="de")
+    assert res is not None
+    assert res["delegate"] == "Nach dem Wetter fuer morgen schauen"
+    from vaf.core import vocab
+    assert res["reply"] in vocab.phrasings("voice_delegate_ack", "de")
 
 
 def test_missing_key_unavailable(monkeypatch):

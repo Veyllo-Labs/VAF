@@ -27,6 +27,10 @@ interface VoiceCallState {
    *  a delegated task runs (mainTask set) the voice agent is temporarily
    *  mute and turns pause until the result arrives. */
   exclusive: boolean;
+  /** true while the local model is still loading (voice_call_started with
+   *  reason "model_loading"): the call heals itself - the controller re-sends
+   *  voice_call_start once the model_state push reports loaded. */
+  loadingModel: boolean;
   seconds: number;
   speaker: VoiceSpeaker;
   agentMode: VoiceAgentMode;
@@ -51,6 +55,7 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   closing: false,
   voiceReady: true,
   exclusive: false,
+  loadingModel: false,
   seconds: 0,
   speaker: null,
   agentMode: 'idle',
@@ -61,8 +66,8 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
 
   start: () => set({
     active: true, closing: false, voiceReady: true, exclusive: false,
-    seconds: 0, speaker: null, agentMode: 'idle', statusKey: 'connecting',
-    mainTask: '', muted: false, hangupRequested: false,
+    loadingModel: false, seconds: 0, speaker: null, agentMode: 'idle',
+    statusKey: 'connecting', mainTask: '', muted: false, hangupRequested: false,
   }),
   stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false }),
   tick: () => set((s) => ({ seconds: s.seconds + 1 })),

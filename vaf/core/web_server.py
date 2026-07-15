@@ -5970,6 +5970,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang,
                                                    "scope": _scope, "chat_context": _chat_ctx}
                         _lane_ok = _va.available()
+                        _lane_reason = None
+                        if not _lane_ok:
+                            if _va.is_exclusive():
+                                # Local mode with the llama server down: the
+                                # model loads LAZILY on activity, and the call
+                                # button never fed that trigger (live incident:
+                                # call opened deaf until a chat message loaded
+                                # the model). Feed the same heartbeat a chat
+                                # message feeds - the tray watchdog then runs
+                                # its locked start_model_async path (never a
+                                # second server). The frontend shows "loading"
+                                # and re-sends voice_call_start once the
+                                # model_state push reports loaded.
+                                _lane_reason = "model_loading"
+                                try:
+                                    tray_context.register_activity()
+                                except Exception:
+                                    pass
+                            else:
+                                _lane_reason = "no_model"
+                            log("WebServer",
+                                f"voice_call_start: lane not ready (reason={_lane_reason})")
                         await websocket.send_json({
                             "type": "voice_call_started",
                             "ok": _lane_ok,
@@ -5978,7 +6000,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # main agent - the frontend mutes the voice agent
                             # while a delegated task runs.
                             "exclusive": _va.is_exclusive(),
-                            "reason": None if _lane_ok else "no_model",
+                            "reason": _lane_reason,
                         })
                         # Greeting: the agent opens the call (deterministic
                         # line, no LLM round-trip) - also an audio check for
@@ -6124,6 +6146,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # never spawn or disturb a running main-agent turn.
                         _busy = bool(cmd.get("main_busy"))
                         _pending = (cmd.get("pending_task") or "")[:300]
+                        _uname = manager.get_connection_username(websocket) or ""
                         _res = await loop.run_in_executor(
                             None,
                             lambda: _va.voice_reply(
@@ -6132,6 +6155,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 main_busy=_busy, pending_task=_pending,
                                 speaker_ok=_speaker_ok,
                                 chat_context=_call.get("chat_context", ""),
+                                username=_uname,
                             ),
                         )
                         if _res is None:

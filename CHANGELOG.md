@@ -11,6 +11,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a11] - 2026-07-16
+
+The voice release: the live call becomes a first-class citizen on local
+single-model setups - its own configurable model lane (Gemma 4 E4B as the
+recommended voice model), local vision, a real level meter with a noise
+gate, owner-approved adaptive voice learning, and a long list of hardening
+fixes found in live testing.
+
 ### Added
 - **Speaker confirmation with a named voice DB.** When speaker identification
   scores a voice as "unsure", VAF now asks the owner to confirm - via the main

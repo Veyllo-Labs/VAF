@@ -5938,11 +5938,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     _conn_key = id(websocket)
 
                     if type == "voice_call_start":
-                        # Call language: the user's SPOKEN language, not the
-                        # browser locale - identity preferred_language first,
-                        # ui_lang as fallback (a German speaker with an
-                        # English UI kept getting English fallback texts).
-                        _lang = (cmd.get("ui_lang") or "de")[:2].lower()
+                        # Base language: identity preferred_language first,
+                        # then the configured default_language (the user's
+                        # chosen default voice language), then the UI locale.
+                        # Per-turn language follow can override on top.
+                        from vaf.core.config import Config as _CfgL
+                        _cfg_default = (_CfgL.get("default_language", "") or "").strip()
+                        _lang = (_cfg_default or cmd.get("ui_lang") or "de")[:2].lower()
                         try:
                             from vaf.auth.user_workspace import get_user_workspace
                             _vuser = manager.get_connection_username(websocket)
@@ -6135,6 +6137,27 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
                             continue
 
+                        # 1b. Language follow: when STT detects a DIFFERENT
+                        # language and the lane the call actually speaks with
+                        # (cloud TTS, else the Docker container's INSTALLED
+                        # voices) can speak it, this turn answers AND speaks
+                        # in that language. Never a download mid-call; the
+                        # per-language verdict is cached on the call record.
+                        _turn_lang = _call["lang"]
+                        try:
+                            _sl = (_stt_lang or "")[:2].lower()
+                            if _sl and _sl != _turn_lang:
+                                _lok = _call.setdefault("lang_ok", {})
+                                if _sl not in _lok:
+                                    from vaf.core.speech import SpeechManager as _SMl
+                                    _lok[_sl] = _SMl.get_instance().call_lane_speaks(_sl)
+                                if _lok[_sl]:
+                                    _turn_lang = _sl
+                                    log("WebServer",
+                                        f"voice_call: language follow {_call['lang']} -> {_sl}")
+                        except Exception:
+                            _turn_lang = _call["lang"]
+
                         # 2. Speaker label (voice profile), same contract as the chat mic.
                         # With an enrolled profile the voice check is authoritative for
                         # delegation: only a verified "self" may trigger real work.
@@ -6200,7 +6223,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _res = await loop.run_in_executor(
                             None,
                             lambda: _va.voice_reply(
-                                _text, scope_id=_call["scope"], lang=_call["lang"],
+                                _text, scope_id=_call["scope"], lang=_turn_lang,
                                 user_name=_display, history=_call["history"],
                                 main_busy=_busy, pending_task=_pending,
                                 speaker_ok=_speaker_ok,
@@ -6264,7 +6287,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 loop.run_in_executor(
                                     None,
                                     lambda: _sm.synthesize_audio(
-                                        _res["reply"], _call["lang"], force_engine="docker"),
+                                        _res["reply"], _turn_lang, force_engine="docker"),
                                 ),
                                 timeout=130.0,
                             )

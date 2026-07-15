@@ -308,7 +308,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `update_check_on_start` | `True` | One-line "update available" hint at startup. |
 | `update_include_prereleases` | `null` | `vaf update` prerelease tracking. `null` = auto (track prereleases only when the installed build is itself a prerelease), `true` = always, `false` = stable-only. Also overridable per command via `vaf update --pre`/`--stable`. See [RELEASING.md](RELEASING.md). |
 | `config_format_version` | `1` | Bumped by config migrations. |
-| `default_language` | `""` | Forced UI language; empty = auto. |
+| `default_language` | `""` | Fallback language for backend spoken/canned phrases (vocab book) when the user identity has no `preferred_language` (empty = `en` there). Also the live-call base language: `preferred_language` > `default_language` > UI locale, with per-turn STT language follow on top. Not a UI-language override. |
 
 ## Thinking mode (background idle reasoning)
 

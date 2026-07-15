@@ -79,6 +79,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   persona now: it introduces itself with the configured agent name (Settings >
   Persona) instead of a generic "VAF", and a compact excerpt of the Soul
   keeps it in character on the call.
+- **The live call follows your spoken language.** Speak Turkish and the
+  agent answers in Turkish with the Turkish voice - per turn, whenever the
+  language is installed in the text-to-speech stack (cloud voices count as
+  multilingual; never a surprise download mid-call). The call's base
+  language now also honors the configured default language instead of only
+  the browser locale, and the "is that your voice?" confirmation card is a
+  centered dialog now instead of a top bar.
 - **Voice delegations are marked in the chat.** A task the voice agent hands
   to the main agent now renders as its own message: a red-ringed bubble with
   a soft glow and a "voice agent" tag next to the timestamp, instead of

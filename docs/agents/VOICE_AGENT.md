@@ -63,7 +63,15 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    than 0.3 s of audible 30 ms frames never reach STT (Whisper-class models
    hallucinate text on silence). Convenience gate, fail-open on analysis
    errors.
-2. **STT** via `speech_client.transcribe` (provider lane first).
+2. **STT** via `speech_client.transcribe` (provider lane first). The
+   detected language drives LANGUAGE FOLLOW: when it differs from the call
+   language and the lane the call actually speaks with can speak it
+   (`SpeechManager.call_lane_speaks`: a configured cloud TTS provider
+   counts as multilingual, else the Docker container is asked for its
+   INSTALLED languages; fail-closed, never a download mid-call, verdict
+   cached per call), the turn answers and speaks in the detected language. The call base language is
+   identity `preferred_language`, else the `default_language` config (the
+   user's default voice language), else the UI locale.
 3. **Speaker label**: `speaker_id.score_wav` against the owner profile and
    all named third-party profiles; the transcript gets a `[Name]: ` prefix.
    With an enrolled profile the check is AUTHORITATIVE for delegation

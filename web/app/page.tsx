@@ -5297,9 +5297,13 @@ function VAFDashboardContent() {
                 </div>
             )}
             {pendingSpeakerConfirms.length > 0 && (
-                <div className="shrink-0 bg-sky-50 dark:bg-sky-950/40 border-b border-sky-200 dark:border-sky-900 px-4 py-3 flex items-center gap-4 flex-wrap">
+                /* Centered floating card (user decision: mid-chat, not a
+                   top-left banner). pointer-events-none wrapper keeps the
+                   chat usable behind it - answering is optional (the
+                   messenger fallback may already have it). */
+                <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 px-4 pointer-events-none">
                     {pendingSpeakerConfirms.map((p) => (
-                        <div key={p.confirmId} className="flex flex-col gap-2 bg-white dark:bg-[#1f1f1f] rounded-lg border border-sky-200 dark:border-sky-900 p-3 shadow-sm min-w-0 max-w-2xl">
+                        <div key={p.confirmId} className="pointer-events-auto flex flex-col gap-2.5 bg-white dark:bg-[#1f1f1f] rounded-2xl border border-sky-200 dark:border-sky-900 p-5 shadow-2xl w-full max-w-md">
                             <p className="text-sm font-medium text-sky-900 dark:text-sky-200">{tMain('speakerConfirmTitle')}</p>
                             <p className="text-xs text-gray-600 dark:text-gray-400">{p.question}</p>
                             {p.audioPath && (

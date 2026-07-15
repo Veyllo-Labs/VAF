@@ -268,15 +268,10 @@ class SpeechManager:
         
         UI.success("Piper TTS installed.")
 
-    def _ensure_voice_model(self, lang: str) -> Optional[Path]:
-        """Ensure the ONNX model for the language exists."""
-        # Handle 'auto' -> default to English
-        if lang == "auto":
-            lang = "en"
-            
-        # Mapping lang -> model name
-        # Using high/medium quality models where available
-        models = {
+    # Mapping lang -> Piper model name (high/medium quality where available).
+    # SSOT for _ensure_voice_model (download) and has_local_voice (the live
+    # call's language-follow checks THIS map + on-disk files, no download).
+    PIPER_VOICES = {
             # Major Languages
             "en": "en_US-lessac-high",
             "de": "de_DE-thorsten-high",
@@ -321,11 +316,21 @@ class SpeechManager:
             "lb": "lb_LU-mary-medium",
             "nl": "nl_NL-rdh-medium",
             "sw": "sw_CD-lanafrica-medium",
-        }
-        
+    }
+
+    def _voice_model_name(self, short_lang: str) -> Optional[str]:
+        """Piper model name for a 2-letter language, or None if unsupported."""
+        return self.PIPER_VOICES.get((short_lang or "")[:2].lower())
+
+    def _ensure_voice_model(self, lang: str) -> Optional[Path]:
+        """Ensure the ONNX model for the language exists."""
+        # Handle 'auto' -> default to English
+        if lang == "auto":
+            lang = "en"
+
         # Default to English if lang not supported
         short_lang = lang[:2].lower()
-        model_name = models.get(short_lang, models["en"])
+        model_name = self.PIPER_VOICES.get(short_lang, self.PIPER_VOICES["en"])
         
         onnx_file = self.models_dir / f"{model_name}.onnx"
         json_file = self.models_dir / f"{model_name}.onnx.json"
@@ -485,6 +490,54 @@ $player.Close()
             thread.start()
         except:
             pass  # Silently fail - sound is optional
+
+    def has_local_voice(self, lang: str) -> bool:
+        """True when a Piper voice for `lang` is ALREADY downloaded (no
+        download side effect). Used by the live call's language-follow: the
+        agent switches its spoken language mid-call only when the matching
+        voice exists locally."""
+        try:
+            short = (lang or "")[:2].lower()
+            model_name = self._voice_model_name(short)
+            if not model_name:
+                return False
+            return ((self.models_dir / f"{model_name}.onnx").exists()
+                    and (self.models_dir / f"{model_name}.onnx.json").exists())
+        except Exception:
+            return False
+
+    def call_lane_speaks(self, lang: str) -> bool:
+        """Can the lane the LIVE CALL actually synthesizes with speak `lang`?
+
+        The call runs force_engine="docker": cloud TTS provider lane first,
+        else the tts-multilang container - NOT the host Piper store that
+        has_local_voice checks (audit finding: gating the language follow on
+        the host store either never triggered on standard installs or made
+        the TEXT switch language while the container spoke its fallback
+        voice). Cloud providers are broadly multilingual -> True; the
+        container is asked for its INSTALLED languages. Fail-closed: an
+        unreachable container means no language switch this turn.
+        """
+        short = (lang or "")[:2].lower()
+        if not short:
+            return False
+        try:
+            from vaf.core.config import Config
+            if (Config.get("speech_tts_provider", "") or "").strip():
+                return True
+            import requests as _rq
+            base = Config.get("speech_tts_docker_url", "http://localhost:5002")
+            r = _rq.get(f"{base}/languages", timeout=2)
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            items = data.get("languages", data) if isinstance(data, dict) else data
+            for it in (items or []):
+                if isinstance(it, dict) and str(it.get("code") or "")[:2].lower() == short:
+                    return bool(it.get("installed"))
+            return False
+        except Exception:
+            return False
 
     def synthesize_audio(self, text: str, lang: str = "auto", force_engine: Optional[str] = None) -> Optional[bytes]:
         """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming.

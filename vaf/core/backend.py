@@ -820,19 +820,26 @@ class ServerManager:
             pass
         self.stop_server(force_external=True)
         if _had_server:
-            # Model swap: CUDA frees the old model's VRAM asynchronously after
-            # the kill. Without settling, the free-VRAM probe below still sees
-            # the OLD model resident and panics the n_ctx cap into the
-            # KV-to-CPU fallback (live incident: "only ~4096 ctx fits" right
-            # after a voice/main swap). Wait briefly until the port is dead
-            # and the driver has reclaimed the memory.
-            for _ in range(10):
+            # Model swap: two separate hazards after killing the old server.
+            # (1) The PORT stays bound briefly after HTTP health dies - a new
+            #     spawn then exits with "address already in use" and the swap
+            #     reports "Server failed to start" although a later retry
+            #     works (live incident on a voice-turn swap). Poll a real
+            #     socket bind, not /health.
+            # (2) CUDA frees the old model's VRAM asynchronously - probing
+            #     free VRAM too early panics the n_ctx cap into the
+            #     KV-to-CPU fallback ("only ~4096 ctx fits"). Settle after
+            #     the port frees.
+            import socket as _sock
+            for _ in range(20):
                 try:
-                    requests.get(f"http://127.0.0.1:{port}/health", timeout=0.5)
-                    time.sleep(0.5)
-                    continue
+                    with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                        _s.settimeout(0.3)
+                        if _s.connect_ex(("127.0.0.1", port)) != 0:
+                            break  # nothing accepting: port is free
                 except Exception:
                     break
+                time.sleep(0.5)
             time.sleep(1.5)
         
         # ═══════════════════════════════════════════════════════════════════

@@ -50,9 +50,12 @@ scripts/
 
 Current keys: `nudge` (thinking-run "are you there?"), the voice stack's
 spoken lines (`voice_greeting`, `voice_greeting_anon`, `voice_tangled`,
-`voice_delegate_ack`), the speaker-confirmation texts (`speaker_confirm_*`)
-and the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
-consumed as a FULL ordered list via `phrasings()`, not `pick()`).
+`voice_delegate_ack`), the speaker-confirmation texts (`speaker_confirm_*`),
+the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
+consumed as a FULL ordered list via `phrasings()`, not `pick()`), and
+`stopwords` - per-language function-word lists (not phrasings) consumed as
+full lists, e.g. by the memory lexical-search query filter; new consumers
+should read them from here instead of hardcoding word lists.
 
 ## API
 

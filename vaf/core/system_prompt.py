@@ -1092,7 +1092,10 @@ Then use the results to answer. Do NOT guess from your training data!
                     cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
                     cache_file = cache_dir / f"{scope_str}.txt"
                     if cache_file.exists():
-                        known_facts = cache_file.read_text(encoding="utf-8").strip()
+                        # Encrypted-at-rest cache; legacy plaintext files
+                        # pass through the helper unchanged.
+                        from vaf.memory.crypto import decrypt_file_bytes
+                        known_facts = decrypt_file_bytes(cache_file.read_bytes()).strip()
                 except Exception:
                     pass
 

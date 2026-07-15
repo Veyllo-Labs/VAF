@@ -12,6 +12,7 @@ Provides:
 """
 
 import asyncio
+import os
 import threading
 from typing import List, Optional, Dict, Any, AsyncGenerator, Tuple
 from uuid import UUID, uuid4
@@ -22,7 +23,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from vaf.memory.models import Memory, Chunk, Connection, EMBEDDING_DIM
-from vaf.memory.crypto import get_crypto, MemoryCrypto
+from vaf.memory.crypto import (get_crypto, MemoryCrypto, encrypt_field,
+                               decrypt_field, encrypt_file_bytes)
 from vaf.memory.embeddings import get_embedding_service, get_chunker, EmbeddingService, TextChunker
 from vaf.memory.graph import GraphManager
 from vaf.memory.database import get_db
@@ -68,7 +70,41 @@ def _log_ingest_profile(profile_id: int, stage: str, **fields: Any) -> None:
 
 
 def _tokenize_lexical_query(query: str) -> List[str]:
-    return [t for t in re.findall(r"[a-zA-Z0-9_]+", (query or "").lower()) if len(t) >= 2]
+    # Umlauts/ß included: without them "können" tokenized to "k"+"nnen" and
+    # German names like "Müller" were unfindable.
+    return [t for t in re.findall(r"[a-zA-Z0-9_äöüÄÖÜß]+", (query or "").lower()) if len(t) >= 2]
+
+
+_lexical_stopwords_cache: Optional[set] = None
+
+
+def _lexical_stopwords() -> set:
+    """Function words (all vocab-book languages combined) that must not
+    dilute the lexical score. Live incident: "Kannst du dich noch an Kai
+    erinnern?" scored the Kai chunks 1/7 tokens = 0.11 while a bare "Kai"
+    query scored 1.0 - the filler words drowned the one signal word. The
+    lists live in the vocabulary book (key "stopwords") so other consumers
+    can share them. Fail-open: on any error the filter is empty.
+    """
+    global _lexical_stopwords_cache
+    if _lexical_stopwords_cache is None:
+        words: set = set()
+        try:
+            from vaf.core import vocab
+            for lang in vocab.available_languages("stopwords"):
+                words.update(w.strip().lower() for w in vocab.phrasings("stopwords", lang) if w.strip())
+        except Exception:
+            words = set()
+        _lexical_stopwords_cache = words
+    return _lexical_stopwords_cache
+
+
+def _content_tokens(query_tokens: List[str]) -> List[str]:
+    """Query tokens minus stopwords - unless that would empty the query
+    (a pure function-word query keeps its tokens rather than matching
+    nothing)."""
+    filtered = [t for t in query_tokens if t not in _lexical_stopwords()]
+    return filtered if filtered else query_tokens
 
 
 def _lexical_score_query_to_text(query_tokens: List[str], text: str) -> float:
@@ -207,22 +243,20 @@ class RagPipeline:
         
         metadata = metadata or {}
 
-        # Set default title if not provided
+        # Set default title if not provided. NEVER derive it from content:
+        # meta is stored unencrypted, and for short fact memories a
+        # content-derived title WAS the whole fact in plaintext.
         if "title" not in metadata:
-            # Use first 50 chars as title
-            metadata["title"] = content[:50].strip().replace('\n', ' ')
-            if len(content) > 50:
-                metadata["title"] += "..."
+            metadata["title"] = f"Memory {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
 
         # Normalize tags and expand with linked tags (tag A↔B: memories get both)
         if "tags" in metadata and isinstance(metadata["tags"], list):
             raw = [t.strip().lower() for t in metadata["tags"] if t and t.strip()]
             metadata["tags"] = expand_tags_with_links(raw)
 
-        # Store a preview in metadata (unencrypted, for display)
-        metadata["preview"] = content[:200].strip().replace('\n', ' ')
-        if len(content) > 200:
-            metadata["preview"] += "..."
+        # No content preview in meta: it was an unencrypted copy of the
+        # content with zero consumers (display previews are derived from the
+        # DECRYPTED parent at read time where needed).
 
         metadata["type"] = metadata.get("type", "note")
         metadata["created_at"] = datetime.utcnow().isoformat()
@@ -231,11 +265,15 @@ class RagPipeline:
         encrypted_content, nonce = self.crypto.encrypt(content)
         _log_ingest_profile(profile_id, "after_encrypt")
         
-        # 2. Create memory embedding (from title/summary)
+        # 2. Create memory embedding. From CONTENT (head) + tags now: the
+        # title is no longer content-derived, so a title-based embedding
+        # would be meaningless for graph similarity. (Embeddings are always
+        # plaintext-derived - the chunk embeddings already encode the full
+        # content, so this adds no new exposure.)
         # Note: Only E5 models need prefix; MiniLM works without
         model_name = self.embeddings.model_name or ""
         use_prefix = "e5" in model_name.lower()
-        summary = f"{metadata.get('title', '')} {' '.join(metadata.get('tags', []))}"
+        summary = f"{content[:256]} {' '.join(metadata.get('tags', []))}"
         memory_embedding = await self.embeddings.embed(summary, prefix="passage" if use_prefix else None)
         _log_ingest_profile(profile_id, "after_memory_embedding")
         
@@ -268,14 +306,19 @@ class RagPipeline:
                 chunk = Chunk(
                     id=uuid4(),
                     memory_id=memory.id,
-                    text=chunk_data["text"],
+                    # Encrypted at rest (embedding was computed from the
+                    # plaintext above); readers go through decrypt_field.
+                    text=encrypt_field(chunk_data["text"]),
                     embedding=embedding,
                     chunk_index=chunk_data["index"],
                     start_char=chunk_data["start_char"],
-                    end_char=chunk_data["end_char"]
+                    end_char=chunk_data["end_char"],
+                    # RLS on chunks is fail-closed WITH CHECK: an unstamped
+                    # insert would be rejected for the app role.
+                    user_scope_id=user_scope_id,
                 )
                 self.db.add(chunk)
-        
+
         await self.db.flush()
         _log_ingest_profile(profile_id, "after_chunk_flush")
         
@@ -415,11 +458,11 @@ class RagPipeline:
                     continue
             
             score = 1.0 - distance
-            
+
             source = RagSource(
                 memory_id=str(memory.id),
                 chunk_id=str(chunk.id),
-                text=chunk.text,
+                text=decrypt_field(chunk.text),
                 score=score,
                 metadata=memory.meta or {}
             )
@@ -449,7 +492,7 @@ class RagPipeline:
         rrf_k = max(1, min(500, rrf_k))
         lexical_min_score = float(Config.get("memory_hybrid_lexical_min_score", 0.0) or 0.0)
         lexical_min_score = max(0.0, min(1.0, lexical_min_score))
-        query_tokens = _tokenize_lexical_query(query)
+        query_tokens = _content_tokens(_tokenize_lexical_query(query))
 
         lexical_filters = [Memory.is_deleted == False]
         if not wants_attachment_lane:
@@ -463,9 +506,10 @@ class RagPipeline:
         # filter unconditionally so the lexical lane can never widen past the caller's scope.
         lexical_filters.append(Memory.user_scope_id == user_scope_id)
 
-        if query_tokens:
-            token_ors = [Chunk.text.ilike(f"%{tok}%") for tok in query_tokens[:8]]
-            lexical_filters.append(or_(*token_ors))
+        # NOTE: no SQL pre-filter on Chunk.text anymore - the text is
+        # encrypted at rest, so ilike cannot match. The lane always scored
+        # app-side anyway; the scan limit below is the cost cap, and rows are
+        # decrypted just-in-time before scoring.
 
         lex_stmt = (
             select(Chunk, Memory)
@@ -500,7 +544,8 @@ class RagPipeline:
                         break
                 if skip:
                     continue
-            lscore = _lexical_score_query_to_text(query_tokens, chunk.text or "")
+            _plain = decrypt_field(chunk.text) or ""
+            lscore = _lexical_score_query_to_text(query_tokens, _plain)
             lexical_scored.append(float(lscore))
             if lscore < lexical_min_score:
                 continue
@@ -508,7 +553,7 @@ class RagPipeline:
                 RagSource(
                     memory_id=str(memory.id),
                     chunk_id=str(chunk.id),
-                    text=chunk.text,
+                    text=_plain,
                     score=float(lscore),
                     metadata=memory.meta or {},
                 )
@@ -813,11 +858,12 @@ Always cite which source(s) you used."""
                     chunk = Chunk(
                         id=uuid4(),
                         memory_id=memory.id,
-                        text=chunk_data["text"],
+                        text=encrypt_field(chunk_data["text"]),
                         embedding=embedding,
                         chunk_index=chunk_data["index"],
                         start_char=chunk_data["start_char"],
-                        end_char=chunk_data["end_char"]
+                        end_char=chunk_data["end_char"],
+                        user_scope_id=memory.user_scope_id,
                     )
                     self.db.add(chunk)
             # Update memory embedding
@@ -1031,6 +1077,72 @@ def _strip_think_reply(text: str) -> str:
     if "<think>" in t.lower():
         t = re.split(r"(?i)<think>", t)[0]
     return t.strip()
+
+
+_MAX_FACTS_PER_COMPACTION = 12   # a derailed model spewing 50 lines gets cut
+_FACT_MIN_CHARS = 15
+_FACT_MAX_CHARS = 500
+# Markers that never belong in a durable fact (model meta-output, injected
+# context echoes, nested protocol lines)
+_FACT_JUNK_MARKERS = ("no_reply", "<think", "[source ", "<relevant-memories",
+                      "as an ai", "final check", "memory:")
+
+
+def _build_compaction_prompt(conversation: str, date_str: str) -> str:
+    """The fact-extraction prompt. Rules sharpened after a live review of a
+    learning run (2026-07-15): facts must be SELF-CONTAINED (each is retrieved
+    alone), volatile facts must be DATED, conversation state is not a memory,
+    and long-known basics should not be re-stored."""
+    return (
+        f"Today is {date_str}. "
+        "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
+        "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
+        'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
+        "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
+        "GROUNDING (critical): store ONLY facts the user STATED explicitly or that are directly evidenced in the conversation. "
+        "Do NOT infer or invent habits, routines, schedules, preferences, or numbers that were not stated. "
+        "Do NOT turn an exploratory, hypothetical, or philosophical remark into a durable preference or routine. "
+        "Preserve the user's exact wording for named concepts; do not paraphrase or guess spellings. "
+        "If you are not sure a fact was actually stated, leave it out. "
+        "SELF-CONTAINED (critical): each fact is retrieved ALONE later - it must be understandable without the other facts or this chat. "
+        "Name the subject explicitly in every fact (write the patent number, never 'the patent'; write 'paragraph 4.7 of the Pro FIT guideline', never just 'paragraph 4.7'). No references that point outside the fact. "
+        f"DATES: convert relative time to absolute dates ('currently', 'next week', 'yesterday'). Snapshot facts that will drift (finances, funding status, ongoing plans) must carry 'as of {date_str}' inside the fact text. "
+        "DURABILITY: do NOT store short-lived conversation state or open todos (e.g. 'has not sent the email yet', 'will let me know when ready') - only facts that will still be true and useful months from now. "
+        "NOVELTY: do not re-store long-established basics (the user's name, their company) unless they changed or are genuinely new in this conversation. "
+        "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
+        f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
+        "--- Conversation ---\n"
+        f"{conversation}\n"
+        "---\n\n"
+        "Output MEMORY: \"...\" [tags] lines or NO_REPLY."
+    )
+
+
+def _apply_fact_gates(memory_tuples: List[Tuple[str, List[str]]]):
+    """Model-independent guardrails between parse and ingest: length bounds,
+    junk-marker rejection and a per-run cap, so a weak model cannot flood the
+    memory store with garbage. Returns (kept, rejected) where rejected is a
+    list of (preview, reason)."""
+    kept: List[Tuple[str, List[str]]] = []
+    rejected: List[Tuple[str, str]] = []
+    for content, tags in memory_tuples:
+        c = " ".join((content or "").split())
+        reason = None
+        if len(c) < _FACT_MIN_CHARS:
+            reason = "too_short"
+        elif len(c) > _FACT_MAX_CHARS:
+            reason = "too_long"
+        else:
+            lowered = c.lower()
+            if any(m in lowered for m in _FACT_JUNK_MARKERS):
+                reason = "junk_marker"
+        if reason is None and len(kept) >= _MAX_FACTS_PER_COMPACTION:
+            reason = "cap"
+        if reason:
+            rejected.append((c[:80], reason))
+        else:
+            kept.append((c, tags))
+    return kept, rejected
 
 
 def _parse_memory_reply(reply: str) -> List[Tuple[str, List[str]]]:
@@ -1260,23 +1372,7 @@ def run_session_compaction_sync(
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
         conversation = _build_compaction_conversation_excerpt(agent)
         if conversation:
-            prompt = (
-                "You are storing durable memories from this chat. Read the conversation below and output concrete facts worth remembering: "
-                "user preferences, name, decisions, events, technical choices, or anything the user would want recalled later. "
-                'Output each fact as: MEMORY: "fact in English" [tag1, tag2]. '
-                "Use 1-3 relevant tags per memory (e.g. preferences, work, personal, project-x, decisions). Tags help filter in the memory graph. "
-                "GROUNDING (critical): store ONLY facts the user STATED explicitly or that are directly evidenced in the conversation. "
-                "Do NOT infer or invent habits, routines, schedules, preferences, or numbers that were not stated. "
-                "Do NOT turn an exploratory, hypothetical, or philosophical remark into a durable preference or routine. "
-                "Preserve the user's exact wording for named concepts; do not paraphrase or guess spellings. "
-                "If you are not sure a fact was actually stated, leave it out. "
-                "Do not output meta-commentary (e.g. no \"final check\", \"compliance\", or \"retention policy\"). "
-                f"Reply with exactly NO_REPLY if there is nothing concrete to store.\n\n"
-                "--- Conversation ---\n"
-                f"{conversation}\n"
-                "---\n\n"
-                "Output MEMORY: \"...\" [tags] lines or NO_REPLY."
-            )
+            prompt = _build_compaction_prompt(conversation, date_str)
         else:
             prompt = (
                 "Session nearing compaction. Store durable memories now. "
@@ -1291,6 +1387,12 @@ def run_session_compaction_sync(
             _notify_ui("error", "Memory Learning failed. Will retry later.")
             return
         memory_tuples = _parse_memory_reply(reply)
+        # Model-independent guardrails: length bounds, junk markers, per-run
+        # cap - a weak model must not be able to flood the store.
+        memory_tuples, _rejected = _apply_fact_gates(memory_tuples)
+        for _preview, _reason in _rejected:
+            _compaction_log("COMPACTION_FACT_REJECT", session_id=session_id,
+                            reason=_reason, preview=_preview)
         if not memory_tuples:
             _compaction_log("COMPACTION_NO_REPLY", session_id=session_id)
             state[session_id] = current_turn_count
@@ -1309,12 +1411,31 @@ def run_session_compaction_sync(
                     logger.debug("User profile summary refresh failed: %s", ex)
             threading.Thread(target=_refresh_bg, daemon=True).start()
             return
+        _counts = {"ingested": 0, "deduped": 0}
+
         async def _ingest_all() -> None:
             async with get_db(user_scope_id=user_scope_id) as db:
                 pipeline = RagPipeline(db)
                 for content, tags in memory_tuples:
                     if not content or not content.strip():
                         continue
+                    # Dedup gate (same primitive as the auto-capture lane,
+                    # singleton embedding service - charter-safe): a near-
+                    # identical chunk in this scope means the fact is already
+                    # known ("User's name is Mert" must not accumulate).
+                    try:
+                        existing = await pipeline.search(
+                            content.strip(), k=1, threshold=0.95,
+                            user_scope_id=user_scope_id,
+                        )
+                        if existing:
+                            _counts["deduped"] += 1
+                            _compaction_log("COMPACTION_DEDUP_SKIP",
+                                            session_id=session_id,
+                                            preview=content.strip()[:80])
+                            continue
+                    except Exception:
+                        pass  # dedup is best-effort, never blocks ingestion
                     meta: Dict[str, Any] = {
                         "source": f"memory/{date_str}",
                         "type": "conversation",  # From 15-message compaction; orange in graph
@@ -1329,6 +1450,7 @@ def run_session_compaction_sync(
                         user_scope_id=user_scope_id,
                         auto_connect=False,
                     )
+                    _counts["ingested"] += 1
 
         # Run in a daemon thread with timeout - never block the queue worker
         def _run_ingest():
@@ -1347,7 +1469,10 @@ def run_session_compaction_sync(
         except Exception as e:
             logger.warning("Compaction ingest failed: %s", e)
             _compaction_log("COMPACTION_INGEST_FAIL", session_id=session_id, error=str(e)[:200])
-        _compaction_log("COMPACTION_DONE", session_id=session_id, memories=str(len(memory_tuples)), date=date_str)
+        _compaction_log("COMPACTION_DONE", session_id=session_id,
+                        memories=str(_counts["ingested"]),
+                        deduped=str(_counts["deduped"]),
+                        rejected=str(len(_rejected)), date=date_str)
         state[session_id] = current_turn_count
         _save_compaction_state(state)
 
@@ -1407,7 +1532,14 @@ def refresh_user_profile_summary(user_scope_id: Optional[UUID]) -> None:
         cache_dir = Path(Config.APP_DIR) / "user_profile_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / f"{user_scope_id}.txt"
-        cache_file.write_text(summary or "", encoding="utf-8")
+        # Encrypted on disk: this cache is a plaintext copy of retrieved
+        # memory content in the user's home otherwise. Legacy plaintext
+        # files are still readable and get rewritten here on refresh.
+        cache_file.write_bytes(encrypt_file_bytes(summary or ""))
+        try:
+            os.chmod(cache_file, 0o600)
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("User profile summary refresh failed: %s", e)
 

@@ -206,12 +206,14 @@ When `attachment_rag_hierarchical_enabled=true`, large structured documents (pat
 - **When:** Compaction runs **only for the main user** (Web UI chats). It does **not** run for contact chats (Telegram, WhatsApp, Discord) for data-protection reasons (DSGVO). After every **Web UI** chat task, the headless runner checks whether that session has reached the compaction interval (number of user turns since last compaction). Default: every **15 user turns** (`memory_compaction_interval`). The count is cumulative per session; only messages with role `user` are counted.
 - **What:** A single non-streaming LLM call with a prompt like “Store durable memories now. Write any lasting notes to memory/{date}.md. Output MEMORY: \"...\" lines or NO_REPLY.” The prompt includes a **conversation excerpt (user and assistant messages only; no system prompts or tool calls)**. Reply format: `MEMORY: "content" [tag1, tag2]` (tags optional but recommended) or NO_REPLY. Parsed lines are ingested with metadata: `type=conversation`, `source=memory/{date}`, `tags` (orange in memory graph). Then the user-profile summary cache is refreshed. Max reply length: `memory_compaction_max_tokens` (default 4000).
 - **Grounding constraint:** the prompt instructs the model to store **only** facts the user stated explicitly or that are directly evidenced in the excerpt. It must not infer or invent habits, routines, schedules, numbers, or preferences that were not stated, and must not convert an exploratory or philosophical remark into a durable preference. This prevents a thin or speculative remark being written back as a hard "fact" that later retrieval treats as ground truth.
+- **Quality rules (prompt, added after a live review of a learning run):** each fact must be **self-contained** (retrieval returns facts individually, so subjects are named explicitly - "patent US...", never "the patent"); relative time must be converted to **absolute dates** and drifting snapshot facts (finances, funding status, plans) must carry "as of {date}" in the fact text (the prompt now states today's date); short-lived **conversation state and open todos are not memories** ("has not sent the email yet"); long-established basics (name, company) are not re-stored unless changed.
+- **Model-independent gates (`_apply_fact_gates`, between parse and ingest):** length bounds 15-500 chars, junk-marker rejection (NO_REPLY echoes, `<think`, injected-context markers, meta commentary, nested `MEMORY:` lines) and a hard cap of 12 facts per run - a weak model cannot flood the store. Rejections are logged per fact (`COMPACTION_FACT_REJECT` with reason). Additionally, each surviving fact runs a **dedup check** before ingest (chunk-level similarity search, threshold 0.95, same primitive as the auto-capture lane and the same singleton embedding service): near-identical existing facts are skipped and logged as `COMPACTION_DEDUP_SKIP`. Dedup is best-effort and never blocks ingestion on errors.
 - **Reasoning-trace stripping:** before the reply is parsed, `_parse_memory_reply` runs `_strip_think_reply` to remove `<think>…</think>` reasoning blocks (and drop an unclosed `<think>` tail). A reasoning model (e.g. `deepseek-v4-pro`) drafts inside `<think>` first, so without this its raw reasoning — and any `MEMORY:` line it merely drafted *inside* the reasoning — would be persisted verbatim. The write path now matches the query and `learn_document` paths, which already strip reasoning.
 - **Context:** The conversation excerpt passed to the LLM contains **only user and assistant messages** (no system prompt, no tool calls or tool results). Built from the last N messages in session history, truncated by character limit (~12k chars).
 - **Where:** Logic in `vaf/memory/rag.py` (`run_session_compaction_sync`); triggered from `vaf/core/headless_runner.py` (after each chat, or enqueued as a separate task when using a local LLM so only one LLM call runs at a time). State per session: `~/.vaf/compaction_state.json` (last compaction turn per `session_id`).
 - **Contact chats (Telegram/WhatsApp/Discord):** Compaction is **disabled** for these sessions. Only the main user’s Web UI session is compacted into long-term memory. Contact conversations are never written to RAG (DSGVO-friendly).
 - **Config:** `memory_compaction_enabled` (default `true`), `memory_compaction_interval` (default `15`), `memory_compaction_max_tokens` (default `4000`, used for API, local LLM, and server mode). All require `memory_enabled` to be `true`.
-- **Logs:** Compaction events are written to **memory.log** (same directory as other app logs: `VAF_LOG_DIR`, repo `logs/`, or platform data dir). Each line is prefixed with `[COMPACTION]` and includes: `COMPACTION_SKIP` (interval not reached), `COMPACTION_START`, `COMPACTION_NO_REPLY`, `COMPACTION_DONE` (with `memories=N`), `COMPACTION_LLM_FAIL`, `COMPACTION_INGEST_FAIL`. All lines have an ISO timestamp at the start. The headless runner also writes `QUEUE_DONE session_id=... (compaction)` to `queue.log` when the compaction task finishes.
+- **Logs:** Compaction events are written to **memory.log** (same directory as other app logs: `VAF_LOG_DIR`, repo `logs/`, or platform data dir). Each line is prefixed with `[COMPACTION]` and includes: `COMPACTION_SKIP` (interval not reached), `COMPACTION_START`, `COMPACTION_NO_REPLY`, `COMPACTION_FACT_REJECT` (gate rejection with reason + preview), `COMPACTION_DEDUP_SKIP` (near-duplicate skipped), `COMPACTION_DONE` (with `memories=N deduped=N rejected=N`), `COMPACTION_LLM_FAIL`, `COMPACTION_INGEST_FAIL`. All lines have an ISO timestamp at the start. The headless runner also writes `QUEUE_DONE session_id=... (compaction)` to `queue.log` when the compaction task finishes.
 
 **Log structure:** One file per domain under the same log directory. **rag.log**: RAG timing, search, embed calls, snippet count, user scope. **memory.log**: compaction, RSS usage, embedding load, profiler, Whisper load. Each line starts with an ISO timestamp. In memory.log, the prefix on each line (`[COMPACTION]`, `[USAGE]`, `[EMBED]`, `[PROFILER]`, `[WHISPER]`) indicates the source.
 
@@ -340,12 +342,38 @@ curl -X POST http://localhost:8000/api/memory/search \
 
 ## Encryption
 
-All memory content is encrypted using AES-256-GCM:
+Memory TEXT is encrypted at rest using AES-256-GCM - both the parent content
+(`memories.encrypted_content` + `nonce` columns) and every chunk text
+(`chunks.text`, stored in the `enc:gcm:<nonce>:<ciphertext>` field format and
+decrypted on read; a startup migration encrypts legacy plaintext rows). The
+user-profile prompt cache on disk is encrypted the same way.
 
 - **Key Generation**: 32-byte random key, auto-generated on first use
 - **Storage**: Key stored Base64-encoded in config (consider using system keyring for production)
+- **Key safety**: a PRESENT but corrupt/wrong-length key is a hard startup
+  error and is never silently replaced - a silent regenerate would
+  permanently orphan every encrypted row. Back the key up separately.
 - **Nonce**: Unique 12-byte nonce per encryption
-- **Metadata**: Stays unencrypted for filtering/searching
+- **Unencrypted by necessity**: embedding vectors (similarity search operates
+  on them), tags, dates, and titles (no longer content-derived by default;
+  content previews are no longer persisted in meta at all)
+
+**Residual risk, stated honestly**: text embeddings are practically
+invertible - published attacks reconstruct short factual sentences from the
+vectors with high fidelity. Column encryption therefore raises the bar
+against file/backup/dump exposure but does NOT protect against an attacker
+with full database access; the fail-closed RLS on `memories` and `chunks`
+is the control for that layer, and full-disk/volume encryption is the
+recommended complement for complete at-rest protection.
+
+The SQL lexical search lane no longer pre-filters on chunk text (it cannot
+match ciphertext): candidate rows are fetched under the scan limit and
+scored app-side on the decrypted text - same semantics, the SQL `ilike`
+optimization is gone. Query tokens are additionally filtered against the
+vocabulary-book `stopwords` lists before scoring: without this, a natural
+question ("Kannst du dich noch an Kai erinnern?") diluted its one signal
+word to 1/7 of the score while a bare "Kai" query scored 1.0. A query
+consisting only of function words keeps its tokens (never emptied).
 
 ### Key Rotation
 
@@ -519,7 +547,7 @@ This incident showed that component-level stability can still fail in compositio
 2. **Use system keyring** for encryption key storage instead of config file
 3. **Network isolation**: The Docker container only exposes port 5432 to localhost
 4. **Backup encryption keys** separately from data backups
-5. **User isolation — defense in depth, enforced and fail-closed at the database**: `get_db(user_scope_id=...)` sets the per-transaction `app.current_user_scope_id` GUC, and PostgreSQL Row-Level Security on the `memories` table (the `user_isolation_memories` policy) enforces it. The policy is **fail-closed**: a row is visible or writable only when its `user_scope_id` equals the GUC; an unset or empty GUC matches nothing (deny), and a row whose `user_scope_id` is NULL is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application data connection uses a non-superuser role (`vaf_app`, `NOBYPASSRLS`) via `memory_db_url`, so RLS is actually enforced for every memory data path. A separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used only for DDL, migrations, and global maintenance. The application-layer scope filter (see [User isolation](#user-isolation-retrieval-is-per-user-and-fails-closed)) remains the first line of defense; database RLS is an independent, fail-closed second guard. `chunks` and `connections` have no policy of their own — every query joins `memories`, so RLS cascades to them.
+5. **User isolation — defense in depth, enforced and fail-closed at the database**: `get_db(user_scope_id=...)` sets the per-transaction `app.current_user_scope_id` GUC, and PostgreSQL Row-Level Security on the `memories` table (the `user_isolation_memories` policy) enforces it. The policy is **fail-closed**: a row is visible or writable only when its `user_scope_id` equals the GUC; an unset or empty GUC matches nothing (deny), and a row whose `user_scope_id` is NULL is not blanket-visible. RLS is `ENABLE`d and `FORCE`d on `memories`, and the application data connection uses a non-superuser role (`vaf_app`, `NOBYPASSRLS`) via `memory_db_url`, so RLS is actually enforced for every memory data path. A separate owner connection (`memory_db_owner_url`, superuser role `vaf`) is used only for DDL, migrations, and global maintenance. The application-layer scope filter (see [User isolation](#user-isolation-retrieval-is-per-user-and-fails-closed)) remains the first line of defense; database RLS is an independent, fail-closed second guard. `chunks` additionally carries its **own** `user_scope_id` column and the same forced fail-closed policy (`user_isolation_chunks`): chunk rows hold the searchable text and the embedding vectors (which are practically invertible back to text), so relying on the join to `memories` alone would leave direct chunk access unprotected. The column is stamped at ingest and backfilled by DB migration v2. `connections` has no policy of its own — its queries join `memories`.
 
 ## Performance
 

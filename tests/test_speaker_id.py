@@ -308,3 +308,29 @@ def test_suggested_threshold_has_security_floor(monkeypatch, tmp_path):
         sid.record_test_feedback("s9", s, "other", "correct")
     stats = sid.feedback_stats("s9")
     assert stats["suggested_threshold"] == 0.46  # max(0.38, 0.61-0.15)
+
+
+def test_engine_failure_is_never_masked_as_no_speech(monkeypatch, tmp_path):
+    """Live incident (fresh Mac install): sherpa-onnx missing -> every
+    enrollment round said "no speech" while the mic was perfect. Engine
+    failures must surface as engine_unavailable, not as a speak-louder loop."""
+    sid.enroll_start("scope-a", "de")
+    monkeypatch.setattr(sid, "engine_ready", lambda: False)
+    res = sid.enroll_round("scope-a", b"RIFFxxxxWAVE")
+    assert res["quality"] == "engine_unavailable"
+    sid.enroll_abort("scope-a")
+
+
+def test_vad_path_downloads_models_first(monkeypatch):
+    """Second Mac bug: _new_vad ran before any model download - the first
+    enrollment round failed on a missing silero_vad.onnx even with
+    sherpa-onnx installed. The VAD path must ensure models itself."""
+    calls = {"ensure": 0}
+    def fake_ensure():
+        calls["ensure"] += 1
+        return False  # unavailable -> _new_vad must return None, not raise
+    monkeypatch.setattr(sid, "_ensure_models", fake_ensure)
+    import sys
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", type(sys)("sherpa_onnx"))
+    assert sid._new_vad() is None
+    assert calls["ensure"] == 1

@@ -167,10 +167,32 @@ def unload() -> None:
     gc.collect()
 
 
+def engine_ready() -> bool:
+    """sherpa-onnx importable AND the model files present (downloaded on
+    first use). Callers use this to tell ENGINE failures apart from genuine
+    silence - a Mac install told the user "I could not hear speech" on
+    every enrollment round while the mic was perfect: sherpa-onnx was never
+    a declared dependency and the import error was swallowed into the
+    no-speech verdict."""
+    try:
+        import sherpa_onnx  # noqa: F401
+    except Exception as e:
+        _log.error("speaker_id: sherpa-onnx unavailable: %s", e)
+        return False
+    return _ensure_models()
+
+
 def _new_vad():
     """A fresh VAD per request (holds per-stream state; the model file is mmapped)."""
     try:
         import sherpa_onnx
+        # Fresh installs: the VAD runs BEFORE the extractor in enroll_round,
+        # but only _get_extractor downloaded the models - the first round
+        # then failed on a missing silero_vad.onnx even WITH sherpa-onnx
+        # installed (reproduced live on the Mac).
+        if not _ensure_models():
+            _log.error("speaker_id: VAD models unavailable")
+            return None
         cfg = sherpa_onnx.VadModelConfig(
             silero_vad=sherpa_onnx.SileroVadModelConfig(
                 model=str(_models_dir() / _VAD_MODEL),
@@ -185,7 +207,9 @@ def _new_vad():
         )
         return sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=180)
     except Exception as e:
-        _log.warning("speaker_id: VAD init failed: %s", e)
+        # Error, not warning: a silent VAD failure surfaced to users as an
+        # endless "I could not hear speech" loop (live incident).
+        _log.error("speaker_id: VAD init failed: %s", e)
         return None
 
 
@@ -370,6 +394,7 @@ def _enroll_lines(lang: str) -> Dict:
         "q_no_speech": vocab.pick("speaker_enroll_q_no_speech", lang),
         "q_too_short": vocab.pick("speaker_enroll_q_too_short", lang),
         "q_error": vocab.pick("speaker_enroll_q_error", lang),
+        "q_engine": vocab.pick("speaker_enroll_q_engine", lang),
     }
 
 
@@ -506,6 +531,15 @@ def enroll_round(scope_id: str, wav_bytes: bytes) -> Dict:
             sess = _enroll_sessions.get(scope_id)
         if sess is None:
             result["quality"] = "no_session"
+            return result
+
+        if not engine_ready():
+            # Engine failure must NEVER be masked as "no speech": the
+            # assistant then sends the user into a speak-louder loop while
+            # their audio was never the problem (live incident on a fresh
+            # Mac install - sherpa-onnx missing).
+            result["quality"] = "engine_unavailable"
+            result.update(_progress(sess))
             return result
 
         samples = wav_bytes_to_samples(wav_bytes)

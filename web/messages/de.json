@@ -445,6 +445,7 @@
       "qTooShortChip": "Antwort zu kurz",
       "qError": "Da ist etwas schiefgelaufen - lass es uns einfach nochmal versuchen.",
       "qErrorChip": "Runde fehlgeschlagen",
+      "qEngineChip": "Engine nicht verfügbar",
       "micDenied": "Für die Einrichtung brauche ich Zugriff auf dein Mikrofon. Bitte erlaube ihn und versuch es nochmal.",
       "progressSpeech": "Gesammelte Sprache",
       "progressConfidence": "Konfidenz",

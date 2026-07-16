@@ -445,6 +445,7 @@
       "qTooShortChip": "Answer too short",
       "qError": "Something went wrong with that round - let's simply try again.",
       "qErrorChip": "Round failed",
+      "qEngineChip": "Engine unavailable",
       "micDenied": "I need microphone access for the setup. Please allow it and try again.",
       "progressSpeech": "Collected speech",
       "progressConfidence": "Confidence",

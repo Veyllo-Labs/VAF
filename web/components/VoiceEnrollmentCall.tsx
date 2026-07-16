@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { toWav16k } from '@/lib/wav';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
 
@@ -238,10 +239,12 @@ export function VoiceEnrollmentCall({ open, ws, displayName, onClose }: Props) {
                 } else {
                     const key = data.quality === 'inconsistent_voice' ? 'qInconsistent'
                         : data.quality === 'no_speech' ? 'qNoSpeech'
-                        : data.quality === 'too_short' ? 'qTooShort' : 'qError';
+                        : data.quality === 'too_short' ? 'qTooShort'
+                        : data.quality === 'engine_unavailable' ? 'qEngine' : 'qError';
                     const lineKey = data.quality === 'inconsistent_voice' ? 'q_inconsistent'
                         : data.quality === 'no_speech' ? 'q_no_speech'
-                        : data.quality === 'too_short' ? 'q_too_short' : 'q_error';
+                        : data.quality === 'too_short' ? 'q_too_short'
+                        : data.quality === 'engine_unavailable' ? 'q_engine' : 'q_error';
                     setChip({ text: t(key + 'Chip'), warn: true });
                     speakAndThen(line(lineKey, key), () => askAgain());
                 }
@@ -474,25 +477,6 @@ export function VoiceEnrollmentCall({ open, ws, displayName, onClose }: Props) {
 
 // ── audio helpers (self-contained; 16 kHz mono 16-bit WAV like the chat mic) ──
 
-async function toWav16k(blob: Blob): Promise<Blob> {
-    const arrayBuffer = await blob.arrayBuffer();
-    const ctx = new AudioContext({ sampleRate: 16000 });
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    const samples = audioBuffer.getChannelData(0);
-    const pcm = new Int16Array(samples.length);
-    for (let i = 0; i < samples.length; i++) {
-        pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
-    }
-    try { ctx.close(); } catch { /* noop */ }
-    const header = new ArrayBuffer(44);
-    const v = new DataView(header);
-    const writeStr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-    writeStr(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE');
-    writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-    v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-    writeStr(36, 'data'); v.setUint32(40, pcm.length * 2, true);
-    return new Blob([header, pcm.buffer], { type: 'audio/wav' });
-}
 
 function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {

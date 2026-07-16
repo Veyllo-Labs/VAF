@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Sus
 import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
+import { toWav16k } from '@/lib/wav';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
@@ -126,57 +127,6 @@ function replaceTextInHtml(html: string, start: number, end: number, newText: st
  * Convert audio Blob (webm/opus) to WAV format for better Whisper compatibility.
  * Uses Web Audio API to decode and re-encode as 16-bit PCM WAV.
  */
-async function convertToWav(blob: Blob): Promise<Blob> {
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioContext = new AudioContext({ sampleRate: 16000 });
-
-    try {
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        const numberOfChannels = 1; // Mono for STT
-        const sampleRate = 16000;
-        const length = audioBuffer.length;
-
-        // Get audio data (convert to mono if stereo)
-        const channelData = audioBuffer.getChannelData(0);
-
-        // Create WAV file
-        const wavBuffer = new ArrayBuffer(44 + length * 2);
-        const view = new DataView(wavBuffer);
-
-        // WAV header
-        const writeString = (offset: number, str: string) => {
-            for (let i = 0; i < str.length; i++) {
-                view.setUint8(offset + i, str.charCodeAt(i));
-            }
-        };
-
-        writeString(0, 'RIFF');
-        view.setUint32(4, 36 + length * 2, true);
-        writeString(8, 'WAVE');
-        writeString(12, 'fmt ');
-        view.setUint32(16, 16, true); // Subchunk1Size
-        view.setUint16(20, 1, true); // AudioFormat (PCM)
-        view.setUint16(22, numberOfChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * numberOfChannels * 2, true); // ByteRate
-        view.setUint16(32, numberOfChannels * 2, true); // BlockAlign
-        view.setUint16(34, 16, true); // BitsPerSample
-        writeString(36, 'data');
-        view.setUint32(40, length * 2, true);
-
-        // Write audio data as 16-bit PCM
-        let offset = 44;
-        for (let i = 0; i < length; i++) {
-            const sample = Math.max(-1, Math.min(1, channelData[i]));
-            view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-            offset += 2;
-        }
-
-        return new Blob([wavBuffer], { type: 'audio/wav' });
-    } finally {
-        await audioContext.close();
-    }
-}
 
 /** Same calendar day (local date)? */
 function isSameDay(ts1: number, ts2: number): boolean {
@@ -4887,7 +4837,7 @@ function VAFDashboardContent() {
                 try {
                     // Convert webm/opus to WAV for better Whisper compatibility
                     console.log('[STT] Converting audio to WAV...');
-                    const wavBlob = await convertToWav(audioBlob);
+                    const wavBlob = await toWav16k(audioBlob);
                     console.log('[STT] WAV conversion complete, size:', wavBlob.size);
 
                     // Convert to base64

@@ -114,7 +114,7 @@ EXTRAS = {
         "sentence-transformers>=2.2.0", "onnxruntime>=1.16.0",
         "tokenizers>=0.15.0", "numpy>=1.24.0", "redis>=5.0.0",
     ],
-    "speech": ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14"],
+    "speech": ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14", "sherpa-onnx>=1.13"],
     "browser": [
         "browser-use>=0.12.9; python_version >= '3.11'",
         "playwright>=1.49.0; python_version >= '3.11'",

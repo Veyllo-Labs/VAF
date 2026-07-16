@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **Voice-profile enrollment works on fresh installs.** Setting up a voice
+  profile answered "I could not hear speech" on every round of a clean
+  install while the microphone was fine: the speaker-identification engine
+  (sherpa-onnx) was never a declared dependency - it is in requirements
+  now (hash-pinned lock refreshed) and in the `speech` extra. Two more
+  layers of the same incident: the voice-activity model is now downloaded
+  by the VAD path itself (the first enrollment round used to fail on a
+  missing model file even with the engine installed), and an engine
+  failure is spoken as its own message ("the voice-profile engine is not
+  available - this is not about your voice") instead of sending the user
+  into a speak-louder loop. The microphone WAV converter is also unified
+  into one shared implementation that writes the recording's actual sample
+  rate into the header (older WebKit builds ignore the requested 16 kHz
+  and would have produced files whose header lied about the audio).
+
 ## [0.1.0a14] - 2026-07-16
 
 ### Fixed

@@ -14,6 +14,7 @@ venv/bin/python examples/01_hello_agent.py
 | [01_hello_agent.py](01_hello_agent.py) | The five-line quickstart: construct an `Agent`, run one prompt, multi-turn state |
 | [02_streaming_and_events.py](02_streaming_and_events.py) | Live token streaming (`on_token`) plus the structured event sink (`tool_start`/`tool_end`/gate events) |
 | [03_stream_json_subprocess.py](03_stream_json_subprocess.py) | Driving VAF as a subprocess via `vaf prompt --output-format stream-json` and parsing the NDJSON - the pattern for non-Python integrations |
+| [04_inline_tool.py](04_inline_tool.py) | Per-instance tool registration with `agent.add_tool()` - no package, no file drop-in |
 | [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
 
 ## Prerequisites
@@ -23,7 +24,8 @@ venv/bin/python examples/01_hello_agent.py
 - A working model backend: either an API provider configured in
   `~/.vaf/config.json` (fastest for a first test) or local mode (the first
   run downloads a multi-GB model). The examples default to whatever your
-  config says; each shows how to override the provider inline.
+  config says; `01_hello_agent.py` shows how to override the provider inline
+  (the same `config={...}` works in every example).
 
 ## The custom-tool package
 

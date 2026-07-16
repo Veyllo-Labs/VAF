@@ -131,6 +131,7 @@ class _StubCore:
         self.api_backend = None
         self.llm = None
         self.use_server = False
+        self.tools = {}
 
     def init_chat(self):
         type(self).calls.append("init_chat")
@@ -174,3 +175,62 @@ def test_facade_skips_load_model_when_api_backend_exists(monkeypatch):
     agent = fw.Agent(config={"provider": "deepseek"})
     assert agent.run("hello") == "hi"
     assert _StubCore.calls == ["init_chat"]
+
+
+def test_add_tool_registers_before_engine_build(monkeypatch):
+    """Per-instance tool registration: tools added before the first run land
+    in the engine registry before init_chat builds the system prompt."""
+    import vaf.framework as fw
+
+    order = []
+
+    class _Recorder(_StubCore):
+        def init_chat(self):
+            order.append(("init_chat", sorted(self.tools)))
+
+        def load_model(self):
+            self.use_server = True
+
+    class _PingTool(BaseTool):
+        name = "ping_tool"
+        description = "test tool"
+
+        def run(self, **kwargs):
+            return "pong"
+
+    monkeypatch.setattr(fw, "CoreAgent", _Recorder)
+    agent = fw.Agent(config={"provider": "local"})
+    agent.add_tool(_PingTool())
+    assert agent.run("hi") == "hi"
+    assert order == [("init_chat", ["ping_tool"])]
+
+
+def test_add_tool_rejects_late_and_invalid_registration(monkeypatch):
+    import pytest
+
+    import vaf.framework as fw
+
+    class _CoderTool(BaseTool):
+        name = "coder_tool"
+        description = "coder only"
+        coder_only = True
+
+        def run(self, **kwargs):
+            return "x"
+
+    monkeypatch.setattr(fw, "CoreAgent", _StubCore)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    with pytest.raises(TypeError):
+        agent.add_tool(object())
+    with pytest.raises(ValueError):
+        agent.add_tool(_CoderTool())
+    agent.run("hi")  # builds the engine
+    class _LateTool(BaseTool):
+        name = "late_tool"
+        description = "too late"
+
+        def run(self, **kwargs):
+            return "x"
+
+    with pytest.raises(RuntimeError):
+        agent.add_tool(_LateTool())

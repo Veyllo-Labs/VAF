@@ -66,9 +66,37 @@ class Agent:
         self._config = dict(config) if config else None
         self._verbose = verbose
         self._agent: Optional[CoreAgent] = None
+        self._pending_tools: list = []
         # Embedding-safe default: never block on a human. `setdefault` lets an
         # explicit `VAF_NONINTERACTIVE=0` from the caller take precedence.
         os.environ.setdefault("VAF_NONINTERACTIVE", "1")
+
+    def add_tool(self, tool) -> None:
+        """Register a BaseTool instance for THIS Agent instance only.
+
+        Call before the first ``run()`` / ``.core`` access: the system prompt
+        is built once at engine build, and the per-instance wiring runs there
+        too, so the facade rejects later additions rather than leaving the
+        tool half-visible. A tool with the same name as an existing one wins
+        (same last-write semantics as the entry-point loader).
+
+        Raises RuntimeError after the engine was built, TypeError for
+        non-BaseTool values, ValueError for coder-only tools (per-instance
+        tools target the main agent).
+        """
+        from vaf.tools.base import BaseTool
+
+        if self._agent is not None:
+            raise RuntimeError(
+                "add_tool() must be called before the first run()/.core access"
+            )
+        if not isinstance(tool, BaseTool):
+            raise TypeError("add_tool() expects a BaseTool instance")
+        if getattr(tool, "coder_only", False):
+            raise ValueError(
+                "coder_only tools cannot be registered on the main agent"
+            )
+        self._pending_tools.append(tool)
 
     @property
     def core(self) -> CoreAgent:
@@ -82,6 +110,24 @@ class Agent:
                 register_signals=False,
                 config_overrides=self._config,
             )
+            # Per-instance tools go in BEFORE init_chat so the system prompt
+            # and the tool schemas the model sees include them. Mirror the
+            # engine's own post-load wiring passes so these tools behave
+            # exactly like entry-point tools (registry handle, state provider).
+            for tool in self._pending_tools:
+                agent.tools[tool.name] = tool
+                if hasattr(tool, "available_tools"):
+                    try:
+                        tool.available_tools = agent.tools
+                    except Exception:
+                        pass
+                try:
+                    if hasattr(tool, "create_state_provider"):
+                        provider = tool.create_state_provider()
+                        if provider:
+                            agent.state_registry.register(f"tool_{tool.name}", provider)
+                except Exception:
+                    pass
             agent.init_chat()
             # Local mode has no lazy load inside chat_step: without a backend
             # the turn aborts ("Agent not initialized") and run() would return

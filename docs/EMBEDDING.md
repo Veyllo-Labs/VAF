@@ -234,8 +234,10 @@ What an embedded agent can and cannot do on the host - the short version of
 
 ## Writing a tool
 
-A tool is a `BaseTool` subclass. Drop it in `vaf/tools/` (in-tree) or ship it as
-a pip package (below). Full contract and examples in
+A tool is a `BaseTool` subclass. Four ways to register one: per Agent
+instance via `agent.add_tool(tool)` (below), as a pip package (next section),
+via the update-surviving `custom_tools/` folder (see "More extension points"),
+or in-tree in `vaf/tools/` for contributions. Full contract and examples in
 [vaf/tools/base.py](../vaf/tools/base.py) and [vaf/tools/README.md](../vaf/tools/README.md).
 
 ```python
@@ -256,6 +258,18 @@ class WeatherTool(BaseTool):
         city = kwargs["city"]
         return f"It is sunny in {city}."
 ```
+
+To give ONE embedded Agent instance this tool - no package, no file drop-in:
+
+```python
+agent = Agent(config={"provider": "deepseek"})
+agent.add_tool(WeatherTool())   # before the first run()/.core access
+print(agent.run("What's the weather in Berlin?"))
+```
+
+`add_tool()` must run before the engine is built (it raises `RuntimeError`
+afterwards); a tool with an existing name wins (last write). Runnable version:
+[examples/04_inline_tool.py](../examples/04_inline_tool.py).
 
 Key declarative rules the runtime enforces:
 
@@ -351,9 +365,9 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` — the façade: `Agent(config=...)`, `.run(prompt, on_token=...)`, `.core`.
-- `vaf.CoreAgent` — the engine, for advanced embedding.
-- `BaseTool` — the tool contract.
+- `from vaf import Agent` - the façade: `Agent(config=...)`, `.run(prompt, on_token=...)`, `.add_tool(tool)`, `.core`.
+- `vaf.CoreAgent` - the engine, for advanced embedding.
+- `BaseTool` - the tool contract.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.

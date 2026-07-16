@@ -27,11 +27,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and an honest note on custom OpenAI-compatible endpoints. Key engine
   methods now carry docstrings.
 
-- **A runnable examples/ directory.** Four self-contained artifacts for the
+- **Per-instance tool registration on the library facade.** An embedded
+  `Agent` can now be handed extra tools directly: `agent.add_tool(MyTool())`
+  before the first run registers a `BaseTool` for that instance only - no
+  pip package, no file drop-in. Late or invalid registrations raise clear
+  errors, and the facade CI guard pins the behavior.
+- **A developer FAQ.** Short verified answers to the questions developers
+  actually hit: Docker requirements, the confirmation-gate error string,
+  thread-safety, the engine's return contract, log redirection, custom
+  endpoints, the tool lanes, and what the alpha stability promise covers.
+- **A runnable examples/ directory.** Five self-contained artifacts for the
   embedding surface: the five-line quickstart, streaming plus the structured
   event sink, driving VAF as a subprocess via the NDJSON output format (the
-  pattern for non-Python integrations), and a complete pip-installable
-  custom-tool package using the entry-point mechanism. A CI test keeps every
+  pattern for non-Python integrations), per-instance tool registration, and
+  a complete pip-installable custom-tool package using the entry-point
+  mechanism. A CI test keeps every
   example compiling and the example tool loadable, and the license-header
   check now covers the examples tree.
 - **A CI guard now protects the public library surface.** The docs promise

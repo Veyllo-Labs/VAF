@@ -13,6 +13,7 @@ Docs are grouped into category folders. Full index by category:
 - [CORE_AGENT.md](CORE_AGENT.md) - `vaf.CoreAgent` reference: constructor, lifecycle, the `chat_step`/`execute_tool` contracts, concurrency rules.
 - [OBSERVABILITY.md](OBSERVABILITY.md) - Streaming vs structured events: `set_event_sink` schema and the `vaf prompt --output-format stream-json` NDJSON interface.
 - [DEBUGGING.md](DEBUGGING.md) - Logging map: where logs land, `debug_logs_enabled`, reading session JSON, `vaf debug`.
+- [FAQ.md](FAQ.md) - Short answers for developers building on VAF: requirements, embedding gotchas, extension lanes, stability, licensing.
 - [TOOLS_CATALOG.md](agents/TOOLS_CATALOG.md) — Catalog of the built-in tools the agent loads, grouped by area.
 
 ### setup/ — install, services, deployment

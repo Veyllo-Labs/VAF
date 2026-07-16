@@ -58,7 +58,9 @@ print(answer)
 ```
 
 `Agent` here is the stable façade. The full internal engine remains available as
-`vaf.CoreAgent` (a.k.a. `vaf.core.agent.Agent`) for advanced use.
+`vaf.CoreAgent` (a.k.a. `vaf.core.agent.Agent`) for advanced use. Runnable
+versions of this page's snippets live in [examples/](../examples/), including a
+complete pip-installable custom-tool package.
 
 The same code works with a local GGUF model — it is provider-agnostic:
 

@@ -27,7 +27,7 @@ SPDX_TAG = "SPDX-License-Identifier: AGPL-3.0-or-later"
 REQUIRED_FILES = ["LICENSE", "LICENSING.md", "COMMERCIAL.md"]
 
 # Directories scanned for first-party source.
-PY_ROOTS = ["vaf", "tests", "scripts"]
+PY_ROOTS = ["vaf", "tests", "scripts", "examples"]
 PY_ROOT_FILES = ["setup.py"]
 WEB_ROOTS = ["web/app", "web/components", "web/lib", "web/hooks"]
 WEB_EXTS = {".ts", ".tsx", ".js", ".jsx"}

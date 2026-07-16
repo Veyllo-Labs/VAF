@@ -1,0 +1,44 @@
+# VAF Examples
+
+Small, runnable scripts for the embedding surface documented in
+[docs/EMBEDDING.md](../docs/EMBEDDING.md). Each file is self-contained and
+commented; run them from the repo root with the repo venv (or any environment
+where `pip install -e .` was done):
+
+```bash
+venv/bin/python examples/01_hello_agent.py
+```
+
+| Example | Shows |
+|---|---|
+| [01_hello_agent.py](01_hello_agent.py) | The five-line quickstart: construct an `Agent`, run one prompt, multi-turn state |
+| [02_streaming_and_events.py](02_streaming_and_events.py) | Live token streaming (`on_token`) plus the structured event sink (`tool_start`/`tool_end`/gate events) |
+| [03_stream_json_subprocess.py](03_stream_json_subprocess.py) | Driving VAF as a subprocess via `vaf prompt --output-format stream-json` and parsing the NDJSON - the pattern for non-Python integrations |
+| [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
+
+## Prerequisites
+
+- VAF installed (`pip install -e .` from the repo root, or a full product
+  install).
+- A working model backend: either an API provider configured in
+  `~/.vaf/config.json` (fastest for a first test) or local mode (the first
+  run downloads a multi-GB model). The examples default to whatever your
+  config says; each shows how to override the provider inline.
+
+## The custom-tool package
+
+```bash
+pip install -e examples/vaf_example_tool
+venv/bin/python examples/01_hello_agent.py   # then ask: "roll a d20"
+```
+
+After the install, the `dice_roll` tool is discovered automatically at agent
+startup (see the entry-point section of
+[docs/EMBEDDING.md](../docs/EMBEDDING.md)); no VAF source file is touched.
+
+## What is deliberately missing
+
+A "resume a persisted conversation" example: the stable facade has no
+session persist/resume API yet (the engine can, via
+`load_session_context` - see [docs/CORE_AGENT.md](../docs/CORE_AGENT.md)).
+It will be added when the facade grows that surface.

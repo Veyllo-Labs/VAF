@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vaf-example-tool"
+version = "0.1.0"
+description = "Example third-party VAF tool package (dice_roll) via the vaf.tools entry-point group"
+requires-python = ">=3.10"
+
+# This is the whole extension mechanism: after `pip install`, VAF discovers
+# the tool at agent startup. No VAF source file is touched.
+[project.entry-points."vaf.tools"]
+dice_roll = "vaf_example_tool.tools:DiceRollTool"
+
+[tool.setuptools.packages.find]
+include = ["vaf_example_tool*"]

@@ -27,6 +27,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and an honest note on custom OpenAI-compatible endpoints. Key engine
   methods now carry docstrings.
 
+- **A runnable examples/ directory.** Four self-contained artifacts for the
+  embedding surface: the five-line quickstart, streaming plus the structured
+  event sink, driving VAF as a subprocess via the NDJSON output format (the
+  pattern for non-Python integrations), and a complete pip-installable
+  custom-tool package using the entry-point mechanism. A CI test keeps every
+  example compiling and the example tool loadable, and the license-header
+  check now covers the examples tree.
 - **A CI guard now protects the public library surface.** The docs promise
   that `from vaf import Agent` is safe to build on; until now no test
   imported that facade, so a breaking change to it could have shipped with

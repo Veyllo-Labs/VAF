@@ -259,18 +259,38 @@ _SELF_CHURN_PATHS = ("web/package-lock.json",)
 
 
 def _split_self_churn(porcelain: str) -> "tuple[list[str], list[str]]":
-    """Split `git status --porcelain` output into (real_changes, self_churn).
+    """Split `git status --porcelain` output into (real_change_lines,
+    self_churn_paths).
 
     Self-churn entries are modifications to _SELF_CHURN_PATHS - artifacts the
-    updater/frontend tooling wrote itself; they are restored, never a reason
-    to abort. Everything else stays a hard abort (real user edits)."""
-    real, churn = [], []
+    updater/frontend tooling wrote itself; they are restored (by PATH, second
+    return value), never a reason to abort. Everything else stays a hard
+    abort (real user edits).
+
+    Parsing is POSITION-INDEPENDENT (`split(maxsplit=1)`), never a fixed
+    `line[3:]` offset: `_git` strips its output, so the porcelain line
+    ' M web/package-lock.json' arrives WITHOUT its leading space in
+    production - the a12 offset parse read 'eb/package-lock.json', never
+    matched, and the self-heal silently never fired (live verification on
+    the Mac caught it; the unit tests had fed the unstripped raw form).
+    """
+    real, churn_paths = [], []
     for line in (porcelain or "").splitlines():
         if not line.strip():
             continue
-        path = line[3:].strip() if len(line) > 3 else line.strip()
-        (churn if path in _SELF_CHURN_PATHS else real).append(line)
-    return real, churn
+        parts = line.split(maxsplit=1)
+        path = parts[1].strip() if len(parts) == 2 else ""
+        if path in _SELF_CHURN_PATHS:
+            churn_paths.append(path)
+        else:
+            real.append(line)
+    return real, churn_paths
+
+
+def _restore_self_churn(root: Path, paths: "list[str]") -> None:
+    """Restore updater-managed files by exact path (git checkout --)."""
+    for path in paths:
+        _git(root, "checkout", "--", path)
 
 
 def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> None:
@@ -483,11 +503,10 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         # aborted EVERY future update before anything happened (live
         # incident: Mac stuck on a7). Derived artifacts are restored;
         # real user edits still abort below.
-        real_changes, self_churn = _split_self_churn(dirty)
-        if self_churn:
+        real_changes, churn_paths = _split_self_churn(dirty)
+        if churn_paths:
             UI.info("Restoring updater-managed files (npm lockfile churn)...")
-            for entry in self_churn:
-                _git(root, "checkout", "--", entry[3:].strip() if len(entry) > 3 else entry.strip())
+            _restore_self_churn(root, churn_paths)
         dirty = "\n".join(real_changes)
         tree_dirty = bool(real_changes)
 

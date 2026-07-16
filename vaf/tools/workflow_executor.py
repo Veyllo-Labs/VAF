@@ -53,6 +53,11 @@ class ExecuteWorkflowTool(BaseTool):
 
     Available workflows are usually shown in the conversation context when relevant.
 
+    workflow_id must be a SAVED workflow template id from that list (e.g.
+    'research_and_document') - it is NEVER the name of a tool. In particular
+    it is NOT 'create_agent_workflow' (that is a different tool, used to
+    build/run a NEW workflow, not to run an existing template).
+
     Example usage:
     - execute_workflow(workflow_id="legal_contract_research", variables={"contract_type": "employment"})
     - execute_workflow(workflow_id="research_and_document", variables={"topic": "Docker deployment"})
@@ -108,6 +113,27 @@ class ExecuteWorkflowTool(BaseTool):
             if not template:
                 available = list_templates()
                 workflow_list = "\n".join([f"- {w['id']}: {w['description']}" for w in available])
+                # Common weak-model confusion: workflow_id is the NAME OF A TOOL
+                # (most often "create_agent_workflow", the workflow-builder tool
+                # itself) rather than a saved workflow template id. Detect it
+                # generically against the live tool registry and redirect
+                # instead of just listing templates again, which does not
+                # explain the actual mistake.
+                _agent_ref = kwargs.get("_agent")
+                _tool_names = set(getattr(_agent_ref, "tools", {}) or {})
+                if workflow_id in _tool_names:
+                    return (
+                        f"❌ '{workflow_id}' is the name of a TOOL, not a saved workflow "
+                        f"template - execute_workflow's workflow_id only accepts one of the "
+                        f"template ids listed below.\n\n"
+                        + (
+                            f"To create or run a workflow RIGHT NOW with no saving, call the "
+                            f"'{workflow_id}' tool directly instead (e.g. action='run_temp').\n\n"
+                            if workflow_id == "create_agent_workflow" else
+                            f"Call the '{workflow_id}' tool directly instead of execute_workflow.\n\n"
+                        )
+                        + f"Saved workflow templates (for execute_workflow):\n{workflow_list}"
+                    )
                 return (
                     f"❌ Workflow '{workflow_id}' not found.\n\n"
                     f"Available workflows:\n{workflow_list}"

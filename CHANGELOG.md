@@ -100,6 +100,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **The workspace-folder chip in the chat bar no longer shows for an empty
+  workspace.** A tool can legitimately create a chat's project folder and
+  then delete everything in it again (workflow scratch-file cleanup), and
+  the chip stayed lit because it only checked whether the folder path
+  existed - not whether anything was actually in it. It now hides again
+  once the folder is empty (a drilled-in subfolder view still shows it,
+  since you can only navigate into a folder that has content).
+- **A local model calling the wrong "workflow" tool now gets redirected,
+  not just a template list.** `execute_workflow(workflow_id=...)` takes a
+  saved template id; a weak model tried
+  `workflow_id="create_agent_workflow"` - the NAME of the other workflow
+  tool, not a template - and got a plain "not found" listing that didn't
+  explain the actual mistake. Both tools' descriptions are now explicit
+  about the distinction, and the error message detects a live tool-name
+  collision and points at the right tool to call instead.
 - **A failed tool no longer reports itself to the model as "OK".** The
   per-turn tool-context summary (what the model reads to know what its
   tools did) labeled failures by an out-of-date heuristic that missed the

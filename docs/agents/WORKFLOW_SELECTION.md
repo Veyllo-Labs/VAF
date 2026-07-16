@@ -138,6 +138,8 @@ It can then make an informed decision:
 
 Both `execute_workflow` and `list_workflows` are available to the main agent. The agent can also **adjust the pre-extracted variables** before calling `execute_workflow` — the hint is a starting point, not a constraint.
 
+A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a **saved template id** (from `list_workflows`), never the name of a tool — in particular never `"create_agent_workflow"` itself, which is the *other* tool (builds/runs a workflow, does not look one up by id). Both tools' descriptions now say this explicitly, and `execute_workflow` detects a live tool-name collision and redirects to the right tool instead of just repeating the template list (`vaf/tools/workflow_executor.py`).
+
 ### `create_agent_workflow` — runtime workflow creation
 
 The agent can define and run its own workflows at runtime without any human involvement. Two modes:

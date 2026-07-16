@@ -174,3 +174,37 @@ def test_tool_result_is_error_recognizes_all_failure_prefixes():
     ]
     summary = summarize_tool_turn(msgs)
     assert summary and "FAILED" in summary and "→ OK" not in summary
+
+
+def test_execute_workflow_redirects_tool_name_confusion(monkeypatch):
+    """Live incident: a weak local model called execute_workflow with
+    workflow_id="create_agent_workflow" (the builder TOOL's own name, not a
+    saved template) and got a plain not-found listing that did not explain
+    the actual mistake. The error now detects a live tool-name collision and
+    redirects to the right tool."""
+    import vaf.core.subagent_ipc as ipc_mod
+    from vaf.tools.workflow_executor import ExecuteWorkflowTool
+
+    class _FakeIpc:
+        def get_active_tasks_for_current_session(self):
+            return []
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIpc())
+
+    class _FakeAgent:
+        tools = {"create_agent_workflow": object(), "web_search": object()}
+
+    result = ExecuteWorkflowTool().run(
+        "create_agent_workflow", {}, _agent=_FakeAgent()
+    )
+    assert "is the name of a TOOL, not a saved workflow" in result
+    assert "call the 'create_agent_workflow' tool directly" in result
+
+    # A genuinely unknown id (no tool-name collision) keeps the plain listing.
+    result2 = ExecuteWorkflowTool().run("totally_made_up_xyz", {}, _agent=_FakeAgent())
+    assert "not a saved workflow" not in result2
+    assert "not found" in result2
+
+    # No _agent kwarg (defensive path) must not crash - falls back to listing.
+    result3 = ExecuteWorkflowTool().run("create_agent_workflow", {})
+    assert "not found" in result3 or "not a saved workflow" in result3

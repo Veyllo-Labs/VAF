@@ -100,13 +100,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
-- **The workspace-folder chip in the chat bar no longer shows for an empty
-  workspace.** A tool can legitimately create a chat's project folder and
-  then delete everything in it again (workflow scratch-file cleanup), and
-  the chip stayed lit because it only checked whether the folder path
-  existed - not whether anything was actually in it. It now hides again
-  once the folder is empty (a drilled-in subfolder view still shows it,
-  since you can only navigate into a folder that has content).
+- **Every chat now shows its workspace-folder chip immediately, and an
+  unused one no longer lingers forever.** The chip is "this chat has its
+  own workspace" - a standing affordance, not a "you already saved
+  something" indicator - so opening a chat now creates its (empty)
+  workspace folder right away instead of only after a tool happened to
+  write into it. To avoid littering the projects folder with abandoned
+  empty directories, deleting a chat now also removes its workspace
+  folder when it is still empty at that point (a folder holding real
+  content is left untouched either way).
 - **A local model calling the wrong "workflow" tool now gets redirected,
   not just a template list.** `execute_workflow(workflow_id=...)` takes a
   saved template id; a weak model tried

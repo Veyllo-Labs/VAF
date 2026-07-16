@@ -1346,7 +1346,7 @@ async def get_tool_source(name: str):
 SOUNDS_DIR = Path(__file__).resolve().parents[1] / "media" / "sounds"
 ALLOWED_SOUND_FILES = {"tts01.mp3", "sst.mp3"}  # Only serve known files
 
-def _resolve_session_workspace(session_id: str, request: Request) -> str:
+def _resolve_session_workspace(session_id: str, request: Request, create: bool = False) -> str:
     """Workspace dir of a chat session ('' if none/unsafe).
 
     User isolation: the session must belong to the requesting user (same
@@ -1354,6 +1354,15 @@ def _resolve_session_workspace(session_id: str, request: Request) -> str:
     scope are legacy/local, the local admin may access everything). Prefers
     the stable workspace anchor, falls back to the most recently used project.
     Unsafe dirs (home, ~/.vaf, ...) are never exposed.
+
+    create: when True and no existing workspace folder is found for an
+    otherwise valid/owned session, create the (empty) per-chat folder. Used
+    by the WebUI workspace view so opening a chat always has a workspace to
+    show - "this is your chat's workspace" is a standing affordance, not a
+    "you already saved something" indicator (an empty one that never gets
+    used is cleaned up again when the chat is deleted, see
+    SessionManager.delete). Endpoints that only ever READ an existing
+    workspace (e.g. deleting a file inside it) leave this False.
     """
     try:
         sess = session_mgr.load(session_id)
@@ -1391,6 +1400,14 @@ def _resolve_session_workspace(session_id: str, request: Request) -> str:
             path = os.path.dirname(path)
     if not path or not os.path.isdir(path):
         path = (getattr(sess, "runtime_state", None) or {}).get("last_project_path", "") or ""
+    if (not path or not os.path.isdir(path)) and create:
+        try:
+            from vaf.core.session import get_session_workspace_dir as _gwd_create
+            _created = _gwd_create(session_id, create=True)
+            if _created:
+                path = str(_created)
+        except Exception:
+            pass
     if not path or not os.path.isdir(path):
         return ""
     try:
@@ -1422,8 +1439,14 @@ async def get_session_workspace(
     sessionId: str = Query(..., description="Chat session id"),
     subpath: str = Query("", description="Folder inside the workspace to list"),
 ):
-    """Browse the chat's workspace folder (feeds the WebUI workspace window)."""
-    root = _resolve_session_workspace(sessionId, request)
+    """Browse the chat's workspace folder (feeds the WebUI workspace window).
+
+    create=True: every chat opened in the WebUI gets a workspace folder to
+    point at immediately, even before anything has ever been saved into it
+    (see _resolve_session_workspace); an unused one is cleaned up again when
+    the chat is deleted.
+    """
+    root = _resolve_session_workspace(sessionId, request, create=True)
     if not root:
         # Orphan drill-in (central explorer): the session JSON is gone but the workspace folder may still
         # exist under the caller's OWN uid8 root. Strictly scoped to the requester's own VAF_Projects/<uid8>.
@@ -1491,7 +1514,9 @@ class WorkspaceUploadRequest(BaseModel):
 @app.post("/api/session/workspace/upload")
 async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Request):
     """Upload a file into the chat's workspace (gives the agent direct access)."""
-    root = _resolve_session_workspace(req.sessionId, request)
+    # create=True: uploading IS "saving something" - create the folder on
+    # demand rather than 404ing on a chat whose workspace was never touched.
+    root = _resolve_session_workspace(req.sessionId, request, create=True)
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     path = _resolve_workspace_subdir(root, req.subpath)

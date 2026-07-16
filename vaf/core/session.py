@@ -647,18 +647,28 @@ class SessionManager:
             self.save(session, sync_state=False)
 
     def delete(self, session_id: str) -> bool:
-        """Delete a session."""
+        """Delete a session.
+
+        Also removes the session's workspace folder (VAF_Projects/<uid8>/<sid>/)
+        if it exists but is EMPTY (no visible files/folders - e.g. the WebUI
+        eagerly created it when the chat was opened and nothing was ever
+        saved into it, or a workflow's own scratch-file cleanup left an empty
+        shell behind). A workspace holding real content is never touched -
+        only the session record is removed and the files stay on disk.
+        """
+        _cleanup_empty_session_workspace(session_id)
+
         deleted = False
-        
+
         for ext in [".json", ".json.gz"]:
             filepath = self.storage_dir / f"{session_id}{ext}"
             if filepath.exists():
                 filepath.unlink()
                 deleted = True
-        
+
         if self._current and self._current.id == session_id:
             self._current = None
-        
+
         return deleted
     
     def rename(self, session_id: str, new_name: str) -> bool:
@@ -928,6 +938,46 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
         if candidate.is_dir():
             return candidate
     return None
+
+
+def _workspace_has_real_content(path: Path) -> bool:
+    """True if `path` holds anything but dotfiles - checked RECURSIVELY, so a
+    tree of only empty subfolders (no dotfiles) still counts as empty. Any
+    walk error is treated as "has content" (fail toward keeping the folder,
+    never toward deleting something we could not fully inspect)."""
+    import os as _os
+
+    try:
+        for _root, dirs, files in _os.walk(path):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            if any(not f.startswith(".") for f in files):
+                return True
+        return False
+    except Exception:
+        return True
+
+
+def _cleanup_empty_session_workspace(session_id: str) -> None:
+    """Remove a session's workspace folder IF it exists and is EMPTY.
+
+    "Empty" ignores dotfiles (e.g. the .vaf_workspace.json channel label) and
+    is checked recursively, so a folder that was only ever auto-labeled or
+    holds nothing but empty subfolders still counts as empty. Called from
+    SessionManager.delete() before the session record is removed (the
+    uid-scoped lookup inside get_session_workspace_dir needs the session to
+    still be loadable). Best-effort: any failure is swallowed, deleting the
+    session must never be blocked by a workspace-folder problem.
+    """
+    try:
+        path = get_session_workspace_dir(session_id, create=False)
+        if not path or not path.is_dir():
+            return
+        if _workspace_has_real_content(path):
+            return  # holds real content - never auto-delete
+        import shutil as _shutil
+        _shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def resolve_agent_output_dir(default: Path, session_id: Optional[str] = None) -> Path:

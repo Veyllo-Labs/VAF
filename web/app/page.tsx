@@ -6441,12 +6441,12 @@ function VAFDashboardContent() {
                                     )}
                                     <div className="flex min-w-0 flex-1 items-baseline justify-end gap-2 px-2 max-md:flex-wrap max-md:gap-y-1">
                                     {/* Workspace chip: leftmost element; mr-auto pushes RAG/tokens to the right edge.
-                                        Hidden until the workspace actually HAS something in it - the folder can exist
-                                        (e.g. left over from a channel label) before any file was ever saved into it,
-                                        and showing an empty-folder chip on every fresh chat was just noise (live
-                                        feedback). Viewing a drilled-in subpath always implies content (you can only
-                                        navigate into a folder that exists), so that case still shows the chip. */}
-                                    {workspaceInfo?.path && ((workspaceInfo.subpath ?? '') !== '' || workspaceInfo.dirs.length > 0 || workspaceInfo.files.length > 0) && (
+                                        Always shown once this chat HAS a workspace folder, even an empty one - it is
+                                        the "this chat has its own workspace" affordance, not a "you saved something"
+                                        indicator. An empty workspace left behind (e.g. by a workflow's own
+                                        scratch-file cleanup) does not linger forever: deleting the chat removes it
+                                        too when it is still empty (vaf/core/session.py SessionManager.delete). */}
+                                    {workspaceInfo?.path && (
                                         <span
                                             className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 leading-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all select-none"
                                             title={workspaceInfo.path}

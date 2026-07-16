@@ -85,7 +85,7 @@ pyotp>=2.9.0               # TOTP 2FA
 qrcode[pil]>=7.4.0         # QR code for 2FA setup
 
 # Memory System (RAG + Vector Search)
-sqlalchemy[asyncio]>=2.0.0  # Async ORM for database operations
+sqlalchemy[asyncio]>=2.0.51  # Async ORM for database operations
 asyncpg>=0.29.0  # Async PostgreSQL driver
 pgvector>=0.2.0  # pgvector SQLAlchemy integration
 sentence-transformers>=2.2.0  # Text embeddings (all-MiniLM-L6-v2)

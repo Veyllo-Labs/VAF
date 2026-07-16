@@ -251,6 +251,28 @@ def _install_python_deps(root: Path) -> None:
             raise _UpdateError(f"pip install {' '.join(args)} failed")
 
 
+# Files the update machinery ITSELF may dirty (fully derived from tracked
+# sources, safe to restore). npm rewrote web/package-lock.json on install,
+# which then DEADLOCKED every future update at the dirty-tree pre-check -
+# live incident: a Mac stuck on a7 with four newer releases available.
+_SELF_CHURN_PATHS = ("web/package-lock.json",)
+
+
+def _split_self_churn(porcelain: str) -> "tuple[list[str], list[str]]":
+    """Split `git status --porcelain` output into (real_changes, self_churn).
+
+    Self-churn entries are modifications to _SELF_CHURN_PATHS - artifacts the
+    updater/frontend tooling wrote itself; they are restored, never a reason
+    to abort. Everything else stays a hard abort (real user edits)."""
+    real, churn = [], []
+    for line in (porcelain or "").splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip() if len(line) > 3 else line.strip()
+        (churn if path in _SELF_CHURN_PATHS else real).append(line)
+    return real, churn
+
+
 def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> None:
     """Update frontend npm deps after a checkout. Without this, the lazy `npm run build` on the
     next start would build against stale node_modules and the Web UI could break. Runs
@@ -271,10 +293,23 @@ def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> No
         need = bool(changed.strip())
     if not need:
         return
-    UI.info("Updating frontend dependencies (npm install)...")
-    r = subprocess.run([npm, "install"], cwd=str(web))
+    # npm ci: installs EXACTLY the release's lockfile and never rewrites it
+    # (npm install rewrote web/package-lock.json, deadlocking the next
+    # update's dirty-tree check - live incident). Fallback to install when
+    # there is no lockfile or ci fails (e.g. lock/manifest mismatch).
+    use_ci = (web / "package-lock.json").exists()
+    UI.info(f"Updating frontend dependencies (npm {'ci' if use_ci else 'install'})...")
+    r = subprocess.run([npm, "ci" if use_ci else "install"], cwd=str(web))
+    if use_ci and r.returncode != 0:
+        UI.warning("npm ci failed - retrying with npm install...")
+        r = subprocess.run([npm, "install"], cwd=str(web))
     if r.returncode != 0:
         UI.warning("npm install failed; the Web UI may not rebuild. Run `cd web && npm install` manually.")
+    # Belt: whatever npm did, the lockfile must leave the tree clean.
+    try:
+        _git(root, "checkout", "--", "web/package-lock.json")
+    except Exception:
+        pass
 
 
 def _invalidate_web_build(root: Path) -> None:
@@ -443,7 +478,18 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         if code != 0:
             UI.error("git status failed; cannot update safely.")
             raise typer.Exit(1)
-        tree_dirty = bool(dirty)
+        # Self-heal the updater's own churn instead of deadlocking on it:
+        # npm rewrote web/package-lock.json, and this very check then
+        # aborted EVERY future update before anything happened (live
+        # incident: Mac stuck on a7). Derived artifacts are restored;
+        # real user edits still abort below.
+        real_changes, self_churn = _split_self_churn(dirty)
+        if self_churn:
+            UI.info("Restoring updater-managed files (npm lockfile churn)...")
+            for entry in self_churn:
+                _git(root, "checkout", "--", entry[3:].strip() if len(entry) > 3 else entry.strip())
+        dirty = "\n".join(real_changes)
+        tree_dirty = bool(real_changes)
 
         code, cur_sha, _ = _git(root, "rev-parse", "HEAD")
         _, cur_branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
@@ -510,11 +556,16 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         _stop_service()
 
         UI.info(f"Fetching and checking out {target}...")
+        # --force on tags: if a release tag was ever recreated on the remote
+        # (history rewrite), a plain --tags fetch refuses to move the local
+        # tag and the WHOLE update aborts mid-apply with a rollback (live
+        # incident: tags a0-a7 differed on an old Mac install). Published
+        # tags should be immutable, but the updater must survive it.
         if non_git:
             # Shallow-fetch only the target tag — a full history fetch of a fresh repo would be slow.
-            code, _, err = _git(root, "fetch", "--depth", "1", "origin", "tag", target)
+            code, _, err = _git(root, "fetch", "--depth", "1", "--force", "origin", "tag", target)
         else:
-            code, _, err = _git(root, "fetch", "origin", "--tags")
+            code, _, err = _git(root, "fetch", "origin", "--tags", "--force")
         if code != 0:
             raise _UpdateError(f"git fetch failed: {err}")
         if non_git:

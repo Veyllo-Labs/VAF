@@ -11,6 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **`vaf update` can no longer deadlock itself.** Three causes found on a
+  Mac that sat on a7 while four newer releases existed: (1) the updater's
+  own npm step (and the first-run frontend install) rewrote
+  `web/package-lock.json`, and the dirty-tree pre-check then refused every
+  future update - npm runs `ci` now (never modifies the lockfile), and the
+  pre-check restores updater-managed files instead of aborting on them;
+  real user edits still abort. (2) Release tags that were ever recreated on
+  the remote made `git fetch --tags` fail mid-update with a rollback - tags
+  are fetched with `--force` now. (3) Two shell scripts were stored with
+  Windows line endings despite their `eol=lf` attribute, so a fresh checkout
+  started dirty - the repository is renormalized. If your install is
+  currently stuck on an old version, run `git checkout -- web/package-lock.json`
+  in the VAF folder once, then `vaf update`.
+
 ## [0.1.0a11] - 2026-07-16
 
 The voice release: the live call becomes a first-class citizen on local

@@ -223,13 +223,22 @@ class FrontendManager:
             if not npm_path:
                 raise FileNotFoundError("npm not found in PATH")
 
-            # Install deps if needed
+            # Install deps if needed. npm ci, NOT npm install: install
+            # rewrites web/package-lock.json, and a dirty lockfile
+            # deadlocked every later `vaf update` at its dirty-tree check
+            # (live incident: Mac stuck on a7 - THIS first-run install was
+            # the original culprit). ci installs the release's exact
+            # lockfile and never modifies it.
             if not os.path.exists(os.path.join(web_dir, "node_modules")):
                 self._log("Installing npm dependencies...", "warning", log_callback)
                 install_kwargs = {"cwd": web_dir, "capture_output": True}
                 if platform.system() == "Windows":
                     install_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                subprocess.run([npm_path, "install"], **install_kwargs)
+                use_ci = os.path.exists(os.path.join(web_dir, "package-lock.json"))
+                r = subprocess.run([npm_path, "ci" if use_ci else "install"], **install_kwargs)
+                if use_ci and r.returncode != 0:
+                    self._log("npm ci failed - retrying with npm install...", "warning", log_callback)
+                    subprocess.run([npm_path, "install"], **install_kwargs)
 
             # Determine starting port from config
             base_port = Config.get("local_network_port_frontend", 3000)

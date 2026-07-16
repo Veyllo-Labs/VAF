@@ -12,6 +12,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Three new developer docs make the existing machinery usable from
+  outside**, each verified against the code: an observability guide
+  (structured tool/gate events via the engine's event sink, plus the
+  machine-readable NDJSON mode of the scripting CLI for integrating VAF as a
+  subprocess from any language), a debugging guide (the complete map of log
+  files, how to redirect them, what the debug switch does and does not
+  silence, how to read a session file), and an engine reference (the
+  constructor, lifecycle, turn and tool-dispatch contracts, and concurrency
+  rules of the advanced embedding class). The embedding guide gains a
+  security-posture section (what needs Docker, what runs on the host, what
+  ports are and are not opened), pointers to the other extension points
+  (workflows, skills, MCP servers, the update-surviving custom-tools folder),
+  and an honest note on custom OpenAI-compatible endpoints. Key engine
+  methods now carry docstrings.
+
 - **A CI guard now protects the public library surface.** The docs promise
   that `from vaf import Agent` is safe to build on; until now no test
   imported that facade, so a breaking change to it could have shipped with
@@ -23,6 +38,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **Embedding a local model actually works now.** The documented library
+  quickstart with the local provider silently returned an empty string: the
+  facade never loaded the model, so the turn aborted before generation. The
+  facade now downloads/starts (or reuses) the one local llama server on
+  first use, exactly like the CLI does. Also corrected in the embedding
+  guide: the real location of the trust store (the platform config dir, not
+  the VAF home dir) and the fact that the "system" permission level bypasses
+  the confirmation gate rather than triggering it.
 - **Documentation corrections across the developer docs**, each verified
   against the code: the embedding guide now names PySide6 (not PyQt6) in
   the desktop extra and includes the `veyllo` provider; the memory doc no

@@ -25,8 +25,9 @@ Design notes
   an explicit caller still wins). That makes the tool-confirmation gates return
   an error instead of blocking on stdin/WebSocket — an embedded library must
   never hang waiting for a human. Grant specific tools via the trust mechanisms
-  (`mark_trusted_dir`, `set_tool_policy`, ~/.vaf/trust.json) when you want
-  dangerous tools to run unattended.
+  (`mark_trusted_dir`, `set_tool_policy`; persisted in trust.json under the
+  platform config dir, e.g. ~/.config/vaf/ on Linux) when you want dangerous
+  tools to run unattended.
 - Stateful across calls: one façade `Agent` keeps one conversation. Repeated
   `run()` calls continue the same history (multi-turn). Create a new `Agent`
   for an independent conversation.
@@ -82,6 +83,13 @@ class Agent:
                 config_overrides=self._config,
             )
             agent.init_chat()
+            # Local mode has no lazy load inside chat_step: without a backend
+            # the turn aborts ("Agent not initialized") and run() would return
+            # an empty string. Mirror chat_step's own guard and load here, so
+            # the first run() downloads/starts (or reuses) the one local
+            # llama server exactly like the CLI lanes do.
+            if agent.api_backend is None and not agent.llm and not agent.use_server:
+                agent.load_model()
             self._agent = agent
         return self._agent
 

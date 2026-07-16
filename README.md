@@ -323,6 +323,9 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 | Build on VAF (embed as a library) | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
 | Architecture (framework vs. harness) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Configuration reference (all config keys) | [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md) |
+| Engine reference (CoreAgent contracts) | [docs/CORE_AGENT.md](docs/CORE_AGENT.md) |
+| Observability (events, NDJSON scripting) | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
+| Debugging & logging | [docs/DEBUGGING.md](docs/DEBUGGING.md) |
 | Write a tool (BaseTool, pip packaging) | [vaf/tools/README.md](vaf/tools/README.md) |
 | Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) |
 | Linux setup & GPU | [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) |

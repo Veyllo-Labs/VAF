@@ -120,3 +120,57 @@ def test_entry_point_tools_register_into_the_agent(monkeypatch):
 
     assert list(holder.tools) == ["ep_good_tool"]
     assert holder.tools["ep_good_tool"].run() == "ok"
+
+
+class _StubCore:
+    """Duck-typed CoreAgent for facade lifecycle tests (no engine load)."""
+
+    calls: list = []
+
+    def __init__(self, verbose=False, register_signals=True, config_overrides=None):
+        self.api_backend = None
+        self.llm = None
+        self.use_server = False
+
+    def init_chat(self):
+        type(self).calls.append("init_chat")
+
+    def load_model(self):
+        type(self).calls.append("load_model")
+        self.use_server = True
+
+    def chat_step(self, prompt, stream_callback=None):
+        if stream_callback:
+            stream_callback("hi")
+        return "hi"
+
+    def _clean_reasoning(self, s):
+        return s
+
+
+def test_facade_loads_local_model_on_first_run(monkeypatch):
+    """Regression: with provider=local the facade never called load_model, so
+    chat_step aborted ("Agent not initialized") and run() returned '' - the
+    documented quickstart was broken (runtime-verified 2026-07-16)."""
+    import vaf.framework as fw
+
+    _StubCore.calls = []
+    monkeypatch.setattr(fw, "CoreAgent", _StubCore)
+    agent = fw.Agent(config={"provider": "local"})
+    assert agent.run("hello") == "hi"
+    assert _StubCore.calls == ["init_chat", "load_model"]
+
+
+def test_facade_skips_load_model_when_api_backend_exists(monkeypatch):
+    import vaf.framework as fw
+
+    class _ApiStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+    _StubCore.calls = []
+    monkeypatch.setattr(fw, "CoreAgent", _ApiStub)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    assert agent.run("hello") == "hi"
+    assert _StubCore.calls == ["init_chat"]

@@ -301,6 +301,19 @@ def _get_debug_log_dir():
     return Path.cwd()
 
 class Agent:
+    """The VAF engine: one instance = one conversation over one LLM backend.
+
+    Re-exported as ``vaf.CoreAgent`` for advanced embedding; most consumers
+    should use the ``vaf.Agent`` facade instead. The embedder-facing contract
+    (constructor, lifecycle, chat_step/execute_tool semantics, concurrency
+    rules) is documented in docs/CORE_AGENT.md; the turn-loop design map for
+    contributors is docs/agents/AGENT_LOOP.md.
+
+    Effectively single-threaded: per-turn state lives in instance attributes
+    and ``history``/``tools`` are mutated without locks. Never drive one
+    instance from two threads; create one instance per parallel conversation.
+    """
+
     # Language names mapping (ISO 639-1 codes to native names)
     # Used for multilingual instructions - comprehensive list supporting 97+ languages
     LANGUAGE_NAMES_NATIVE = {
@@ -3073,6 +3086,14 @@ class Agent:
             return False
 
     def load_model(self, skip_download_check: bool = False):
+        """Make the local backend ready; no-op for API providers.
+
+        Local provider: ensure the GGUF exists (locked, self-healing download)
+        and start or reuse the ONE llama server on 127.0.0.1:8080 (or load
+        llama-cpp in-process, platform-dependent). NOT called lazily by
+        chat_step - in local mode call this (the vaf.Agent facade does) before
+        chatting, else the turn aborts with "Agent not initialized".
+        """
         from vaf.cli.ui import UI
         from vaf.core.gpu_detection import get_primary_gpu, _check_cuda_available
         
@@ -3337,6 +3358,13 @@ class Agent:
         self.filename = os.path.basename(path)
 
     def init_chat(self):
+        """Build the system prompt and start a fresh conversation.
+
+        Rebuilds the prompt manager from the current tools/config/session
+        identity, loads project context (VAF.md in the cwd, capped), and
+        RESETS ``self.history`` to just the system message. Call once before
+        the first chat_step; calling again discards the running conversation.
+        """
         # Initialize Prompt Manager
         n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum for local models
 
@@ -6362,6 +6390,15 @@ class Agent:
         force_tool_choice: Optional[str] = None,
         allow_memory_search: bool = False,
     ):
+        """Run one full turn: routing, LLM/tool loop, guardrails, persistence.
+
+        The REAL answer is streamed via stream_callback and lands in
+        history[-1]; the return value is a status (the "..." placeholder or a
+        tool summary on normal completion, None when no backend is loaded,
+        meaningful strings for workflow results / errors / stop / loop
+        protection). Full return contract and parameter semantics:
+        docs/CORE_AGENT.md. The vaf.Agent facade wraps this correctly.
+        """
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
         self._current_turn_thinking_mode = bool(thinking_mode)
@@ -9602,6 +9639,17 @@ class Agent:
         return self._clean_reasoning(full_response)
 
     def execute_tool(self, name, args):
+        """Dispatch one tool call through the full pipeline; returns a string.
+
+        Pipeline: argument validation/repair -> policy evaluation (admin-only,
+        channel blocks -> "Security Error: ...") -> confirmation gate (in
+        noninteractive mode gated tools return an "[ERROR] ... requires
+        confirmation" string instead of blocking) -> per-tool kwarg injection
+        (identity/session/workspace) -> bounded execution with timeout and
+        stop polling. Emits tool_start/tool_end/gate_* events to the optional
+        event sink (schema: docs/OBSERVABILITY.md). Never raises for tool
+        failures - errors come back as the result string.
+        """
         from vaf.cli.ui import UI
         from pathlib import Path
         from vaf.core.trust import get_tool_policy, set_tool_policy, mark_trusted_dir, is_trusted_dir

@@ -10,6 +10,9 @@ Docs are grouped into category folders. Full index by category:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — What VAF is: the framework/harness layering (engine, framework surface, product) and the public boundary (stable vs internal).
 - [EMBEDDING.md](EMBEDDING.md) — Install VAF as a slim library and build on it: `from vaf import Agent`, config, writing tools, shipping tools as pip packages.
 - [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md) — Configuration reference: all config keys by area, with defaults and which ones matter for embedding.
+- [CORE_AGENT.md](CORE_AGENT.md) - `vaf.CoreAgent` reference: constructor, lifecycle, the `chat_step`/`execute_tool` contracts, concurrency rules.
+- [OBSERVABILITY.md](OBSERVABILITY.md) - Streaming vs structured events: `set_event_sink` schema and the `vaf prompt --output-format stream-json` NDJSON interface.
+- [DEBUGGING.md](DEBUGGING.md) - Logging map: where logs land, `debug_logs_enabled`, reading session JSON, `vaf debug`.
 - [TOOLS_CATALOG.md](agents/TOOLS_CATALOG.md) — Catalog of the built-in tools the agent loads, grouped by area.
 
 ### setup/ — install, services, deployment

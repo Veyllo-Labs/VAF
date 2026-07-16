@@ -67,6 +67,13 @@ agent = Agent(config={"provider": "local"})   # downloads/starts a local model
 print(agent.run("Hello!"))
 ```
 
+In local mode the first `run()` may take a while: it downloads the model on
+first use and readies the local backend - depending on the platform either
+**one** llama server on `127.0.0.1:8080` (started or reused; the same
+single-server rule as the full product) or an in-process llama-cpp load that
+opens no port. Expect a multi-GB download and significant RAM/VRAM use; for a
+quick first test, an API provider is the fastest path.
+
 ### Streaming
 
 ```python
@@ -177,7 +184,49 @@ of disabling the gate:
 
 - mark a working directory trusted (`mark_trusted_dir`),
 - set a per-tool policy to allow (`set_tool_policy`),
-- both persist in `~/.vaf/trust.json`.
+- both persist in `trust.json` under the platform config dir
+  (Linux `~/.config/vaf/`, macOS `~/Library/Application Support/vaf/`,
+  Windows `%APPDATA%/vaf/`) - per OS user across all projects, not per
+  project.
+
+Two semantics worth knowing before you grant anything:
+
+- `mark_trusted_dir(path)` trusts that directory **and its entire subtree**
+  for **all** gated tools; the check runs against the host process's current
+  working directory at tool-call time.
+- The interactive "always allow" choice does both at once: it trusts the
+  current working directory *and* sets the tool's policy to allow.
+
+---
+
+## Security posture
+
+What an embedded agent can and cannot do on the host - the short version of
+[SANDBOXING.md](security/SANDBOXING.md), from the embedder's perspective:
+
+- **Code execution needs Docker.** `python_sandbox` (and the test runner)
+  refuse to run without a working Docker daemon - there is deliberately **no
+  fallback to host execution**. Without Docker the tool returns a
+  `[SECURITY] Sandbox requires Docker: ...` error string and the run
+  continues. The coder sub-agent's shell needs bubblewrap or Docker and
+  refuses otherwise.
+- **Host execution is opt-in.** `python_exec` (unsandboxed Python on the
+  host) additionally requires a persisted `set_tool_policy("python_exec",
+  "allow")` - a one-off interactive confirmation is not enough. File tools
+  write to the host as the gate allows.
+- **Network posture.** `import vaf` and `Agent(config=...)` open no ports and
+  start no services. An API provider means outbound HTTPS only. Local mode
+  either starts the one llama server on `127.0.0.1:8080` or loads the model
+  in-process (platform-dependent) - never anything on a public interface.
+  The memory/RAG stack
+  (PostgreSQL, Redis) is **not** started by the library - it is a Docker
+  compose stack the desktop/server product manages; without it, memory tools
+  fail soft with an error string. One exception to know:
+  `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
+  `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of
+  that call.
+- **Admin-only tools stay off.** A bare embedded agent has no admin identity,
+  so `admin_only` tools are blocked.
 
 ---
 
@@ -208,7 +257,10 @@ class WeatherTool(BaseTool):
 
 Key declarative rules the runtime enforces:
 
-- `permission_level` — `dangerous`/`system` trigger the confirmation gate.
+- `permission_level` - `dangerous` triggers the confirmation gate; `system`
+  marks internal plumbing tools and explicitly **bypasses** it; `read`/`write`
+  run without confirmation (except a legacy by-name gate on the risky
+  built-ins `move_file`, `bash`, `run_command`, `python_exec`).
 - `side_effect_class` — surfaced to the model so it knows what is reversible.
 - `admin_only`, `channel_restrictions`, `coder_only` — visibility/scoping.
 
@@ -241,6 +293,55 @@ get_weather = "vaf_weather.tools:WeatherTool"
 Each entry point must resolve to a `BaseTool` subclass. After
 `pip install vaf-weather`, the tool is discovered automatically at agent startup
 (a broken package logs an error and is skipped — it never breaks startup).
+
+---
+
+## Observability, logging, and the engine reference
+
+Three companion pages cover the operational side of embedding:
+
+- [OBSERVABILITY.md](OBSERVABILITY.md) - streaming vs structured events:
+  `on_token` caveats, `CoreAgent.set_event_sink()` and its event schema, and
+  the `vaf prompt --output-format stream-json` NDJSON interface for
+  integrating VAF as a subprocess from any language.
+- [DEBUGGING.md](DEBUGGING.md) - where an embedded agent writes log files,
+  how to redirect them (`VAF_LOG_DIR`), what `debug_logs_enabled` does (and
+  does not) silence, and how to read a session JSON. Note: an embedded agent
+  **does write log files by default**; set `VAF_LOG_DIR` if you care where.
+- [CORE_AGENT.md](CORE_AGENT.md) - the `vaf.CoreAgent` reference: constructor,
+  lifecycle, the `chat_step`/`execute_tool` contracts, and the concurrency
+  rules.
+
+**Concurrency contract (short version):** one `Agent` is one conversation and
+is effectively single-threaded - drive it from one thread at a time. For
+parallelism, create multiple `Agent` instances (each in its own thread is
+fine). There is no async API today; `run()` blocks.
+
+### More extension points
+
+Beyond tools, the product loads three other user-extensible artifact kinds -
+usable from an embedded engine too, documented in their own pages:
+
+- **Custom workflows** - Python files with a module-level `WORKFLOW` dict,
+  dropped in `~/.vaf/workflows/`, see
+  [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md).
+- **Skills** - reusable prompt/procedure packages, see [SKILLS.md](agents/SKILLS.md).
+- **MCP servers** - register external MCP tool servers in `mcp_servers.json`;
+  their tools appear as native tools (`mcp_<server>_<tool>`), see
+  [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
+- **Update-surviving local tools** - a `custom_tools/` folder in the platform
+  data dir (managed via the Web UI, admin-only), see
+  [vaf/tools/README.md](../vaf/tools/README.md).
+
+### A note on custom OpenAI-compatible endpoints
+
+The config key `local_api_url` points VAF's *API-backend consumers* (browser
+agent, local vision, cloud-to-local failover) at any OpenAI-compatible server
+(Ollama, vLLM, LM Studio). It does **not** redirect the main chat loop: with
+`provider="local"` the main agent always manages its own llama server on
+`127.0.0.1:8080`. Embedding VAF's main loop on top of a foreign inference
+server is not supported today. See
+[PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for the details.
 
 ---
 

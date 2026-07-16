@@ -92,7 +92,7 @@ sentence-transformers>=2.2.0  # Text embeddings (all-MiniLM-L6-v2)
 cryptography>=41.0.0  # AES-256-GCM encryption
 onnxruntime>=1.16.0  # Lightweight ONNX Runtime for embeddings
 sherpa-onnx>=1.13  # Speaker ID (Silero VAD + ERes2Net embeddings); live incident: missing dep = every fresh install's enrollment said "no speech"
-tokenizers>=0.15.0   # Fast Rust-based tokenizers
+tokenizers>=0.23.1   # Fast Rust-based tokenizers
 numpy>=1.24.0        # Numerical operations for embeddings
 
 # Caching (Redis)

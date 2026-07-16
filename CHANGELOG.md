@@ -100,6 +100,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A tool call is no longer silently dropped when a model garbles its own
+  closing tags.** The recovery parser for text-written tool calls (a
+  reasoning model sometimes emits `<tool_call><function=NAME>...` as plain
+  text instead of a native call) required an exact
+  `</function></tool_call>` close to accept anything. A live case showed a
+  local model trail off into hallucinated, unrelated closing tags instead
+  of its own; the properly-closed parameter inside was perfectly
+  recoverable, but the strict match returned nothing and the turn ended
+  with tool-call-shaped text visible in history and no tool ever actually
+  invoked. A call's body is now bounded by whichever comes first - a real
+  close, the start of the next call, or any closing-tag-shaped attempt
+  (right structure, wrong names) - so a well-formed call parses exactly as
+  before, a malformed-but-attempted one is recovered, and a plain
+  unclosed mention (e.g. a model explaining the call syntax in prose) is
+  still rejected rather than risking an unintended dispatch.
 - **A request to "build a workflow for this" no longer gets talked out of
   it.** When the router finds no SAVED workflow template for a request
   (most requests - templates are a fixed catalog, not every task fits

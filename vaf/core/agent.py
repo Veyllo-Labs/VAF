@@ -212,13 +212,39 @@ def _parse_qwen_tool_calls(text: str, valid_names=None):
 
         <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
 
+    The closing `</function></tool_call>` is matched but NOT required, PROVIDED the text still
+    contains some (possibly wrong) two-level closing-tag attempt (live incident: a local model
+    trailed off into hallucinated unrelated tags - `</tasks></working_memory>` - instead of closing
+    its own call; the properly-closed `<parameter>` pairs inside were recoverable, but the strict
+    version of this parser returned nothing and the tool call was silently dropped, same failure mode
+    as the docstring above, just one level deeper). The body of a call is bounded by whichever comes
+    first: a real `</function></tool_call>` close, the start of the next `<tool_call>`, or ANY two
+    closing tags in a row (`</whatever> </whatever>`, whitespace between allowed) that are not
+    themselves `</parameter>` - i.e.
+    the model attempted to close SOMETHING, just used the wrong names.
+
+    Deliberately NOT a bare "match to end of text" fallback: an earlier version fell back that far,
+    and adversarial review found it could turn an incidental, unclosed EXPLANATION of the tool-call
+    format ("tool calls look like <tool_call><function=web_search><parameter=query>example</parameter>
+    when using this format") into a genuinely dispatched call, with no closing attempt of any kind
+    ever appearing before the rest of the response - a real execution risk, not just a parsing
+    curiosity. Requiring a closing-tag-SHAPED sequence (right structure, any names) keeps the real
+    incident recoverable while a plain trailing sentence with no such shape matches nothing, exactly
+    like the strict parser before it.
+
     Returns a list of (name, args_dict). Each parameter VALUE is JSON-decoded when possible (so a list /
     dict / number survives) and otherwise kept as the trimmed string. Tolerant of newlines/whitespace.
-    Pure function; `valid_names` (when given) restricts results to known tool names."""
+    Pure function; `valid_names` (when given) restricts results to known tool names - the anchor is
+    still an exact `<tool_call><function=KNOWN_NAME>` open, so this stays as bounded as the strict
+    version was, just more forgiving about how the call ends."""
     import re as _re
     import json as _json
     out = []
-    for m in _re.finditer(r'<tool_call>\s*<function=([\w.\-]+)\s*>(.*?)</function>\s*</tool_call>', text or "", _re.DOTALL):
+    pattern = (
+        r'<tool_call>\s*<function=([\w.\-]+)\s*>(.*?)'
+        r'(?:</function>\s*</tool_call>|(?!</parameter>)</\w+>\s*</\w+>|(?=<tool_call>))'
+    )
+    for m in _re.finditer(pattern, text or "", _re.DOTALL):
         name = (m.group(1) or "").strip()
         if not name or (valid_names is not None and name not in valid_names):
             continue

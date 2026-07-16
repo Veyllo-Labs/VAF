@@ -100,6 +100,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A request to "build a workflow for this" no longer gets talked out of
+  it.** When the router finds no SAVED workflow template for a request
+  (most requests - templates are a fixed catalog, not every task fits
+  one), the fallback hint told the model "most simple requests (weather,
+  news, questions) don't need workflows" and pointed only at
+  `list_workflows` (saved templates only) - never at the ad-hoc builder.
+  A user who explicitly asked to run a weather lookup as a temporary
+  workflow got a hint that contradicted their own request almost word
+  for word, and the model complied with the hint over the user (live
+  incident). The no-match hint now detects a workflow mention in the
+  user's own message (typo-tolerant - the real request had "workflow"
+  mistyped as "workflwo") and surfaces
+  `create_agent_workflow(action="run_temp")` as the option to use
+  instead; the detection is a cheap substring match that can also fire
+  on an unrelated mention ("workforce", "my daily workflow" as small
+  talk), so the wording stays advisory either way - it defers to the
+  model's own judgment rather than pushing a directive - and now warns
+  in both branches that `run_temp` needs 2+ chained steps, matching the
+  tool's own single-step rejection.
 - **Every chat now shows its workspace-folder chip immediately, and an
   unused one no longer lingers forever.** The chip is "this chat has its
   own workspace" - a standing affordance, not a "you already saved

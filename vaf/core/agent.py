@@ -5260,17 +5260,51 @@ class Agent:
                     )
                     return None
 
-                # No workflow match - give agent brief hint (not full list!)
-                # Agent can use list_workflows tool if they need to see options
-                self.history.append({
-                    "role": "system",
-                    "content": (
-                        "ℹ️ No workflow automatically matched for this request. "
-                        "You can handle it directly with your tools, or if you think a multi-step workflow "
-                        "would be beneficial, use the 'list_workflows' tool to see available options. "
-                        "Most simple requests (weather, news, questions) don't need workflows."
+                # No SAVED workflow template matched - give agent a brief hint (not the
+                # full list). This must not talk the model OUT of workflows for a
+                # request that explicitly asked for one: the old fixed wording used
+                # "weather" as its example of something that never needs a workflow,
+                # which directly contradicted a user request to run a weather lookup
+                # AS a workflow, and never mentioned create_agent_workflow(run_temp) -
+                # the ad-hoc builder is the right answer here precisely because no
+                # SAVED template fits an on-the-fly multi-step request (live incident:
+                # the model called list_tools, saw run_temp buried on page 1 of a 15KB
+                # dump, and just did the steps manually instead).
+                #
+                # Detection is a cheap, imprecise substring match (typo-tolerant on
+                # purpose: the real incident's message had "workflow" transposed to
+                # "workflwo", which a whole-word match would have missed), so it WILL
+                # also match unrelated mentions ("workforce" news, "review my workflow
+                # doc"). Both branches below stay ADVISORY, not directive - matching
+                # this file's own "agent decides" design principle (see "New Flow"
+                # above) - specifically so a false match cannot push the model into an
+                # unwanted run_temp call; only the STRENGTH of the suggestion differs.
+                # "workf(?!orce)" excludes the one common real word that shares the
+                # prefix; other topical false positives are left to the model's
+                # judgment, which the wording below explicitly invites.
+                _user_asked_for_workflow = bool(
+                    re.search(r"\bworkf(?!orce)", user_input or "", re.IGNORECASE)
+                )
+                if _user_asked_for_workflow:
+                    _no_match_hint = (
+                        "ℹ️ No SAVED workflow template matched this request, and the "
+                        "user's message mentions a workflow. If this is genuinely "
+                        "multi-step work (2+ chained steps - research, analyse, produce "
+                        "a deliverable), create_agent_workflow with action='run_temp' can "
+                        "build and run one on the fly. Use your own judgment: a "
+                        "single-step lookup, a question, or an unrelated mention of the "
+                        "word does not need it - keep using your tools directly for those."
                     )
-                })
+                else:
+                    _no_match_hint = (
+                        "ℹ️ No workflow automatically matched for this request. "
+                        "For a genuinely multi-step task (research -> analyse -> produce "
+                        "a deliverable, 2+ chained steps), consider create_agent_workflow "
+                        "with action='run_temp' to run one ad hoc, or the 'list_workflows' "
+                        "tool to see saved templates. A single-step lookup or question "
+                        "does not need either."
+                    )
+                self.history.append({"role": "system", "content": _no_match_hint})
 
                 # Show Tier 2 status (Agent Choice)
                 UI.event("Step 1/2", f"Workflow [Tier 2: No auto-match - Agent deciding]", style="cyan")

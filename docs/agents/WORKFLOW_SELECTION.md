@@ -108,6 +108,17 @@ IMPORTANT: If the user is asking to edit or modify an existing project
 
 The hint is **one-shot** — it is consumed and cleared immediately. The next message starts fresh with no pre-set hint.
 
+### Step 3b - No SAVED Template Matched
+
+When the router finds nothing (most requests), `_try_workflow()` appends a short system hint instead of the `[WORKFLOW SUGGESTION]` block. This hint is NOT a "workflows are usually unnecessary" note - a saved-template miss says nothing about whether an **ad-hoc** workflow (`create_agent_workflow(action="run_temp")`) would help, since the router only ever matches against saved templates.
+
+The hint branches on whether the user's own message mentions a workflow at all (prefix-matched on `workf`, excluding "workforce" - case-insensitive and typo-tolerant on purpose, since a live incident's real request had "workflow" transposed to "workflwo", which a whole-word match would have missed):
+
+- **Mentions a workflow, no template fits**: `create_agent_workflow(action="run_temp")` is surfaced as the option to reach for, not `list_workflows` (which would only surface saved templates - the wrong tool here).
+- **No mention**: a lighter hint still offers `run_temp` for genuinely multi-step work, alongside `list_workflows`.
+
+The substring match is deliberately cheap and imprecise (it can also fire on an unrelated mention - small talk about "my daily workflow", a document literally named "workflow doc"), so **both branches stay advisory, not directive** - matching this file's own "agent decides" principle from the New Flow above. Neither branch instructs the model that it *must* call `run_temp`; both explicitly defer to its judgment and note the tool's own 2+-step requirement, so a false match cannot push an unwanted call and a genuine but single-step "workflow" request does not walk into the tool's own rejection with no warning. Domain examples are avoided entirely (the old fixed wording used "weather" as its example of something that never needs a workflow - directly contradicting a user who explicitly asked to run a weather lookup AS a workflow, and the model complied by doing every step manually instead of building one, per its own instruction).
+
 ### Step 4 — Main Agent Decides
 
 The main agent sees:

@@ -68,16 +68,20 @@ class Agent:
         *,
         verbose: bool = False,
         user_scope: Optional[str] = None,
+        session: Optional[str] = None,
     ):
         self._config = dict(config) if config else None
         self._verbose = verbose
         self._agent: Optional[CoreAgent] = None
         self._pending_tools: list = []
+        # Structured-event callback registered before the engine exists.
+        self._event_cb: Optional[Callable[[dict], None]] = None
         # Multi-tenant identity (docs/EMBEDDING.md "Multi-tenant embedding"):
         # user_scope is an ASSERTION by the embedder - the library performs no
         # authentication (the process boundary is the trust boundary, same as
         # the gateway trusting itself). Validate at the boundary: a bad value
         # must fail HERE, loudly, never fall back to the machine owner's data.
+        # Parsed BEFORE the session check below, which needs it for ownership.
         self._user_scope = None
         self._scope_username: Optional[str] = None
         if user_scope is not None:
@@ -89,6 +93,22 @@ class Agent:
                 raise ValueError(
                     "user_scope must be a valid UUID string"
                 ) from None
+        # Persisted-conversation lane: pass a session id from a previous
+        # save_session() to resume that conversation on first use. Validated
+        # EAGERLY (existence + tenant ownership) so a stale id fails at
+        # construction, where callers expect ValueError - not mid-run.
+        self._session_id: Optional[str] = str(session) if session else None
+        if self._session_id:
+            from vaf.core.session import SessionManager
+
+            try:
+                loaded = SessionManager().load(self._session_id, restore_state=False)
+            except FileNotFoundError:
+                raise ValueError(f"session '{self._session_id}' not found") from None
+            if self._user_scope is not None:
+                owner = (loaded.metadata or {}).get("user_scope_id")
+                if owner and str(owner) != str(self._user_scope):
+                    raise ValueError("session belongs to a different user_scope")
         # Embedding-safe default: never block on a human. `setdefault` lets an
         # explicit `VAF_NONINTERACTIVE=0` from the caller take precedence.
         os.environ.setdefault("VAF_NONINTERACTIVE", "1")
@@ -177,7 +197,25 @@ class Agent:
             # (user context, memory seed, last interaction).
             if self._user_scope is not None:
                 self._bind_identity(agent)
-            agent.init_chat()
+            if self._session_id:
+                # Resume the persisted conversation (existence and tenant
+                # ownership were validated eagerly in __init__).
+                # load_session_context runs init_chat itself, replays the
+                # messages (tool-call linkage preserved) and rebinds identity
+                # from session metadata - so re-assert ours afterwards.
+                try:
+                    agent.load_session_context(self._session_id)
+                except FileNotFoundError:
+                    # Deleted between construction and first use.
+                    raise ValueError(
+                        f"session '{self._session_id}' not found"
+                    ) from None
+                if self._user_scope is not None:
+                    self._bind_identity(agent)
+            else:
+                agent.init_chat()
+            if self._event_cb is not None:
+                agent.set_event_sink(self._event_cb)
             # Local mode has no lazy load inside chat_step: without a backend
             # the turn aborts ("Agent not initialized") and run() would return
             # an empty string. Mirror chat_step's own guard and load here, so
@@ -187,6 +225,72 @@ class Agent:
                 agent.load_model()
             self._agent = agent
         return self._agent
+
+    def on_event(self, callback: Optional[Callable[[dict], None]]) -> None:
+        """Attach a structured-event callback (or None to detach).
+
+        Receives one dict per event: tool_start/tool_end (with duration_ms and
+        a dispatch-level ok flag), gate_required/gate_decision, and
+        llm_start/llm_end (with duration_ms, ok, and a best-effort usage
+        snapshot on API providers). Full schema: docs/OBSERVABILITY.md.
+        Shortcut for ``.core.set_event_sink(...)``; safe to call before or
+        after the first run. A raising callback is swallowed by the engine.
+        """
+        self._event_cb = callback
+        if self._agent is not None:
+            self._agent.set_event_sink(callback)
+
+    def save_session(self) -> str:
+        """Persist the current conversation; returns the session id.
+
+        The first call creates the session (or updates the one passed via
+        ``session=``); later calls update it in place, so calling after every
+        turn is safe. Resume later with ``Agent(config=..., session=<id>)``.
+        Sessions live in the standard store (``~/.vaf/sessions/``); a bound
+        ``user_scope`` is stamped as the session owner (on create, and when
+        saving a legacy owner-less session).
+        """
+        from vaf.core.session import SessionManager
+
+        core = self.core
+        mgr = SessionManager()
+        session = None
+        if self._session_id:
+            try:
+                session = mgr.load(self._session_id, restore_state=False)
+            except FileNotFoundError:
+                session = None
+        if session is None:
+            session = mgr.new(
+                model=str(core.config.get("model", "")),
+                user_scope_id=str(self._user_scope) if self._user_scope else None,
+            )
+        # Claim ownership of a legacy owner-less session so it stops being
+        # listed to every tenant (create path stamps it via mgr.new above).
+        if self._user_scope is not None and not (session.metadata or {}).get(
+            "user_scope_id"
+        ):
+            session.metadata["user_scope_id"] = str(self._user_scope)
+        # Replace the stored transcript with the live history (idempotent
+        # update semantics). The system prompt is rebuilt on load, never
+        # persisted; tool-call linkage fields AND per-message metadata
+        # (e.g. vision image grounding on product sessions) are preserved.
+        session.messages = []
+        for m in core.history:
+            role = m.get("role", "user")
+            if role == "system":
+                continue
+            extra = {
+                k: m[k]
+                for k in ("tool_calls", "tool_call_id", "name", "kind", "metadata")
+                if m.get(k) is not None
+            }
+            if m.get("images") is not None and "metadata" not in extra:
+                extra["metadata"] = {"images": m["images"]}
+            session.add_message(role, m.get("content", ""), **extra)
+        mgr.save(session, sync_state=False)
+        self._session_id = session.id
+        return session.id
 
     def run(self, prompt: str, on_token: Optional[Callable[[str], None]] = None) -> str:
         """Send one message and return the final assistant answer (reasoning stripped).
@@ -241,3 +345,19 @@ class Agent:
         if degenerate and cleaned_stream:
             return cleaned_stream
         return result or cleaned_stream
+
+    async def run_async(
+        self, prompt: str, on_token: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """Async wrapper around ``run()`` for event-loop applications.
+
+        Honest contract: this is a THREAD-EXECUTOR wrapper (the engine has no
+        native async path) - the turn runs in a worker thread while your event
+        loop stays responsive. ``on_token`` is invoked on that worker thread;
+        hop back to the loop yourself (e.g. ``loop.call_soon_threadsafe``)
+        before touching loop-bound state. One instance still means one
+        conversation: do not run two turns on the same Agent concurrently.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.run, prompt, on_token)

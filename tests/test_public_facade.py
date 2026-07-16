@@ -18,19 +18,21 @@ from vaf.tools.base import BaseTool
 
 def test_facade_exports_exactly_the_documented_surface():
     assert vaf.__version__
-    assert sorted(vaf.__all__) == ["Agent", "CoreAgent", "__version__"]
+    assert sorted(vaf.__all__) == ["Agent", "CoreAgent", "__version__", "markers"]
     assert dir(vaf) == sorted(vaf.__all__)
 
 
 def test_agent_constructor_signature_is_stable():
     params = list(inspect.signature(Agent.__init__).parameters.values())[1:]
-    assert [p.name for p in params] == ["config", "verbose", "user_scope"]
-    config, verbose, user_scope = params
+    assert [p.name for p in params] == ["config", "verbose", "user_scope", "session"]
+    config, verbose, user_scope, session = params
     assert config.default is None
     assert verbose.kind is inspect.Parameter.KEYWORD_ONLY
     assert verbose.default is False
     assert user_scope.kind is inspect.Parameter.KEYWORD_ONLY
     assert user_scope.default is None
+    assert session.kind is inspect.Parameter.KEYWORD_ONLY
+    assert session.default is None
 
 
 def test_agent_run_signature_is_stable():
@@ -309,3 +311,134 @@ def test_user_scope_username_falls_back_synthetic_never_admin(monkeypatch):
     username = agent.core._current_username
     assert username == f"scope_{scope.replace('-', '')[:8]}"
     assert username != "admin"
+
+
+def test_run_async_is_a_thread_executor_wrapper(monkeypatch):
+    import asyncio
+
+    import vaf.framework as fw
+
+    monkeypatch.setattr(fw, "CoreAgent", _StubCore)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    assert inspect.iscoroutinefunction(fw.Agent.run_async)
+    assert asyncio.run(agent.run_async("hello")) == "hi"
+
+
+def test_on_event_attaches_before_and_after_engine_build(monkeypatch):
+    import vaf.framework as fw
+
+    sinks = []
+
+    class _SinkStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+        def set_event_sink(self, sink):
+            sinks.append(sink)
+
+    monkeypatch.setattr(fw, "CoreAgent", _SinkStub)
+
+    cb = lambda evt: None  # noqa: E731
+    # Before build: registered, applied at engine build.
+    agent = fw.Agent(config={"provider": "deepseek"})
+    agent.on_event(cb)
+    agent.run("hi")
+    assert sinks == [cb]
+    # After build: applied immediately.
+    cb2 = lambda evt: None  # noqa: E731
+    agent.on_event(cb2)
+    assert sinks == [cb, cb2]
+
+
+def _patched_session_manager(monkeypatch, tmp_path):
+    import vaf.core.session as session_mod
+
+    real = session_mod.SessionManager
+
+    def _factory(*args, **kwargs):
+        kwargs.setdefault("storage_dir", str(tmp_path))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(session_mod, "SessionManager", _factory)
+    return _factory
+
+
+def test_save_session_persists_and_updates_in_place(monkeypatch, tmp_path):
+    import vaf.framework as fw
+
+    _patched_session_manager(monkeypatch, tmp_path)
+
+    class _HistStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+            self.config = {"model": "test-model"}
+            self.history = [
+                {"role": "system", "content": "SYSTEM PROMPT"},
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi there",
+                 "tool_calls": [{"id": "call_1", "type": "function",
+                                 "function": {"name": "t", "arguments": "{}"}}]},
+                {"role": "tool", "content": "res", "tool_call_id": "call_1", "name": "t"},
+            ]
+
+    monkeypatch.setattr(fw, "CoreAgent", _HistStub)
+    agent = fw.Agent(config={"provider": "deepseek"})
+    agent.run("hello")
+    sid = agent.save_session()
+    assert sid and agent.save_session() == sid  # stable id, update in place
+
+    import json
+
+    data = json.loads((tmp_path / f"{sid}.json").read_text())
+    roles = [m["role"] for m in data["messages"]]
+    assert "system" not in roles  # prompt is rebuilt on load, never persisted
+    assert roles == ["user", "assistant", "tool"]
+    assert data["messages"][1]["tool_calls"][0]["id"] == "call_1"
+    assert data["messages"][2]["tool_call_id"] == "call_1"
+
+
+def test_session_resume_loads_and_checks_ownership(monkeypatch, tmp_path):
+    import uuid
+
+    import pytest
+
+    import vaf.framework as fw
+    import vaf.core.session as session_mod
+
+    factory = _patched_session_manager(monkeypatch, tmp_path)
+
+    owner = str(uuid.uuid4())
+    mgr = factory()
+    s = mgr.new(model="m", user_scope_id=owner)
+    s.add_message("user", "old message")
+    mgr.save(s, sync_state=False)
+
+    loads = []
+
+    class _LoadStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+        def load_session_context(self, session_id):
+            loads.append(session_id)
+
+    monkeypatch.setattr(fw, "CoreAgent", _LoadStub)
+
+    # Unknown id fails loudly AT CONSTRUCTION (example 05 relies on this).
+    with pytest.raises(ValueError, match="not found"):
+        fw.Agent(config={"provider": "deepseek"}, session="nope123")
+
+    # Wrong tenant is refused.
+    import vaf.core.thinking_mode as tm
+
+    monkeypatch.setattr(tm, "_resolve_username_for_scope", lambda sc: "someone")
+    stranger = str(uuid.uuid4())
+    with pytest.raises(ValueError, match="different user_scope"):
+        fw.Agent(config={"provider": "deepseek"}, session=s.id, user_scope=stranger)
+
+    # Owner (and unscoped local use) resumes.
+    fw.Agent(config={"provider": "deepseek"}, session=s.id, user_scope=owner).run("hi")
+    assert loads == [s.id]

@@ -92,6 +92,42 @@ is always the cleaned final answer.
 One `Agent` instance keeps one conversation — repeated `run()` calls continue
 the same history. Create a new `Agent` for an independent conversation.
 
+### Persistent conversations
+
+```python
+agent = Agent(config={"provider": "deepseek"})
+agent.run("My name is Lisa.")
+sid = agent.save_session()          # persist; returns the session id
+
+# ... process restarts ...
+agent = Agent(config={"provider": "deepseek"}, session=sid)
+agent.run("What's my name?")        # remembers
+```
+
+`save_session()` writes into VAF's standard session store (`~/.vaf/sessions/`)
+and is idempotent: later calls update the same session, so saving after every
+turn is fine. An unknown `session=` id raises `ValueError` at construction; with
+`user_scope` set, resuming another tenant's session is refused (legacy
+sessions without an owner are resumable and get stamped with your scope on
+the next save). Runnable version:
+[examples/05_chatbot_with_memory.py](../examples/05_chatbot_with_memory.py).
+
+### Async applications
+
+`await agent.run_async(prompt, on_token=...)` runs the turn in a worker
+thread so your event loop stays responsive - an honest thread-executor
+wrapper, not native async. `on_token` fires on the worker thread; hop back to
+the loop before touching loop-bound state. One instance still means one
+conversation: never run two turns on the same Agent concurrently.
+
+### Special return values: `vaf.markers`
+
+Handled failures and control-flow outcomes come back as strings inside the
+normal return channel. Compare against the constants in `vaf.markers`
+(`SYSTEM_LOG_ONLY`, `GENERATION_STOPPED`, `LOOP_PROTECTION`, `ASYNC_ACK`,
+`TOOL_CONFIRMATION_REQUIRED`) instead of copying string literals from the
+docs - a CI guard keeps the constants in sync with the engine.
+
 ---
 
 ## Configuration
@@ -420,7 +456,8 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=...)`, `.run(prompt, on_token=...)`, `.add_tool(tool)`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
+- `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `BaseTool` - the tool contract.
 - The `vaf.tools` entry-point group.

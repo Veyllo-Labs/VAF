@@ -409,6 +409,9 @@ class Agent:
                     return False
                 self.provider = new_provider
                 self.api_backend = new_backend
+                # Keep the structured-event sink attached across backend swaps.
+                if getattr(self, "_event_sink", None) is not None:
+                    new_backend.event_sink = self._event_sink
                 # Tear down local backends so generation uses the API, not a GGUF.
                 self.use_server = False
                 self.llm = None
@@ -9819,8 +9822,13 @@ class Agent:
 
         if name == "multi_tool_use.parallel":
             emit({"type": "tool_start", "tool": name, "args": make_json_serializable(args or {})})
+            _mt_t0 = time.monotonic()
             result = run_multi_tool_use(args if isinstance(args, dict) else {})
-            emit({"type": "tool_end", "tool": name})
+            emit({
+                "type": "tool_end", "tool": name,
+                "duration_ms": int((time.monotonic() - _mt_t0) * 1000),
+                "ok": True,  # the wrapper itself; each inner tool reports its own ok
+            })
             return result
 
         # Gate risky tools with once/always/cancel (no persistent deny). Skipped during Whare
@@ -9889,6 +9897,7 @@ class Agent:
         except Exception:
             dbg_args = serializable_args
         emit({"type": "tool_start", "tool": name, "args": dbg_args})
+        _tool_t0 = time.monotonic()
         try:
             if name in self.tools:
                 tool_args = dict(args) if args else {}
@@ -10219,15 +10228,30 @@ class Agent:
                     # Convert args to JSON-serializable format (OS-independent)
                     python_exec_args = make_json_serializable({"timeout": 30})
                     emit({"type": "tool_start", "tool": "python_exec", "args": python_exec_args})
+                    _pe_t0 = time.monotonic()
                     try:
                         unsafe_result = self.tools["python_exec"].run(code=code, timeout=30)
                     except Exception as e:
                         unsafe_result = f"Tool Error: {e}"
-                    emit({"type": "tool_end", "tool": "python_exec"})
+                    emit({
+                        "type": "tool_end", "tool": "python_exec",
+                        "duration_ms": int((time.monotonic() - _pe_t0) * 1000),
+                        "ok": not str(unsafe_result).startswith("Tool Error:"),
+                    })
                     self._record_tool_used("python_exec")
                     result = unsafe_result
 
-        emit({"type": "tool_end", "tool": name})
+        # ok reflects DISPATCH-level failure (exception -> "Tool Error:", or an
+        # unknown tool name) - not the semantic success of the tool's output.
+        _tool_ok = not (
+            isinstance(result, str)
+            and (result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))
+        )
+        emit({
+            "type": "tool_end", "tool": name,
+            "duration_ms": int((time.monotonic() - _tool_t0) * 1000),
+            "ok": _tool_ok,
+        })
         self._record_tool_used(name)
         # Log system reaction (result summary only)
         try:
@@ -10247,8 +10271,15 @@ class Agent:
         return result
 
     def set_event_sink(self, sink):
-        """Set an optional event sink for structured outputs (e.g. stream-json)."""
+        """Set an optional event sink for structured outputs (e.g. stream-json).
+
+        Also attaches the sink to the API backend so llm_start/llm_end events
+        flow through the same callback (schema: docs/OBSERVABILITY.md).
+        """
         self._event_sink = sink
+        backend = getattr(self, "api_backend", None)
+        if backend is not None:
+            backend.event_sink = sink
 
     # --- Tool Implementations ---
 

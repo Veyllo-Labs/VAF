@@ -15,6 +15,7 @@ venv/bin/python examples/01_hello_agent.py
 | [02_streaming_and_events.py](02_streaming_and_events.py) | Live token streaming (`on_token`) plus the structured event sink (`tool_start`/`tool_end`/gate events) |
 | [03_stream_json_subprocess.py](03_stream_json_subprocess.py) | Driving VAF as a subprocess via `vaf prompt --output-format stream-json` and parsing the NDJSON - the pattern for non-Python integrations |
 | [04_inline_tool.py](04_inline_tool.py) | Per-instance tool registration with `agent.add_tool()` - no package, no file drop-in |
+| [05_chatbot_with_memory.py](05_chatbot_with_memory.py) | A chatbot that survives restarts: `save_session()` + `Agent(session=...)` |
 | [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
 
 ## Prerequisites
@@ -38,9 +39,8 @@ After the install, the `dice_roll` tool is discovered automatically at agent
 startup (see the entry-point section of
 [docs/EMBEDDING.md](../docs/EMBEDDING.md)); no VAF source file is touched.
 
-## What is deliberately missing
+## Notes
 
-A "resume a persisted conversation" example: the stable facade has no
-session persist/resume API yet (the engine can, via
-`load_session_context` - see [docs/CORE_AGENT.md](../docs/CORE_AGENT.md)).
-It will be added when the facade grows that surface.
+Example 05 writes its session id into `chat_session_id.txt` in the current
+directory (that file belongs to the example app, not to VAF); the session
+itself lives in VAF's standard store under `~/.vaf/sessions/`.

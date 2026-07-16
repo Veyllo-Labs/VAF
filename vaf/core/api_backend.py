@@ -866,6 +866,18 @@ class APIBackendManager:
         self.session_usage = {"input_tokens": 0, "output_tokens": 0}
         self.last_request_usage = {"input_tokens": 0, "output_tokens": 0}
         self._failover_pinned_idx = 0  # sticky link when failover_return_to_primary is off
+        # Optional structured-event callback (set via Agent.set_event_sink):
+        # emits llm_start/llm_end around every chat completion. None = off.
+        self.event_sink = None
+
+    def _emit_event(self, evt: dict) -> None:
+        """Send one event to the sink; a raising sink never breaks the call."""
+        sink = getattr(self, "event_sink", None)
+        if callable(sink):
+            try:
+                sink(evt)
+            except Exception:
+                pass
 
     def _create_provider(self) -> BaseAIProvider:
         # Provider set, endpoints and key requirements come from the single
@@ -1059,7 +1071,43 @@ class APIBackendManager:
     def chat_completion(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
         """Public chat-completion entry point. Transparently adds automatic provider
         failover when configured (Settings → Advanced → Failover); with failover off it
-        delegates straight to the single-provider path and is byte-identical to before."""
+        delegates straight to the single-provider path and is byte-identical to before.
+
+        When an event sink is attached (Agent.set_event_sink), one llm_start /
+        llm_end pair wraps the whole call: llm_end carries duration_ms, ok
+        (False = errored OR abandoned before completion) and a best-effort
+        usage snapshot (the serving provider's last request; may lag one call
+        behind when a failover link served the response)."""
+        if not callable(getattr(self, "event_sink", None)):
+            yield from self._chat_completion_impl(
+                messages, temperature, max_tokens, stream, model, tools, tool_choice
+            )
+            return
+        import time as _time
+
+        self._emit_event(
+            {"type": "llm_start", "provider": self.provider_name, "model": model}
+        )
+        _t0 = _time.monotonic()
+        _ok = False
+        try:
+            yield from self._chat_completion_impl(
+                messages, temperature, max_tokens, stream, model, tools, tool_choice
+            )
+            _ok = True
+        finally:
+            self._emit_event(
+                {
+                    "type": "llm_end",
+                    "provider": self.provider_name,
+                    "model": model,
+                    "duration_ms": int((_time.monotonic() - _t0) * 1000),
+                    "ok": _ok,
+                    "usage": dict(self.last_request_usage or {}),
+                }
+            )
+
+    def _chat_completion_impl(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
         chain = self._build_failover_chain(model)
         if len(chain) <= 1:
             yield from self._chat_single(messages, temperature, max_tokens, stream, model, tools, tool_choice)

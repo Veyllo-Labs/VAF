@@ -40,9 +40,12 @@ from `agent.history[-1]`.
 
 ```python
 agent = Agent(config={"provider": "deepseek"})
-agent.core.set_event_sink(lambda evt: print("EVENT", evt))
+agent.on_event(lambda evt: print("EVENT", evt))   # facade shortcut
 agent.run("List the files in this folder.")
 ```
+
+(`agent.on_event(cb)` is the facade shortcut for `agent.core.set_event_sink(cb)`;
+it can be called before the first run and survives backend swaps.)
 
 Contract (all verified against `vaf/core/agent.py`):
 
@@ -51,19 +54,20 @@ Contract (all verified against `vaf/core/agent.py`):
   order per call: `[gate_required -> gate_decision] -> tool_start -> tool_end`.
 - A raising sink is swallowed (`try/except`): a broken consumer can never
   break the run.
-- Only tool execution emits sink events. There are currently **no** events for
-  LLM-call start/end, token usage, or context compression (those exist only as
-  Web UI pushes or log files). `tool_end` carries no result, duration, or
-  success flag.
+- Tool execution and (on API providers) LLM calls emit sink events. There are
+  currently **no** events for context compression (Web UI pushes / log files
+  only), and `tool_end` carries no result payload.
 
 ### Event types
 
 | type | Fields | Notes |
 |---|---|---|
 | `tool_start` | `tool`, `args` | `args` is sanitized best-effort: heavy fields such as `content`/`code` (and `command` for the `bash` tool) are replaced by `<field>_len`, `<field>_sha256`, `<field>_preview`. Not exhaustive: the `multi_tool_use.parallel` wrapper's own `tool_start` carries raw args, and other field names pass through - treat args as potentially sensitive |
-| `tool_end` | `tool` | normally closes every `tool_start`, including on tool error (the error is returned as the result string); rare early-return branches can leave a `tool_start` unclosed, so do not block forever waiting for the pair |
+| `tool_end` | `tool`, `duration_ms`, `ok` | normally closes every `tool_start`, including on tool error (the error is returned as the result string); rare early-return branches can leave a `tool_start` unclosed, so do not block forever waiting for the pair. `ok` is DISPATCH-level (False = the tool raised or the name was unknown), not the semantic success of the tool's output |
 | `gate_required` | `tool`, `cwd`, `reason`, `args_preview` (max 300 chars) | a confirmation-gated tool was hit; in non-interactive mode the tool then returns an `[ERROR] ... requires confirmation ...` string and **no** `gate_decision` follows |
 | `gate_decision` | `tool`, `decision`: `allow_once` \| `allow_always` \| `cancel` | interactive runs only |
+| `llm_start` | `provider`, `model` | one per chat-completion call on API providers (`model` may be None before default resolution). Note: INTERNAL engine calls (context compression, routers, title generation) also emit llm pairs - do not assume one pair per visible turn |
+| `llm_end` | `provider`, `model`, `duration_ms`, `ok`, `usage` | closes every `llm_start`; `ok` False = errored OR abandoned before completion (e.g. user stop); `usage` is a best-effort snapshot of the serving provider's last request (may lag one call behind when failover served the response). Local-server and in-process lanes do not emit llm events yet |
 
 Two shapes to handle defensively:
 
@@ -163,10 +167,11 @@ Constructed example (a run that lists a directory):
 
 Known limitations, so you do not go looking for events that do not exist:
 
-- No LLM-request start/end or latency events; no run/span ids.
-- No token-usage or cost events (usage is tracked internally; see
-  `get_token_usage()` in [CORE_AGENT.md](CORE_AGENT.md) for a polling
-  accessor).
+- No run/span ids; llm events cover API providers only (the local llama-server
+  and in-process lanes emit none yet).
+- No cost-in-currency events; `llm_end.usage` carries token counts, and
+  `get_token_usage()` in [CORE_AGENT.md](CORE_AGENT.md) remains the polling
+  accessor for context fill.
 - `tool_end` has no result payload - correlate results from the final answer
   or the [debug logs](DEBUGGING.md) (`tool_use_*.log`, sub-agent
   `events.jsonl`).

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     # __getattr__ below). Paired with the vaf/py.typed marker (PEP 561).
     from .framework import Agent, CoreAgent
 
-__all__ = ["__version__", "Agent", "CoreAgent"]
+__all__ = ["__version__", "Agent", "CoreAgent", "markers"]
 
 
 def __getattr__(name):
@@ -23,6 +23,12 @@ def __getattr__(name):
     if name in ("Agent", "CoreAgent"):
         from .framework import Agent, CoreAgent
         return {"Agent": Agent, "CoreAgent": CoreAgent}[name]
+    if name == "markers":
+        # importlib, not `from . import`: the latter re-enters this
+        # __getattr__ while the submodule is being set and recurses.
+        import importlib
+
+        return importlib.import_module(".markers", __name__)
     raise AttributeError(f"module 'vaf' has no attribute {name!r}")
 
 

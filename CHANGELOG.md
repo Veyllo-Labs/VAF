@@ -27,6 +27,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and an honest note on custom OpenAI-compatible endpoints. Key engine
   methods now carry docstrings.
 
+- **Persistent conversations, richer events, async and marker constants on
+  the library facade.** Four additions for developers embedding VAF:
+  `agent.save_session()` plus `Agent(session=<id>)` persist and resume a
+  conversation across process restarts (idempotent updates, loud failure on
+  unknown ids, tenant-ownership check under `user_scope`; runnable chatbot
+  example included); `vaf.markers` exports the special return-value strings
+  (`SYSTEM_LOG_ONLY`, `GENERATION_STOPPED`, ...) as constants with a CI
+  guard pinning them against the engine source; the structured event sink
+  grows `duration_ms` and a dispatch-level `ok` flag on `tool_end` plus new
+  `llm_start`/`llm_end` events with token usage on API providers (attached
+  across backend swaps; facade shortcut `agent.on_event(cb)`); and
+  `await agent.run_async(...)` runs a turn in a worker thread for
+  event-loop applications - documented honestly as a thread-executor
+  wrapper, not native async.
 - **Multi-tenant embedding: `Agent(user_scope=...)`.** An application
   embedding VAF can now assert which end user a conversation belongs to
   with one parameter. The value is validated as a UUID at construction

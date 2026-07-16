@@ -10675,24 +10675,15 @@ class Agent:
         else:
             _model = getattr(self, "model_display_name", "").lower()
 
-        def _model_supports_vision(provider: str, model: str) -> bool:
-            if provider == "anthropic":
-                return True  # All Claude 3+ support vision
-            if provider == "google":
-                return True  # All Gemini models support vision
-            if provider == "openai":
-                return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
-            if provider == "deepseek":
-                # DeepSeek's commercial API (api.deepseek.com/v1) does not support image_url
-                # content blocks — the API schema only accepts type: text. No vision support.
-                return False
-            if provider == "openrouter":
-                # Many openrouter models support vision; heuristic on common vision model names
-                return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
-            # local / unknown: pass through and let the model decide
-            return True
+        # Shared registry predicate (formerly a local copy that had drifted from
+        # vision_infer.py's - it did not know veyllo). provider_registry is
+        # deliberately import-light, so the lazy import is cheap.
+        from vaf.core.provider_registry import model_supports_vision as _model_supports_vision
 
-        _vision_ok = _model_supports_vision(_provider, _model)
+        # probe_local=False: _prepare_messages runs on EVERY LLM round trip;
+        # the historical behavior here was local=capable without a probe, and
+        # a blocking HTTP check per turn is not acceptable on this hot path.
+        _vision_ok = _model_supports_vision(_provider, _model, probe_local=False)
 
         # --- Convert inline images to OpenAI multimodal content blocks ------
         # History entries may carry an "images" key: [{data: base64, mime_type: str}].
@@ -10743,17 +10734,13 @@ class Agent:
                     _vision_fb_model = Config.get("vision_model", "").strip() or None
                     _vision_fb_used = False
 
-                    # Safe default vision models per provider (used when vision_model is not set).
-                    # The first three track the provider default (Config.PROVIDER_MODELS);
-                    # openrouter keeps a vision-capable route explicitly.
-                    _VISION_DEFAULTS = {
-                        "openai":     Config.get_default_model("openai"),
-                        "anthropic":  Config.get_default_model("anthropic"),
-                        "google":     Config.get_default_model("google"),
-                        "openrouter": "openai/gpt-4o",
-                    }
+                    # Safe default vision model per provider (used when vision_model is
+                    # not set): shared registry lookup that tracks Config.PROVIDER_MODELS
+                    # for SDK providers and keeps openrouter on an explicitly
+                    # vision-capable route (the former local dict did not know veyllo).
                     if not _vision_fb_model and _vision_fb_provider:
-                        _vision_fb_model = _VISION_DEFAULTS.get(_vision_fb_provider)
+                        from vaf.core.provider_registry import default_vision_model as _dvm
+                        _vision_fb_model = _dvm(_vision_fb_provider)
 
                     if _vision_fb_provider and _vision_fb_provider != _provider:
                         try:

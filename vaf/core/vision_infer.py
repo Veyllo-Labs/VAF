@@ -44,49 +44,22 @@ BASE_DESCRIPTION_PROMPT = (
 def _model_supports_vision(provider: str, model: str) -> bool:
     """Whether (provider, model) accepts image input.
 
-    Mirror of the same helper in agent.py and browser_agent.py — kept in sync manually
-    (a tiny pure function; a shared import would pull the 10k-line agent module into core).
+    Thin delegation to the shared registry predicate (previously one of three
+    manually-synced copies alongside agent.py and browser_agent.py that had
+    already diverged). The module-level name stays: other code imports it from here.
     """
-    provider = (provider or "").lower()
-    model = (model or "").lower()
-    if provider in ("anthropic", "google", "veyllo"):
-        return True
-    if provider == "openai":
-        return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
-    if provider == "deepseek":
-        return False  # api.deepseek.com rejects image_url content blocks
-    if provider == "openrouter":
-        return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
-    if provider == "local":
-        # Honest capability: with vision_provider=local the llama server is
-        # launched with the mmproj projector (backend.resolve_mmproj_for) and
-        # reports image support on /v1/models; without it every image call
-        # would burn a round-trip + retries into the sentinel error. Probe
-        # defensively; an unreachable server counts as capable so the normal
-        # lazy-load/error path stays intact (mirrors stay optimistic - this
-        # is the default description path's gate).
-        try:
-            import requests as _rq
-            r = _rq.get("http://127.0.0.1:8080/v1/models", timeout=2)
-            if r.status_code == 200:
-                return "multimodal" in r.text.lower() or "image" in r.text.lower()
-        except Exception:
-            pass
-        return True
-    return True  # unknown: let the model decide
+    from vaf.core.provider_registry import model_supports_vision
+    return model_supports_vision(provider, model)
 
 
 def _default_vision_model(provider: str) -> Optional[str]:
-    """Safe default vision model for an explicit vision_provider without a vision_model."""
-    from vaf.core.config import Config
-    defaults = {
-        "openai": Config.get_default_model("openai"),
-        "anthropic": Config.get_default_model("anthropic"),
-        "google": Config.get_default_model("google"),
-        "veyllo": Config.get_default_model("veyllo"),
-        "openrouter": "openai/gpt-4o",  # explicit vision-capable route
-    }
-    return defaults.get(provider)
+    """Safe default vision model for an explicit vision_provider without a vision_model.
+
+    Thin delegation to the shared registry lookup (tracks Config.PROVIDER_MODELS
+    for SDK providers; openrouter keeps an explicitly vision-capable route).
+    """
+    from vaf.core.provider_registry import default_vision_model
+    return default_vision_model(provider)
 
 
 def select_vision_backend() -> Tuple[Optional[str], Optional[str]]:

@@ -3553,65 +3553,50 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _active_model_download_cancels[ws_id].set()
 
                 elif type == "get_api_models":
-                    # Fetch available models from API providers
+                    # Fetch available models from API providers. The discovery
+                    # URL + auth kind come from the provider registry (single
+                    # source of truth, includes the config-overridable Veyllo
+                    # base); the response FILTERING below stays provider-specific.
                     provider = cmd.get("provider", "openai")
                     api_key = cmd.get("api_key", "")
                     models = []
-                    
+
                     try:
-                        if provider == "openai" and api_key:
+                        from vaf.core.provider_registry import models_discovery
+
+                        disc = models_discovery(provider)
+                        # None = no remote listing for this provider (e.g. local):
+                        # keep today's empty-result behavior.
+                        if disc is not None and api_key:
+                            url, auth = disc
+                            headers = {}
+                            params = {}
+                            if auth == "bearer":
+                                headers["Authorization"] = f"Bearer {api_key}"
+                            elif auth == "x-api-key":
+                                headers["X-Api-Key"] = api_key
+                                headers["anthropic-version"] = "2023-06-01"
+                            elif auth == "query-key":
+                                params["key"] = api_key
+                            if provider == "google":
+                                params["pageSize"] = 1000
                             import httpx
                             async with httpx.AsyncClient() as client:
                                 resp = await client.get(
-                                    "https://api.openai.com/v1/models",
-                                    headers={"Authorization": f"Bearer {api_key}"},
+                                    url,
+                                    headers=headers,
+                                    params=params,
                                     timeout=10.0
                                 )
                                 if resp.status_code == 200:
                                     data = resp.json()
-                                    # Filter to chat models only
-                                    models = sorted([
-                                        m["id"] for m in data.get("data", [])
-                                        if "gpt" in m["id"] or "o1" in m["id"] or "o3" in m["id"]
-                                    ])
-                        elif provider == "anthropic":
-                            # Anthropic models list (requires API key)
-                            if api_key:
-                                import httpx
-                                async with httpx.AsyncClient() as client:
-                                    resp = await client.get(
-                                        "https://api.anthropic.com/v1/models",
-                                        headers={
-                                            "X-Api-Key": api_key,
-                                            "anthropic-version": "2023-06-01"
-                                        },
-                                        timeout=10.0
-                                    )
-                                    if resp.status_code == 200:
-                                        data = resp.json()
-                                        models = [m["id"] for m in data.get("data", []) if m.get("id")]
-                        elif provider == "deepseek" and api_key:
-                            import httpx
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.get(
-                                    "https://api.deepseek.com/models",
-                                    headers={"Authorization": f"Bearer {api_key}"},
-                                    timeout=10.0
-                                )
-                                if resp.status_code == 200:
-                                    data = resp.json()
-                                    models = [m["id"] for m in data.get("data", [])]
-                        elif provider == "google":
-                            if api_key:
-                                import httpx
-                                async with httpx.AsyncClient() as client:
-                                    resp = await client.get(
-                                        "https://generativelanguage.googleapis.com/v1beta/models",
-                                        params={"key": api_key, "pageSize": 1000},
-                                        timeout=10.0
-                                    )
-                                    if resp.status_code == 200:
-                                        data = resp.json()
+                                    if provider == "openai":
+                                        # Filter to chat models only
+                                        models = sorted([
+                                            m["id"] for m in data.get("data", [])
+                                            if "gpt" in m["id"] or "o1" in m["id"] or "o3" in m["id"]
+                                        ])
+                                    elif provider == "google":
                                         raw_models = data.get("models", [])
                                         unique_models = []
                                         for model in raw_models:
@@ -3624,30 +3609,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                             if model_id and model_id not in unique_models:
                                                 unique_models.append(model_id)
                                         models = sorted(unique_models)
-                        elif provider == "openrouter" and api_key:
-                            import httpx
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.get(
-                                    "https://openrouter.ai/api/v1/models",
-                                    headers={"Authorization": f"Bearer {api_key}"},
-                                    timeout=10.0
-                                )
-                                if resp.status_code == 200:
-                                    data = resp.json()
-                                    models = [m["id"] for m in data.get("data", [])][:50]  # Limit
-                        elif provider == "veyllo" and api_key:
-                            # First-party Veyllo API (OpenAI-compatible /v1/models). Base URL is configurable.
-                            veyllo_base = (Config.load().get("veyllo_base_url") or "https://api.veyllo.app/v1").rstrip("/")
-                            import httpx
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.get(
-                                    f"{veyllo_base}/models",
-                                    headers={"Authorization": f"Bearer {api_key}"},
-                                    timeout=10.0
-                                )
-                                if resp.status_code == 200:
-                                    data = resp.json()
-                                    models = [m["id"] for m in data.get("data", []) if m.get("id")]
+                                    elif provider == "deepseek":
+                                        models = [m["id"] for m in data.get("data", [])]
+                                    elif provider == "openrouter":
+                                        models = [m["id"] for m in data.get("data", [])][:50]  # Limit
+                                    else:
+                                        # anthropic, veyllo and any future
+                                        # OpenAI-compatible provider: plain id list.
+                                        models = [m["id"] for m in data.get("data", []) if m.get("id")]
                     except Exception as e:
                         log("WebServer", f"Failed to fetch models for {provider}: {e}")
                     

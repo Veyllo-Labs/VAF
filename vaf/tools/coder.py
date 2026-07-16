@@ -665,23 +665,20 @@ def coder_api_providers() -> dict:
     direct HTTP calls (the coder talks plain OpenAI wire format, so Anthropic/Google
     use their OpenAI-compat URLs, not their native SDK endpoints).
 
-    MUST cover every provider in vaf.core.config.PROVIDER_MODELS — enforced by
-    tests/test_coder_provider_map.py, so adding a new provider centrally without
-    updating this map fails CI instead of leaving the coder without an endpoint.
-    Without an entry here a provider would fall into the LOCAL branch and route to
-    the local server rather than the intended API. To prevent that, the run() gate
-    raises a clear error on an unknown API provider instead of falling back to the
-    local endpoint.
+    Built from the central registry (vaf.core.provider_registry.coder_endpoints),
+    so it covers every provider in vaf.core.config.PROVIDER_MODELS by construction;
+    tests/test_coder_provider_map.py still guards against drift. Without an entry
+    here a provider would fall into the LOCAL branch and route to the local server
+    rather than the intended API. To prevent that, the run() gate raises a clear
+    error on an unknown API provider instead of falling back to the local endpoint.
+    The Veyllo base URL stays config-driven at CALL time (staging/self-host
+    override via veyllo_base_url): coder_endpoints() reads Config per call.
+    Return shape is unchanged: {provider: (base_url, default_model)}.
     """
-    from vaf.core.config import Config
+    from vaf.core.provider_registry import coder_endpoints
     return {
-        "deepseek":   ("https://api.deepseek.com/v1",       "deepseek-v4-flash"),
-        "openai":     ("https://api.openai.com/v1",         "gpt-4o"),
-        "openrouter": ("https://openrouter.ai/api/v1",      "anthropic/claude-sonnet-4.6"),
-        "anthropic":  ("https://api.anthropic.com/v1",      "claude-sonnet-4-6"),
-        "google":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
-        # Veyllo is OpenAI-compatible; base URL from config (staging/self-host override).
-        "veyllo":     (Config.get("veyllo_base_url", "https://api.veyllo.app/v1").rstrip("/"), "veyllo-chat"),
+        name: (entry["base"], entry["model"])
+        for name, entry in coder_endpoints().items()
     }
 
 

@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.terminal_theme import TerminalTheme
 from huggingface_hub import HfApi, hf_hub_download
 from vaf.core.config import Config
+from vaf.core.provider_registry import PROVIDER_SPECS, api_provider_names
 from vaf.cli.ui import UI
 import os
 import sys
@@ -685,15 +686,12 @@ def api_provider_menu():
     # Display current status
     UI.panel(f"Current Provider: {current_provider.upper()}", title="🌐 AI Provider Settings", style="highlight")
     
-    providers = [
-        ("🖥️  Local (llama-server)", "local"),
-        ("🤖 OpenAI (GPT-4, etc.)", "openai"),
-        ("🧠 Anthropic (Claude)", "anthropic"),
-        ("💫 DeepSeek", "deepseek"),
-        ("✨ Google AI Studio (Gemini)", "google"),
-        ("🌐 OpenRouter (Multi-provider)", "openrouter"),
-        ("Back", "back"),
-    ]
+    # Built from the provider registry (single source of truth): local first,
+    # then every API provider. A provider added centrally can no longer be
+    # missing from this menu (the historic veyllo gap).
+    providers = [(PROVIDER_SPECS["local"].label, "local")]
+    providers += [(PROVIDER_SPECS[name].label, name) for name in api_provider_names()]
+    providers.append(("Back", "back"))
     
     questions = [inquirer.List('provider', message="Select AI Provider", choices=providers)]
     answers = inquirer.prompt(questions)
@@ -890,15 +888,15 @@ def subagent_provider_menu():
     UI.print("\n[dim]Sub-agents can use a different AI provider than the main agent.[/dim]")
     UI.print("[dim]Example: Main uses Claude (API), Sub-agents use Local (free)[/dim]\n")
     
+    # Built from the provider registry (single source of truth): inherit,
+    # local, then every API provider (same fix as the main provider menu).
     choices = [
         ("Inherit from Main Agent", "inherit"),
         ("─────────────────", None),
-        ("Use Local (llama-server)", "local"),
-        ("Use OpenAI", "openai"),
-        ("Use Anthropic (Claude)", "anthropic"),
-        ("Use DeepSeek", "deepseek"),
-        ("Use Google AI Studio", "google"),
-        ("Use OpenRouter", "openrouter"),
+        (f"Use {PROVIDER_SPECS['local'].label}", "local"),
+    ]
+    choices += [(f"Use {PROVIDER_SPECS[name].label}", name) for name in api_provider_names()]
+    choices += [
         ("─────────────────", None),
         ("Back", "back"),
     ]

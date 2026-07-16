@@ -27,6 +27,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and an honest note on custom OpenAI-compatible endpoints. Key engine
   methods now carry docstrings.
 
+- **One provider registry instead of eleven copies.** The LLM provider set
+  and its endpoints now live in a single source of truth
+  (`vaf/core/provider_registry.py`); the backend factory, the coder's
+  endpoint map, live model discovery (both copies), the vision-capability
+  check (previously three manually-synced copies that had drifted apart) and
+  the CLI settings menus all read from it, guarded by new CI sync tests plus
+  a factory-pinning test that locks today's behavior byte for byte. Four
+  real drift bugs died in the process: the CLI provider menus did not offer
+  Veyllo at all, the provider-coverage test itself skipped Veyllo, and two
+  of the three vision checks did not recognize Veyllo models as
+  vision-capable. Provider-specific behavior (DeepSeek reasoning fields,
+  OpenAI reasoning-parameter gating, Veyllo tool-call-id handling) stays in
+  gated code paths, unchanged.
 - **Per-instance tool registration on the library facade.** An embedded
   `Agent` can now be handed extra tools directly: `agent.add_tool(MyTool())`
   before the first run registers a `BaseTool` for that instance only - no

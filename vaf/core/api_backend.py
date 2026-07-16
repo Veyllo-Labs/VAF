@@ -868,33 +868,39 @@ class APIBackendManager:
         self._failover_pinned_idx = 0  # sticky link when failover_return_to_primary is off
 
     def _create_provider(self) -> BaseAIProvider:
-        # Local/Ollama provider doesn't need an API key
-        if self.provider_name == "local":
-            # OpenAI-compatible endpoint of the local server. Default to VAF's own llama-server
-            # (port 8080, Docker/env-aware via get_llama_server_url) -- NOT Ollama's 11434, which is
-            # nothing in a stock VAF install and made the browser agent fail with a connection error.
-            # An explicit "local_api_url" (e.g. a real Ollama on :11434) still wins.
-            local_url = self.config.get("local_api_url", "") or Config.get_llama_server_url("/v1")
-            return OpenAIProvider("local", "ollama", base_url=local_url)
+        # Provider set, endpoints and key requirements come from the single
+        # source of truth (vaf/core/provider_registry.py); this factory only
+        # maps a spec to the right provider class. Error messages and their
+        # order are pinned by tests/test_provider_factory_pinning.py.
+        from vaf.core.provider_registry import (
+            KIND_ANTHROPIC_SDK,
+            KIND_GOOGLE_SDK,
+            get_spec,
+            resolve_sdk_base_url,
+        )
+
+        spec = get_spec(self.provider_name)
+
+        if spec is not None and not spec.needs_api_key:
+            # Local/Ollama lane: no key needed (the dummy bearer is ignored).
+            # Base URL: explicit local_api_url wins, else VAF's own llama-server
+            # (port 8080, Docker/env-aware) - never Ollama's 11434 default.
+            base_url = resolve_sdk_base_url(spec.name, self.config)
+            return OpenAIProvider(spec.name, spec.dummy_api_key or "", base_url=base_url)
 
         if not self.api_key:
             raise ValueError(f"API key missing for {self.provider_name}")
 
-        if self.provider_name == "openai":
-            return OpenAIProvider("openai", self.api_key)
-        elif self.provider_name == "anthropic":
-            return AnthropicProvider(self.api_key)
-        elif self.provider_name == "google":
-            return GoogleProvider(self.api_key)
-        elif self.provider_name == "deepseek":
-            return OpenAIProvider("deepseek", self.api_key, base_url="https://api.deepseek.com/v1")
-        elif self.provider_name == "openrouter":
-            return OpenAIProvider("openrouter", self.api_key, base_url="https://openrouter.ai/api/v1")
-        elif self.provider_name == "veyllo":
-            # First-party Veyllo API (OpenAI-compatible). Base URL is configurable for staging/self-host.
-            return OpenAIProvider("veyllo", self.api_key, base_url=self.config.get("veyllo_base_url") or "https://api.veyllo.app/v1")
-        else:
+        if spec is None:
             raise ValueError(f"Unsupported provider: {self.provider_name}")
+
+        if spec.kind == KIND_ANTHROPIC_SDK:
+            return AnthropicProvider(self.api_key)
+        if spec.kind == KIND_GOOGLE_SDK:
+            return GoogleProvider(self.api_key)
+        return OpenAIProvider(
+            spec.name, self.api_key, base_url=resolve_sdk_base_url(spec.name, self.config)
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # FAILOVER  (Settings → Advanced → Failover)
@@ -1263,8 +1269,10 @@ class APIBackendManager:
                 return APIBackendManager._openrouter_ctx_cache[model_lc]
             try:
                 import requests as _req
+                from vaf.core.provider_registry import models_discovery as _md
+                _or_url = (_md("openrouter") or ("https://openrouter.ai/api/v1/models", "bearer"))[0]
                 resp = _req.get(
-                    "https://openrouter.ai/api/v1/models",
+                    _or_url,
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     timeout=5,
                 )
@@ -1298,7 +1306,10 @@ class APIBackendManager:
     def list_models(provider: str) -> List[str]:
         """Live-fetch the available chat model IDs for `provider` from its API, or [] on any error.
         Sync + hard fail-safe; the API key is read from Config. Used by Whare Wananga's teacher
-        selection to consider the strongest AVAILABLE model, not only the configured one."""
+        selection to consider the strongest AVAILABLE model, not only the configured one.
+
+        Discovery URL + auth kind come from the provider registry (single source
+        of truth); the response FILTERING below stays provider-specific."""
         import requests
         from vaf.core.config import Config
         try:
@@ -1308,26 +1319,31 @@ class APIBackendManager:
         if not key:
             return []
         try:
-            if provider == "openai":
-                r = requests.get("https://api.openai.com/v1/models",
-                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
-                if r.status_code == 200:
+            from vaf.core.provider_registry import models_discovery
+
+            disc = models_discovery(provider)
+            if disc is None:
+                # No remote listing for this provider (e.g. local): today's
+                # empty-result behavior.
+                return []
+            url, auth = disc
+            headers = {}
+            params = {}
+            if auth == "bearer":
+                headers["Authorization"] = f"Bearer {key}"
+            elif auth == "x-api-key":
+                headers["X-Api-Key"] = key
+                headers["anthropic-version"] = "2023-06-01"
+            elif auth == "query-key":
+                params["key"] = key
+            if provider == "google":
+                params["pageSize"] = 1000
+            r = requests.get(url, headers=headers, params=params, timeout=10)
+            if r.status_code == 200:
+                if provider == "openai":
                     return sorted(m["id"] for m in r.json().get("data", [])
                                   if any(x in m["id"] for x in ("gpt", "o1", "o3", "o4")))
-            elif provider == "anthropic":
-                r = requests.get("https://api.anthropic.com/v1/models",
-                                 headers={"X-Api-Key": key, "anthropic-version": "2023-06-01"}, timeout=10)
-                if r.status_code == 200:
-                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
-            elif provider == "deepseek":
-                r = requests.get("https://api.deepseek.com/models",
-                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
-                if r.status_code == 200:
-                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
-            elif provider == "google":
-                r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
-                                 params={"key": key, "pageSize": 1000}, timeout=10)
-                if r.status_code == 200:
+                elif provider == "google":
                     out = []
                     for m in r.json().get("models", []):
                         if "generateContent" not in (m.get("supportedGenerationMethods") or []):
@@ -1338,16 +1354,11 @@ class APIBackendManager:
                         if mid and mid not in out:
                             out.append(mid)
                     return sorted(out)
-            elif provider == "openrouter":
-                r = requests.get("https://openrouter.ai/api/v1/models",
-                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
-                if r.status_code == 200:
+                elif provider == "openrouter":
                     return [m["id"] for m in r.json().get("data", []) if m.get("id")][:50]
-            elif provider == "veyllo":
-                base = (Config.load().get("veyllo_base_url") or "https://api.veyllo.app/v1").rstrip("/")
-                r = requests.get(f"{base}/models",
-                                 headers={"Authorization": f"Bearer {key}"}, timeout=10)
-                if r.status_code == 200:
+                else:
+                    # anthropic, deepseek, veyllo and any future
+                    # OpenAI-compatible provider: plain id list.
                     return [m["id"] for m in r.json().get("data", []) if m.get("id")]
         except Exception:
             return []

@@ -33,18 +33,12 @@ from vaf.tools.base import BaseTool
 # This avoids paying vision-token cost on every DOM-only step.
 
 def _model_supports_vision(provider: str, model: str) -> bool:
-    """Mirror of agent.py's _model_supports_vision — kept in sync manually."""
-    if provider == "anthropic":
-        return True
-    if provider == "google":
-        return True
-    if provider == "openai":
-        return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
-    if provider == "deepseek":
-        return False
-    if provider == "openrouter":
-        return any(k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral"))
-    return True  # local / unknown: pass through
+    """Thin delegation to the shared registry predicate (previously a manual
+    mirror of agent.py's copy that had drifted from vision_infer.py's)."""
+    from vaf.core.provider_registry import model_supports_vision
+    # probe_local=False: this lane historically treated provider=local as
+    # vision-capable without a network probe; keep it off the hot path.
+    return model_supports_vision(provider, model, probe_local=False)
 
 
 def _call_vision(image_url: str, prompt: str, max_tokens: int = 512) -> Optional[str]:

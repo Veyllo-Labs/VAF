@@ -132,7 +132,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
 ### B. Initialization (Lines ~1700-2200)
 *   **TUI Start:** Checks `VAF_IN_WORKFLOW_TERMINAL`. If set, `CoderTUI` is created with `simple_mode=True` and `live = _NoopLive()`. Otherwise, a full `rich.Live` context is started at 12 FPS.
 *   **API Mode Detection (`_is_api_mode`):**
-    *   The coder talks plain OpenAI wire format over raw HTTP, so it resolves its endpoint from its own map: `coder_api_providers()` (module level) — OpenAI, Anthropic (OpenAI-compat URL), DeepSeek, OpenRouter, Google (OpenAI-compat URL), Veyllo (base URL from config `veyllo_base_url`).
+    *   The coder talks plain OpenAI wire format over raw HTTP, so it resolves its endpoint from `coder_api_providers()` (module level), which is built from the central provider registry (`vaf/core/provider_registry.py`) and therefore covers every API provider by construction - OpenAI, Anthropic (OpenAI-compat URL), DeepSeek, OpenRouter, Google (OpenAI-compat URL), Veyllo (base URL from config `veyllo_base_url`, resolved at call time).
     *   **Sync guard:** the map MUST cover every provider in `config.PROVIDER_MODELS` — enforced by `tests/test_coder_provider_map.py`. An API provider missing from the map returns a clear "coder configuration error" instead of falling through to the local branch, which would otherwise route an API provider's work to a local model.
     *   **IF API mode:** Templates are **skipped entirely** — capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
     *   **IF local model (`provider == "local"` only):** Template selection logic runs as normal; the `:8080` health check applies only here.

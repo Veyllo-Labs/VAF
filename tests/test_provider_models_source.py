@@ -5,13 +5,17 @@
 
 Pins that every consumer derives from the one definition: config DEFAULTS, the
 api_backend default/fallback lookups, and the /api/provider-models endpoint all
-agree with Config.PROVIDER_MODELS — so a model change in one place propagates.
+agree with Config.PROVIDER_MODELS - so a model change in one place propagates.
 """
 from vaf.core.config import Config, PROVIDER_MODELS
 from vaf.core.api_backend import APIBackendManager
+from vaf.core.provider_registry import api_provider_names
 
 
-API_PROVIDERS = ["openai", "anthropic", "google", "deepseek", "openrouter"]
+# Derived from the provider registry (not hardcoded) so a newly added API
+# provider is covered automatically. The hardcoded 5-entry list this replaces
+# silently skipped veyllo.
+API_PROVIDERS = api_provider_names()
 
 
 def test_every_provider_has_default_and_nonempty_fallback():

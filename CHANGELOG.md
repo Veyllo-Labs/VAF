@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a12] - 2026-07-16
+
 ### Fixed
 - **`vaf update` can no longer deadlock itself.** Three causes found on a
   Mac that sat on a7 while four newer releases existed: (1) the updater's

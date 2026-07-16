@@ -5476,6 +5476,25 @@ class Agent:
                         # Create IPC task
                         from vaf.core.subagent_ipc import get_ipc, get_current_session_id
                         ipc = get_ipc()
+                        # Re-delegation guard (same rule as the sub-agent tools):
+                        # after an empty-response snapshot reset the model forgets
+                        # it already delegated and starts the SAME workflow again
+                        # (live incident: duplicate research run, double GPU load).
+                        # Session-scoped IPC is the truth (Rule 4.4).
+                        try:
+                            _dup = [
+                                t for t in ipc.get_active_tasks_for_current_session()
+                                if getattr(t, "agent_type", "") == f"workflow:{workflow_id}"
+                            ]
+                        except Exception:
+                            _dup = []
+                        if _dup:
+                            _debug_log(f"BLOCKED duplicate workflow launch: {workflow_id}")
+                            return (
+                                f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
+                                "- not starting a duplicate. Tell the user the workflow is "
+                                "still in progress; the result will arrive when it finishes."
+                            )
                         task_id = ipc.create_task(
                             agent_type=f"workflow:{workflow_id}",
                             task_description=user_input,

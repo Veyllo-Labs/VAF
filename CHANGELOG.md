@@ -100,6 +100,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A workflow cannot be started twice for the same chat anymore.** After
+  an empty-response recovery reset, a local model could forget it had
+  already delegated and call the same workflow again while the first run
+  was still live (observed: two concurrent research workflows sharing one
+  GPU). Both launch lanes now check the session's live tasks and refuse a
+  duplicate with an honest still-in-progress status, mirroring the
+  sub-agent re-delegation guard.
 - **The workflow terminal stream no longer freezes the app window.** When a
   workflow step drew a live progress animation (the research agent), every
   animation frame line was forwarded to the Web UI as its own event -

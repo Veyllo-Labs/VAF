@@ -76,3 +76,28 @@ def test_osc_title_sequences_are_stripped(monkeypatch):
     f = wf._WebTickerFilter(sent.append)
     f.feed("\x1b]0;window title\x07visible text\n")
     assert sent == ["visible text"]
+
+
+def test_execute_workflow_blocks_a_duplicate_live_run(monkeypatch):
+    """Live incident 2026-07-16: after empty-response snapshot resets the
+    model re-called execute_workflow while the first run was still live -
+    two concurrent research workflows on one GPU. Session-scoped IPC is the
+    truth; a duplicate must be refused with an honest status."""
+    import vaf.core.subagent_ipc as ipc_mod
+    from vaf.tools.workflow_executor import ExecuteWorkflowTool
+
+    class _Task:
+        agent_type = "workflow:research_and_document"
+
+    class _FakeIpc:
+        def get_active_tasks_for_current_session(self):
+            return [_Task()]
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIpc())
+    result = ExecuteWorkflowTool().run("research_and_document", {"topic": "x"})
+    assert "ALREADY RUNNING" in result
+
+    # A different workflow id is NOT blocked by the guard (it proceeds into
+    # normal resolution; unknown id yields the not-found message).
+    result2 = ExecuteWorkflowTool().run("some_other_wf_xyz", {})
+    assert "ALREADY RUNNING" not in result2

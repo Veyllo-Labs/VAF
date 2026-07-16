@@ -85,6 +85,25 @@ class ExecuteWorkflowTool(BaseTool):
             _agent = kwargs.get("_agent")
             _agent_session_id = getattr(_agent, "current_session_id", None)
 
+            # Re-delegation guard (mirrors the async terminal lane in
+            # agent.py): a snapshot-reset model may call execute_workflow for
+            # the SAME workflow again while the first run is still live.
+            try:
+                from vaf.core.subagent_ipc import get_ipc as _get_ipc
+
+                _dup = [
+                    t for t in _get_ipc().get_active_tasks_for_current_session()
+                    if getattr(t, "agent_type", "") == f"workflow:{workflow_id}"
+                ]
+            except Exception:
+                _dup = []
+            if _dup:
+                return (
+                    f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
+                    "- not starting a duplicate. Tell the user the workflow is "
+                    "still in progress; the result will arrive when it finishes."
+                )
+
             template = get_template(workflow_id)
             if not template:
                 available = list_templates()

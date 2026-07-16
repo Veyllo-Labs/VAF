@@ -100,6 +100,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **`vaf prompt` works in local mode now.** Both scripting lanes
+  (`vaf prompt` and the `vaf run prompt` alias) never loaded the local
+  model, so every local-mode invocation returned an empty answer - the
+  same bug class as the library-facade fix below, found by pre-push smoke
+  testing and verified live against real hardware (model load, NDJSON
+  stream, server reused by the running app afterwards).
+- **Workflow steps run the sandbox under the calling user's scope.** The
+  workflow engine's own tool-argument injection (a deliberate narrower
+  copy of the agent dispatcher) did not cover the sandbox tool; its
+  per-user container work directories now key on the user in workflow
+  runs too, and a CI guard pins the engine copy's coverage.
 - **Embedding a local model actually works now.** The documented library
   quickstart with the local provider silently returned an empty string: the
   facade never loaded the model, so the turn aborted before generation. The

@@ -632,6 +632,11 @@ class WorkflowEngine:
                         elif tool_name in ("list_calendar_events", "create_calendar_event", "update_calendar_event", "delete_calendar_event"):
                             a["username"] = self.username
                             a["user_scope_id"] = self.user_scope_id
+                        elif tool_name == "python_sandbox":
+                            # Per-user container workdir; direct assignment so a
+                            # model-authored step arg can never spoof the scope
+                            # (mirrors the agent dispatcher, agent.py execute_tool).
+                            a["user_scope_id"] = self.user_scope_id
 
                 # Retry logic for context errors (like main agent)
                 max_retries = 3

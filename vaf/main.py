@@ -724,6 +724,12 @@ def prompt_command(
 
     agent = Agent(verbose=False, run_kind="chat")
     agent.init_chat()
+    # Local mode has no lazy load inside chat_step: without a backend the turn
+    # aborts and every local-mode `vaf prompt` returned an EMPTY answer (found
+    # by pre-push smoke testing; same bug class as the library facade fix).
+    # load_model reuses an already-running llama server (one-server rule).
+    if agent.api_backend is None and not agent.llm and not agent.use_server:
+        agent.load_model()
 
     # Restore session history if provided (keeps system prompt at history[0])
     if loaded_session:

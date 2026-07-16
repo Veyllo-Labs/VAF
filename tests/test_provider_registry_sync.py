@@ -122,3 +122,25 @@ def test_vision_predicate_knows_veyllo_and_deepseek():
     assert model_supports_vision("veyllo", "veyllo-chat") is True
     assert model_supports_vision("deepseek", "deepseek-v4-pro") is False
     assert model_supports_vision("deepseek", "anything-at-all") is False
+
+
+def test_workflow_engine_scope_injection_covers_python_sandbox():
+    """Rule-2 guard: the workflow engine keeps its OWN copy of the per-tool
+    scope injection (narrower than the agent dispatcher by design). The
+    sandbox's per-user container workdir depends on user_scope_id reaching
+    the tool from BOTH dispatchers - the agent one is covered by the facade
+    guard; this pins the engine copy."""
+    from pathlib import Path
+    import re
+
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "workflows" / "engine.py").read_text()
+    match = re.search(
+        r"def _inject_user_scope.*?(?=\n                # Retry logic)", src, re.DOTALL
+    )
+    assert match, "engine _inject_user_scope block not found - update this guard"
+    block = match.group(0)
+    for tool in ("memory_save", "python_sandbox", "schedule_reminder", "send_to_user"):
+        assert f'"{tool}"' in block, (
+            f"workflow engine _inject_user_scope no longer covers {tool} - "
+            "sync with the agent dispatcher (vaf/core/agent.py execute_tool)"
+        )

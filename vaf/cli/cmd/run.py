@@ -733,6 +733,10 @@ def run_prompt(
     # Non-interactive machine lane: never play audio on this host's speakers.
     agent = _make_cli_agent(verbose=False, host_audio=False)
     agent.init_chat()
+    # Same local-mode guard as `vaf prompt` (main.py): without it every
+    # local-mode run of this alias returned an empty answer.
+    if agent.api_backend is None and not agent.llm and not agent.use_server:
+        agent.load_model()
 
     if loaded_session:
         for m in loaded_session.get_history():

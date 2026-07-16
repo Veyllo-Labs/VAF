@@ -24,11 +24,13 @@ def test_facade_exports_exactly_the_documented_surface():
 
 def test_agent_constructor_signature_is_stable():
     params = list(inspect.signature(Agent.__init__).parameters.values())[1:]
-    assert [p.name for p in params] == ["config", "verbose"]
-    config, verbose = params
+    assert [p.name for p in params] == ["config", "verbose", "user_scope"]
+    config, verbose, user_scope = params
     assert config.default is None
     assert verbose.kind is inspect.Parameter.KEYWORD_ONLY
     assert verbose.default is False
+    assert user_scope.kind is inspect.Parameter.KEYWORD_ONLY
+    assert user_scope.default is None
 
 
 def test_agent_run_signature_is_stable():
@@ -234,3 +236,76 @@ def test_add_tool_rejects_late_and_invalid_registration(monkeypatch):
 
     with pytest.raises(RuntimeError):
         agent.add_tool(_LateTool())
+
+
+def test_user_scope_rejects_invalid_values_at_construction():
+    import pytest
+
+    for bad in ("not-a-uuid", "", 123, "1234"):
+        with pytest.raises(ValueError, match="user_scope must be a valid UUID"):
+            Agent(user_scope=bad)
+
+
+def test_user_scope_binds_identity_before_init_chat_and_reasserts(monkeypatch):
+    """Multi-tenant contract: scope AND username travel together, are bound
+    BEFORE the system prompt is built, and are re-asserted every turn (a
+    session load rebinding identity must not stick)."""
+    import uuid
+
+    import vaf.framework as fw
+
+    scope = str(uuid.uuid4())
+    events = []
+
+    class _IdStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+        def init_chat(self):
+            events.append(
+                ("init_chat", str(getattr(self, "_current_user_scope_id", None)),
+                 getattr(self, "_current_username", None))
+            )
+
+    monkeypatch.setattr(fw, "CoreAgent", _IdStub)
+    import vaf.core.thinking_mode as tm
+
+    monkeypatch.setattr(tm, "_resolve_username_for_scope", lambda s: "max")
+
+    agent = fw.Agent(config={"provider": "deepseek"}, user_scope=scope)
+    assert agent.run("hi") == "hi"
+    assert events == [("init_chat", scope, "max")]
+
+    # Simulate a session load clobbering identity - the next turn rebinds.
+    core = agent.core
+    core._current_user_scope_id = None
+    core._current_username = "admin"
+    agent.run("again")
+    assert str(core._current_user_scope_id) == scope
+    assert core._current_username == "max"
+
+
+def test_user_scope_username_falls_back_synthetic_never_admin(monkeypatch):
+    import uuid
+
+    import vaf.framework as fw
+
+    scope = str(uuid.uuid4())
+
+    class _IdStub(_StubCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.api_backend = object()
+
+    monkeypatch.setattr(fw, "CoreAgent", _IdStub)
+    import vaf.core.thinking_mode as tm
+
+    monkeypatch.setattr(
+        tm, "_resolve_username_for_scope", lambda s: (_ for _ in ()).throw(RuntimeError())
+    )
+    agent = fw.Agent(config={"provider": "deepseek"}, user_scope=scope)
+    agent.run("hi")
+    username = agent.core._current_username
+    assert username == f"scope_{scope.replace('-', '')[:8]}"
+    assert username != "admin"

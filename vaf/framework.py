@@ -62,14 +62,59 @@ class Agent:
         Forwarded to the core agent (extra diagnostic output).
     """
 
-    def __init__(self, config: Optional[dict] = None, *, verbose: bool = False):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        *,
+        verbose: bool = False,
+        user_scope: Optional[str] = None,
+    ):
         self._config = dict(config) if config else None
         self._verbose = verbose
         self._agent: Optional[CoreAgent] = None
         self._pending_tools: list = []
+        # Multi-tenant identity (docs/EMBEDDING.md "Multi-tenant embedding"):
+        # user_scope is an ASSERTION by the embedder - the library performs no
+        # authentication (the process boundary is the trust boundary, same as
+        # the gateway trusting itself). Validate at the boundary: a bad value
+        # must fail HERE, loudly, never fall back to the machine owner's data.
+        self._user_scope = None
+        self._scope_username: Optional[str] = None
+        if user_scope is not None:
+            import uuid as _uuid
+
+            try:
+                self._user_scope = _uuid.UUID(str(user_scope))
+            except (ValueError, AttributeError, TypeError):
+                raise ValueError(
+                    "user_scope must be a valid UUID string"
+                ) from None
         # Embedding-safe default: never block on a human. `setdefault` lets an
         # explicit `VAF_NONINTERACTIVE=0` from the caller take precedence.
         os.environ.setdefault("VAF_NONINTERACTIVE", "1")
+
+    def _bind_identity(self, agent: "CoreAgent") -> None:
+        """Bind scope AND username together onto the engine.
+
+        Username resolution goes through the same helper the background lanes
+        use: the real account name when the scope maps to a local user, else
+        a synthetic per-scope name - NEVER the literal "admin", which the
+        engine's injection sites would otherwise fall back to (that fallback
+        stamps the admin's identity into a foreign tenant's artifacts).
+        """
+        if self._scope_username is None:
+            username = None
+            try:
+                from vaf.core.thinking_mode import _resolve_username_for_scope
+
+                username = _resolve_username_for_scope(self._user_scope)
+            except Exception:
+                username = None
+            self._scope_username = (
+                username or f"scope_{str(self._user_scope).replace('-', '')[:8]}"
+            )
+        agent._current_user_scope_id = self._user_scope
+        agent._current_username = self._scope_username
 
     def add_tool(self, tool) -> None:
         """Register a BaseTool instance for THIS Agent instance only.
@@ -128,6 +173,10 @@ class Agent:
                             agent.state_registry.register(f"tool_{tool.name}", provider)
                 except Exception:
                     pass
+            # Identity BEFORE init_chat: the system prompt is built from it
+            # (user context, memory seed, last interaction).
+            if self._user_scope is not None:
+                self._bind_identity(agent)
             agent.init_chat()
             # Local mode has no lazy load inside chat_step: without a backend
             # the turn aborts ("Agent not initialized") and run() would return
@@ -168,7 +217,14 @@ class Agent:
             if on_token is not None:
                 on_token(s)
 
-        result = self.core.chat_step(prompt, stream_callback=_sink)
+        core = self.core
+        # Re-assert identity every turn: session loads rebind identity from
+        # session metadata unconditionally, so a bound scope must be
+        # re-applied (same pattern as the headless runner). Cheap after the
+        # first call (username is cached).
+        if self._user_scope is not None:
+            self._bind_identity(core)
+        result = core.chat_step(prompt, stream_callback=_sink)
         result = result.strip() if isinstance(result, str) else ""
 
         streamed = "".join(buf)

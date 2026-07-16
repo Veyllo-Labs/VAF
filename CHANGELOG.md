@@ -27,6 +27,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and an honest note on custom OpenAI-compatible endpoints. Key engine
   methods now carry docstrings.
 
+- **Multi-tenant embedding: `Agent(user_scope=...)`.** An application
+  embedding VAF can now assert which end user a conversation belongs to
+  with one parameter. The value is validated as a UUID at construction
+  (a bad scope fails loudly instead of silently operating on the machine
+  owner's data), the account username is resolved together with the scope
+  (never the admin fallback), the identity is bound before the system
+  prompt is built and re-asserted on every turn, and memory/reminders/
+  per-user files then key on that scope with the product's fail-closed
+  filters. The embedding guide gains a "Multi-tenant embedding" section
+  spelling out the trust model and the hard limits (one tenant per
+  process, the machine-global trust store, shared on-disk config, no
+  reliance on database-level isolation yet), and now states honestly that
+  a bare unscoped agent acts as the machine owner in local mode. Also
+  fixed: the sandbox tool now receives the user scope from the dispatcher
+  (spoof-proof direct assignment), so its per-user container work
+  directories key on the calling user (previously every main-agent run
+  shared one prefix).
+
 - **One provider registry instead of eleven copies.** The LLM provider set
   and its endpoints now live in a single source of truth
   (`vaf/core/provider_registry.py`); the backend factory, the coder's

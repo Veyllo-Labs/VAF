@@ -227,8 +227,63 @@ What an embedded agent can and cannot do on the host - the short version of
   `python_sandbox(with_vaf_tools=True)` opens a temporary tool-bridge port on
   `0.0.0.0` (random ephemeral port, per-run token auth) for the duration of
   that call.
-- **Admin-only tools stay off.** A bare embedded agent has no admin identity,
-  so `admin_only` tools are blocked.
+- **Admin-only tools stay off - but a bare agent still acts as the machine
+  owner.** Without `user_scope`, an embedded agent has no admin identity
+  (`admin_only` tools are blocked), yet in local mode its memory tools
+  operate on the local admin's memory bucket and file tools get the
+  no-scope jail exemption (home-wide access as the gate allows). That is
+  the intended single-tenant default: embedding VAF on your own machine
+  means acting as yourself. For anything multi-tenant, read the next
+  section.
+
+---
+
+## Multi-tenant embedding: `user_scope`
+
+To serve multiple end users from your application, tell each `Agent`
+instance whose conversation it is:
+
+```python
+agent = Agent(config={"provider": "deepseek"}, user_scope="6f9619ff-8b86-d011-b42d-00c04fc964ff")
+```
+
+What it does, and the trust model:
+
+- `user_scope` is an **assertion by you, the embedder** - the library
+  performs no authentication. The process boundary is the trust boundary
+  (an in-process caller could set engine attributes directly anyway); your
+  application must authenticate its users before asserting their scope.
+- The value is validated as a UUID at construction and raises `ValueError`
+  otherwise - a bad scope fails loudly instead of silently operating on the
+  machine owner's data.
+- Scope and username travel together: VAF resolves the account username for
+  the scope itself (a synthetic per-scope name when unknown) and never
+  falls back to the admin identity. The identity is bound before the system
+  prompt is built and re-asserted on every `run()`.
+- Memory, reminders, per-user files (speaker profiles, browser sessions,
+  scope-keyed stores) then key on that scope, with the same fail-closed
+  filters the product server uses.
+
+Hard limits you must respect (they are architecture, not fine print):
+
+- **One tenant per process.** Two differently-scoped `Agent` instances in
+  one process share process-global state (environment variables written
+  during tool calls, singletons, the working-context fallback directory).
+  Run one OS process per tenant.
+- **trust.json is per OS user, machine-global**: a `set_tool_policy(...,
+  "allow")` or trusted directory granted while serving one tenant arms that
+  permission for every tenant on the machine.
+- **The on-disk config is shared**: `Config`-routed settings (not passed
+  via `config=`) are the same for all tenants.
+- **Do not rely on database-level isolation**: the memory DB's row-level
+  security is not an independent backstop yet ([USER_ISOLATION.md](security/USER_ISOLATION.md));
+  the app-side fail-closed filters are the active enforcement.
+- **Custom tools receive no scope automatically**: a tool you register via
+  `add_tool()` that touches per-user data must accept and honor a
+  `user_scope_id` argument passed by your own code; the engine's automatic
+  injection covers only its built-in tools.
+- Passing the local admin's scope id IS full admin (tools and files) - hand
+  it out deliberately or never.
 
 ---
 

@@ -547,7 +547,8 @@ async def get_db_stats(user_scope_id: Optional[str] = None) -> dict:
     Memory statistics for the CURRENT USER.
 
     Runs on the app engine with the scope GUC set, so the memories count is RLS-filtered and the chunk /
-    connection counts JOIN memories so they are scoped too (chunks/connections have no RLS of their own).
+    connection counts JOIN memories so they are scoped too (chunks DO carry their own forced RLS policy
+    since migration v2; connections have none and are scoped only via the JOIN).
     A missing scope yields zeros (fail-closed), never global totals.
 
     Returns:

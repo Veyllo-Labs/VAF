@@ -26,7 +26,7 @@ bridges. Add those only if you need them, via extras:
 | Extra | Adds | For |
 |---|---|---|
 | `vaf[server]` | fastapi, uvicorn, websockets | the HTTP/WebSocket API |
-| `vaf[desktop]` | pywebview, pystray, PyQt6 | the desktop window / tray |
+| `vaf[desktop]` | pywebview, pystray, PySide6 | the desktop window / tray |
 | `vaf[memory]` | sqlalchemy, pgvector, sentence-transformers, redis | long-term RAG memory |
 | `vaf[speech]` | SpeechRecognition, pyaudio | offline speech-to-text |
 | `vaf[browser]` | browser-use, playwright | browser automation tools |
@@ -93,7 +93,7 @@ keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | `local` | `local`, `openai`, `anthropic`, `google`, `deepseek`, `openrouter` |
+| `provider` | `local` | `local`, `veyllo`, `openai`, `anthropic`, `google`, `deepseek`, `openrouter` |
 | `model` | `auto` | local GGUF filename / repo, or an API model name |
 | `api_key_<provider>` | — | API key, e.g. `api_key_deepseek` |
 | `api_model_<provider>` | — | model per provider, e.g. `api_model_openai` |

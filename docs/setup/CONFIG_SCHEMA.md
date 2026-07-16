@@ -90,6 +90,8 @@ print(agent.run("In one sentence, what is Python?"))
 | `api_timeout_write` | `120.0` | Request-upload (body) timeout (s) — bounds large image uploads. |
 | `api_timeout_read` | `600.0` | Read timeout (s); kept generous so long reasoning streams are not cut off. |
 | `api_timeout_pool` | `20.0` | Connection-pool acquire timeout (s). |
+| `anthropic_prompt_cache` | `True` | Anthropic only: send the system prompt as a `cache_control: ephemeral` block so the stable prefix is cached across multi-turn / tool loops (cost saver). Read with an inline default, not part of `DEFAULTS`. See [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
+| `anthropic_thinking` | `True` | Anthropic only: adaptive (extended) thinking on supported models (reasoning streams wrapped in `<think>` tags); ignored on models without thinking support. Read with an inline default, not part of `DEFAULTS`. |
 | `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. |
 | `subagent_use_separate_provider` | `False` | Use `subagent_provider` instead of inheriting. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |
@@ -298,6 +300,9 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `use_docker` | `True` | Use Docker-backed services (DB/Redis/TTS/...). |
 | `web_ui_enabled` | `True` | Serve the web UI. |
 | `tray_autostart` | `False` | Start the desktop tray on login. |
+| `ux_auto_open_links` | `False` | Auto-open `web_search` source links as browser tabs (skipped in non-interactive runs, `VAF_NONINTERACTIVE`). |
+| `ux_auto_open_outputs` | `True` | Auto-open finished outputs: HTML reports in the browser, other output files via their folder in the file manager, created project folders (skipped in non-interactive runs). |
+| `ux_auto_open_max_tabs` | `8` | Cap on browser tabs auto-opened per search; clamped to 1-20. |
 | `debug_logs_enabled` | `True` | Verbose logs in `~/.vaf/logs/`. |
 | `redis_enabled` | `True` | Use Redis (cache/queues). |
 | `redis_url` | `redis://localhost:6379/0` | Redis DSN. |

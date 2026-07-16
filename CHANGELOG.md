@@ -11,7 +11,35 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **A CI guard now protects the public library surface.** The docs promise
+  that `from vaf import Agent` is safe to build on; until now no test
+  imported that facade, so a breaking change to it could have shipped with
+  a green CI. A new executable contract pins the facade exports, the
+  `Agent`/`run()` signatures, the `BaseTool` declarative defaults, and the
+  pip entry-point tool discovery (`vaf.tools` group).
+- Setting up a voice profile no longer stalls on slow connections: the
+  speaker-engine models (26 MB) now download in the background during the
+  enrollment intro instead of blocking the first round.
+
 ### Fixed
+- **Documentation corrections across the developer docs**, each verified
+  against the code: the embedding guide now names PySide6 (not PyQt6) in
+  the desktop extra and includes the `veyllo` provider; the memory doc no
+  longer claims "all memory content" is encrypted at rest (embedding
+  vectors and titles/tags metadata are not - the encryption section
+  spells out exactly what is and is not); the contributing guide's lint
+  and format instructions now match what CI actually gates on instead of
+  commands that would reformat 480 files; the architecture doc reconciles
+  the "stable surface" promise with the alpha status and links the
+  backward-compatibility rules; the Web UI flow doc's log-directory
+  resolution order matches the code; the tools guide recommends native
+  MCP server registration over the raw low-level tool, and its FAQ now
+  covers all three tool lanes (in-tree, update-surviving `custom_tools/`,
+  pip entry points); the docs index describes server mode correctly and
+  lists three previously missing pages; the config reference gains rows
+  for `anthropic_prompt_cache`, `anthropic_thinking`, and the
+  `ux_auto_open_*` keys.
 - **Voice-profile enrollment works on fresh installs.** Setting up a voice
   profile answered "I could not hear speech" on every round of a clean
   install while the microphone was fine: the speaker-identification engine

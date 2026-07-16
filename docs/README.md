@@ -22,7 +22,7 @@ Docs are grouped into category folders. Full index by category:
 - [NGINX_REVERSE_PROXY.md](setup/NGINX_REVERSE_PROXY.md) — Reverse proxy + HTTPS (`nginx-vaf-https.conf.example`).
 - [GATEWAY.md](setup/GATEWAY.md) — Persistent gateway server, multi-channel access.
 - [RELEASING.md](setup/RELEASING.md) — Cutting a release; how `vaf update` updates installed clients.
-- [SERVER_MODE.md](setup/SERVER_MODE.md) — Standalone llama-server mode.
+- [SERVER_MODE.md](setup/SERVER_MODE.md) - Always-on server installation profile: systemd service, TLS, LAN access, multi-user concurrency.
 - [PROCESS_MANAGEMENT.md](setup/PROCESS_MANAGEMENT.md) — Process lifecycle management.
 - [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md) — Network-mode security model, doctor checks.
 
@@ -87,6 +87,8 @@ Docs are grouped into category folders. Full index by category:
 - [WelcomeGreeting.md](web-ui/WelcomeGreeting.md) — Welcome greeting.
 - [WINDOW_TILING_DESIGN.md](web-ui/WINDOW_TILING_DESIGN.md) — Window tiling design.
 - [DESIGN.md](web-ui/DESIGN.md) — UI design tokens and component styles.
+- [LIGHTMODE.md](web-ui/LIGHTMODE.md) - Light-mode color reference (the default; stock Tailwind values for every surface, control, and the avatar).
+- [DARKMODE.md](web-ui/DARKMODE.md) - Dark-mode color reference (neutral gray theme on #181818 for every surface, control, and the avatar).
 - [SPEECH_FEATURES.md](web-ui/SPEECH_FEATURES.md) — TTS/STT integration (local Docker lane and cloud voice providers).
 - [NETWORK_TAB.md](web-ui/NETWORK_TAB.md) — Network tab UI.
 
@@ -104,6 +106,7 @@ Docs are grouped into category folders. Full index by category:
 - [WINDOWS.md](platform/WINDOWS.md) — How VAF runs on Windows (WebView2, `.lnk` launcher, tray).
 - [MACOS.md](platform/MACOS.md) — How VAF runs on macOS (WKWebView, menu-bar tray, startup splash).
 - [SYSTEM_TRAY.md](platform/SYSTEM_TRAY.md) — Tray architecture and platform notes.
+- [STARTUP_SPLASH.md](platform/STARTUP_SPLASH.md) - Desktop startup splash screen shown until the frontend is actually serving.
 - [AUTOMATIONS.md](platform/AUTOMATIONS.md) — Automations, timers, planner.
 - [I18N.md](platform/I18N.md) — Internationalization.
 - [TRANSLATION_SYSTEM.md](platform/TRANSLATION_SYSTEM.md) — Translation system.

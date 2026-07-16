@@ -45,12 +45,23 @@ For anything beyond a small fix, please open an issue first to discuss the chang
       vaf --version
       ```
 
-4.  **Lint & Format**    We enforce strict coding standards. Before committing, run:
+4.  **Lint & Check**
+    Run the same checks CI gates on before committing:
     ```bash
-    # Auto-format and lint
-    vaf automate format
-    vaf automate lint --fix
+    # Ruff gate (these are the only rules that fail CI; everything else is warnings)
+    ruff check . --select=E9,F63,F7,F82 --exclude vaf/tools/coder_templates
+
+    # Doc links and license headers (both fail CI when broken)
+    python scripts/check_doc_links.py
+    python scripts/check_license_headers.py
     ```
+    If your change touches the Web UI, also make sure it builds:
+    ```bash
+    cd web && npm install && npm run build
+    ```
+    Do not run a repo-wide formatter (`ruff format .` or `vaf automate format`): the codebase
+    is not formatted that way, and you would produce a huge unrelated diff. If you use a
+    formatter at all, apply it only to the files you touched.
 
 5.  **Commit**
     Use descriptive commit messages. We prefer the [Conventional Commits](https://www.conventionalcommits.org/) specification (e.g., `feat: add new tool`, `fix: context overflow`).
@@ -70,7 +81,7 @@ For anything beyond a small fix, please open an issue first to discuss the chang
 ### Before Submitting
 - [ ] Target the `main` branch
 - [ ] Test everything locally (`pytest tests/`)
-- [ ] Run the linter (`vaf automate lint`)
+- [ ] Run the Ruff gate and the doc-link/license-header checks (see "Lint & Check" above)
 - [ ] Update `CHANGELOG.md` if this is a user-facing change
 - [ ] **Verify CI/CD:** Ensure your local tests pass; GitHub Actions will run the same suite.
 - [ ] Re-read your changes - ensure they are clean and well-thought-out

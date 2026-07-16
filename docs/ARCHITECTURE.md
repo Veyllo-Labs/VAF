@@ -128,6 +128,17 @@ This is the contract. Treat it as a stable API.
   `_clean_reasoning`, context/compaction internals, sub-agent IPC, web server)
 - private methods and attributes (leading underscore)
 
+**What "stable" means during the alpha.** VAF is currently a `0.1.0aN`
+prerelease, so breaking changes to this surface are still possible. "Stable"
+here means this is the part of the API we commit to keeping compatible: it is
+not broken without a MAJOR bump and a deprecation note, per the
+backward-compatibility rules in [setup/RELEASING.md](setup/RELEASING.md), and
+any change to it is announced in `CHANGELOG.md`. Everything listed as internal
+carries no such commitment and may change between releases without notice. The
+surface itself is guarded by a CI test (`tests/test_public_facade.py`) that
+fails when the facade, the `Agent` signatures, or the `BaseTool` contract
+drift from what is documented here.
+
 When the engine needs to change, change it freely *behind* Layer 2. When Layer 2
 needs to change, that is a deliberate, versioned event.
 

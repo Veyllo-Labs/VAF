@@ -176,9 +176,10 @@ These endpoints are used only for the native DOCX editor path. The legacy HTML e
 WebUI debug traces are written to the first writable location in this order:
 
 1. `VAF_LOG_DIR` (if set)
-2. `Platform.data_dir()/logs` (OS-specific app data dir)
-3. `Platform.vaf_dir()/logs` (user home)
-4. Repo `logs/` (dev fallback)
+2. Repo `logs/` (preferred, so WebUI debug files sit next to `queue.log` etc.)
+3. `Platform.data_dir()/logs` (OS-specific app data dir)
+4. `Platform.vaf_dir()/logs` (user home)
+5. Package `vaf/logs` (last resort; the current working directory if none is writable)
 
 Useful files when debugging WebUI / LLM / queue (all under the log dir above):
 

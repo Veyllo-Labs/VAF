@@ -55,7 +55,7 @@ class Agent:
         Optional dict of config overrides merged on top of ~/.vaf/config.json
         for this instance only (nothing is written to disk). Common keys:
         ``provider`` ("local" | "openai" | "anthropic" | "google" | "deepseek" |
-        "openrouter"), ``model``, ``api_key_<provider>``, ``n_ctx``,
+        "openrouter" | "veyllo"), ``model``, ``api_key_<provider>``, ``n_ctx``,
         ``temperature``. See vaf/core/config.py for the full schema.
     verbose:
         Forwarded to the core agent (extra diagnostic output).

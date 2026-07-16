@@ -1,10 +1,10 @@
 # VAF Memory System
 
-The Memory System provides persistent, encrypted memory storage with RAG (Retrieval-Augmented Generation) capabilities for VAF. It enables the agent to remember and retrieve information across sessions using semantic search.
+The Memory System provides persistent memory storage with content encrypted at rest and RAG (Retrieval-Augmented Generation) capabilities for VAF. It enables the agent to remember and retrieve information across sessions using semantic search.
 
 ## Features
 
-- **Encrypted Storage**: AES-256-GCM encryption for all memory content at rest
+- **Encrypted Storage**: AES-256-GCM encryption at rest for memory text (parent content, chunk text, and the on-disk profile cache); embedding vectors and metadata (titles, tags, dates) are stored unencrypted - see [Encryption](#encryption)
 - **Vector Search**: PostgreSQL with pgvector extension for semantic similarity search
 - **Redis Caching**: Fast caching for embeddings, RAG queries, and graph data
 - **RAG pipeline**: Retrieval and answer generation with source citations

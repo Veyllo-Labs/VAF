@@ -176,12 +176,41 @@ MCP (Model Context Protocol) enables integration of tools from other languages a
 - **JSON-RPC**: Communication over stdio, HTTP, or SSE
 - **Ecosystem**: Many pre-built MCP servers available
 
-### Option 1: Use MCP Client Tool (Recommended)
+### Option 1: Register the Server as Native Tools (Recommended)
 
-VAF already has an `mcp_client` tool that calls external MCP servers:
+Declare the server once in `mcp_servers.json` (in the VAF data directory, next to the
+custom-tools data). At startup VAF connects to every enabled server, lists its tools,
+and registers each one as a native tool named `mcp_<server>_<tool>`:
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx -y @modelcontextprotocol/server-filesystem /home/me/projects",
+      "transport": "stdio",
+      "enabled": true,
+      "permission_level": "write"
+    }
+  }
+}
+```
+
+The LLM then calls the server's tools directly, e.g. `mcp_filesystem_read_file(path=...)`.
+Discovery runs in parallel with a per-server timeout; a slow or misconfigured server is
+skipped and never blocks startup. The whole registration step is gated by the
+`mcp_native_tools_enabled` config key (default `true`), the manifest is hot-reloadable,
+and servers can also be managed in the Web UI under Settings > Advanced > MCP.
+Full details (transports, permission levels, per-tool overrides):
+[docs/agents/MCP_INTEGRATION.md](../../docs/agents/MCP_INTEGRATION.md).
+
+### Option 2: Raw `mcp_call` Tool (Low-Level Fallback)
+
+For ad-hoc calls to servers that are not registered in the manifest, VAF ships a
+generic `mcp_call` tool (`vaf/tools/mcp_client.py`). The server command is passed on
+every call:
 
 ```python
-# The LLM can now call MCP tools:
+# The LLM can call unregistered MCP servers directly:
 # mcp_call(
 #   server_command="npx -y @modelcontextprotocol/server-filesystem",
 #   tool_name="read_file",
@@ -189,26 +218,30 @@ VAF already has an `mcp_client` tool that calls external MCP servers:
 # )
 ```
 
-**Example: Using GitHub MCP Server**
+Both paths coexist: registered `mcp_<server>_<tool>` tools are the day-to-day
+convenience path, `mcp_call` is the low-level raw path for unregistered servers.
 
-```python
-# VAF can now use GitHub tools without rewriting them:
-# mcp_call(
-#   server_command="npx -y @modelcontextprotocol/server-github",
-#   tool_name="search_repositories",
-#   arguments={"query": "python ai"}
-# )
+### Using Your Own MCP Server
+
+If you have your own MCP server (Node.js, Go, Rust, Python, ...), register it in
+`mcp_servers.json` like any other server:
+
+```json
+{
+  "servers": {
+    "my_server": {
+      "command": "python my_mcp_server.py",
+      "transport": "stdio",
+      "enabled": true
+    }
+  }
+}
 ```
 
-### Option 2: Create Your Own MCP Server
-
-If you have your own MCP server:
-
-1. **Start the server** (e.g., as Node.js/Go/Rust process)
-2. **Use MCP Client Tool**:
+Its tools appear as `mcp_my_server_<tool>` after the next startup or manifest reload.
+For a quick one-off test without registering the server, use the raw tool:
 
 ```python
-# Example: Custom MCP server
 # mcp_call(
 #   server_command="python my_mcp_server.py",
 #   tool_name="my_custom_tool",
@@ -218,31 +251,22 @@ If you have your own MCP server:
 
 ### MCP Server Examples
 
-**Filesystem MCP Server:**
-```bash
-# Install
-npm install -g @modelcontextprotocol/server-filesystem
+**GitHub MCP Server (registered):**
 
-# Use in VAF:
-# mcp_call(
-#   server_command="npx -y @modelcontextprotocol/server-filesystem",
-#   tool_name="read_file",
-#   arguments={"path": "~/Documents/file.txt"}
-# )
+```json
+{
+  "servers": {
+    "github": {
+      "command": "npx -y @modelcontextprotocol/server-github",
+      "transport": "stdio",
+      "enabled": true,
+      "env": { "GITHUB_TOKEN": "..." }
+    }
+  }
+}
 ```
 
-**GitHub MCP Server:**
-```bash
-# Install
-npm install -g @modelcontextprotocol/server-github
-
-# Use in VAF:
-# mcp_call(
-#   server_command="npx -y @modelcontextprotocol/server-github",
-#   tool_name="search_repositories",
-#   arguments={"query": "machine learning"}
-# )
-```
+This registers tools such as `mcp_github_search_repositories`.
 
 ### MCP vs. Native VAF Tools
 
@@ -314,13 +338,6 @@ class ReadFileTool(BaseTool):
         if file.exists():
             return file.read_text()
         return f"Error: File not found: {path}"
-```
-
-### Example 3: MCP Client Tool
-
-```python
-# vaf/tools/mcp_client.py
-# See full implementation above
 ```
 
 ---
@@ -585,13 +602,21 @@ assert "get_weather" in Agent().core.tools
 
 **Q: Why isn't my tool being recognized?**
 A: Make sure:
-- The file is in `vaf/tools/`
+- The file is in one of the discovery lanes: `vaf/tools/` (in-tree), the
+  `custom_tools/` folder of the VAF data directory with a `manifest.json` entry
+  (user-uploaded tools), or a pip package exposing a `vaf.tools` entry point
 - The class inherits from `BaseTool`
 - `name` and `description` are defined
 - `run()` is implemented
 
 **Q: Can I organize tools in subdirectories?**
-A: Not currently. All tools must be directly in `vaf/tools/`.
+A: Not inside the package: in-tree tools must be directly in `vaf/tools/`. Tools do
+not have to live in the repo at all, though. For a local tool that survives VAF
+updates, put it in the `custom_tools/` folder of the VAF data directory (e.g.
+`~/.local/share/vaf/custom_tools/` on Linux) with a `manifest.json` entry - normally
+created by uploading the tool in the Web UI. For distribution, ship it as a pip
+package via the `vaf.tools` entry-point group (see "Shipping a tool as a pip package"
+above). Use in-tree `vaf/tools/*.py` when contributing a tool to VAF itself.
 
 **Q: How do I test my tool?**
 A: Restart VAF and ask the LLM if it sees the tool. Or test directly:

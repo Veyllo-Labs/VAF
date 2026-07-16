@@ -30,6 +30,25 @@ from typing import Callable, Optional
 
 _log = logging.getLogger(__name__)
 
+# Thread-local cancellation flag for the CURRENT bounded worker thread.
+# run_bounded sets the event when it abandons the worker (user stop or
+# timeout); abandoning cannot kill a Python thread, so long-running tools
+# poll cancel_requested() at their loop boundaries and exit early instead
+# of crawling on as zombies (which, in local mode, keep occupying the one
+# llama-server with dead work).
+_thread_cancel = threading.local()
+
+
+def cancel_requested() -> bool:
+    """True inside a bounded worker whose run was stopped or timed out.
+
+    Safe to call from anywhere: outside a bounded worker it returns False.
+    Long-running tools should check this between units of work (per search
+    result, per page fetch, per summary call) and return early.
+    """
+    ev = getattr(_thread_cancel, "event", None)
+    return bool(ev is not None and ev.is_set())
+
 # Sentinels returned (not raised) when a call is aborted. Kept as recognizable
 # string prefixes so callers (agent / workflow engine) can detect them in a result.
 TIMEOUT_PREFIX = "[VAF_TOOL_TIMEOUT]"
@@ -114,6 +133,7 @@ def run_bounded(
 
     box: dict = {}
     done = threading.Event()
+    cancel_ev = threading.Event()
 
     # Run the tool inside a COPY of the caller's context so context-locals (notably the current
     # session id, see subagent_ipc) propagate into this worker thread. A bare threading.Thread
@@ -124,6 +144,12 @@ def run_bounded(
     _ctx = contextvars.copy_context()
 
     def _worker():
+        # Expose the cancellation flag to THIS worker thread: abandoning a
+        # thread does not kill it, so long-running tools (web_search) poll
+        # cancel_requested() at loop boundaries and exit early - otherwise a
+        # zombie worker keeps crawling and keeps occupying the single local
+        # llama-server with dead work (live incident 2026-07-16).
+        _thread_cancel.event = cancel_ev
         try:
             box["value"] = _ctx.run(fn)
         except BaseException as exc:  # noqa: BLE001 — preserved and re-raised below
@@ -148,6 +174,7 @@ def run_bounded(
             except Exception:
                 stop = False
             if stop:
+                cancel_ev.set()  # cooperative: the worker exits at its next checkpoint
                 _log.warning(
                     "[BoundedRun] '%s' cancelled by stop request after %.1fs "
                     "(worker thread abandoned)", label, time.monotonic() - (deadline - timeout)
@@ -158,6 +185,7 @@ def run_bounded(
                 )
 
         if time.monotonic() >= deadline:
+            cancel_ev.set()  # cooperative: the worker exits at its next checkpoint
             _log.warning(
                 "[BoundedRun] '%s' timed out after %.0fs (worker thread abandoned)",
                 label, timeout,

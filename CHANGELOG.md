@@ -100,6 +100,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **Stop now actually stops a running web search.** Stopping a turn
+  abandons the tool's worker thread (Python cannot kill threads), and the
+  abandoned search kept crawling pages and calling the local model for
+  summaries long after the stop - occupying the single llama server with
+  dead work. The runner now hands every bounded worker a cancellation
+  signal that, unlike the shared stop flag, cannot be cleared out from
+  under it; the web search checks it before every page read, every
+  summary call and the final synthesis, and exits early. Bonus fix found
+  in the same logs: those summary calls burned their whole token budget
+  on reasoning and returned empty text on thinking-capable local models -
+  tool-side utility completions now disable thinking, like the voice lane
+  already did.
 - **A workflow cannot be started twice for the same chat anymore.** After
   an empty-response recovery reset, a local model could forget it had
   already delegated and call the same workflow again while the first run

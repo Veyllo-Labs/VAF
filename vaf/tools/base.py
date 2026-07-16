@@ -265,6 +265,13 @@ class BaseTool(ABC):
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
+                # Qwen-class local models burn the whole (small) token budget
+                # on reasoning_content and return EMPTY content for these
+                # utility calls (observed live: finish_reason=length,
+                # reasoning_len=2691, max_tokens=600 on web_search summaries).
+                # Same fix as the voice lane: disable thinking for tool-side
+                # utility completions; non-thinking templates ignore the flag.
+                "chat_template_kwargs": {"enable_thinking": False},
             }
             res = requests.post(
                 "http://127.0.0.1:8080/v1/chat/completions",

@@ -101,3 +101,38 @@ def test_execute_workflow_blocks_a_duplicate_live_run(monkeypatch):
     # normal resolution; unknown id yields the not-found message).
     result2 = ExecuteWorkflowTool().run("some_other_wf_xyz", {})
     assert "ALREADY RUNNING" not in result2
+
+
+def test_bounded_run_sets_cancel_event_for_the_abandoned_worker():
+    """Stop semantics: run_bounded cannot kill a thread, it abandons it. The
+    thread-local cancel event lets the worker exit at its next checkpoint
+    instead of crawling on as a zombie (live incident 2026-07-16: web_search
+    kept calling the local LLM 42s after the stop). Unlike the shared
+    should_stop flag, the event cannot be cleared by the main loop."""
+    import threading
+    import time as _time
+
+    from vaf.core.bounded_run import STOPPED_PREFIX, cancel_requested, run_bounded
+
+    worker_exited = threading.Event()
+    saw_cancel = {}
+
+    def _looping_tool():
+        for _ in range(200):  # ~10s worst case; exits at the first checkpoint
+            if cancel_requested():
+                saw_cancel["yes"] = True
+                worker_exited.set()
+                return "aborted-early"
+            _time.sleep(0.05)
+        worker_exited.set()
+        return "ran-to-completion"
+
+    result = run_bounded(
+        _looping_tool, timeout=30, stop_check=lambda: True, poll=0.05, label="test"
+    )
+    assert isinstance(result, str) and result.startswith(STOPPED_PREFIX)
+    assert worker_exited.wait(timeout=5.0), "worker never exited - zombie"
+    assert saw_cancel.get("yes") is True
+
+    # Outside a bounded worker the helper is inert.
+    assert cancel_requested() is False

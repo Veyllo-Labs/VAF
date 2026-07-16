@@ -567,6 +567,12 @@ Example: User asks "Weather + News" → Call web_search TWICE (weather, then new
 
             def answer_question_with_page(user_question: str, page_title: str, page_content: str, page_url: str) -> str:
                 """Use separate LLM context to answer user question based on single page."""
+                # Checkpoint before each summarize LLM call: an abandoned
+                # (stopped/timed-out) worker must not keep burning the local
+                # llama-server on summaries whose result is already discarded.
+                from vaf.core.bounded_run import cancel_requested as _cancelled
+                if _cancelled():
+                    return ""
                 try:
                     # Detect language from user question
                     lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
@@ -614,6 +620,11 @@ Answer:"""
             
             def synthesize_final_answer(user_question: str, all_answers: list) -> str:
                 """Create ONE final synthesized answer from multiple source answers."""
+                # An abandoned worker's synthesis result is already discarded -
+                # never spend a 35s LLM call on it (see checkpoint note above).
+                from vaf.core.bounded_run import cancel_requested as _cancelled
+                if _cancelled():
+                    return ""
                 try:
                     # Detect language from user question
                     lang = "German" if any(word in user_question.lower() for word in ["wie", "was", "wann", "wo", "wer", "warum"]) else "English"
@@ -710,7 +721,18 @@ Final Answer:"""
             _perpage_deadline = _t_start + max(10.0, _budget - 70.0)
 
             for i, res in enumerate(results, 1):
-                # Respect stop button between result pages
+                # Respect stop button between result pages. TWO signals on
+                # purpose: the shared should_stop flag is cleared as soon as
+                # the main loop honors the stop, so an ABANDONED bounded
+                # worker polling late sees False and crawled on as a zombie,
+                # still feeding the one local llama-server (live incident
+                # 2026-07-16). bounded_run's thread-local cancel event has no
+                # such race - it stays set for this worker forever.
+                from vaf.core.bounded_run import cancel_requested as _cancelled
+                if _cancelled():
+                    summary += "\n\n[Web search aborted by user.]"
+                    UI.event("Web Search", "Stop requested - aborting remaining reads", style="dim")
+                    break
                 try:
                     from vaf.core.subagent_ipc import get_current_session_id as _gcsi
                     _sid = _gcsi()

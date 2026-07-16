@@ -52,6 +52,14 @@ rather than being abandoned, in one of two ways:
   stop-aware poll loop that checks `TaskQueue().should_stop(get_current_session_id())` and, on Stop,
   kills the Docker exec (and the in-container process) immediately instead of letting it run to the
   timeout.
+- **Thread-local cancel event** (`bounded_run.cancel_requested()`): when `run_bounded` abandons a
+  worker (Stop or timeout), it sets a cancellation event visible ONLY to that worker thread. Unlike
+  the shared `should_stop` flag - which the main loop clears as soon as it honors the Stop, so a
+  late-polling abandoned worker sees `False` and crawls on - the event stays set for that worker
+  forever. Long-running tools check it between units of work and exit early: `web_search` does at
+  every result page, before each per-page summary LLM call, and before the final synthesis (live
+  incident 2026-07-16: an abandoned search kept feeding the single local llama-server for 40+
+  seconds after Stop). New long-loop tools should adopt the same checkpoints.
 
 ## Subprocess units: bounded IPC wait, liveness, real kill
 

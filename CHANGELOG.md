@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a14] - 2026-07-16
+
+### Fixed
+- **The a12 updater self-heal never actually fired - fixed for real.** The
+  live verification on a Mac caught it: the updater's git wrapper strips
+  its output, the dirty-line parser read paths at a fixed offset, and the
+  lockfile churn was misread as a real user edit - so updates kept
+  aborting despite the a12 fix. The parser is position-independent now,
+  the restore uses exact paths, and the test suite gained an end-to-end
+  test through a real git repository (the fixture shape that would have
+  caught this). Stuck installs still need the one-time
+  `git checkout -- web/package-lock.json` before their old updater can
+  reach this version.
+
 ## [0.1.0a13] - 2026-07-16
 
 No functional changes: a verification release. Updating a12 to a13

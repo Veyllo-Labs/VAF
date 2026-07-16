@@ -169,7 +169,7 @@ fixes found in live testing.
   into the console and the log files. Request-URL logging is silenced now
   (warnings and errors still come through). If you ever copied terminal
   output containing `api.telegram.org/bot...`, revoke the token via
-  @BotFather and set the new one in Settings.
+  `@BotFather` and set the new one in Settings.
 - **Local voice turns answer instead of thinking.** A local reasoning model
   (Qwen) burned its entire voice token budget on internal reasoning: the turn
   ended with nothing to speak, no delegation was created, and the code then
@@ -465,7 +465,7 @@ fixes found in live testing.
   mirrored into the channel session (and, where the bridge does not record outbound
   itself, the channel message store). Thinking-mode deliveries opt out: tracked
   requests are reconstructed scope-keyed at reply time and would appear twice.
-- **Workflow runs open the Workflow Runtime panel again in TLS setups.** The @workflow
+- **Workflow runs open the Workflow Runtime panel again in TLS setups.** The `@workflow`
   subprocess posted its UI events (workflow_start/update/done, terminal lines) to a
   hardcoded plain-HTTP 127.0.0.1:8001 - with local_network_tls_enabled that port speaks
   HTTPS, every event died silently, and the frontend (never learning a workflow was
@@ -473,8 +473,8 @@ fixes found in live testing.
   Subprocess senders now resolve the backend through a shared TLS-aware helper
   (internal plain-HTTP port 8005 when TLS is on); the vaf-run terminal's
   heartbeat/health probes had the same blindness and use it too.
-- **@workflow runs no longer fail with "Tool not found" for sandbox steps.** The
-  @workflow CLI subprocess, the in-chat executor and the run_temp overlay each
+- **`@workflow` runs no longer fail with "Tool not found" for sandbox steps.** The
+  `@workflow` CLI subprocess, the in-chat executor and the run_temp overlay each
   hand-maintained their own copy of the workflow tool set, and the copies had drifted -
   the subprocess lacked python_sandbox entirely, so a template using it failed its
   first step. All runners now build from one shared list, and a test enforces that

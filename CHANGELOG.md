@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a13] - 2026-07-16
+
+No functional changes: a verification release. Updating a12 to a13
+exercises the fixed updater end to end on a real install - the npm
+lockfile self-churn restore, the forced tag fetch and the renormalized
+line endings must carry an update through without any manual step.
+
 ## [0.1.0a12] - 2026-07-16
 
 ### Fixed

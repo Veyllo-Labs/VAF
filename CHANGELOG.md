@@ -100,6 +100,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **The workflow terminal stream no longer freezes the app window.** When a
+  workflow step drew a live progress animation (the research agent), every
+  animation frame line was forwarded to the Web UI as its own event -
+  hundreds per second, full of raw ANSI color codes - until the page froze
+  and the WebSocket dropped (live incident). The mirror now enforces ticker
+  semantics at the emit site: ANSI escapes stripped, empty animation frames
+  and duplicate redraws dropped, and a hard rate cap with an honest
+  "[... N lines skipped]" marker. The real terminal still shows everything.
 - **`vaf prompt` works in local mode now.** Both scripting lanes
   (`vaf prompt` and the `vaf run prompt` alias) never loaded the local
   model, so every local-mode invocation returned an empty answer - the

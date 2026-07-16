@@ -10,11 +10,76 @@ runs in its own terminal and only reports the final summary back.
 """
 import typer
 import json
+import re
 import sys
 import os
 import time
 from pathlib import Path
 from typing import Optional
+
+# ANSI/VT escape sequences (CSI colors/cursor moves, OSC titles, charset
+# selects). Rich Live animations are made of these; the web ticker must
+# never see them (they rendered as literal garbage and their volume froze
+# the tray browser - live incident 2026-07-16).
+_ANSI_RE = re.compile(
+    r"\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-B])"
+)
+
+
+class _WebTickerFilter:
+    """Turns a raw terminal stream into a web-safe, rate-capped line ticker.
+
+    The workflow terminal mirrors its stdout into the Web UI panel. Sub-agents
+    (research agent) draw Rich Live animations: full-panel redraws many times
+    per second, hundreds of ANSI lines - one HTTP POST + one WebSocket event
+    + one React render EACH froze the tray browser until the WebSocket
+    dropped. This filter enforces ticker semantics at the emit site:
+
+    - strips ANSI escapes and carriage returns,
+    - drops lines that are empty after stripping (animation frames),
+    - drops consecutive duplicates (Live redraws),
+    - hard rate cap: at most MAX_LINES_PER_WINDOW sends per WINDOW seconds;
+      excess lines are counted and surfaced as one "[... N lines skipped]".
+    """
+
+    WINDOW = 0.25
+    MAX_LINES_PER_WINDOW = 15
+
+    def __init__(self, send_line):
+        self._send_line = send_line
+        self._buffer = ""
+        self._last_line = None
+        self._window_start = 0.0
+        self._window_count = 0
+        self._skipped = 0
+
+    def feed(self, data: str) -> None:
+        self._buffer += data
+        while "\n" in self._buffer:
+            raw, self._buffer = self._buffer.split("\n", 1)
+            self._handle_line(raw)
+
+    def _handle_line(self, raw: str) -> None:
+        line = _ANSI_RE.sub("", raw).replace("\r", "").rstrip()
+        if not line.strip():
+            return
+        if line == self._last_line:
+            return
+        self._last_line = line
+
+        now = time.monotonic()
+        if now - self._window_start >= self.WINDOW:
+            self._window_start = now
+            self._window_count = 0
+        if self._window_count >= self.MAX_LINES_PER_WINDOW:
+            self._skipped += 1
+            return
+        if self._skipped:
+            self._send_line(f"[... {self._skipped} lines skipped]")
+            self._skipped = 0
+            self._window_count += 1
+        self._send_line(line)
+        self._window_count += 1
 
 # Fix Windows encoding issues - must be done BEFORE any output
 if sys.platform == "win32":
@@ -242,10 +307,13 @@ def run_workflow(
             except:
                 pass
 
-        class WebStreamWriter:
+        class WebStreamWriter(_WebTickerFilter):
+            """Real terminal gets everything; the web ticker gets the
+            filtered, rate-capped view (see _WebTickerFilter)."""
+
             def __init__(self, stream):
+                super().__init__(send_web_line)
                 self.stream = stream
-                self._buffer = ""
 
             def write(self, data):
                 try:
@@ -253,13 +321,9 @@ def run_workflow(
                     self.stream.flush()
                 except Exception:
                     pass
-
                 if not session_id:
                     return
-                self._buffer += data
-                while "\n" in self._buffer:
-                    line, self._buffer = self._buffer.split("\n", 1)
-                    send_web_line(line)
+                self.feed(data)
 
             def flush(self):
                 try:

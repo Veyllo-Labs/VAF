@@ -59,8 +59,13 @@ def _localize(err) -> str:
     return f"field '{path}': {err.message}" if path else err.message
 
 
-def repair_tool_input(schema: Any, args: Any):
+def repair_tool_input(schema: Any, args: Any, aliases: Any = None):
     """Validate ``args`` against ``schema``; repair common weak-model shape errors.
+
+    ``aliases`` (optional) maps a canonical property name to a list of synonym
+    keys the model might use instead (a tool's ``input_aliases``); R0 remaps a
+    present synonym to the canonical name before validation. Kept out of the
+    schema so it never reaches a model-facing tool definition.
 
     Returns ``(repaired_args, applied, errors)``:
 
@@ -85,9 +90,32 @@ def repair_tool_input(schema: Any, args: Any):
         # jsonschema unavailable -> behave as a no-op (never block dispatch).
         return args, [], []
 
+    # R0 - key aliases: weak models routinely use a synonym for a property
+    # name (write_file: file_path->path, message->content). The tool's
+    # input_aliases map (passed in, NOT read from the schema, so no unknown
+    # keyword ever reaches a model-facing tool definition) is applied BEFORE
+    # the initial validation, so a pure-alias input re-validates clean and
+    # dispatches. Conservative: only fills a canonical key that is ABSENT (and
+    # is a real schema property), only from an alias that IS present, and never
+    # overwrites a value the model already supplied under the real name; two
+    # aliases present at once is ambiguous and left alone.
+    alias_args = dict(args)
+    alias_applied: list[str] = []
+    if isinstance(aliases, dict):
+        for key, syns in aliases.items():
+            if key in alias_args or key not in props or not isinstance(syns, (list, tuple)):
+                continue
+            present = [a for a in syns if a in alias_args]
+            if len(present) == 1:
+                src = present[0]
+                alias_args[key] = alias_args.pop(src)
+                alias_applied.append(f"{key}: alias<-{src}")
+    if alias_applied:
+        args = alias_args
+
     errs = list(Draft202012Validator(schema).iter_errors(args))
     if not errs:
-        return args, [], []  # never touch valid input
+        return args, alias_applied, []  # valid after alias remap (or already valid)
 
     # Only repair fields that THEMSELVES fail validation. A field that is already
     # valid must never be touched just because a *different* field errored — that
@@ -99,7 +127,7 @@ def repair_tool_input(schema: Any, args: Any):
 
     required = set(schema.get("required") or [])
     repaired = dict(args)
-    applied: list[str] = []
+    applied: list[str] = list(alias_applied)
 
     for key, prop in props.items():
         if key not in error_fields:

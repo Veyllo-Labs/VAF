@@ -100,6 +100,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A failed tool no longer reports itself to the model as "OK".** The
+  per-turn tool-context summary (what the model reads to know what its
+  tools did) labeled failures by an out-of-date heuristic that missed the
+  standard `Tool Error:` / `Security Error:` / `[PLAN REQUIRED]` prefixes,
+  so a failed `write_file` showed as `-> OK: Tool Error ...`; a local model
+  then told the user the file existed when it did not (live incident). The
+  three copies of the "is this a failed tool result" check (retry guard,
+  per-turn summary) now share one prefix-anchored helper so they cannot
+  drift again.
+- **Common weak-model argument-name mistakes are now repaired.** A local
+  model called `write_file` with `file_path`/`message` instead of
+  `path`/`content`; the call failed schema validation and the write was
+  lost. Tools can now declare an `input_aliases` map (kept off the model-facing
+  schema so no provider can reject it), and the input-repair layer remaps a
+  present alias to the canonical name before dispatch (conservatively:
+  never overwriting a supplied canonical key, never guessing between two
+  aliases). `write_file` maps the obvious path/content synonyms.
 - **Stop now actually stops a running web search.** Stopping a turn
   abandons the tool's worker thread (Python cannot kill threads), and the
   abandoned search kept crawling pages and calling the local model for

@@ -136,3 +136,41 @@ def test_bounded_run_sets_cancel_event_for_the_abandoned_worker():
 
     # Outside a bounded worker the helper is inert.
     assert cancel_requested() is False
+
+
+def test_tool_result_is_error_recognizes_all_failure_prefixes():
+    """Incident cyan123670: a failed write_file rendered '-> OK: Tool Error'
+    because context.py's detector missed the 'Tool Error:' prefix, and the
+    local model reported the (non-existent) file as created. One shared
+    detector now backs the retry guard, the summarizer and the tool_end flag."""
+    from vaf.core.context import tool_result_is_error, summarize_tool_turn
+
+    fail = [
+        "Tool Error: invalid arguments for 'write_file': 'path' is a required property",
+        "Security Error: Tool 'x' requires an admin session.",
+        "[PLAN REQUIRED] set your approach first",
+        "Error: Unknown tool 'foo'",
+        "❌ something broke",
+        "Traceback (most recent call last):\n  File ...",
+        "Exception: boom",
+    ]
+    for f in fail:
+        assert tool_result_is_error(f), f
+
+    ok = [
+        "Saved: /tmp/report.html",
+        "No errors found in the document.",
+        "Message sent to the user via Telegram.",
+        "### Web Search Results ...",
+    ]
+    for o in ok:
+        assert not tool_result_is_error(o), o
+
+    # End to end: the per-turn summary must label the failed write FAILED, not OK.
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"function": {"name": "write_file"}}]},
+        {"role": "tool", "name": "write_file",
+         "content": "Tool Error: invalid arguments for 'write_file': 'path' is a required property"},
+    ]
+    summary = summarize_tool_turn(msgs)
+    assert summary and "FAILED" in summary and "→ OK" not in summary

@@ -29,17 +29,52 @@ from vaf.core.config import Config
 TURN_CONTEXT_PREFIX = "[Context:"
 
 
-def _tool_result_is_error(content: str) -> bool:
-    """Heuristic: does a tool result represent a failure? Mirrors the detection
-    used in the agent's retry guard."""
+# Prefixes that mean a tool result is a FAILURE, anchored to the start so
+# "No errors found" is not a false positive. Tools surface failures as
+# "<qualifier> Error: ..." (Tool Error / Security Error), NOT a bare
+# "Error:", so a leading "error"/"failed" check alone marked those green.
+# THE single source of truth for "is this a failed tool result", shared by
+# the agent's retry guard (agent.py) and this per-turn summarizer so the two
+# copies can never drift again (a drift left this summarizer labeling a failed
+# write_file as OK, which a weak local model then reported to the user as
+# success - session cyan123670). NOTE: the tool_end observability `ok` flag in
+# agent.py intentionally does NOT use this helper - it is a narrower,
+# dispatch-level check (it must not mark a "Failed..."-style semantic output
+# as not-ok).
+_ERROR_PREFIXES = (
+    "❌",
+    "error",
+    "failed",
+    "tool error",
+    "security error",
+    "exception",
+    "[error]",
+    # State-changing tool gated until a plan is set: it did NOT run, so it
+    # must not read as a green success.
+    "[plan required]",
+)
+
+
+def tool_result_is_error(content: str) -> bool:
+    """True when a tool result string represents a failure (prefix-anchored)."""
+    if not isinstance(content, str):
+        return False
+    head = content[:50].lower().strip()
+    if head.startswith(_ERROR_PREFIXES):
+        return True
+    # Substring belts for wrapped tracebacks / generic runner errors and an
+    # embedded cross-mark that do not lead with a known prefix.
     low = content.lower()
     return (
-        "error executing tool" in low
-        or low.lstrip().startswith("error")
+        "❌" in content
+        or "error executing tool" in low
         or "traceback (most recent call last)" in low
-        or "❌" in content  # ❌
         or ("failed" in low and ("tool" in low or "execution" in low))
     )
+
+
+# Backward-compatible private alias (was the only name before the extraction).
+_tool_result_is_error = tool_result_is_error
 
 
 def summarize_tool_turn(messages: List[Dict], snippet_limit: int = 200) -> Optional[str]:

@@ -8644,23 +8644,11 @@ class Agent:
                         from vaf.core.web_interface import get_web_interface
                         r_str = str(result) if result else ""
                         # Same 50-char status convention: only the prefix is the status.
-                        # NOTE: match the "<qualifier> Error:" forms too — tools surface
-                        # failures as "Tool Error: …" / "Security Error: …" (not a bare
-                        # "Error: …"), so a leading "error"/"failed" check alone marked
-                        # those results as a green success. Prefix-anchored to avoid false
-                        # positives like "No errors found".
-                        _r_status = r_str[:50].lower().strip()
-                        is_err = (
-                            _r_status.startswith("❌") or
-                            _r_status.startswith("error") or
-                            _r_status.startswith("failed") or
-                            _r_status.startswith("tool error") or
-                            _r_status.startswith("security error") or
-                            _r_status.startswith("exception") or
-                            # State-changing tool gated until a plan is set: it did NOT run, so it must not
-                            # show as a green success (the user could mistake it for "memory saved").
-                            _r_status.startswith("[plan required]")
-                        )
+                        # Single source of truth for "is this a failed tool
+                        # result" (context.py) - the per-turn summarizer and the
+                        # tool_end ok flag use the same helper so they cannot drift.
+                        from vaf.core.context import tool_result_is_error
+                        is_err = tool_result_is_error(r_str)
                         _tool_session = getattr(self, 'current_session_id', None)
                         if not _tool_session:
                             from vaf.core.subagent_ipc import get_current_session_id
@@ -9930,7 +9918,8 @@ class Agent:
                 try:
                     from vaf.core.tool_input_repair import repair_tool_input
                     tool_args, _ti_applied, _ti_errors = repair_tool_input(
-                        getattr(self.tools[name], "parameters", None), tool_args
+                        getattr(self.tools[name], "parameters", None), tool_args,
+                        getattr(self.tools[name], "input_aliases", None),
                     )
                     if _ti_applied:
                         try:
@@ -10261,7 +10250,10 @@ class Agent:
                     result = unsafe_result
 
         # ok reflects DISPATCH-level failure (exception -> "Tool Error:", or an
-        # unknown tool name) - not the semantic success of the tool's output.
+        # unknown tool name) - NOT the semantic success of the tool's output, so
+        # this stays an explicit narrow check rather than the broad
+        # tool_result_is_error helper (which also flags "Failed..."-style
+        # semantic outputs the observability contract must not mark not-ok).
         _tool_ok = not (
             isinstance(result, str)
             and (result.startswith("Tool Error:") or result.startswith("Error: Unknown tool"))

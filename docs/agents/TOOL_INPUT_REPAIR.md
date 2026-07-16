@@ -36,10 +36,23 @@ invariant — R2 runs before R4 so a stringified array is parsed, not wrapped.
 
 | Id | When | Action |
 |----|------|--------|
+| R0 | the tool's `input_aliases` names a synonym for a property, the canonical key is absent, and exactly one alias is present | move the value under the canonical key (rename, no value change). Runs first, before validation, so a pure-alias input dispatches cleanly |
 | R2 | array field, value is a string that looks like a JSON array (`'["a","b"]'`) | `json.loads`; use it if the result is a list |
 | R1 | optional field (not in `required`), value is `null` | drop the key so the tool's own default applies |
 | R3 | non-object field, value is a single-key object (`{"value": [...]}`) | unwrap to the inner value |
 | R4 | array field, value is a non-empty string (`"urgent"`) | wrap as `["urgent"]` |
+
+R0 is conservative on purpose: it never overwrites a canonical key the model
+already supplied, and it does nothing when two aliases are present at once
+(ambiguous). Because it only renames, it is safe for the excluded `content` /
+`code` fields (the value is not coerced). Aliases live on the tool's
+`input_aliases` attribute, NOT in the `parameters` schema, so the unknown
+keyword never reaches a model-facing tool definition (a strict provider such
+as Google Gemini could otherwise reject the whole tool). Example: `write_file`
+maps `path` <- `file_path`/`filepath`/`filename`/`file` and `content` <-
+`message`/`text`/`body`/`data`, so a weak model's `{file_path, message}` call
+is remapped and dispatched instead of lost (incident: a local model's HTML
+write silently failed, then the model reported the file as created).
 
 ### Excluded fields
 
@@ -96,6 +109,12 @@ This shows which models mis-shape which tool inputs, and how often.
 - Array fields benefit most: a single value sent as a bare string is wrapped
   instead of failing.
 - `content` / `code` fields are passed through verbatim.
+- Set `input_aliases = {canonical: [synonyms]}` on the tool class to catch
+  common synonym mistakes (e.g. `path` <- `file_path`). Kept off the schema so
+  it is never sent to a model. The alias remap (R0) does the rest.
+- Repair (and therefore R0) runs only on the MAIN agent / sub-agent dispatch
+  path (`Agent.execute_tool`). The coder and the workflow engine have their
+  own tool loops and do not call it, so aliases do not help there.
 
 ## Notes
 

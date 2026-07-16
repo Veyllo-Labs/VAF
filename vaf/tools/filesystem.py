@@ -628,6 +628,15 @@ class WriteFileTool(BaseTool):
         "required": ["path"]
     }
 
+    # Weak models often send synonyms; repair_tool_input (R0) remaps them to
+    # the canonical names before dispatch. Kept OFF the model-facing schema
+    # above (incident cyan123670: a local model sent file_path/message and the
+    # write was silently lost).
+    input_aliases = {
+        "path": ["file_path", "filepath", "filename", "file"],
+        "content": ["message", "text", "body", "data"],
+    }
+
     def run(self, **kwargs) -> str:
         # Main-agent calls (identified by the injected kwargs from execute_tool) apply
         # the per-user filesystem jail for non-admin users. It MUST be set here in the

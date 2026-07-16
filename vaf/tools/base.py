@@ -102,6 +102,15 @@ class BaseTool(ABC):
     # The check runs before the tool executes — no confirmation, hard block.
     channel_restrictions: tuple[str, ...] = ()
 
+    # input_aliases: {canonical_param: [synonyms]}. Weak models often use a
+    # synonym for a parameter name (write_file: file_path -> path,
+    # message -> content). The input-repair layer (R0, see
+    # docs/agents/TOOL_INPUT_REPAIR.md) remaps a present synonym to the
+    # canonical name before dispatch. Deliberately NOT a JSON-schema keyword:
+    # kept off the model-facing `parameters` so a strict provider (Google
+    # Gemini) can never reject the whole tool over an unknown schema field.
+    input_aliases: Dict[str, List[str]] = {}
+
     # side_effect_class: impact classification shown in the confirmation prompt.
     #   "none"        — read-only, no external state changed
     #   "reversible"  — state changed but can be undone

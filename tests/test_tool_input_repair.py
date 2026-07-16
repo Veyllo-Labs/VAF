@@ -138,3 +138,100 @@ def test_real_type_mismatch_keeps_expects_got_wording():
     }
     _out, _applied, errors = repair_tool_input(schema, {"count": "many"})
     assert errors and "expects integer, got str" in errors[0], errors
+
+
+def test_r0_key_aliases_remap_to_canonical_names():
+    """Incident cyan123670: a weak local model sent write_file
+    {file_path, message} and the write was silently lost. R0 remaps declared
+    aliases to the canonical property name before validation."""
+    from vaf.core.tool_input_repair import repair_tool_input
+
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "required": ["path"],
+    }
+    aliases = {"path": ["file_path", "filename"], "content": ["message", "text"]}
+    rep, applied, errors = repair_tool_input(
+        schema, {"file_path": "/tmp/x.html", "message": "<html>"}, aliases
+    )
+    assert rep == {"path": "/tmp/x.html", "content": "<html>"}
+    assert errors == []
+    assert "path: alias<-file_path" in applied
+    assert "content: alias<-message" in applied
+
+
+def test_r0_never_clobbers_a_supplied_canonical_key():
+    from vaf.core.tool_input_repair import repair_tool_input
+
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+    rep, applied, errors = repair_tool_input(
+        schema, {"path": "real.txt", "file_path": "stray"}, {"path": ["file_path"]}
+    )
+    assert rep["path"] == "real.txt"  # canonical wins; alias not applied
+    assert not any(a.startswith("path: alias") for a in applied)
+
+
+def test_r0_alias_value_is_byte_identical_for_protected_content():
+    from vaf.core.tool_input_repair import repair_tool_input
+
+    schema = {
+        "type": "object",
+        "properties": {"content": {"type": "string"}},
+        "required": ["content"],
+    }
+    payload = '["not","a","real","array"] <- must survive verbatim'
+    rep, applied, errors = repair_tool_input(schema, {"message": payload}, {"content": ["message"]})
+    assert rep["content"] == payload  # renamed, never coerced
+
+
+def test_r0_ambiguous_aliases_are_left_alone():
+    from vaf.core.tool_input_repair import repair_tool_input
+
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+    # Two aliases present -> ambiguous -> do not guess.
+    rep, applied, errors = repair_tool_input(
+        schema, {"file_path": "a", "filename": "b"}, {"path": ["file_path", "filename"]}
+    )
+    assert not any(a.startswith("path: alias") for a in applied)
+    assert errors  # still missing required 'path'
+
+
+def test_write_file_aliases_live_and_off_the_model_schema():
+    """The real WriteFileTool: input_aliases repair the incident args, and the
+    model-facing parameters schema carries NO custom 'aliases' keyword (so a
+    strict provider cannot reject the tool)."""
+    from jsonschema import Draft202012Validator
+
+    from vaf.core.tool_input_repair import repair_tool_input
+    from vaf.tools.filesystem import WriteFileTool
+
+    tool = WriteFileTool()
+    rep, applied, errors = repair_tool_input(
+        tool.parameters, {"file_path": "/tmp/x.html", "message": "<html>"},
+        tool.input_aliases,
+    )
+    assert rep == {"path": "/tmp/x.html", "content": "<html>"}
+    assert not errors
+
+    # Schema is a valid JSON Schema and declares no 'aliases' anywhere.
+    Draft202012Validator.check_schema(tool.parameters)
+    import json
+    assert '"aliases"' not in json.dumps(tool.parameters)
+
+
+def test_repair_without_aliases_arg_is_unchanged():
+    from vaf.core.tool_input_repair import repair_tool_input
+
+    schema = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+    rep, applied, errors = repair_tool_input(schema, {"file_path": "x"})
+    assert errors  # no aliases passed -> still missing 'path'
+    assert not any(a.startswith("path: alias") for a in applied)

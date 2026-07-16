@@ -257,6 +257,18 @@ vaf update     # update to the latest release
 
 On Linux and macOS, `vaf` is added to your shell — open a new terminal if it isn't found yet. On Windows, use the **VAF Agent** shortcut or `run_vaf.bat <command>` (for example `run_vaf.bat status`); the bare `vaf` command needs the virtual environment active first. In Server mode these same commands wrap the background service.
 
+> **Stuck on an old version (0.1.0a7 - 0.1.0a13)?** Those updaters could
+> deadlock on a lockfile their own npm step had rewritten: `vaf update`
+> aborts with "local changes to tracked files: web/package-lock.json".
+> Run this once in the VAF folder, then update normally:
+>
+> ```bash
+> git checkout -- web/package-lock.json
+> vaf update
+> ```
+>
+> From 0.1.0a14 on the updater restores such files itself.
+
 ---
 
 ## Alternative: install without git

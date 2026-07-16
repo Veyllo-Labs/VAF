@@ -334,3 +334,14 @@ def test_vad_path_downloads_models_first(monkeypatch):
     monkeypatch.setitem(sys.modules, "sherpa_onnx", type(sys)("sherpa_onnx"))
     assert sid._new_vad() is None
     assert calls["ensure"] == 1
+
+
+def test_enroll_start_prewarms_the_engine(monkeypatch):
+    """The models download during the intro speech, not in round 1 (26 MB
+    embedding model on a slow line would stall the first answer)."""
+    import threading as _th
+    fired = _th.Event()
+    monkeypatch.setattr(sid, "engine_ready", lambda: fired.set() or True)
+    sid.enroll_start("scope-a", "de")
+    assert fired.wait(timeout=3.0)
+    sid.enroll_abort("scope-a")

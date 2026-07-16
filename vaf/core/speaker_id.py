@@ -109,8 +109,19 @@ def _profile_dir(scope_id: str) -> Path:
 # Engine (singleton, lazy, CPU)
 # ---------------------------------------------------------------------------
 
+_models_lock = threading.Lock()
+
+
 def _ensure_models() -> bool:
-    """Download missing model files (Piper precedent). Returns True when present."""
+    """Download missing model files (Piper precedent). Returns True when present.
+    Serialized: the enroll_start prewarm thread and the first round's VAD may
+    call this concurrently - two writers on the same .part file would corrupt
+    the download."""
+    with _models_lock:
+        return _ensure_models_locked()
+
+
+def _ensure_models_locked() -> bool:
     try:
         import requests
         d = _models_dir()
@@ -495,6 +506,12 @@ def enroll_start(scope_id: str, ui_lang: str = "en") -> Dict:
             "rounds": 0,
             "started": time.time(),
         }
+    # Prewarm the engine in the background: the models (26 MB embedding +
+    # VAD) then download DURING the intro speech instead of stalling the
+    # first round (Mac report suggestion). Idempotent and lock-serialized;
+    # a failure surfaces later as engine_unavailable, never here.
+    threading.Thread(target=engine_ready, name="speaker-engine-prewarm",
+                     daemon=True).start()
     lang = _enroll_lang(ui_lang)
     return {
         "target_seconds": _ENROLL_TARGET_SECONDS,

@@ -79,6 +79,49 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
         args[_arg] = os.path.join(workflow_project_path, p)
 
 
+def summarize_run_steps(steps) -> str:
+    """One bounded line per step (tool, status, result head) for the workflow
+    completion message. The completion used to show ONLY the LAST step's
+    output - when a template's final step produced garbage ("No files found
+    matching '*was*'", a filesystem agent misreading a prose prompt), the
+    model read that next to "completed successfully", concluded the workflow
+    produced nothing, and redid all the work manually (live incident). With
+    every step's real result in view, one weird step can no longer hide the
+    actual deliverables."""
+    lines = []
+    try:
+        for i, s in enumerate(steps or [], 1):
+            status = getattr(getattr(s, "status", None), "value", None) or str(getattr(s, "status", "?"))
+            head = _strip_rich_links(str(getattr(s, "result", "") or "")).replace("\n", " ").strip()[:120]
+            lines.append(f"{i}. {getattr(s, 'tool', '?')} [{status}] {head}")
+    except Exception:
+        return ""
+    return "\n".join(lines)
+
+
+def _workflow_step_timeout(tool_name: str) -> float:
+    """Worst-case hard cap for one workflow step.
+
+    Heavy agent steps (coder/research/document) get a WORKFLOW-specific floor
+    (workflow_agent_step_timeout_seconds, default 1800s): the generic
+    subagent_timeout_seconds cap of 300s killed a perfectly HEALTHY coder
+    mid-loop at minute five (live incident: loop 9, linter green, actively
+    streaming - SIGTERM). The hard cap is only the absolute-runaway backstop;
+    a dead/stuck child is caught much earlier by the heartbeat liveness lane
+    (subagent_liveness_timeout_seconds, ~60s), so generous is correct here.
+    Every other tool keeps its normal per-tool budget."""
+    from vaf.core.bounded_run import agent_timeout_seconds
+    base = agent_timeout_seconds(tool_name)
+    if tool_name in ("coding_agent", "research_agent", "document_agent"):
+        try:
+            from vaf.core.config import Config
+            floor = float(Config.get("workflow_agent_step_timeout_seconds", 1800) or 1800)
+            return max(base, floor)
+        except Exception:
+            return max(base, 1800.0)
+    return base
+
+
 def _strip_rich_links(text: str) -> str:
     """Replace Rich link markup with just the display text.
 
@@ -272,6 +315,11 @@ class WorkflowEngine:
 
         final_output = None
         error = None
+        # Ordered record of ACTUAL step results (name, tool, stripped result) for
+        # the auto-attach digest below. Deliberately separate from `outputs`,
+        # which is polluted with variables, defaults, temporal seeds and the
+        # project path - none of which are step data.
+        _executed_step_outputs: List[tuple] = []
 
         # ── Shared Workflow Project Path ───────────────────────────────────────
         # Generate ONE project directory for the entire workflow run. coding_agent
@@ -523,6 +571,66 @@ class WorkflowEngine:
                             )
                             break
 
+                # ── Auto-attach previous step results (weak-model safety net) ──
+                # The {output_name} substitution only helps when the step AUTHOR
+                # referenced prior outputs in the template. A weak model reliably
+                # NAMES outputs but never references them - live incident: the
+                # final coding_agent step said "use the results from the previous
+                # searches" in prose, no placeholder anywhere, so the coder
+                # received zero data and (correctly, per the factual-data policy)
+                # rendered [DATA NOT FOUND] into every field of the deliverable.
+                # For task-consuming agent steps whose template references NO
+                # prior step output, attach a bounded digest of what the
+                # workflow has actually produced so far. Saved templates author
+                # real placeholders and are therefore never touched by this.
+                # The set is every agent tool whose primary arg is a free-text
+                # `task` (builders AND analyzers - a librarian step saying
+                # "analysiere die Datei von vorher" has the same hole).
+                # research_agent stays OUT deliberately: its primary arg is a
+                # short `topic` query - bolting result data onto it would
+                # pollute the search profile, and its job is to PRODUCE data,
+                # not consume it.
+                _DIGEST_TOOLS = {"coding_agent", "document_writer", "document_agent",
+                                 "librarian_agent", "browser_agent"}
+                if step.tool in _DIGEST_TOOLS and _executed_step_outputs:
+                    _tmpl_text = str(step.input_template or "") + " " + " ".join(
+                        str(v) for v in (step.args_template or {}).values()
+                    )
+                    _references_prior = any(
+                        ("{" + _n + "}") in _tmpl_text for _n, _t, _r in _executed_step_outputs
+                    )
+                    _instr_key = next((k for k in ("task", "input", "prompt", "instruction")
+                                       if isinstance(args.get(k), str)), None)
+                    if not _references_prior and _instr_key:
+                        _PER_RESULT_CAP, _TOTAL_CAP = 3000, 9000
+                        _parts, _used = [], 0
+                        for _n, _t, _r in _executed_step_outputs:
+                            _r = (str(_r or "")).strip()
+                            if not _r:
+                                continue
+                            _r = _r[:_PER_RESULT_CAP]
+                            if _used + len(_r) > _TOTAL_CAP:
+                                _r = _r[: max(0, _TOTAL_CAP - _used)]
+                            if not _r:
+                                break
+                            _parts.append(f"### {_n} (from tool '{_t}')\n{_r}")
+                            _used += len(_r)
+                        if _parts:
+                            args[_instr_key] = (
+                                str(args[_instr_key])
+                                + "\n\n## RESULTS FROM PREVIOUS WORKFLOW STEPS (auto-attached)\n"
+                                + "These are the actual outputs of the steps that already ran. "
+                                + "Use them as your input data where relevant - do not re-gather "
+                                + "what is already here, and do not invent values that are "
+                                + "missing from it:\n\n"
+                                + "\n\n".join(_parts)
+                            )
+                            UI.event(
+                                "Workflow",
+                                f"  [INFO] Auto-attached {len(_parts)} previous step result(s) to {step.tool}",
+                                style="dim",
+                            )
+
                 # Snapshot outputs before tool execution (for retry on failure)
                 outputs_snapshot = {k: v for k, v in outputs.items()}
                 
@@ -658,7 +766,7 @@ class WorkflowEngine:
                 # workflow orchestrators stay self-supervised here (they are never steps in
                 # practice). Standalone browser_agent (via execute_tool) stays self-supervised.
                 _self_supervised = (step.tool in SELF_SUPERVISED_TOOLS) and step.tool != "browser_agent"
-                _step_timeout = agent_timeout_seconds(step.tool)   # per-agent budget
+                _step_timeout = _workflow_step_timeout(step.tool)  # per-agent budget (workflow floor for heavy agents)
                 _stop_poll = float(_CfgTO.get("tool_stop_poll_seconds", 0.5))
 
                 while retry_count < max_retries:
@@ -1056,6 +1164,9 @@ class WorkflowEngine:
                 # don't embed URL-encoded paths into subsequent steps' task text,
                 # which would confuse the coder's path-extraction regex.
                 outputs[step.output_name] = _strip_rich_links(str(result))
+                _executed_step_outputs.append(
+                    (step.output_name, step.tool, _strip_rich_links(str(result)))
+                )
                 final_output = result
 
                 # Truncate for display

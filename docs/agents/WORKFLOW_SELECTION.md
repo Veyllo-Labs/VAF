@@ -155,6 +155,8 @@ Both `execute_workflow` and `list_workflows` are available to the main agent. Th
 
 A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a **saved template id** (from `list_workflows`), never the name of a tool - in particular never `"create_agent_workflow"` itself, which is the *other* tool (builds/runs a workflow, does not look one up by id). Both tools' descriptions now say this explicitly, and `execute_workflow` detects a live tool-name collision and redirects to the right tool instead of just repeating the template list (`vaf/tools/workflow_executor.py`).
 
+The redirect is an ECHO-BACK when possible: a model that merged the two hints usually delivers a complete, correct run_temp payload inside `variables` (live incident: `execute_workflow(workflow_id="create_agent_workflow", variables={action: "run_temp", steps: [...]})` with perfectly good steps - after a prose-only redirect the model gave up on workflows and did every step manually). When `variables` carries `steps`, the error message hands back the exact `create_agent_workflow(...)` call to copy, with the model's own arguments verbatim (action defaulted to `run_temp`, oversized payloads fall back to the generic advice). Weak models copy reliably; they rephrase poorly. The redirect stays a MESSAGE - it never auto-forwards the call (dispatch gates and the "agent decides" principle stay intact).
+
 ### `create_agent_workflow` — runtime workflow creation
 
 The agent can define and run its own workflows at runtime without any human involvement. Two modes:
@@ -178,6 +180,39 @@ create_agent_workflow(
 - Available to the agent in **any session** (not admin-only).
 - The `WorkflowEngine` runs synchronously using the agent's **full live tool registry** — all tools currently loaded, including custom ones.
 - Each step's `output` is available as `{variable}` in subsequent steps.
+- **Weak-model step repair (`_repair_raw_step`):** the canonical step shape is `input` + `tool`,
+  but a weak model reliably mangles the FIELD NAMES while getting the plan right - live incident:
+  `{"action": "web_search", "description": "Wetter suchen (Berlin)", "name": "step_1_wetter"}`,
+  which the old nested schema requirement (`required: ["input"]`) rejected wholesale
+  ("'input' is a required property"); the model could not act on that message and regressed into
+  planning spin until the loop guards ended the turn. Steps are now repaired before validation:
+  `tool` also accepts step-level `action`/`agent_id`, `input` falls back through
+  `code`/`task`/`prompt`/`instruction`/`query`/`description`/`name`, and an args-only step gets a
+  synthesized label (the engine runs it via `args` anyway). A step with truly nothing usable
+  still errors, now with a targeted message. Applies to `run_temp` AND `create`.
+- **Weak-model safety net (auto-attach):** a weak model reliably NAMES step outputs but never
+  references them - a live incident's final coding_agent step said "use the results from the
+  previous searches" in prose, with no `{placeholder}` anywhere, so substitution had nothing to do,
+  the coder received zero data, and the strict factual-data anchor made it render
+  `[DATA NOT FOUND]` into every field of the deliverable. When a task-consuming agent step
+  (`coding_agent` / `document_writer` / `document_agent` / `librarian_agent` / `browser_agent` -
+  every agent tool whose primary arg is a free-text `task`; builders and analyzers alike)
+  references NO prior step output in its template, the engine now appends a bounded
+  "RESULTS FROM PREVIOUS WORKFLOW STEPS" digest of the actual results (3000 chars per result,
+  9000 total) to the step's instruction. `research_agent` is deliberately excluded: its primary
+  arg is a short `topic` query - attaching result data would pollute the search profile, and its
+  job is to produce data, not consume it. Templates that DO reference an output - every saved
+  template - are never touched. This applies in EVERY lane that runs the engine (run_temp, saved
+  templates via `execute_workflow`, the CLI `@workflow` lane, automations with workflow steps).
+  The full authored step list is logged as a `[RUN_TEMP]` line (backend log) so the next forensic
+  is a grep, not an inference.
+- **Completion carries every step's result:** both completion messages (saved workflows via
+  `execute_workflow` and temporary ones) append a bounded "Step results" summary - one line per
+  step with tool, status and result head (`engine.summarize_run_steps`). The completion used to
+  show only the LAST step's output; when a template's final step produced garbage, the model read
+  it next to "completed successfully", concluded the run produced nothing, and redid all the work
+  manually (live incident; see also the removed librarian completion-message anti-pattern in the
+  templates).
 - **Minimum two steps.** A single-step `run_temp` is rejected with an error — a lone step has no output to chain and gains nothing from the engine, so the agent should call that tool directly instead. The only exception is a single `create_automation` step (scheduling a task, as the built-in "Create Scheduled Task" workflow does), which is allowed.
 
 ##### Step fields
@@ -296,7 +331,7 @@ Assertions are deterministic substring checks. For content/agent steps you often
 
 - **Eligible tools only:** `document_agent`, `document_writer`, `research_agent`, `coding_agent`, `browser_agent`, `librarian_agent` (a correction-retry can't change a deterministic tool's output, so `validate` is ignored elsewhere).
 - **No lenient fast-path:** unlike the Main Agent's direct sub-agent validation, this judges the *content* — a step that merely reports "saved successfully" but produced the wrong/empty document is caught.
-- **Confirmation gate:** if a workflow has eligible steps but **none** sets `validate`, `run_temp` does not execute — it returns a `[VALIDATION CHECK]` asking you to either flag the critical steps or pass the top-level `skip_validation: true` to run without validation on purpose.
+- **Auto-enable (was a confirmation gate):** if a workflow has eligible steps but **none** sets `validate`, `run_temp` now enables validation on those steps automatically and RUNS; `skip_validation: true` is the explicit opt-out. The old behavior returned a `[VALIDATION CHECK]` bounce asking the agent to re-call with flags - a live incident showed a weak model bouncing twice (retrying without the flags both times) and then doing every step manually while its correctly authored workflow never ran. Validation-on is exactly what the bounce text recommended, so the system decides it itself.
 - Globally toggled via `workflow_step_validation_enabled` (default on). See [Sub-Agent IPC](SUBAGENT_IPC.md#per-step-output-validation-opt-in).
 
 ##### Variable Anchoring (automatic)

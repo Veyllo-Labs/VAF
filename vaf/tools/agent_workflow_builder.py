@@ -63,6 +63,44 @@ from typing import Any, Dict, List, Optional
 from vaf.tools.base import BaseTool
 
 
+# Per-step weak-model repair (the generic input-repair layer only remaps
+# TOP-LEVEL argument aliases; nested step objects need their own). Live
+# incident: a model authored {"action": "web_search", "description": "Wetter
+# suchen (Berlin)", "name": "step_1_wetter"} - tool named in 'action',
+# instruction in 'description', no 'input' - and the old nested schema
+# requirement rejected the whole call ("'input' is a required property"),
+# after which the model never recovered the thread.
+_STEP_INPUT_ALIASES = ("input", "code", "task", "prompt", "instruction", "query",
+                       "description", "name")
+
+
+def _repair_raw_step(s: dict) -> dict:
+    """Return a shallow copy of one raw step with weak-model field shapes
+    repaired: tool <- tool|agent_id|action (step-level 'action' is unambiguous;
+    the run_temp/create discriminator lives on the TOP level), input <- the
+    first non-empty alias in _STEP_INPUT_ALIASES; an args-only step gets a
+    synthesized label so the engine's args_template path can run it. A step
+    with truly nothing usable keeps input empty and the caller errors as
+    before. Pure."""
+    out = dict(s or {})
+    if not out.get("tool"):
+        alias = out.get("agent_id") or out.get("action")
+        if isinstance(alias, str) and alias.strip():
+            out["tool"] = alias.strip()
+    if not str(out.get("input") or "").strip():
+        for key in _STEP_INPUT_ALIASES:
+            v = out.get(key)
+            if isinstance(v, dict):
+                v = json.dumps(v, ensure_ascii=False)
+            if isinstance(v, str) and v.strip():
+                out["input"] = v.strip()
+                break
+        else:
+            if isinstance(out.get("args"), dict) and out["args"]:
+                out["input"] = f"Run {out.get('tool') or 'coding_agent'}"
+    return out
+
+
 class AgentWorkflowBuilderTool(BaseTool):
     name = "create_agent_workflow"
     description = (
@@ -91,9 +129,9 @@ class AgentWorkflowBuilderTool(BaseTool):
         "browser/librarian) set \"validate\": true to have the step's output LLM-checked against its "
         "goal and re-run up to 3x with a correction if it doesn't match, then accept and continue. "
         "ALWAYS flag the deliverable-producing steps - in create mode too, otherwise the saved "
-        "workflow ships without any output checking. Only the confirmation gate is run_temp-only: "
-        "if you provide no validate flags there, run_temp asks you to confirm — flag the steps "
-        "or pass skip_validation=true.\n\n"
+        "workflow ships without any output checking. In run_temp, content/agent steps without "
+        "validate flags get validation enabled AUTOMATICALLY; pass skip_validation=true to run "
+        "without it on purpose.\n\n"
         "Each step needs an 'input' (supports {variable} substitution from prior steps) "
         "and a 'tool'. AVAILABLE SUB-AGENTS AND TOOLS FOR STEPS:\n"
         "  coding_agent    — Write/edit code, create HTML/CSS/JS, generate structured files, "
@@ -254,7 +292,17 @@ class AgentWorkflowBuilderTool(BaseTool):
                         "max_assertion_retries": {"type": "integer", "description": "How many times to retry on assertion failure (default: 1)."},
                         "validate":    {"type": "boolean", "description": "Set true on content/agent steps (document/research/coding/browser/librarian) whose output must actually match the step's goal. The output is LLM-checked against the step description; on a mismatch the step is re-run with a correction hint up to 3 times, then the last version is accepted and the workflow continues."},
                     },
-                    "required": ["input"],
+                    # NOTE deliberately NOT "required": ["input"]. The nested
+                    # schema rejection killed the whole call pre-dispatch with
+                    # "'input' is a required property" - and the live incident
+                    # model, which had just done everything else right
+                    # (action=run_temp, sensible steps), could not act on that
+                    # message and regressed into planning spin until the loop
+                    # guards ended the turn. Weak-model step shapes (tool named
+                    # in 'action', instruction in 'description', args-only
+                    # steps) are repaired in _repair_raw_step instead; a step
+                    # with truly nothing usable still errors with a targeted
+                    # message.
                 },
             },
             "variables": {
@@ -284,10 +332,9 @@ class AgentWorkflowBuilderTool(BaseTool):
             "skip_validation": {
                 "type": "boolean",
                 "description": (
-                    "For run_temp only: set true to confirm you intentionally want NO per-step output "
-                    "validation. If a workflow has content/agent steps but none set \"validate\": true and "
-                    "this is not set, run_temp will NOT execute — it asks you to either flag the steps that "
-                    "produce a critical deliverable or set this to confirm you want none."
+                    "For run_temp only: set true to run WITHOUT per-step output validation. When a "
+                    "workflow has content/agent steps and none sets \"validate\": true, run_temp "
+                    "enables validation on those steps automatically instead of asking."
                 ),
             },
         },
@@ -363,15 +410,20 @@ class AgentWorkflowBuilderTool(BaseTool):
         for i, s in enumerate(raw_steps):
             if not isinstance(s, dict):
                 return f"Error: step {i + 1} must be an object with at least an 'input' field."
-            # Accept 'agent_id' as alias for 'tool' (some LLMs emit this)
-            tool_val = s.get("tool") or s.get("agent_id") or "coding_agent"
-            # Accept 'input' as dict (convert to JSON string) or string
-            raw_input = s.get("input") or s.get("code") or ""
+            # Weak-model field-shape repair first (tool <- action/agent_id,
+            # input <- task/prompt/description/..., args-only steps).
+            s = _repair_raw_step(s)
+            tool_val = s.get("tool") or "coding_agent"
+            raw_input = s.get("input") or ""
             if isinstance(raw_input, dict):
                 raw_input = json.dumps(raw_input, ensure_ascii=False)
             raw_input = str(raw_input).strip()
             if not raw_input:
-                return f"Error: step {i + 1} is missing a non-empty 'input' field."
+                return (
+                    f"Error: step {i + 1} has no usable instruction. Give the step an "
+                    f"'input' (the prompt/instruction for its tool), or 'args' with the "
+                    f"tool's parameters."
+                )
             # Normalise tool aliases the LLM sometimes emits
             _tool_aliases = {
                 "python_exec": "python_sandbox",
@@ -428,26 +480,47 @@ class AgentWorkflowBuilderTool(BaseTool):
         }
         steps = create_workflow(template_dict)
 
-        # ── Validation confirmation gate ──────────────────────────────────────
-        # If this workflow has content/agent steps but none opted into per-step output
-        # validation, don't just run — bounce back so the agent consciously decides: flag the
-        # critical steps with validate:true, or confirm none is wanted via skip_validation:true.
+        # Observability: persist WHAT the model authored. During a live-incident
+        # forensic the full run_temp step list existed nowhere (the timeline
+        # truncates tool args) - whether a step referenced prior outputs via
+        # {placeholders} had to be inferred from the coder's received task.
+        try:
+            from vaf.core.log_helper import append_domain_log
+            append_domain_log(
+                "backend",
+                f"[RUN_TEMP] name={name!r} steps={json.dumps(normalised, ensure_ascii=False)[:4000]}",
+            )
+        except Exception:
+            pass
+
+        # ── Validation auto-enable ────────────────────────────────────────────
+        # Content/agent steps get per-step output validation by DEFAULT. This
+        # used to be a bounce ("[VALIDATION CHECK] ... call run_temp again with
+        # validate flags or skip_validation"), i.e. a conscious-decision prompt
+        # - and it cost weak models the whole run twice in one live chat: the
+        # model retried without the flags, got bounced again, and drifted into
+        # doing every step manually while the authored workflow never ran. The
+        # system can make this call itself: validation on deliverable steps is
+        # exactly what the bounce text recommended, so set it and RUN.
+        # skip_validation=true remains the explicit opt-out.
         _validatable_steps = [s for s in steps if s.tool in VALIDATABLE_TOOLS]
+        _auto_validated = []
         if (
             _validatable_steps
             and not any(getattr(s, "validate", False) for s in _validatable_steps)
             and not kwargs.get("skip_validation")
         ):
-            _names = ", ".join(sorted({s.tool for s in _validatable_steps}))
-            return (
-                f"[VALIDATION CHECK] This workflow has content/agent steps ({_names}) but NONE "
-                "has \"validate\": true. For each step that produces a critical deliverable (a "
-                "document, research report, code, or browser result), set \"validate\": true so its "
-                "output is checked against the step's goal and re-run up to 3x with a correction "
-                "hint if it does not match. Then call run_temp again.\n"
-                "If you intentionally want NO validation, call run_temp again with "
-                "skip_validation: true to confirm."
-            )
+            for s in _validatable_steps:
+                s.validate = True
+                _auto_validated.append(s.tool)
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log(
+                    "backend",
+                    f"[RUN_TEMP] auto-enabled output validation for steps: {sorted(set(_auto_validated))}",
+                )
+            except Exception:
+                pass
 
         # Tool registry: prefer agent's live tools (full set), fall back to stubs
         tools = self._collect_tools()
@@ -746,7 +819,14 @@ class AgentWorkflowBuilderTool(BaseTool):
                 pass
 
         if result.success:
-            return f"Temporary workflow '{name}' completed.\n\n{result.final_output}"
+            # Per-step summary so a weird FINAL step can never hide the real
+            # deliverables (see engine.summarize_run_steps for the incident).
+            from vaf.workflows.engine import summarize_run_steps
+            _summary = summarize_run_steps(steps)
+            return (
+                f"Temporary workflow '{name}' completed.\n\n{result.final_output}"
+                + (f"\n\nStep results:\n{_summary}" if _summary else "")
+            )
         # Lead with "Error:" so the UI status heuristic flags this as a failure (red),
         # not a green success — the bubble status keys off the result prefix.
         return f"Error: Temporary workflow '{name}' failed: {result.error}"
@@ -806,7 +886,10 @@ class AgentWorkflowBuilderTool(BaseTool):
 
         normalised = []
         for i, s in enumerate(raw_steps if isinstance(raw_steps, list) else []):
-            if not isinstance(s, dict) or not s.get("input", "").strip():
+            if not isinstance(s, dict):
+                return f"Error: step {i + 1} missing non-empty 'input' field."
+            s = _repair_raw_step(s)  # same weak-model field-shape repair as run_temp
+            if not str(s.get("input") or "").strip():
                 return f"Error: step {i + 1} missing non-empty 'input' field."
             step_dict2: dict = {
                 "input":       s["input"],

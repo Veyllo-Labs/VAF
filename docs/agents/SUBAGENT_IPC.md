@@ -604,8 +604,9 @@ on a mismatch the step re-runs with a correction hint up to `workflow_step_valid
 (default 3) times, then the last version is **accepted** and the workflow continues. It never
 hard-fails on validation, and a validator error is treated as a pass. Unlike the direct-call
 validator there is **no** lenient "saved successfully → accept" fast-path — the content is judged.
-If a workflow has content steps but none set `validate`, `run_temp` returns a `[VALIDATION CHECK]`
-prompt so the agent either flags the critical steps or confirms `skip_validation: true`. See
+If a workflow has content steps but none set `validate`, `run_temp` enables validation on those
+steps automatically and runs (`skip_validation: true` is the explicit opt-out; the old
+`[VALIDATION CHECK]` bounce cost weak models the whole run). See
 [Workflow Selection](WORKFLOW_SELECTION.md).
 
 ### Step execution and conditions

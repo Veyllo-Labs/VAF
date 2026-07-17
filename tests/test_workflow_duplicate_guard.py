@@ -340,3 +340,62 @@ def test_own_tool_name_as_workflow_id_gets_a_non_circular_message(wf_tool):
     # The genuinely-useful redirect for OTHER tool names stays intact.
     msg2 = tool.run(workflow_id="create_agent_workflow", _agent=agent)
     assert "run_temp" in msg2
+
+
+def test_wrong_wrapper_with_full_payload_echoes_a_copyable_call(wf_tool):
+    """Live incident: the model merged the suggestion's execute_workflow(...)
+    with the run_temp advisory into execute_workflow(workflow_id=
+    'create_agent_workflow', variables={action, steps}) - a CORRECT payload in
+    the wrong wrapper. After a prose-only redirect it gave up on workflows and
+    did every step manually. The redirect must hand back the exact call to
+    copy (weak models copy reliably, they do not rephrase)."""
+    tool, agent, release = wf_tool
+    release.set()
+    agent.tools = {"create_agent_workflow": object()}
+    payload = {
+        "action": "run_temp",
+        "steps": [
+            {"name": "Wetter Berlin suchen", "tool": "web_search",
+             "params": {"query": "wetter Berlin heute"}},
+            {"name": "New York News suchen", "tool": "web_search",
+             "params": {"query": "latest news New York today"}},
+        ],
+    }
+    msg = tool.run(workflow_id="create_agent_workflow", variables=payload, _agent=agent)
+    assert "Copy this call exactly" in msg
+    assert 'create_agent_workflow(action="run_temp", steps=[' in msg
+    assert "wetter Berlin heute" in msg  # THEIR steps, echoed verbatim
+    assert "do NOT fall" in msg  # forbids the manual-fallback escape hatch
+
+
+def test_wrong_wrapper_payload_as_json_string_still_echoes(wf_tool):
+    import json
+
+    tool, agent, release = wf_tool
+    release.set()
+    agent.tools = {"create_agent_workflow": object()}
+    payload = json.dumps({"steps": [{"tool": "web_search", "params": {"query": "x"}}]})
+    msg = tool.run(workflow_id="create_agent_workflow", variables=payload, _agent=agent)
+    assert "Copy this call exactly" in msg
+    # action defaulted in for a payload that lacked it
+    assert 'action="run_temp"' in msg
+
+
+def test_wrong_wrapper_without_steps_falls_back_to_generic_redirect(wf_tool):
+    tool, agent, release = wf_tool
+    release.set()
+    agent.tools = {"create_agent_workflow": object()}
+    msg = tool.run(workflow_id="create_agent_workflow",
+                   variables={"topic": "wetter"}, _agent=agent)
+    assert "Copy this call exactly" not in msg
+    assert "run_temp" in msg  # the generic advice still points the right way
+
+
+def test_wrong_wrapper_oversized_payload_falls_back(wf_tool):
+    tool, agent, release = wf_tool
+    release.set()
+    agent.tools = {"create_agent_workflow": object()}
+    huge = {"steps": [{"tool": "web_search", "params": {"query": "q" * 5000}}]}
+    msg = tool.run(workflow_id="create_agent_workflow", variables=huge, _agent=agent)
+    assert "Copy this call exactly" not in msg
+    assert "run_temp" in msg

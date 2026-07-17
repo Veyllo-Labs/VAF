@@ -76,17 +76,14 @@ WORKFLOW = {
             "output": "saved",
             "description": "Save the generated code to file",
         },
-        {
-            "tool": "librarian_agent",
-            "input": (
-                "Write a short completion message.\n"
-                "Include: where the file was saved, how to run it, and any dependencies.\n\n"
-                "Filename: {filename}\n"
-                "Save result: {saved}\n"
-            ),
-            "output": "final",
-            "description": "Return a helpful completion message",
-        },
+        # NOTE: no librarian "completion message" step. librarian_agent is a
+        # FILESYSTEM agent - asked to "write a short completion message ...
+        # where the file was saved", it parsed the text as a file-search task
+        # and returned "No files found matching '*was*'" as the workflow's
+        # final output (live incident: the model read that next to "completed
+        # successfully", concluded the workflow produced nothing, and redid
+        # every step manually). The write step's own result ("File written
+        # successfully to <path>") IS the honest completion message.
     ],
 }
 

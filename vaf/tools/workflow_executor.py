@@ -145,6 +145,47 @@ class ExecuteWorkflowTool(BaseTool):
                 _agent_ref = kwargs.get("_agent")
                 _tool_names = set(getattr(_agent_ref, "tools", {}) or {})
                 if workflow_id in _tool_names and workflow_id != self.name:
+                    # Echo-back redirect: a weak model that merged the two hints
+                    # ("execute_workflow(workflow_id=...)" + "create_agent_workflow
+                    # with action='run_temp'") usually delivers a COMPLETE, correct
+                    # run_temp payload inside variables - it only picked the wrong
+                    # wrapper (live incident: correct steps, wrong tool, and after
+                    # a prose-only redirect the model gave up on workflows and did
+                    # everything manually). Weak models copy reliably but rephrase
+                    # poorly, so hand back the exact call to copy instead of a
+                    # description of it.
+                    _fwd = None
+                    if workflow_id == "create_agent_workflow":
+                        import json as _json
+                        _payload = variables
+                        if isinstance(_payload, str):
+                            try:
+                                _payload = _json.loads(_payload)
+                            except Exception:
+                                _payload = None
+                        if isinstance(_payload, dict) and _payload.get("steps"):
+                            _payload = dict(_payload)
+                            _payload.setdefault("action", "run_temp")
+                            try:
+                                _kwargs_repr = ", ".join(
+                                    f"{k}={_json.dumps(v, ensure_ascii=False)}"
+                                    for k, v in _payload.items()
+                                )
+                                # Oversized payloads fall back to the generic
+                                # redirect rather than flooding the context.
+                                if len(_kwargs_repr) <= 4000:
+                                    _fwd = f"create_agent_workflow({_kwargs_repr})"
+                            except Exception:
+                                _fwd = None
+                    if _fwd:
+                        return (
+                            f"❌ Wrong wrapper: 'create_agent_workflow' is a TOOL, not a "
+                            f"workflow template, so execute_workflow cannot run it. Your "
+                            f"plan itself looks fine - do NOT rebuild it and do NOT fall "
+                            f"back to doing the steps manually. Call the tool DIRECTLY "
+                            f"with the SAME arguments. Copy this call exactly:\n\n"
+                            f"{_fwd}\n"
+                        )
                     return (
                         f"❌ '{workflow_id}' is the name of a TOOL, not a saved workflow "
                         f"template - execute_workflow's workflow_id only accepts one of the "
@@ -506,8 +547,15 @@ class ExecuteWorkflowTool(BaseTool):
                 _out = str(result.final_output) if result.final_output else ""
                 if len(_out) > 3000:
                     _out = _out[:3000] + f"\n\n[... {len(_out) - 3000} weitere Zeichen gekürzt ...]"
+                # Per-step summary so a weird FINAL step can never hide the real
+                # deliverables (see engine.summarize_run_steps for the incident).
+                from vaf.workflows.engine import summarize_run_steps
+                _summary = summarize_run_steps(steps)
                 _wf_log(wf_run_id, "RETURN_SUCCESS", output_len=len(_out))
-                return f"✅ Workflow '{template['name']}' completed successfully!\n\n{_out}"
+                return (
+                    f"✅ Workflow '{template['name']}' completed successfully!\n\n{_out}"
+                    + (f"\n\nStep results:\n{_summary}" if _summary else "")
+                )
             else:
                 _wf_log(wf_run_id, "RETURN_FAILED", error=str(result.error or '')[:200])
                 return f"❌ Workflow '{template['name']}' failed: {result.error}"

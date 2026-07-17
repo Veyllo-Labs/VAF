@@ -50,17 +50,10 @@ WORKFLOW = {
             "output": "saved",
             "description": "Save the file",
         },
-        {
-            "tool": "librarian_agent",
-            "input": (
-                "Create a short user-facing completion message.\n"
-                "Include: what was created, where it was saved, and how to use it (if applicable).\n\n"
-                "Filename: {filename}\n"
-                "Write result: {saved}\n"
-            ),
-            "output": "final",
-            "description": "Return a helpful completion message",
-        },
+        # NOTE: no librarian "completion message" step - see research_and_code:
+        # the filesystem agent misreads that prompt as a file search and its
+        # garbage becomes the workflow's final output. The save result is the
+        # honest completion message.
     ],
 }
 

@@ -13,7 +13,11 @@ Scope: this catalog covers LLM chat providers only. Voice (TTS/STT) providers su
 ElevenLabs are configured separately via `speech_tts_provider` / `speech_stt_provider` and
 implemented in `vaf/core/speech_api.py`; audio-only vendors are intentionally NOT added to
 `PROVIDER_MODELS` (they must not appear in the LLM provider UI or the coder endpoint map;
-CI-guarded by `tests/test_speech_config_schema_sync.py`). See
+CI-guarded by `tests/test_speech_config_schema_sync.py`). Veyllo is the one vendor that is
+both a chat provider (this catalog) and an STT provider (`speech_stt_provider = veyllo`,
+model `veyllo-transcribe`, same key and base URL); its audio model rides the same
+`GET /v1/models` list but is filtered out of chat dropdowns via
+`provider_registry.is_veyllo_chat_model`. See
 [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
 
 The gates:

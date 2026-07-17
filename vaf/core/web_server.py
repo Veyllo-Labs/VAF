@@ -3832,6 +3832,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         # anthropic, veyllo and any future
                                         # OpenAI-compatible provider: plain id list.
                                         models = [m["id"] for m in data.get("data", []) if m.get("id")]
+                                        if provider == "veyllo":
+                                            # /v1/models also lists veyllo-transcribe (STT); keep chat only.
+                                            from vaf.core.provider_registry import is_veyllo_chat_model
+                                            models = [mid for mid in models if is_veyllo_chat_model(mid)]
                     except Exception as e:
                         log("WebServer", f"Failed to fetch models for {provider}: {e}")
                     
@@ -3861,7 +3865,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
                                 existing["connection_enabled_by_scope"] = by_scope
                         merged = Config.merge_preserving_nonempty_sensitive(existing, new_config)
-                        Config.save(merged)
+                        Config.save(merged)  # Config.save centrally applies the Veyllo-key -> default-STT seed
                         provider_changed = existing.get("provider") != merged.get("provider")
 
                         try:

@@ -242,9 +242,11 @@ export default function LoginPage() {
             if (res.ok && data.ok === true) {
                 // Use the Veyllo key as the default for chat AND vision: veyllo-chat is multimodal, so
                 // image analysis routes to the hosted API even if the user later switches chat to a local
-                // model on a weak machine. vision_model stays empty = the provider's default (veyllo-chat).
-                // Placeholder for hosted speech: once Veyllo offers TTS/STT, default them here too —
-                // e.g. speech_tts_engine: 'veyllo', speech_stt_engine: 'veyllo' (+ their docker_url keys).
+                // model on a weak machine (vision_model stays empty = the provider's default).
+                // Speech-to-text is NOT set here: the backend (Config.apply_veyllo_stt_default, called by
+                // the /api/config PATCH below) defaults speech_stt_provider to 'veyllo' the first time a
+                // Veyllo key is added while no STT provider was chosen - one code path that covers BOTH
+                // this onboarding entry and a key added later in Settings. TTS is not hosted yet (local).
                 const veylloCfg = {
                     api_key_veyllo: key,
                     provider: 'veyllo',

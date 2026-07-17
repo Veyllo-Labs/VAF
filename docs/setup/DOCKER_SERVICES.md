@@ -319,9 +319,10 @@ VAF configuration for Docker services (`~/.vaf/config.json`):
 ```
 
 The `vaf-tts` and `vaf-stt` containers are required only for the local speech lane
-(`speech_tts_provider` / `speech_stt_provider` empty). When a cloud voice provider
-(ElevenLabs or OpenAI) is selected in Settings > Voice, speech works without these
-containers. See [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
+(`speech_tts_provider` / `speech_stt_provider` empty). When a cloud voice provider is
+selected in Settings > Voice (TTS: ElevenLabs or OpenAI; STT: Veyllo, ElevenLabs, or
+OpenAI), speech works without the matching container. See
+[SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
 
 ---
 

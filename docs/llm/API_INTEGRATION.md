@@ -5,7 +5,7 @@ VAF now supports multiple AI providers through API integration, allowing you to 
 ## Supported Providers
 
 - **Local** - llama-server (default, runs locally)
-- **Veyllo** - First-party Veyllo API. `veyllo-chat` is multimodal — a single model for both text chat and image input (vision)
+- **Veyllo** - First-party Veyllo API. `veyllo-chat` is multimodal, a single model for both text chat and image input (vision); the same key also serves speech-to-text via `veyllo-transcribe` (set `speech_stt_provider = veyllo`), which becomes the default STT lane the first time a Veyllo key is added, at onboarding or later, when no STT provider was chosen (local fallback always applies)
 - **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
 - **Anthropic** - Claude Sonnet 4.6, Claude Opus 4.8, Claude Haiku 4.5 (native Messages API: tool use, streaming, adaptive thinking, prompt caching)
 - **DeepSeek** - DeepSeek V4 Flash, DeepSeek V4 Pro

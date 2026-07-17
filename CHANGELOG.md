@@ -12,6 +12,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Veyllo speech-to-text**: Veyllo is now selectable as a cloud STT provider
+  (`speech_stt_provider = veyllo`, model `veyllo-transcribe`), using the same
+  API key and base URL as the Veyllo chat/vision provider. The first time a Veyllo
+  key is added (at onboarding or later in Settings) while no STT provider was
+  chosen, Veyllo becomes the default STT lane, and it always falls back to the
+  local engine on any failure (no internet, empty credits, timeout); an explicit
+  later choice (local, OpenAI, ElevenLabs) overrides it. The `veyllo-transcribe`
+  audio model is filtered out of the chat-model dropdowns.
 - **Data Explorer legibility**: deleting a chat now saves the chat's title
   into the surviving workspace folder, so folders left behind by deleted
   chats keep their human name instead of showing a raw internal folder name

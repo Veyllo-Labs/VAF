@@ -893,6 +893,40 @@ class Config:
         return merged
 
     @classmethod
+    def apply_veyllo_stt_default(cls, existing: dict, merged: dict) -> dict:
+        """Default `speech_stt_provider` to `veyllo` the FIRST time a Veyllo API key
+        is added (absent -> present) while no STT provider was chosen yet. Owner
+        product decision: when a Veyllo key exists and the user never picked a
+        specific STT provider, hosted Veyllo STT is the default; the always-local
+        fallback still covers offline / empty credits, and an explicit later choice
+        (local, OpenAI, ElevenLabs) overwrites it. Covers the onboarding key entry,
+        a key added later in Settings, AND the CLI provider menu, because `save()`
+        calls this centrally (one place, every write path - so a new key-write path
+        can never silently miss it or consume the transition without seeding).
+
+        Fires only on the absent->present transition (never on key rotation or a
+        re-sent key). "No STT provider chosen" means an empty `speech_stt_provider`
+        AND a default/empty `speech_stt_engine`: an explicit local pick also stores
+        an empty provider, but `local_whisper` sets `speech_stt_engine='local'`
+        (non-default), which is an unambiguous explicit-local signal that MUST block
+        the seed so a deliberate local opt-out is never flipped to the metered cloud.
+        (`local_docker`/unset both leave the default engine `docker`, genuinely
+        indistinguishable, so that pristine-default case is seeded.) `api_key_` is
+        admin-only, so this only runs for admin saves - consistent with the
+        admin-gated `speech_stt_` keys it writes. Best-effort: never blocks a save."""
+        try:
+            had_key = bool((existing or {}).get("api_key_veyllo"))
+            has_key = bool((merged or {}).get("api_key_veyllo"))
+            provider_chosen = str((merged or {}).get("speech_stt_provider") or "").strip()
+            engine = str((merged or {}).get("speech_stt_engine") or "").strip().lower()
+            explicit_local = engine not in ("", "docker")  # e.g. 'local' = local_whisper picked
+            if has_key and not had_key and not provider_chosen and not explicit_local:
+                merged["speech_stt_provider"] = "veyllo"
+        except Exception:
+            pass
+        return merged
+
+    @classmethod
     def save(cls, config: dict):
         if not cls.APP_DIR.exists():
             cls.APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1079,11 +1113,17 @@ class Config:
 
         # Load existing to detect changes
         existing_config = cls.load()
-        
+
         # Preserve protected keys from existing config
         for key in cls.PROTECTED_KEYS:
             if key in existing_config and key not in config:
                 config[key] = existing_config[key]
+
+        # Central seed point for the Veyllo-key -> default-STT rule (see the method
+        # docstring). Runs here so EVERY write path is covered - web REST/WS, the CLI
+        # provider menu, and any future key-writer - and no path can consume the
+        # absent->present transition without seeding.
+        cls.apply_veyllo_stt_default(existing_config, config)
 
         # Hosting lock: keep Local Network Hosting enabled if lock is active.
         force_network = bool(

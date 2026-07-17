@@ -74,3 +74,76 @@ def test_config_for_user_redacts_key_keeps_provider():
     filtered = {k: v for k, v in cfg.items() if not Config.is_secret_config_key(k)}
     assert "api_key_elevenlabs" not in filtered
     assert filtered.get("speech_tts_provider") == "elevenlabs"
+
+
+# ── Veyllo STT default-on-key-add (owner product decision) ────────────────────
+
+def test_veyllo_stt_default_seeded_on_key_add():
+    """First Veyllo key added + no STT provider chosen -> default speech_stt_provider=veyllo."""
+    merged = {"api_key_veyllo": "enc", "speech_stt_provider": ""}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == "veyllo"
+
+
+def test_veyllo_stt_default_respects_explicit_cloud_choice():
+    merged = {"api_key_veyllo": "enc", "speech_stt_provider": "openai"}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == "openai"  # explicit choice wins
+
+
+def test_veyllo_stt_default_not_on_key_rotation():
+    """Key already present is not an absent->present transition -> never re-seed
+    (so an explicit local pick, which writes '', is not overwritten later)."""
+    merged = {"api_key_veyllo": "new-enc", "speech_stt_provider": ""}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": "old-enc"}, merged)
+    assert merged["speech_stt_provider"] == ""
+
+
+def test_veyllo_stt_default_not_without_key():
+    merged = {"api_key_veyllo": "", "speech_stt_provider": ""}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == ""
+
+
+def test_veyllo_stt_default_idempotent_when_already_veyllo():
+    merged = {"api_key_veyllo": "enc", "speech_stt_provider": "veyllo"}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == "veyllo"
+
+
+def test_veyllo_stt_default_blocked_by_explicit_local_whisper():
+    """local_whisper stores provider='' but engine='local' (non-default) - an
+    unambiguous explicit local opt-out that must NOT be flipped to the metered cloud."""
+    merged = {"api_key_veyllo": "enc", "speech_stt_provider": "", "speech_stt_engine": "local"}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == ""
+
+
+def test_veyllo_stt_default_seeds_pristine_local_docker():
+    """local_docker / unset both leave the default engine 'docker' -> seeded."""
+    merged = {"api_key_veyllo": "enc", "speech_stt_provider": "", "speech_stt_engine": "docker"}
+    Config.apply_veyllo_stt_default({"api_key_veyllo": ""}, merged)
+    assert merged["speech_stt_provider"] == "veyllo"
+
+
+def test_config_save_applies_veyllo_stt_default_centrally(tmp_path, monkeypatch):
+    """The seed runs inside Config.save, so EVERY write path is covered - including
+    the CLI's set_api_key -> set -> save, not just the two web endpoints."""
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    monkeypatch.setattr(Config, "CONFIG_FILE", tmp_path / "config.json")
+    # Baseline: no Veyllo key, no STT provider chosen (pristine local).
+    Config.save({"provider": "local", "speech_stt_provider": "", "speech_stt_engine": "docker"})
+    assert (Config.load().get("speech_stt_provider") or "") == ""
+    # CLI-style key add funnels through set() -> save(); the central seed must fire.
+    Config.set_api_key("veyllo", "vaf_live_secret")
+    assert Config.load().get("speech_stt_provider") == "veyllo"
+
+
+def test_config_save_seed_respects_explicit_local_across_key_add(tmp_path, monkeypatch):
+    """An explicit local_whisper opt-out made BEFORE the key is added survives a
+    later key add through Config.save (the exact regression the review caught)."""
+    monkeypatch.setattr(Config, "APP_DIR", tmp_path)
+    monkeypatch.setattr(Config, "CONFIG_FILE", tmp_path / "config.json")
+    Config.save({"provider": "local", "speech_stt_provider": "", "speech_stt_engine": "local"})
+    Config.set_api_key("veyllo", "vaf_live_secret")
+    assert (Config.load().get("speech_stt_provider") or "") == ""  # local opt-out preserved

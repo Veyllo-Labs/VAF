@@ -7,10 +7,15 @@ Audio-only vendors (ElevenLabs) and the audio endpoints of chat vendors
 (OpenAI) are a separate lane from the LLM provider catalog: they are NEVER
 added to PROVIDER_MODELS or api_backend.py (see docs/llm/PROVIDER_MODES.md).
 
-Backend selection is explicit opt-in ONLY (deliberate deviation from vision's
-capable-main-provider cascade): audio is metered separately from chat, so a
-configured chat provider must never silently start paying for speech. Empty
+Backend selection at RUNTIME is explicit opt-in ONLY (deliberate deviation from
+vision's capable-main-provider cascade): audio is metered separately from chat,
+so a configured chat provider must never silently start paying for speech. Empty
 ``speech_tts_provider`` / ``speech_stt_provider`` means the local Docker lane.
+One owner-decided exception, applied at CONFIG-WRITE time (not here): when a
+Veyllo API key is first added and no STT provider was chosen, the config seeds
+``speech_stt_provider = "veyllo"`` (``Config.apply_veyllo_stt_default``). Runtime
+selection still just reads that explicit value; the always-local fallback below
+still covers empty credits / offline.
 
 Design: this runs in the hot path and must never break a turn. Every public
 function catches everything and returns ``None`` so callers degrade to the
@@ -25,10 +30,15 @@ from typing import Optional, Tuple
 _log = logging.getLogger(__name__)
 
 # Capability registry. Extend here for future vendors (Google, Deepgram,
-# Groq, a Veyllo-hosted lane); keep it audio-only vendors + audio endpoints.
+# Groq); keep it audio-only vendors + audio endpoints. Veyllo is the one
+# vendor that is ALSO a chat provider (in PROVIDER_MODELS), but its audio
+# endpoint lives in THIS lane, exactly like OpenAI's - the chat catalog never
+# routes audio. Veyllo offers STT (veyllo-transcribe) today; TTS is not live
+# yet, so tts=False (a speech_tts_provider='veyllo' harmlessly falls to local).
 AUDIO_PROVIDERS = {
     "elevenlabs": {"tts": True, "stt": True},
     "openai": {"tts": True, "stt": True},
+    "veyllo": {"tts": False, "stt": True},
 }
 
 _TTS_TIMEOUT = 120.0  # long answers take time (observed ~45s for 4 min of audio);
@@ -37,10 +47,11 @@ _STT_TIMEOUT = 60.0  # matches every existing docker STT timeout
 
 _DEFAULT_TTS_MODEL = {"elevenlabs": "eleven_flash_v2_5", "openai": "gpt-4o-mini-tts"}
 _DEFAULT_TTS_VOICE = {"elevenlabs": "21m00Tcm4TlvDq8ikWAM", "openai": "alloy"}  # Rachel / alloy
-_DEFAULT_STT_MODEL = {"elevenlabs": "scribe_v2", "openai": "whisper-1"}
+_DEFAULT_STT_MODEL = {"elevenlabs": "scribe_v2", "openai": "whisper-1", "veyllo": "veyllo-transcribe"}
 
 _ELEVENLABS_BASE = "https://api.elevenlabs.io"
 _OPENAI_BASE = "https://api.openai.com"
+_VEYLLO_DEFAULT_BASE = "https://api.veyllo.app/v1"  # veyllo_base_url already carries the /v1 suffix
 
 # OpenAI whisper verbose_json returns the language as a full English name.
 _LANGUAGE_NAME_TO_ISO2 = {
@@ -145,6 +156,8 @@ def transcribe(
             return None, None
         if provider == "elevenlabs":
             result = _elevenlabs_stt(audio, mime, filename, model)
+        elif provider == "veyllo":
+            result = _veyllo_stt(audio, mime, filename, model)
         else:
             result = _openai_stt(audio, mime, filename, model)
         if result and result[0]:
@@ -250,6 +263,38 @@ def _openai_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Opt
     # language - then None (voice replies default to 'en').
     lang_name = (data.get("language") or "").strip().lower()
     lang = _LANGUAGE_NAME_TO_ISO2.get(lang_name) or (lang_name if len(lang_name) == 2 else None)
+    return (text or None), lang
+
+
+# ---------------------------------------------------------------------------
+# Veyllo audio endpoint (OpenAI-compatible; Bearer api_key_veyllo,
+# veyllo_base_url already includes the /v1 suffix). STT only for now.
+# ---------------------------------------------------------------------------
+
+def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Optional[str], Optional[str]]:
+    import httpx
+    from vaf.core.config import Config
+
+    base = (Config.get("veyllo_base_url", "") or _VEYLLO_DEFAULT_BASE).rstrip("/")
+    # verbose_json adds the detected language + duration; unlike OpenAI whisper
+    # (which returns an English language NAME), Veyllo returns an ISO-639-1 code
+    # directly. Omitting an input `language` lets the server auto-detect, which
+    # is correct; a known language could be passed for best accuracy later.
+    resp = httpx.post(
+        f"{base}/audio/transcriptions",
+        headers={"Authorization": f"Bearer {_api_key('veyllo')}"},
+        files={"file": (filename, audio, mime)},
+        data={"model": model, "response_format": "verbose_json"},
+        timeout=_STT_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        _warn_api("veyllo", "STT", resp)
+        return None, None
+    data = resp.json()
+    text = (data.get("text") or "").strip()
+    lang = (data.get("language") or "").strip().lower() or None
+    if lang and len(lang) > 2:
+        lang = lang[:2]  # defensive: keep the ISO-639-1 short form
     return (text or None), lang
 
 

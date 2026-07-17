@@ -369,6 +369,7 @@
       "agentLlmDesc": "The language model of the live call's first layer. \"Same as main agent\" shares the model with the main agent; a dedicated model or an API provider makes the call more independent and often more natural.",
       "elevenKeyHint": "ElevenLabs requires an API key. Set it under General > API Keys.",
       "openaiKeyHint": "The OpenAI voice provider requires the OpenAI API key. Set it under General > API Keys.",
+      "veylloKeyHint": "Veyllo transcription requires a Veyllo API key. Set it under General > API Keys.",
       "managedByAdmin": "Voice provider settings are managed by an administrator.",
       "voiceProfile": "Voice profile",
       "profileActive": "Active",

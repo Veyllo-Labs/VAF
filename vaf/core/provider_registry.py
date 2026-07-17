@@ -206,6 +206,20 @@ def models_discovery(provider: str, config: Optional[dict] = None) -> Optional[T
     return None
 
 
+# Veyllo lists its audio models (STT: veyllo-transcribe today, TTS later) on the
+# SAME GET /v1/models endpoint as veyllo-chat. Those are NOT chat models and must
+# never appear in a chat-model dropdown. Single source of truth for that filter,
+# used by BOTH live-listing copies (api_backend.list_models + web_server
+# get_api_models). Audio-model ids carry one of these markers.
+_VEYLLO_NON_CHAT_MARKERS = ("transcribe", "tts", "speech")
+
+
+def is_veyllo_chat_model(model_id: str) -> bool:
+    """False for a Veyllo audio model id (e.g. 'veyllo-transcribe'), True otherwise."""
+    mid = (model_id or "").lower()
+    return not any(marker in mid for marker in _VEYLLO_NON_CHAT_MARKERS)
+
+
 def model_supports_vision(provider: str, model: str, probe_local: bool = True) -> bool:
     """Whether (provider, model) accepts image input.
 

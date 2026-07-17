@@ -299,3 +299,71 @@ def test_get_api_key_roundtrip_for_elevenlabs():
     encoded = base64.b64encode(b"el-key").decode()
     assert base64.b64decode(encoded).decode() == "el-key"
     assert "api_key_elevenlabs" in Config.DEFAULTS
+
+
+# ---------------------------------------------------------------------------
+# Veyllo STT lane (OpenAI-compatible; api_key_veyllo + veyllo_base_url)
+# ---------------------------------------------------------------------------
+
+def test_veyllo_stt_selection_default_model(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    assert sa.select_stt_backend() == ("veyllo", "veyllo-transcribe")
+
+
+def test_veyllo_not_tts_capable_falls_back_local(monkeypatch):
+    # Veyllo has no hosted TTS yet (tts=False) -> local lane even with a key.
+    _cfg(monkeypatch, {"speech_tts_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    assert sa.select_tts_backend() == (None, None, None)
+
+
+def test_veyllo_stt_request_shape_and_iso_language(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo",
+                       "veyllo_base_url": "https://api.veyllo.app/v1"},
+         keys={"veyllo": "vaf_live_x"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(url=url, headers=headers, files=files, data=data)
+        return _Resp(200, {"text": "guten tag", "language": "de", "duration": 1.5})
+
+    _mock_httpx(monkeypatch, fake_post)
+    text, lang = sa.transcribe(b"RIFFdata", mime="audio/wav", filename="mic.wav")
+    # Veyllo returns the ISO code directly (no English-name mapping needed).
+    assert (text, lang) == ("guten tag", "de")
+    assert captured["url"] == "https://api.veyllo.app/v1/audio/transcriptions"
+    assert captured["headers"]["Authorization"] == "Bearer vaf_live_x"
+    assert captured["data"]["model"] == "veyllo-transcribe"
+    assert captured["data"]["response_format"] == "verbose_json"
+    assert "file" in captured["files"] and "audio_file" not in captured["files"]
+
+
+def test_veyllo_stt_default_base_url_when_unset(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    captured = {}
+
+    def fake_post(url, **kw):
+        captured["url"] = url
+        return _Resp(200, {"text": "hi", "language": "en"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"RIFFdata")
+    assert captured["url"] == "https://api.veyllo.app/v1/audio/transcriptions"
+
+
+def test_veyllo_stt_long_language_code_trimmed(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    _mock_httpx(monkeypatch, lambda *a, **kw: _Resp(200, {"text": "hi", "language": "en-US"}))
+    assert sa.transcribe(b"RIFFdata") == ("hi", "en")
+
+
+def test_veyllo_stt_quota_error_falls_back(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    _mock_httpx(monkeypatch, lambda *a, **kw: _Resp(402, {"error": {"code": "insufficient_quota"}}))
+    assert sa.transcribe(b"RIFFdata") == (None, None)
+
+
+def test_veyllo_transcribe_filtered_from_chat_models():
+    from vaf.core.provider_registry import is_veyllo_chat_model
+    assert is_veyllo_chat_model("veyllo-chat") is True
+    assert is_veyllo_chat_model("veyllo-transcribe") is False
+    assert is_veyllo_chat_model("veyllo-tts") is False

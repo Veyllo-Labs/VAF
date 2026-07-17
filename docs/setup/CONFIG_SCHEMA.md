@@ -261,8 +261,8 @@ PostgreSQL (pgvector) + Redis back the memory system; both are optional for embe
 | `speech_tts_provider` | `""` | Cloud TTS provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_tts_engine`; falls back to the local engine on API errors. |
 | `speech_tts_api_model` | `""` | Model for the cloud TTS provider (`""` = default: ElevenLabs `eleven_flash_v2_5`, OpenAI `gpt-4o-mini-tts`). |
 | `speech_tts_api_voice` | `""` | Voice for the cloud TTS provider: ElevenLabs voice ID or OpenAI voice name (`""` = default). |
-| `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. |
-| `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
+| `speech_stt_provider` | `""` | Cloud STT provider: `""` (use the local engine), `veyllo`, `elevenlabs`, or `openai`. Takes precedence over `speech_stt_engine`; falls back to the local engine on API errors. Seeded to `veyllo` the first time a Veyllo key is added (onboarding OR later in Settings) while no STT provider was chosen (`Config.apply_veyllo_stt_default`); an explicit later choice overwrites it. |
+| `speech_stt_api_model` | `""` | Model for the cloud STT provider (`""` = default: Veyllo `veyllo-transcribe`, ElevenLabs `scribe_v2`, OpenAI `whisper-1`). |
 | `api_key_elevenlabs` | `""` | ElevenLabs API key (speech only, not an LLM provider). Base64 on disk; redacted for non-admin reads. |
 | `speaker_id_enabled` | `True` | Speaker identification kill-switch. Inert until a voice profile is enrolled (enrollment is the real opt-in; no model loads without a profile). |
 | `speaker_id_threshold` | `0.60` | Cosine score at or above this labels the enrolled user. |

@@ -4,12 +4,12 @@ This document provides comprehensive documentation for VAF's Text-to-Speech (TTS
 
 ## Overview
 
-VAF's speech processing is local by default: Docker containers provide high-quality neural TTS (Piper) and Whisper-based STT. Optionally, an admin can select a cloud voice provider (ElevenLabs or OpenAI) per direction; the local lane remains the fallback. The system supports multiple languages and interfaces.
+VAF's speech processing is local by default: Docker containers provide high-quality neural TTS (Piper) and Whisper-based STT. Optionally, an admin can select a cloud voice provider per direction (TTS: ElevenLabs or OpenAI; STT: Veyllo, ElevenLabs, or OpenAI); the local lane remains the fallback. The system supports multiple languages and interfaces.
 
 ### Key Features
 
 - **Local by Default**: All processing runs locally via Docker unless an admin selects a cloud voice provider
-- **Optional Cloud Providers**: ElevenLabs and OpenAI for TTS and STT, selectable independently (`speech_tts_provider` / `speech_stt_provider`), with automatic fallback to the local lane on any API error
+- **Optional Cloud Providers**: ElevenLabs and OpenAI for TTS and STT, plus Veyllo for STT (`veyllo-transcribe`), selectable independently (`speech_tts_provider` / `speech_stt_provider`), with automatic fallback to the local lane on any API error
 - **Multi-Language Support**: Automatic language detection and routing to appropriate TTS voices
 - **Multi-Interface**: Speech works across CLI, Web UI, and Telegram
 - **Bidirectional Voice**: Telegram and WhatsApp support receiving and sending voice messages (STT for incoming, TTS for outgoing)
@@ -127,9 +127,9 @@ Before TTS playback, content is cleaned via `_clean_markdown()`:
 | `docker` | Whisper via HTTP API | **Recommended** |
 | `local` | faster-whisper + ffmpeg | Requires local installation |
 
-When `speech_stt_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
-precedence over `speech_stt_engine`, with automatic fallback to the local lane on
-any API error. See [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
+When `speech_stt_provider` is set (`veyllo`, `elevenlabs`, or `openai`), the cloud
+lane takes precedence over `speech_stt_engine`, with automatic fallback to the local
+lane on any API error. See [Cloud provider lane](#cloud-provider-lane-elevenlabs--openai).
 
 ### Docker Whisper STT
 
@@ -176,13 +176,28 @@ selection.
 | `speech_tts_provider` | `""`, `elevenlabs`, `openai` | Cloud TTS provider; `""` = local engine |
 | `speech_tts_api_model` | model ID | `""` = default (`eleven_flash_v2_5` / `gpt-4o-mini-tts`) |
 | `speech_tts_api_voice` | voice ID / name | `""` = default (ElevenLabs Rachel / OpenAI `alloy`) |
-| `speech_stt_provider` | `""`, `elevenlabs`, `openai` | Cloud STT provider; `""` = local engine |
-| `speech_stt_api_model` | model ID | `""` = default (`scribe_v2` / `whisper-1`) |
+| `speech_stt_provider` | `""`, `veyllo`, `elevenlabs`, `openai` | Cloud STT provider; `""` = local engine |
+| `speech_stt_api_model` | model ID | `""` = default (`veyllo-transcribe` / `scribe_v2` / `whisper-1`) |
 | `api_key_elevenlabs` | key | ElevenLabs API key (read-redacted for non-admins) |
 
-The OpenAI lane reuses the existing `api_key_openai`. ElevenLabs is an
-audio-only vendor and is deliberately NOT part of the LLM provider catalog
-(see [PROVIDER_MODES.md](../llm/PROVIDER_MODES.md)).
+The OpenAI lane reuses the existing `api_key_openai`; the Veyllo STT lane reuses
+`api_key_veyllo` and `veyllo_base_url` (the same key and endpoint as the Veyllo
+chat/vision provider). ElevenLabs is an audio-only vendor and is deliberately
+NOT part of the LLM provider catalog (see
+[PROVIDER_MODES.md](../llm/PROVIDER_MODES.md)); Veyllo IS a chat provider, but its
+`veyllo-transcribe` audio model is filtered out of chat-model dropdowns
+(`provider_registry.is_veyllo_chat_model`). Unlike the other lanes, `speech_stt_provider`
+is seeded to `veyllo` the first time a Veyllo key is added, whether at onboarding, in
+Settings, or via the CLI provider menu, as long as no STT provider was chosen yet.
+`Config.apply_veyllo_stt_default` runs centrally inside `Config.save`, so every
+config-write path is covered and none can consume the absent-to-present key
+transition without seeding. "No STT provider chosen" means an empty
+`speech_stt_provider` AND a default `speech_stt_engine`: an explicit `local_whisper`
+pick (`speech_stt_engine='local'`, non-default) blocks the seed so a deliberate local
+opt-out is never flipped to the metered cloud (`local_docker`/unset both leave the
+default engine, so that pristine-default case is seeded). Runtime selection stays
+explicit opt-in: the seed just writes that explicit value, and any later choice
+(local, OpenAI, ElevenLabs) overwrites it.
 
 ### Request contracts
 
@@ -206,6 +221,13 @@ audio-only vendor and is deliberately NOT part of the LLM provider catalog
   with plain `json` and return no language, so voice replies default to
   English with them. For the reply-in-same-language pairing, `whisper-1` is
   the recommended STT model.
+- **Veyllo STT**: `POST {veyllo_base_url}/audio/transcriptions` (default
+  `https://api.veyllo.app/v1`, which already includes the `/v1` suffix) with a
+  Bearer `api_key_veyllo`, multipart field `file`, `model=veyllo-transcribe`, and
+  `response_format=verbose_json`. Unlike OpenAI whisper (which returns an English
+  language NAME), Veyllo returns an ISO-639-1 language code directly, so the
+  reply-in-same-language pairing works without a name-to-code table. Batch only;
+  live-mic streaming stays on the local lane.
 
 ### Settings catalogs (fetched vs hardcoded)
 

@@ -369,6 +369,7 @@
       "agentLlmDesc": "Das Sprachmodell der ersten Ebene im Live-Call. \"Wie Main-Agent\" teilt sich das Modell mit dem Main-Agent; ein eigenes Modell oder ein API-Anbieter macht den Call unabhängiger und oft natürlicher.",
       "elevenKeyHint": "ElevenLabs benötigt einen API-Schlüssel. Hinterlege ihn unter Allgemein > API-Schlüssel.",
       "openaiKeyHint": "Der OpenAI-Sprachanbieter benötigt den OpenAI API-Schlüssel. Hinterlege ihn unter Allgemein > API-Schlüssel.",
+      "veylloKeyHint": "Die Veyllo-Transkription benötigt einen Veyllo API-Schlüssel. Hinterlege ihn unter Allgemein > API-Schlüssel.",
       "managedByAdmin": "Sprachanbieter-Einstellungen werden von einem Administrator verwaltet.",
       "voiceProfile": "Stimmprofil",
       "profileActive": "Aktiv",

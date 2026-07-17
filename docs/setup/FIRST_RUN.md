@@ -52,7 +52,9 @@ and can be changed later in Settings.
 ### 3. Veyllo API (optional)
 Optionally paste a **Veyllo API key** to use the hosted Veyllo models — handy if your
 machine has limited GPU/VRAM. The key is verified live; on success VAF sets Veyllo as the
-default provider (including vision). **Skip** to keep the local default model. You can add
+default provider (including vision, and speech-to-text when no STT provider was chosen
+yet - it always falls back to the local engine and an explicit later choice overrides it).
+**Skip** to keep the local default model. You can add
 this or other providers later under **Settings → AI & Model**.
 
 > Discord, Telegram, and Email connections are no longer part of first-run setup — add them

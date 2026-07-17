@@ -2832,16 +2832,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     } else {
                                                         // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
                                                         handleChange('speech_stt_provider', v);
-                                                        handleChange('speech_stt_api_model', v === 'elevenlabs' ? 'scribe_v2' : 'whisper-1');
+                                                        handleChange('speech_stt_api_model',
+                                                            v === 'elevenlabs' ? 'scribe_v2'
+                                                            : v === 'veyllo' ? 'veyllo-transcribe'
+                                                            : 'whisper-1');
                                                     }
                                                 }}
                                                 options={[
                                                     { value: 'local_docker', label: tVoice('dockerStt') },
                                                     { value: 'local_whisper', label: tVoice('localStt') },
+                                                    { value: 'veyllo', label: 'Veyllo' },
                                                     { value: 'elevenlabs', label: 'ElevenLabs' },
                                                     { value: 'openai', label: 'OpenAI' },
                                                 ]}
                                             />
+                                            {localConfig.speech_stt_provider === 'veyllo' && (
+                                                <Select
+                                                    label={tVoice('sttModel')}
+                                                    value={localConfig.speech_stt_api_model || 'veyllo-transcribe'}
+                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                                                    options={[{ value: 'veyllo-transcribe', label: 'veyllo-transcribe' }]}
+                                                />
+                                            )}
                                             {localConfig.speech_stt_provider === 'elevenlabs' && (
                                                 <Select
                                                     label={tVoice('sttModel')}
@@ -2863,6 +2875,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                             )}
 
+                                            {localConfig.speech_stt_provider === 'veyllo' && !localConfig.api_key_veyllo && (
+                                                <p className="text-xs text-amber-600">{tVoice('veylloKeyHint')}</p>
+                                            )}
                                             {(localConfig.speech_tts_provider === 'elevenlabs' || localConfig.speech_stt_provider === 'elevenlabs')
                                                 && !localConfig.api_key_elevenlabs && (
                                                 <p className="text-xs text-amber-600">{tVoice('elevenKeyHint')}</p>

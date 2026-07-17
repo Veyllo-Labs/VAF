@@ -93,5 +93,5 @@ async def patch_config(
                 by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
             current["connection_enabled_by_scope"] = by_scope
     merged = Config.merge_preserving_nonempty_sensitive(current, body)
-    Config.save(merged)
+    Config.save(merged)  # Config.save centrally applies the Veyllo-key -> default-STT seed
     return merged

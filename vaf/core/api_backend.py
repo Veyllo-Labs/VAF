@@ -1407,7 +1407,12 @@ class APIBackendManager:
                 else:
                     # anthropic, deepseek, veyllo and any future
                     # OpenAI-compatible provider: plain id list.
-                    return [m["id"] for m in r.json().get("data", []) if m.get("id")]
+                    ids = [m["id"] for m in r.json().get("data", []) if m.get("id")]
+                    if provider == "veyllo":
+                        # /v1/models also lists veyllo-transcribe (STT); keep chat only.
+                        from vaf.core.provider_registry import is_veyllo_chat_model
+                        ids = [mid for mid in ids if is_veyllo_chat_model(mid)]
+                    return ids
         except Exception:
             return []
         return []

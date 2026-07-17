@@ -9,6 +9,24 @@ from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
+def _to_user_tz(dt: datetime) -> datetime:
+    """Convert a tz-aware (UTC-stored) working-memory timestamp to the user's
+    timezone for PROMPT display. Stored stamps are UTC ("...Z"), but the model
+    read them as wall-clock ("10:03" for a 12:03 local event) - off-by-tz
+    times in the working-memory block misdate the model's own recent actions
+    (timezone SSOT: vaf/core/user_time). Naive stamps and any error pass
+    through unchanged."""
+    try:
+        if dt.tzinfo is not None:
+            from vaf.core.user_time import resolve_user_timezone
+            tz = resolve_user_timezone(None)
+            if tz is not None:
+                return dt.astimezone(tz)
+    except Exception:
+        pass
+    return dt
+
+
 # Main Context Constants
 MAIN_CONTEXT_DIR = ".vaf/main"
 USER_INTENT_FILE = "user_intent.md"
@@ -336,6 +354,7 @@ class MainPersistenceManager:
                 if t:
                     try:
                         dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+                        dt = _to_user_tz(dt)
                         lines.append(f"{dt.strftime('%Y-%m-%d %H:%M')} - {text}")
                     except (ValueError, TypeError):
                         lines.append(f"(no date) - {text}")
@@ -535,6 +554,7 @@ class MainPersistenceManager:
             if ts:
                 try:
                     dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    dt = _to_user_tz(dt)
                     lines.append(f"[{i}] {dt.strftime('%Y-%m-%d %H:%M')} [{status}] {text}")
                 except (ValueError, TypeError):
                     lines.append(f"[{i}] (no date) [{status}] {text}")

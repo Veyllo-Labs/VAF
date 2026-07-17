@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (269 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (271 keys).
 
 ## How configuration is set
 
@@ -169,6 +169,7 @@ These are sent only on the local path; cloud APIs ignore them.
 | `subagent_timeout_enabled` | `True` | Enable sub-agent timeouts. |
 | `subagent_timeout_minutes` | `120` | Legacy IPC zombie-cleanup window. |
 | `subagent_timeout_seconds` | `300` | Hard cap for a research/coding/document step. |
+| `workflow_agent_step_timeout_seconds` | `1800` | Worst-case cap for a heavy agent step (coder/research/document) INSIDE a workflow - a floor over the generic cap, which killed a healthy coder mid-run at minute five. Dead children are caught much earlier by heartbeat liveness. |
 | `subagent_liveness_timeout_seconds` | `60` | Kill a sub-agent after this long with no heartbeat (primary guard). |
 | `tool_timeout_seconds` | `120` | Hard cap for a generic in-process tool call. |
 | `librarian_timeout_seconds` | `60` | Hard cap for the filesystem/document agent. |
@@ -334,6 +335,7 @@ highlights:
 | `thinking_quiet_hours_enabled` | `False` | Suppress thinking during quiet hours. |
 | `thinking_quiet_hours_start/end` | `23:00` / `07:00` | Quiet-hours window. |
 | `thinking_question_dedup_enabled` | `True` | Semantic (embedding) de-duplication of proactive questions so they vary in topic instead of repeating the same subject. Kill-switch; reuses the existing embedding singleton, fail-open. Tuning keys: `thinking_question_similarity_threshold` (`0.80`), `thinking_question_similarity_runs`/`_max_compare` (`12`), `thinking_getto_max_attempts` (`3`). |
+| `thinking_reply_wait_ttl_hours` | `12` | Safety net: a waiting-for-reply latch older than this is expired at read time, so a stale background question can never claim the user's next message as its "reply" long after the fact (the 10-min skip only runs when a thinking run fires). `0` disables. |
 
 (~24 more `thinking_*` tuning keys exist — see config.py.)
 

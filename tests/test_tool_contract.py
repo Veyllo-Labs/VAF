@@ -142,7 +142,7 @@ def test_execute_tool_uses_contract_for_noninteractive_gating():
         _current_chat_source="web",
         current_session_id=None,
         _record_tool_used=lambda name: None,
-        _plan_gate_decision=lambda name, tool: None,  # plan gate is a no-op here (noninteractive)
+        _plan_gate_decision=lambda name, tool, tool_args=None: None,  # plan gate is a no-op here (noninteractive)
         _proactive_reply_gate_decision=lambda name, tool, args: None,  # incident gates: no-op
         _ask_first_gate_decision=lambda name, tool: None,
     )

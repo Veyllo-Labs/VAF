@@ -94,6 +94,143 @@ _READ_TOOLS_THINKING = frozenset({
     "memory_search", "web_search", "list_automation_notes", "list_automation_todos", "list_automations",
 })
 
+# Working-memory note firewall: outcome/progress CLAIMS a model may only write
+# after real work happened. A weak model narrates its intentions as notes
+# ("Web-Suche: läuft", "Workflow wurde erfolgreich gestartet") without calling
+# any tool - the working-memory block then re-injects that fiction into the
+# next generation as trusted context, and the model coherently reports work it
+# never did (live incidents: two consecutive chats ended in confabulated
+# completion reports; the "hallucination" was faithful reading of a
+# self-poisoned diary). The verb list is deliberately outcome-shaped; the
+# firewall additionally requires an action-noun so user-stated facts ("der
+# Server läuft laut User") are never caught, and it only fires while NO
+# non-bookkeeping tool has run this turn.
+_UNEARNED_OUTCOME_VERB_RE = re.compile(
+    r"(erfolgreich|successfully|abgeschlossen|completed|durchgef(?:ü|ue)hrt|ausgef(?:ü|ue)hrt"
+    r"|executed|gestartet|started|l(?:ä|ae)uft|running|erledigt|done|fertig|finished)",
+    re.IGNORECASE,
+)
+_UNEARNED_OUTCOME_NOUN_RE = re.compile(
+    r"(workflow|such|search|recherch|research|html|datei|file|schritt|step|task"
+    r"|sub[- ]?agent|coder|coding|tool|dokument|document|report)",
+    re.IGNORECASE,
+)
+
+
+def _note_claims_unearned_outcome(texts) -> "str | None":
+    """First note text that claims an action outcome/progress, or None.
+    Pure; used by the working-memory note firewall (see the regexes above)."""
+    try:
+        for t in texts or []:
+            s = str(t or "")
+            if _UNEARNED_OUTCOME_VERB_RE.search(s) and _UNEARNED_OUTCOME_NOUN_RE.search(s):
+                return s
+    except Exception:
+        return None
+    return None
+
+
+# Pure lookups whose EXACT-argument repetition within one turn cannot yield new
+# information (unless a mutating tool succeeded in between - the windowed
+# redundant check verifies exactly that before blocking). Extends the
+# _is_nonprogress_tool classification with the gather tools that are deliberately
+# NOT "non-progress" (varied queries are legitimate work; only the exact repeat
+# is dead weight - live incident: a weak model re-ran its two web searches
+# verbatim after a failed workflow detour, four wasted calls in one turn).
+_WINDOW_DEDUP_READ_TOOLS = frozenset({
+    "web_search", "memory_search", "webfetch", "tree", "find_files",
+    "find_mail", "find_telegram_messages", "find_whatsapp_messages",
+    "find_discord_messages",
+})
+
+
+def _is_window_dedup_tool(name: str) -> bool:
+    n = (name or "").strip()
+    return _is_nonprogress_tool(n) or n in _WINDOW_DEDUP_READ_TOOLS
+
+
+def _normalize_tool_args(arguments) -> str:
+    """Canonical string form of a tool call's arguments for equality checks
+    (JSON key order and whitespace must not defeat the comparison)."""
+    import json as _json
+    obj = arguments
+    if isinstance(obj, str):
+        try:
+            obj = _json.loads(obj)
+        except Exception:
+            return obj.strip()
+    try:
+        return _json.dumps(obj, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        return str(obj).strip()
+
+
+def _original_args_for_tool_msg(history, tool_msg_index: int, tool_call_id) -> "str | None":
+    """The arguments of the assistant tool_call that produced history[tool_msg_index]
+    (a role:tool message), found by its tool_call_id. None when unresolvable."""
+    if not tool_call_id:
+        return None
+    for h_idx in range(tool_msg_index - 1, -1, -1):
+        m = history[h_idx] or {}
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                if (tc or {}).get("id") == tool_call_id:
+                    try:
+                        return tc["function"]["arguments"]
+                    except Exception:
+                        return None
+    return None
+
+
+def _find_redundant_read_call(history, tool_name: str, arguments, max_window: int = 12) -> bool:
+    """True when an identical (name, args) READ call already SUCCEEDED earlier in
+    the CURRENT turn and nothing mutated state since - its result is still in
+    context, so re-running it cannot produce new information.
+
+    The adjacent redundant block (below, in the streaming loop) compares only
+    against the newest tool message, so one interleaved call of any other tool
+    (a failed workflow attempt, a plan-gate bounce) made an exact re-search
+    invisible to it (live incident: two verbatim web_search re-runs plus a
+    doubled sibling in one batch). This check walks the turn's tool messages
+    (newest first, bounded by max_window, stopping at the user message):
+
+    - only tools in _is_window_dedup_tool are ever blocked (pure lookups);
+    - the earlier call must have SUCCEEDED (tool_result_is_error) - retrying a
+      failed read is legitimate;
+    - any successful MUTATING tool between the earlier call and now clears the
+      block (a re-read after a write can legitimately differ; fail-open).
+
+    Pure function over the history list; never raises."""
+    try:
+        if not _is_window_dedup_tool(tool_name):
+            return False
+        from vaf.core.context import tool_result_is_error
+        current = _normalize_tool_args(arguments)
+        seen = 0
+        mutated_since = False
+        for i in range(len(history) - 1, -1, -1):
+            msg = history[i] or {}
+            role = msg.get("role")
+            if role == "user":
+                break
+            if role != "tool":
+                continue
+            seen += 1
+            if seen > max_window:
+                break
+            name = msg.get("name") or ""
+            content = msg.get("content")
+            failed = tool_result_is_error(content if isinstance(content, str) else str(content or ""))
+            if name == tool_name and not failed and not mutated_since:
+                orig = _original_args_for_tool_msg(history, i, msg.get("tool_call_id"))
+                if orig is not None and _normalize_tool_args(orig) == current:
+                    return True
+            if not failed and name and not _is_window_dedup_tool(name):
+                mutated_since = True
+        return False
+    except Exception:
+        return False
+
 # Decision nudge for the PROACTIVE grounding step (there is NO open note/todo there, so the housekeeping
 # "resolve the open item / delete_automation_note" block message misleads the weak model into searching
 # again instead of committing). Returned when it over-searches or reaches for a blocked tool. The
@@ -868,7 +1005,8 @@ class Agent:
                 return (
                     f"[!] STOP PLANNING. You have updated your plan/tasks/intent {self._anti_spin_streak} times in a row "
                     "without doing the actual work. Do NOT call update_working_memory, update_intent or add_task again now "
-                    "— call the tool the task actually needs (e.g. the sub-agent or a write tool). If the task is already "
+                    "- call the tool the task actually needs (e.g. the sub-agent or a write tool). Do NOT write notes "
+                    "claiming progress or results: nothing has actually run this turn. If the task is already "
                     "done, answer the user in plain text.",
                     False,
                 )
@@ -878,9 +1016,13 @@ class Agent:
                 except Exception:
                     pass
                 self._anti_spin_streak = 0
+                # Wording matters: an earlier version said "state your result" -
+                # with tools off, a weak model answered that by FABRICATING one
+                # (live incident). The message must forbid claiming results.
                 return (
                     "You keep updating working memory instead of acting. Tools are disabled for one turn. "
-                    "State your result, or the next concrete step you will take, to the user in plain text now.",
+                    "You have NOT run any real tool this turn, so do NOT claim any result or completed "
+                    "work - tell the user honestly what is still open and what you will do next.",
                     True,
                 )
             return (None, False)
@@ -1027,12 +1169,21 @@ class Agent:
         except Exception:
             return "continue"
 
-    def _plan_gate_decision(self, name, tool_instance):
+    def _plan_gate_decision(self, name, tool_instance, tool_args=None):
         """Main-agent plan gate: block a state-changing tool until a plan exists in working memory
         ("explore freely, plan before you act"). Returns a block message (str) to show the model, or
         None to allow. Never gates sub-agents (their own loops are untouched) and never blocks on a
         read error (fail-open). Satisfied in the same turn by update_working_memory(plan=[...]); after
-        plan_gate_max_blocks it proceeds anyway so nothing hard-locks."""
+        plan_gate_max_blocks it proceeds anyway so nothing hard-locks.
+
+        Workflow launches SATISFY the gate by construction: execute_workflow names a
+        saved multi-step template and create_agent_workflow(run_temp) carries an
+        explicit steps list - that IS the approach this gate exists to demand. The
+        gate used to bounce them like any write tool, and a weak model that had just
+        committed to a workflow lost the thread over the bounce (live incident:
+        bounce -> plan set -> workflow forgotten -> manual steps, user aborted).
+        Instead of bouncing, the gate now SEEDS working memory's plan from the
+        call itself (observability preserved) and allows the launch."""
         try:
             from vaf.core.config import Config
             if not Config.get("plan_gate_enabled", True):
@@ -1057,6 +1208,21 @@ class Agent:
             if plan_exists:
                 self._plan_gate_blocks = 0
                 return None
+            # Workflow launches: seed the plan FROM the call and allow (see docstring).
+            if name in ("execute_workflow", "create_agent_workflow"):
+                _seed = self._derive_workflow_plan_seed(name, tool_args)
+                if _seed:
+                    try:
+                        if self.main_persistence is not None:
+                            self.main_persistence.update_working_memory(plan=_seed)
+                        self._plan_gate_blocks = 0
+                        append_domain_log(
+                            "backend",
+                            f"[PLAN_GATE] seeded plan from '{name}' launch: {str(_seed)[:200]!r}",
+                        )
+                        return None
+                    except Exception:
+                        pass  # seeding failed -> fall through to the normal bounce
             # No plan -> gate. Loop-cap escape so it never hard-locks.
             self._plan_gate_blocks += 1
             if self._plan_gate_blocks > int(Config.get("plan_gate_max_blocks", 3)):
@@ -1075,6 +1241,71 @@ class Agent:
                 "A one-line approach is enough; then call the tool again. "
                 "Read/search tools need no plan — use them freely to work out the approach."
             )
+        except Exception:
+            return None
+
+    def _working_memory_note_gate(self, tool_args):
+        """Note firewall: while NO non-bookkeeping tool has run this turn, an
+        update_working_memory call whose notes CLAIM an action outcome or live
+        progress is refused with an honest result (invariant 4.1 - a tool
+        RESULT, never a mid-loop system message). Returns the block string or
+        None. See _note_claims_unearned_outcome for the incident story."""
+        try:
+            if getattr(self, "_turn_ran_progress_tool", False):
+                return None
+            a = tool_args if isinstance(tool_args, dict) else {}
+            texts = []
+            for key in ("add_notes", "notes"):
+                v = a.get(key)
+                if isinstance(v, list):
+                    texts.extend(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in v)
+                elif isinstance(v, str):
+                    texts.append(v)
+            off = _note_claims_unearned_outcome(texts)
+            if not off:
+                return None
+            return (
+                f"[BLOCKED] This note claims an outcome or live progress "
+                f"(\"{off[:120]}\") but NO real tool has run this turn - working "
+                f"memory records FACTS, not intentions. Do the actual work first "
+                f"(call the tool: web_search / execute_workflow / "
+                f"create_agent_workflow / write_file ...), THEN note the real result."
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _derive_workflow_plan_seed(name, tool_args):
+        """A short, substantive plan derived from a workflow-launch call (or None
+        when the args carry nothing usable - then the normal bounce applies).
+        Pure so tests can pin it."""
+        try:
+            a = tool_args if isinstance(tool_args, dict) else {}
+            if name == "execute_workflow":
+                wf = str(a.get("workflow_id") or "").strip()
+                if not wf:
+                    return None
+                _vars = a.get("variables")
+                _vs = ""
+                if isinstance(_vars, dict) and _vars:
+                    _vs = "; " + ", ".join(
+                        f"{k}={str(v)[:60]}" for k, v in list(_vars.items())[:4]
+                    )
+                return [f"Run saved workflow '{wf}'{_vs}"]
+            # create_agent_workflow: only a run carrying real steps is a plan.
+            steps = a.get("steps")
+            if not isinstance(steps, list) or not steps:
+                return None
+            lines = []
+            for s in steps[:6]:
+                if isinstance(s, dict):
+                    label = (s.get("name") or s.get("description")
+                             or s.get("input") or s.get("tool") or "step")
+                    lines.append(str(label)[:100])
+            if not lines:
+                return None
+            wf_name = str(a.get("name") or "temp workflow").strip()
+            return [f"Run temp workflow '{wf_name}': " + " -> ".join(lines)]
         except Exception:
             return None
 
@@ -1100,17 +1331,49 @@ class Agent:
         re.IGNORECASE,
     )
 
+    # A genuine go-ahead to a yes/no background question is SHORT ("Ja bitte",
+    # "ok mach das"). Anything longer is a message with its own content - most
+    # often a brand-new task that merely OPENS with an acknowledging word
+    # (live incident: "Okay fuehre bitte eine mehrstufige websuche ..." was a
+    # new 200-char request, not a confirmation of the pending proposal).
+    _REPLY_CONFIRMATION_MAX_CHARS = 80
+
     @classmethod
     def _is_clear_affirmative(cls, text) -> bool:
         """Deterministic check: is this reply an unambiguous go-ahead? Anything with a
-        negation, or not starting with a known affirmative, counts as NOT confirmed -
-        the gate then asks instead of acting (duplicate question beats wrong action)."""
+        negation, not starting with a known affirmative, or LONGER than a real
+        confirmation plausibly is, counts as NOT confirmed - the gate then asks
+        instead of acting (duplicate question beats wrong action)."""
         t = (text or "").strip().lower()
         if not t:
+            return False
+        if len(t) > cls._REPLY_CONFIRMATION_MAX_CHARS:
             return False
         if cls._NEGATION_RE.search(t):
             return False
         return bool(cls._AFFIRMATIVE_RE.match(t))
+
+    @classmethod
+    def _classify_background_reply(cls, text) -> str:
+        """Deterministic three-way classification of the user's next message while a
+        background question is pending: 'affirmative' (short clear yes - carry the
+        proposal), 'negation' (short clear no - change nothing), 'new_topic' (a long,
+        task-shaped message: the user started something NEW; do not treat it as the
+        answer, do not arm the mutation gate against it), or 'unclear' (short but
+        neither - ask one confirming question). The length cut is what separates a
+        confirmation from a new instruction that merely opens with "Okay ..." (live
+        incident: the pending-question framing plus the armed gate turned a fresh
+        workflow request into a blocked, confused 27-step turn)."""
+        t = (text or "").strip()
+        if not t:
+            return "unclear"
+        if len(t) > cls._REPLY_CONFIRMATION_MAX_CHARS:
+            return "new_topic"
+        if cls._NEGATION_RE.search(t):
+            return "negation"
+        if cls._AFFIRMATIVE_RE.match(t):
+            return "affirmative"
+        return "unclear"
 
     def _proactive_reply_gate_decision(self, name, tool_instance, tool_args):
         """Gate (a): while this turn is a pickup of the user's reply to a tracked
@@ -1121,6 +1384,14 @@ class Agent:
         mutated an automation and delegated a file deletion, all unconfirmed."""
         try:
             if not getattr(self, "_thinking_reply_context", None):
+                return None
+            # A 'new_topic' pickup (the user's message is a fresh task, not the
+            # answer to the pending question) injects only a light context note
+            # and does NOT arm this gate: blocking the user's OWN request over
+            # an unrelated pending question was the live failure. Default True
+            # so a set reply context without explicit disarm keeps the old,
+            # strict behavior.
+            if not getattr(self, "_thinking_reply_gate_armed", True):
                 return None
             if not Config.get("proactive_reply_mutation_gate_enabled", True):
                 return None
@@ -6674,6 +6945,14 @@ class Agent:
         # Reset the thinking-reply context per turn so it persists across ALL generations of THIS turn
         # (set below from waiting_for_reply) but never leaks into the next turn.
         self._thinking_reply_context = None
+        # Whether the proactive-reply mutation gate is armed for this pickup turn. True by
+        # default; the 'new_topic' pickup lane disarms it (the user's message is their OWN
+        # new request - the gate must not block the tools that request needs).
+        self._thinking_reply_gate_armed = True
+        # Turn-local: has any NON-bookkeeping tool run this turn? Gates the
+        # working-memory note firewall and the deterministic grounding rule
+        # (self-poisoning guards). Reset per user turn.
+        self._turn_ran_progress_tool = False
         # Raw user reply of a pickup turn - the proactive-reply mutation gate needs it to decide
         # "clear affirmative" deterministically. Reset per turn with the context above.
         self._thinking_reply_user_text = None
@@ -6712,10 +6991,17 @@ class Agent:
                 # _prepare_messages() injects it as a system message the LLM sees but history never stores.
                 waiting = get_waiting_for_reply(_scope)
                 _presence_reentry = False
+                # Everything in this pickup lane reads the RAW message: the WebUI
+                # lane enriches user_input with the [SESSION WORKSPACE] preamble,
+                # which defeated every leading-text check here (live incident: the
+                # clear-affirmative gate saw "[SESSION WORKSPACE]..." instead of
+                # "Okay fuehre bitte..." and blocked the user's own workflow
+                # request; the request record stored the preamble as the reply).
+                _reply_text = (raw_user_input or user_input)
                 if waiting and (waiting.get("question_text") or "").strip():
                     q_text = waiting["question_text"].strip()
                     _req_id = (waiting.get("request_id") or "").strip() or None
-                    if waiting.get("nudge_sent_at_ts") and _is_presence_ack(user_input):
+                    if waiting.get("nudge_sent_at_ts") and _is_presence_ack(_reply_text):
                         # The user replied to a PRESENCE nudge ("are you there?"), not the question itself.
                         # Do NOT record it as the answer: re-arm the wait (resets the nudge timer) and have
                         # the agent warmly RE-ASK its original question. The next real reply is captured
@@ -6756,55 +7042,84 @@ class Agent:
                                 from vaf.core import thinking_requests as _treq
                                 _req = _treq.get_request(_scope, _req_id)
                                 _action = (_req or {}).get("proposed_action") or ""
-                                _treq.record_reply(_scope, _req_id, user_reply=user_input)
+                                _treq.record_reply(_scope, _req_id, user_reply=_reply_text)
                                 self._thinking_reply_pending = {"scope": _scope, "request_id": _req_id}
                             except Exception:
                                 pass
-                        self._thinking_reply_user_text = user_input
-                        _carry = f" If they CLEARLY confirm, carry out this proposal now: {_action}." if _action else ""
-                        # If this request came from a background AUTOMATION handoff, it links to a bundle that
-                        # holds the automation agent's FULL working context. Load it (same scope only) and
-                        # integrate it deliberately: a concise note + a BOUNDED digest of the run's summary +
-                        # recent steps - so the main agent continues with full context, not a raw transcript
-                        # dumped into the chat. A missing/expired/wrong-scope/mislabeled bundle falls back to
-                        # the plain-question note (no automation framing).
-                        _bundle_ctx, _bundle_curated = (
-                            self._render_handoff_bundle(_scope, _req) if _req else ("", False)
-                        )
-                        # Concrete content the background run gathered behind a teaser message (e.g. the actual
-                        # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
-                        # answered with the REAL findings - not a made-up version (observed 2026-06-22: the
-                        # main agent invented incoherent cooling tips because the content was never passed).
-                        _details = (_req or {}).get("details") or ""
-                        if _details:
-                            _facts = (f" The concrete information behind that message - use THIS to answer their "
-                                      f"reply, do not invent new facts: {_details}.")
-                        else:
-                            _facts = (" You do not have the specifics on hand; if the user asks for details, look "
-                                      "them up (e.g. web_search) - do NOT make up facts.")
-                        self._thinking_reply_context = self._build_reply_pickup_note(
-                            q_text, _carry, _bundle_ctx, _bundle_curated, _facts
-                        )
-                        # Observability (incident lesson: the injected note is mid-list and appears in
-                        # no prompt log - the next incident should be a grep, not an inference).
-                        try:
-                            _lane = ("handoff" if (_bundle_ctx and _bundle_curated)
-                                     else ("handoff_uncurated" if _bundle_ctx else "plain"))
-                            append_domain_log(
-                                "prompt",
-                                f"[REPLY_CTX] lane={_lane} req={_req_id} "
-                                f"len={len(self._thinking_reply_context or '')} q_head={q_text[:120]!r}",
+                        self._thinking_reply_user_text = _reply_text
+                        _reply_kind = self._classify_background_reply(_reply_text)
+                        if _reply_kind == "new_topic":
+                            # The user's message is a fresh, task-shaped request - NOT the
+                            # answer to the pending question (live incident: a topically
+                            # similar new task got the full reply framing; the model
+                            # blended both, replied over the messenger, and the armed
+                            # mutation gate then blocked the user's own workflow request).
+                            # Inject only a LIGHT note, skip the carry/handoff framing,
+                            # and leave the mutation gate DISARMED for this turn.
+                            self._thinking_reply_gate_armed = False
+                            self._thinking_reply_context = (
+                                f"[Context: You earlier asked the user a background question "
+                                f"(\"{q_text}\") which they have NOT answered. Their message "
+                                f"below is a NEW request - handle it normally, in this chat. "
+                                f"Do NOT treat it as an answer to that question and do NOT "
+                                f"carry out any earlier proposal because of it; the open "
+                                f"question may be re-raised by a later background run if "
+                                f"still relevant.]"
                             )
-                        except Exception:
-                            pass
+                            try:
+                                append_domain_log(
+                                    "prompt",
+                                    f"[REPLY_CTX] lane=new_topic req={_req_id} "
+                                    f"len={len(self._thinking_reply_context or '')} q_head={q_text[:120]!r}",
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            _carry = f" If they CLEARLY confirm, carry out this proposal now: {_action}." if _action else ""
+                            # If this request came from a background AUTOMATION handoff, it links to a bundle that
+                            # holds the automation agent's FULL working context. Load it (same scope only) and
+                            # integrate it deliberately: a concise note + a BOUNDED digest of the run's summary +
+                            # recent steps - so the main agent continues with full context, not a raw transcript
+                            # dumped into the chat. A missing/expired/wrong-scope/mislabeled bundle falls back to
+                            # the plain-question note (no automation framing).
+                            _bundle_ctx, _bundle_curated = (
+                                self._render_handoff_bundle(_scope, _req) if _req else ("", False)
+                            )
+                            # Concrete content the background run gathered behind a teaser message (e.g. the actual
+                            # list of tips). Hand it to the main agent so a follow-up ("which ones? list them") is
+                            # answered with the REAL findings - not a made-up version (observed 2026-06-22: the
+                            # main agent invented incoherent cooling tips because the content was never passed).
+                            _details = (_req or {}).get("details") or ""
+                            if _details:
+                                _facts = (f" The concrete information behind that message - use THIS to answer their "
+                                          f"reply, do not invent new facts: {_details}.")
+                            else:
+                                _facts = (" You do not have the specifics on hand; if the user asks for details, look "
+                                          "them up (e.g. web_search) - do NOT make up facts.")
+                            self._thinking_reply_context = self._build_reply_pickup_note(
+                                q_text, _carry, _bundle_ctx, _bundle_curated, _facts
+                            )
+                            # Observability (incident lesson: the injected note is mid-list and appears in
+                            # no prompt log - the next incident should be a grep, not an inference).
+                            try:
+                                _lane = ("handoff" if (_bundle_ctx and _bundle_curated)
+                                         else ("handoff_uncurated" if _bundle_ctx else "plain"))
+                                append_domain_log(
+                                    "prompt",
+                                    f"[REPLY_CTX] lane={_lane} req={_req_id} "
+                                    f"len={len(self._thinking_reply_context or '')} q_head={q_text[:120]!r}",
+                                )
+                            except Exception:
+                                pass
                 else:
                     self._thinking_reply_context = None
 
                 # If we're interacting, we're definitely not waiting anymore — UNLESS we just re-armed the
                 # wait for a presence re-entry (then keep it open so the user's REAL answer is captured).
-                # Pass the input text so it gets saved for the NEXT thinking run summary.
+                # Pass the RAW input text so it gets saved for the NEXT thinking run summary
+                # (the enriched text put the workspace preamble into the stored reply).
                 if not _presence_reentry:
-                    clear_waiting_for_reply(_scope, user_reply_text=user_input)
+                    clear_waiting_for_reply(_scope, user_reply_text=_reply_text)
             except Exception:
                 pass
 
@@ -8372,7 +8687,7 @@ class Agent:
                     tool_data = streaming_tools[idx]
                     try:
                         tool_name = tool_data['name']
-                        
+
                         # CRITICAL: Check if we're retrying a tool that just failed OR repeating a success
                         if len(self.history) >= 1:
                             # Check failure (existing logic) or repetition (new logic)
@@ -8493,7 +8808,7 @@ class Agent:
                                 except Exception as e:
                                     # If check fails, assume it's safe to proceed
                                     pass
-                        
+
                         tool_calls_detected.append({
                             "id": tool_data['id'] or _synth_tool_call_id(),
                             "type": "function",
@@ -8586,6 +8901,70 @@ class Agent:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
             except Exception:
                 pass
+
+            # ── Cross-lane duplicate filter (AFTER every parsing lane) ─────────────
+            # One copy for streamed AND fallback-parsed calls. These checks used to
+            # live inside the streaming loop only - the fallback parsers (XML/JSON/
+            # paren/qwen/Gemma recovery) bypassed them entirely, and a fallback-
+            # parsed batch re-ran the same two searches verbatim in one second
+            # (live incident, streaming_tools=0 in the log). Runs BEFORE the
+            # assistant tool_calls message is built, so a dropped call never
+            # leaves an unanswered tool_call behind (invariant 4.1).
+            if tool_calls_detected:
+                _filtered_tcs = []
+                _batch_seen_calls = set()
+                for _tc in tool_calls_detected:
+                    try:
+                        _fn = _tc.get("function", {}).get("name") or ""
+                        _fa = _tc.get("function", {}).get("arguments")
+                        # (a) Exact (name, args) duplicate WITHIN this response:
+                        # the model made one logical call - it gets one result.
+                        # For a send tool the same hole would mean a double-send.
+                        _bkey = (_fn, _normalize_tool_args(_fa))
+                        if _bkey in _batch_seen_calls:
+                            UI.event("Warning", f"Dropped exact duplicate call in one response: {_fn}", style="warning")
+                            try:
+                                append_domain_log("backend", f"[LOOP_PROTECTION] dropped in-batch duplicate '{_fn}'")
+                            except Exception:
+                                pass
+                            continue
+                        _batch_seen_calls.add(_bkey)
+                        # (b) Windowed exact-duplicate READ check: a pure lookup
+                        # whose identical call already succeeded THIS turn (and
+                        # nothing mutated since) is refused with a pointer to the
+                        # existing result - the adjacent last-message check goes
+                        # blind as soon as one other call is interleaved.
+                        if _find_redundant_read_call(self.history, _fn, _fa):
+                            UI.event("Warning", f"Blocked redundant tool call (result already in this turn): {_fn}", style="warning")
+                            redundant_block_count += 1
+                            try:
+                                append_domain_log("backend", f"[LOOP_PROTECTION] blocked windowed redundant '{_fn}' (#{redundant_block_count})")
+                            except Exception:
+                                pass
+                            if redundant_block_count >= 3:
+                                self.history.append({
+                                    "role": "system",
+                                    "content": (
+                                        "You have already gathered the needed tool results (see the 'tool' messages above). "
+                                        "Answer the user NOW in plain text. Do NOT call any tool."
+                                    )
+                                })
+                                disable_tools = True  # next generation: no tools -> a text answer, never an abort
+                                redundant_block_count = 0
+                            else:
+                                self.history.append({
+                                    "role": "system",
+                                    "content": (
+                                        f"[!] STOP! You already ran '{_fn}' with these EXACT arguments "
+                                        f"earlier this turn - its result is still in the context above. "
+                                        f"Do NOT run it again; use that result."
+                                    )
+                                })
+                            continue
+                        _filtered_tcs.append(_tc)
+                    except Exception:
+                        _filtered_tcs.append(_tc)  # fail-open: never lose a call to a filter bug
+                tool_calls_detected = _filtered_tcs
 
             # ── Action-Tag parser ──────────────────────────────────────────────────
             # Read the agent's committed <Action> intent and fuzzy-match it against the loaded
@@ -9964,9 +10343,18 @@ class Agent:
         # drives. Hard security blocks (policy_decision.blocked above) are NOT skipped.
         _ww = getattr(self, "_ww_training", False)
         if not _ww:
-            gate_msg = self._plan_gate_decision(name, tool_instance)
+            gate_msg = self._plan_gate_decision(name, tool_instance, tool_args=args)
             if gate_msg is not None:
                 return gate_msg
+            # Turn-local progress flag + note firewall: bookkeeping never counts
+            # as progress; an outcome-claiming note before any real tool ran is
+            # refused (self-poisoning guard - see _working_memory_note_gate).
+            if name == "update_working_memory":
+                _note_block = self._working_memory_note_gate(args)
+                if _note_block is not None:
+                    return _note_block
+            elif name not in _BOOKKEEPING_TOOLS:
+                self._turn_ran_progress_tool = True
             # Incident 2026-07-13 gates (order after the plan gate, before execution):
             # (a) a non-affirmative reply to a background question must not mutate state,
             # (c) while the agent awaits the user's answer, drain turns must not start
@@ -10788,6 +11176,24 @@ class Agent:
         )
         if not _has_outcome:
             return False, None
+
+        # Deterministic rule (no LLM needed): the turn WORKED (tool calls were
+        # made) but ONLY bookkeeping ran - any asserted outcome is unearned by
+        # construction. The LLM judge failed exactly here: it saw a wall of
+        # "✅ Working Memory updated." results next to "Workflow erfolgreich
+        # ausgeführt" and considered that supported (two consecutive live
+        # incidents; the model had narrated fiction into its notes, then
+        # reported it as done). Purely conversational turns (zero tool calls,
+        # e.g. recapping YESTERDAY'S work) deliberately fall through to the
+        # LLM judge as before.
+        _bookkeeping_ish = _BOOKKEEPING_TOOLS | {"memory_save"}
+        if turn_results and all((n or "") in _bookkeeping_ish for n, _ in turn_results):
+            _m = _re.search(
+                r'[^.!?\n]{0,120}(ausgeführt|abgeschlossen|erstellt|gespeichert|durchgeführt'
+                r'|executed|completed|created|saved|success)[^.!?\n]{0,80}',
+                text, _re.I,
+            )
+            return True, (_m.group(0).strip() if _m else text[:120])
 
         if not (getattr(self, "use_server", False) or getattr(self, "api_backend", None) or getattr(self, "llm", None)):
             return False, None

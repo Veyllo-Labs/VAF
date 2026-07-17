@@ -493,10 +493,32 @@ def clear_waiting_for_reply(
 
 
 def get_waiting_for_reply(user_scope_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Return waiting state for this user or None."""
+    """Return waiting state for this user or None.
+
+    TTL safety net: the normal lifecycle skips an unanswered question after
+    ~10 minutes (_process_waiting_reply) - but only when a thinking run
+    actually fires. If thinking mode is disabled, crashed, or the app was
+    restarted, a stale wait could otherwise latch onto the user's NEXT
+    message hours or days later and reframe a fresh request as "the reply to
+    your old question". A wait older than thinking_reply_wait_ttl_hours
+    (default 12h, 0 disables) is treated as expired: cleared and not
+    returned. Fail-open on any error (the entry is returned unexpired)."""
     key = _key(user_scope_id)
     data = _load_waiting()
-    return data.get(key)
+    entry = data.get(key)
+    if not entry:
+        return None
+    try:
+        from vaf.core.config import Config
+        ttl_h = float(Config.get("thinking_reply_wait_ttl_hours", 12) or 0)
+        sent_ts = float(entry.get("question_sent_at_ts") or 0)
+        if ttl_h > 0 and sent_ts > 0 and (time.time() - sent_ts) > ttl_h * 3600:
+            del data[key]
+            _save_waiting(data)
+            return None
+    except Exception:
+        pass
+    return entry
 
 
 def get_and_clear_last_reply(user_scope_id: Optional[str]) -> Optional[str]:

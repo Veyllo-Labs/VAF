@@ -402,6 +402,8 @@ class Config:
         "thinking_followup_max": 3,                            # Re-ask an unanswered proactive question up to N times (pointed follow-up), then let the topic rest
         "default_language": "",                                # Fallback language for backend canned phrases (vocab book) when the user has no preferred_language; empty -> 'en'
         "thinking_wait_skip_minutes": 10,                     # If still no reply after this many minutes total: skip the question and do other things
+        "thinking_reply_wait_ttl_hours": 12,                  # Safety net: a waiting-for-reply latch older than this is expired at read time (the 10-min skip only runs when a thinking run fires); 0 disables
+        "workflow_agent_step_timeout_seconds": 1800,          # Worst-case hard cap for a heavy agent step (coder/research/document) INSIDE a workflow; dead children are caught much earlier by heartbeat liveness
         "thinking_nudge_activity_minutes": 5,                # Do not nudge if user was active on any channel in the last N minutes
         "thinking_provider": "inherit",                      # AI provider for thinking mode ('inherit' or e.g. 'openai', 'local')
         "thinking_model": None,                              # Specific model for thinking mode (None = use provider default)

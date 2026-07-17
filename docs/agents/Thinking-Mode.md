@@ -41,13 +41,23 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
   `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`). `confirmed` is a legacy
   status kept valid for old entries.
 - **Handoff to the main agent:** the request is linked to `waiting_for_reply`. When the user replies in
-  chat, `chat_step` loads the request and injects a reply note carrying the question text and, when a
-  `proposed_action` exists, "if they CLEARLY confirm, carry it out now" - so the **main agent still
-  carries out** a clear "yes" immediately, while a decline changes nothing and an ambiguous reply
-  triggers exactly one confirming question before any action (the old unconditional continue steered a
-  "nein bitte nicht" into unintended mutations, live 2026-07-13). It **captures** the exchange: the
-  user's reply (at pickup) and its own reply (at end-of-turn), moving the status to `replied`. The main
-  agent does NOT decide accepted-vs-declined here. Each pickup logs one `[REPLY_CTX]` line (prompt log).
+  chat, `chat_step` classifies the RAW message deterministically (`_classify_background_reply`; the
+  enriched WebUI text with the workspace preamble defeated every leading-text check here - live
+  incident) and injects the matching reply note:
+  - **short clear "yes"** - full note with the question and, when a `proposed_action` exists, "if they
+    CLEARLY confirm, carry it out now" - the main agent carries it out immediately;
+  - **short decline / short unclear** - same note; a decline changes nothing, an ambiguous reply
+    triggers exactly one confirming question before any action (the old unconditional continue steered
+    a "nein bitte nicht" into unintended mutations, live 2026-07-13);
+  - **long, task-shaped message** (`new_topic`, > ~80 chars) - the user started something NEW, not an
+    answer: only a LIGHT note is injected ("the question was not answered; handle the new request"),
+    the carry/handoff framing is skipped, and the proactive-reply mutation gate is DISARMED for the
+    turn - a live incident showed a topically similar fresh task getting the full reply framing, the
+    model blending both, and the armed gate blocking the user's own workflow request twice.
+  It **captures** the exchange: the user's RAW reply (at pickup) and its own reply (at end-of-turn),
+  moving the status to `replied`. The main agent does NOT decide accepted-vs-declined here. Each
+  pickup logs one `[REPLY_CTX]` line with its lane (`plain`/`handoff`/`handoff_uncurated`/`new_topic`)
+  in the prompt log.
 - **Outcome classification (next run):** the background run that owns the question classifies each
   `replied` request from the full triple {its question, the user's reply, the main agent's own reply
   (capped)} via one small LLM call (`_classify_replied_requests` → `agent._generate_for_classification`):
@@ -120,6 +130,7 @@ Key options (in `config.json` or via Web UI **Settings → AI & Model → Thinke
 | `thinking_wait_nudge_minutes` | `3` | If user does not reply: send nudge after this many minutes |
 | `thinking_followup_max` | `3` | When a proactive question is unanswered, re-ask the SAME one (pointed follow-up) up to N times, then let the topic rest (no question, no nudge) until the user reacts. |
 | `thinking_wait_skip_minutes` | `10` | If still no reply: clear waiting state after this many minutes |
+| `thinking_reply_wait_ttl_hours` | `12` | Safety net: a waiting latch older than this is expired at READ time (`get_waiting_for_reply`), so a stale question can never claim the user's next message as its "reply" when the 10-min skip never ran (thinking disabled/crashed/restart). `0` disables. |
 | `thinking_nudge_activity_minutes` | `5` | Do not nudge if user was active on any channel in the last N minutes |
 | `thinking_provider` | `"inherit"` | AI provider for thinking mode (`inherit` = same as main chat, or `openai`, `anthropic`, `deepseek`, `local`) |
 | `thinking_model` | `null` | Specific model for thinking mode (empty = use provider default) |
@@ -369,8 +380,13 @@ one soft reconfirm instead of logging a refusal. The question text comes from th
   phrasings are generated/expanded across languages by `scripts/generate_vocab.py` (dev-time; the runtime
   never calls an LLM for a nudge).
   - **Inactivity Protection:** No nudge is sent if the user was active on ANY channel within the last `thinking_nudge_activity_minutes` (default 5 min).
-- **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared
-- **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)` is called.
+- **Skip:** After `thinking_wait_skip_minutes`, the waiting state is cleared. This runs inside
+  `_process_waiting_reply`, i.e. only when a thinking run actually fires - the TTL safety net
+  (`thinking_reply_wait_ttl_hours`, checked in `get_waiting_for_reply`) covers the case where it never
+  does.
+- **User replies:** When the user next sends a message, `clear_waiting_for_reply(user_reply_text=...)`
+  is called with the RAW message text (the enriched WebUI text would store the workspace preamble as
+  the recorded reply - observed live in a request record).
 - **Presence re-ask:** If a nudge was already sent (`nudge_sent_at_ts` set) and the user's reply is a
   bare "I'm here" acknowledgement (`_is_presence_ack` — `ja`/`yes`/`da`/`bin wieder da`/👋, exact match
   only), the reply is treated as a presence signal, NOT as the answer: `chat_step` re-arms the wait

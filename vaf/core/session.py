@@ -654,9 +654,13 @@ class SessionManager:
         eagerly created it when the chat was opened and nothing was ever
         saved into it, or a workflow's own scratch-file cleanup left an empty
         shell behind). A workspace holding real content is never touched -
-        only the session record is removed and the files stay on disk.
+        only the session record is removed and the files stay on disk; the
+        chat's title is saved into the workspace label first so the surviving
+        folder keeps a human name in the Data Explorer instead of falling
+        back to the raw session-id folder name.
         """
         _cleanup_empty_session_workspace(session_id)
+        _preserve_workspace_title(self, session_id)
 
         deleted = False
 
@@ -1001,6 +1005,43 @@ def _cleanup_empty_session_workspace(session_id: str) -> None:
             return  # holds real content - never auto-delete
         import shutil as _shutil
         _shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _preserve_workspace_title(manager, session_id: str) -> None:
+    """When a deleted chat leaves its workspace behind (it holds real content),
+    save the chat's title as the workspace display label so the orphaned folder
+    keeps its human name in the Data Explorer instead of falling back to the raw
+    session-id folder name (the title lives in the session record, which is about
+    to be removed). A user-set label is never overwritten (rename wins). Called
+    from SessionManager.delete() AFTER the empty-workspace cleanup (an empty
+    folder is gone by then, nothing to label) and BEFORE the record is removed -
+    both the uid-scoped workspace lookup and the title need the session to still
+    be loadable. Best-effort: never blocks the deletion."""
+    try:
+        path = get_session_workspace_dir(session_id, create=False)
+        if not path or not path.is_dir():
+            return
+        if read_workspace_label(path):
+            return  # explicit rename wins over the chat title
+        # Read the title straight from the record file instead of manager.load():
+        # load() always repoints manager._current at whatever it loads, and
+        # deleting a background chat must not touch the active-session pointer.
+        title = ""
+        for ext in (".json", ".json.gz"):
+            fp = manager.storage_dir / f"{session_id}{ext}"
+            if fp.exists():
+                if ext.endswith(".gz"):
+                    with gzip.open(fp, "rt", encoding="utf-8") as f:
+                        data = json.load(f)
+                else:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                title = str((data or {}).get("name") or "").strip()
+                break
+        if title:
+            write_workspace_label(path, title)
     except Exception:
         pass
 

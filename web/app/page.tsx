@@ -12,7 +12,7 @@ import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
     Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock,
-    Folder, Download, Upload, RefreshCw, ArrowLeft
+    Folder, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X
 } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -1351,6 +1351,17 @@ function VAFDashboardContent() {
         sessionId: string; displayName: string; label: string | null; liveTitle: string | null;
         orphan: boolean; fileCount: number; folderCount: number; updated: string;
     }>>([]);
+    // Explains the explorer's visual language (folder colors, "chat deleted" badge, current-chat
+    // dot) - an explicit info panel, not a hover tooltip, so it is discoverable on touch too.
+    const [showWorkspaceLegend, setShowWorkspaceLegend] = useState(false);
+    // Data Explorer search: the name filter is instant client-side; file names and text-file
+    // CONTENTS are searched server-side (debounced) via /api/workspaces/search.
+    const [workspaceSearch, setWorkspaceSearch] = useState('');
+    const [workspaceSearchHits, setWorkspaceSearchHits] = useState<Record<string, {
+        files: Array<{ path: string; kind: string; snippet?: string }>; truncated: boolean;
+    }> | null>(null);
+    const [workspaceSearching, setWorkspaceSearching] = useState(false);
+    const workspaceSearchSeq = useRef(0);
 
     const workspaceSubpathRef = useRef('');
     // The workspace currently OPEN in the viewer. It may be an orphan or another chat's
@@ -1449,6 +1460,40 @@ function VAFDashboardContent() {
             setAllWorkspaces(Array.isArray(data?.workspaces) ? data.workspaces : []);
         } catch { /* backend unreachable - keep current */ }
     }, []);
+    // Debounced server search over file names + text-file contents. A sequence counter
+    // drops stale responses so a slow earlier query can never overwrite a newer one.
+    useEffect(() => {
+        const q = workspaceSearch.trim();
+        // Bump the sequence on EVERY change, including clearing the box: otherwise an
+        // in-flight response from the last >=2-char query passes the guard after the
+        // field is emptied and paints stale match chips under the tiles.
+        const seq = ++workspaceSearchSeq.current;
+        if (q.length < 2) { setWorkspaceSearchHits(null); setWorkspaceSearching(false); return; }
+        setWorkspaceSearching(true);
+        const t = setTimeout(async () => {
+            try {
+                const res = await fetch(`${getApiBase()}/api/workspaces/search?q=${encodeURIComponent(q)}`, { credentials: 'include' });
+                const data = res.ok ? await res.json().catch(() => null) : null;
+                if (workspaceSearchSeq.current !== seq) return;
+                setWorkspaceSearchHits(data?.results && typeof data.results === 'object' ? data.results : {});
+            } catch {
+                if (workspaceSearchSeq.current === seq) setWorkspaceSearchHits({});
+            } finally {
+                if (workspaceSearchSeq.current === seq) setWorkspaceSearching(false);
+            }
+        }, 350);
+        return () => clearTimeout(t);
+    }, [workspaceSearch]);
+    // A workspace stays visible while searching if its NAME matches (instant, client-side)
+    // or the server found matching files/contents inside it.
+    const visibleWorkspaces = useMemo(() => {
+        const q = workspaceSearch.trim().toLowerCase();
+        if (!q) return allWorkspaces;
+        return allWorkspaces.filter(w =>
+            w.displayName.toLowerCase().includes(q) ||
+            w.sessionId.toLowerCase().includes(q) ||
+            !!workspaceSearchHits?.[w.sessionId]);
+    }, [allWorkspaces, workspaceSearch, workspaceSearchHits]);
     // Drill into any workspace from the index (incl. orphans) WITHOUT switching the active chat.
     const openWorkspace = useCallback((sid: string) => {
         workspaceSubpathRef.current = '';
@@ -6915,11 +6960,11 @@ function VAFDashboardContent() {
             {/* Context Window Modal - Clean & Professional */}
             {isWorkspaceModalOpen && (workspaceView === 'index' || workspaceInfo?.path) && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 max-md:p-0 animate-in fade-in duration-200">
-                    <div className="relative bg-white w-full max-w-[1320px] min-h-[720px] max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200 max-md:max-w-none max-md:min-h-0 max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
+                    <div className="relative bg-white w-full max-w-[1320px] h-[90vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-gray-200 max-md:max-w-none max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
                         {/* Header */}
-                        <div className="shrink-0 px-8 py-5 border-b border-gray-100 bg-gray-50/80">
-                            <div className="flex justify-between items-center">
-                                <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-3 min-w-0">
+                        <div className="shrink-0 px-8 py-5 border-b border-gray-100 bg-gray-50/80 max-md:px-4">
+                            <div className="flex items-center max-md:flex-wrap">
+                                <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-3 min-w-0 max-md:text-lg">
                                     <Folder className="text-gray-800 shrink-0" size={22} />
                                     {workspaceView === 'index' ? (
                                         <span className="truncate">My Workspaces</span>
@@ -6932,9 +6977,25 @@ function VAFDashboardContent() {
                                         </>
                                     )}
                                 </h3>
+                                {workspaceView === 'index' && (
+                                    <div className="relative ml-3 flex min-w-0 max-w-md flex-1 items-center max-md:order-last max-md:ml-0 max-md:mt-3 max-md:w-full max-md:max-w-none max-md:flex-none">
+                                        {workspaceSearching
+                                            ? <Loader2 size={14} className="pointer-events-none absolute left-3 animate-spin text-gray-400" />
+                                            : <Search size={14} className="pointer-events-none absolute left-3 text-gray-400" />}
+                                        <input
+                                            value={workspaceSearch}
+                                            onChange={e => setWorkspaceSearch(e.target.value)}
+                                            placeholder="Search names and file contents…"
+                                            className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-8 text-sm font-normal text-gray-800 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none"
+                                        />
+                                        {workspaceSearch && (
+                                            <button onClick={() => setWorkspaceSearch('')} className="absolute right-2 rounded p-1 text-gray-400 hover:text-gray-700" title="Clear search"><X size={14} /></button>
+                                        )}
+                                    </div>
+                                )}
                                 <button
                                     onClick={() => setIsWorkspaceModalOpen(false)}
-                                    className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
+                                    className="ml-auto shrink-0 p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400 hover:text-gray-700"
                                 >
                                     <span className="sr-only">Close</span>
                                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -6999,13 +7060,28 @@ function VAFDashboardContent() {
 
                         {/* Central index: ALL of this user's workspaces (live + orphaned), incl. those from deleted chats */}
                         {workspaceView === 'index' && (
-                            <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                            <div className="vaf-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-3">
                                 <div className="flex items-center justify-between px-3 pb-1">
-                                    <span className="text-[11px] text-gray-300">{allWorkspaces.length} {allWorkspaces.length === 1 ? 'workspace' : 'workspaces'}</span>
-                                    <button onClick={() => refreshAllWorkspaces()} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800" title="Refresh"><RefreshCw size={15} /></button>
+                                    <span className="text-[11px] text-gray-300">
+                                        {workspaceSearch.trim()
+                                            ? `${visibleWorkspaces.length} of ${allWorkspaces.length} ${allWorkspaces.length === 1 ? 'workspace' : 'workspaces'}`
+                                            : `${allWorkspaces.length} ${allWorkspaces.length === 1 ? 'workspace' : 'workspaces'}`}
+                                    </span>
+                                    <div className="flex items-center gap-1">
+                                        <button onClick={() => setShowWorkspaceLegend(v => !v)} className={cn("rounded-lg p-2 transition-colors hover:bg-gray-100 hover:text-gray-800", showWorkspaceLegend ? "bg-gray-100 text-gray-800" : "text-gray-500")} title="What do the colors mean?"><Info size={15} /></button>
+                                        <button onClick={() => refreshAllWorkspaces()} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800" title="Refresh"><RefreshCw size={15} /></button>
+                                    </div>
                                 </div>
+                                {showWorkspaceLegend && (
+                                    <div className="mx-3 mb-1 space-y-1.5 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[11px] leading-relaxed text-gray-600">
+                                        <div className="flex items-center gap-2"><Folder size={16} strokeWidth={1} className="shrink-0 text-amber-400" fill="#fde68a" /><span>Workspace of an active chat. Its name is the chat&apos;s title (or a name you set via Rename).</span></div>
+                                        <div className="flex items-center gap-2"><Folder size={16} strokeWidth={1} className="shrink-0 text-gray-300" fill="#f3f4f6" /><span>Files kept from a deleted chat (<span className="rounded bg-amber-100 px-1 py-px text-[9px] font-bold text-amber-700">chat deleted</span>). Deleting a chat never deletes its files. These sort to the end.</span></div>
+                                        <div className="flex items-center gap-2"><span className="ml-[3px] mr-[3px] h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 ring-2 ring-white" /><span>The chat you have open right now.</span></div>
+                                        <div className="text-gray-400">Rename changes only the display name. Delete removes the folder and all its files permanently.</div>
+                                    </div>
+                                )}
                                 <div className="grid content-start gap-1 p-2 [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))]">
-                                    {allWorkspaces.map(w => (
+                                    {visibleWorkspaces.map(w => (
                                         <div
                                             key={w.sessionId}
                                             role="button"
@@ -7032,10 +7108,34 @@ function VAFDashboardContent() {
                                             </div>
                                             <Folder size={44} strokeWidth={1} className={w.orphan ? 'text-gray-300' : 'text-amber-400'} fill={w.orphan ? '#f3f4f6' : '#fde68a'} />
                                             <span className="line-clamp-2 w-full break-words text-xs font-medium leading-tight text-gray-800">{w.displayName}</span>
-                                            {w.orphan && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">orphan</span>}
-                                            <span className="text-[10px] text-gray-300">{w.fileCount} {w.fileCount === 1 ? 'file' : 'files'}</span>
+                                            {w.orphan && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">chat deleted</span>}
+                                            <span className="text-[10px] text-gray-300">
+                                                {(() => {
+                                                    const parts: string[] = [];
+                                                    if (w.fileCount) parts.push(`${w.fileCount} ${w.fileCount === 1 ? 'file' : 'files'}`);
+                                                    if (w.folderCount) parts.push(`${w.folderCount} ${w.folderCount === 1 ? 'folder' : 'folders'}`);
+                                                    return parts.length ? parts.join(' · ') : 'empty';
+                                                })()}
+                                            </span>
+                                            {workspaceSearchHits?.[w.sessionId] && (
+                                                <div className="w-full space-y-0.5">
+                                                    {workspaceSearchHits[w.sessionId].files.slice(0, 2).map(f => (
+                                                        <div key={f.path} className="truncate rounded bg-violet-50 px-1 py-0.5 text-[9px] text-violet-700" title={f.snippet ? `${f.path} - "${f.snippet}"` : f.path}>{f.path}</div>
+                                                    ))}
+                                                    {(workspaceSearchHits[w.sessionId].files.length > 2 || workspaceSearchHits[w.sessionId].truncated) && (
+                                                        <div className="text-[9px] text-gray-400">
+                                                            {workspaceSearchHits[w.sessionId].files.length > 2 ? `+${workspaceSearchHits[w.sessionId].files.length - 2} more` : 'more matches'}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
+                                    {allWorkspaces.length > 0 && visibleWorkspaces.length === 0 && (
+                                        <div className="col-span-full flex h-48 items-center justify-center text-sm text-gray-300">
+                                            {workspaceSearching ? 'Searching…' : `No matches for "${workspaceSearch.trim()}".`}
+                                        </div>
+                                    )}
                                     {allWorkspaces.length === 0 && (
                                         <div className="col-span-full flex h-48 items-center justify-center text-sm text-gray-300">No workspaces yet.</div>
                                     )}
@@ -7047,7 +7147,7 @@ function VAFDashboardContent() {
                         {workspaceView === 'folder' && workspaceInfo?.path && (
                         <div
                             className={cn(
-                                "relative min-h-0 flex-1 overflow-y-auto px-4 py-3 transition-colors",
+                                "vaf-scroll relative min-h-0 flex-1 overflow-y-auto px-4 py-3 transition-colors",
                                 workspaceDragOver && "bg-violet-50/60"
                             )}
                             onDragOver={(e) => { e.preventDefault(); setWorkspaceDragOver(true); }}

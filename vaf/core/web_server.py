@@ -1759,7 +1759,183 @@ async def list_my_workspaces(request: Request):
             })
     except Exception:
         pass
+    # Live chats first (the ones the user is actually working in), orphaned
+    # folders from deleted chats at the end - one flat list, no sections.
+    out.sort(key=lambda w: (1 if w.get("orphan") else 0, str(w.get("displayName") or "").lower()))
     return {"workspaces": out, "isAdmin": is_admin}
+
+
+# Whole-request budgets for /api/workspaces/search, shared across ALL of a user's
+# workspaces (per-workspace caps below are the inner bound). A search runs on the
+# shared thread pool and the frontend fires it on every debounced keystroke, so a
+# crafted tree must never let one request monopolize the pool: the walk stops on the
+# FIRST of wall-clock, total files read, or total entries (dirs+files) visited.
+_SEARCH_DEADLINE_S = 2.0
+_SEARCH_GLOBAL_FILES = 4000
+_SEARCH_GLOBAL_ENTRIES = 60000
+
+
+class _SearchBudget:
+    """Mutable whole-request budget shared across every workspace in one search.
+    exhausted() is monotonic-clock aware so a superseded walk self-terminates even
+    if the frontend already dropped its response."""
+    __slots__ = ("deadline", "files", "entries")
+
+    def __init__(self, deadline, files, entries):
+        self.deadline = deadline
+        self.files = files
+        self.entries = entries
+
+    def exhausted(self) -> bool:
+        return (self.files <= 0 or self.entries <= 0
+                or (self.deadline is not None and time.monotonic() >= self.deadline))
+
+
+def _search_one_workspace(child, q: str, per_ws_hits: int = 5, max_files: int = 400,
+                          max_depth: int = 6, max_bytes: int = 1_000_000,
+                          budget: "_SearchBudget" = None, root_real: str = None):
+    """Search ONE workspace folder for `q` (case-insensitive substring) in file/folder
+    NAMES and text-file CONTENTS. Returns {"files": [...], "truncated": bool} or None
+    when nothing matched. Bounded on every axis (hit count, file count, ENTRY count,
+    depth, file size, and an optional whole-request wall-clock/file/entry budget) so a
+    crafted wide or deep tree can never stall the request; binary files (NUL in the
+    first 8KB) match by name only.
+
+    Symlink containment (user-isolation critical): file CONTENTS are read only when the
+    file's real path stays inside `root_real` (the resolved workspace root). A symlink
+    planted in the workspace that points at another user's VAF_Projects file or any host
+    file (agent/coder can create files here) is therefore never opened for content - it
+    can still match by NAME (its name genuinely lives in this workspace, no leak). os.walk
+    runs with followlinks=False so symlinked directories are never descended."""
+    ql = q.lower()
+    hits = []
+    scanned = 0          # files whose content we considered (per-workspace cap)
+    entries = 0          # dirs + files visited (per-workspace breadth cap)
+    max_entries = max_files * 40  # generous per-ws breadth bound; global budget is the real guard
+    truncated = False
+    if root_real is None:
+        try:
+            root_real = os.path.realpath(str(child))
+        except Exception:
+            root_real = str(child)
+    _root_prefix = root_real.rstrip(os.sep) + os.sep
+    try:
+        base_depth = len(child.parts)
+        for dirpath, dirnames, filenames in os.walk(child):  # followlinks=False (default): symlink dirs not descended
+            # Stop before doing any work in this directory if the walk is already
+            # over its per-workspace entry cap or the whole-request budget - so a
+            # crafted tree cannot accumulate work directory by directory.
+            if entries > max_entries or (budget is not None and budget.exhausted()):
+                return {"files": hits, "truncated": True} if hits else None
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            # Match directory NAMES at this level BEFORE the depth cutoff prunes them,
+            # so a folder sitting exactly on the boundary is not silently skipped.
+            for d in dirnames:
+                if ql in d.lower():
+                    rel = os.path.relpath(os.path.join(dirpath, d), str(child))
+                    hits.append({"path": rel.replace(os.sep, "/"), "kind": "name"})
+                    if len(hits) >= per_ws_hits:
+                        return {"files": hits, "truncated": True}
+            if len(Path(dirpath).parts) - base_depth >= max_depth:
+                dirnames[:] = []
+            entries += len(dirnames)
+            if entries > max_entries or (budget is not None and budget.exhausted()):
+                return {"files": hits, "truncated": True} if hits else None
+            for fn in filenames:
+                if fn.startswith("."):
+                    continue
+                entries += 1
+                scanned += 1
+                if scanned > max_files or entries > max_entries or (budget is not None and budget.exhausted()):
+                    return {"files": hits, "truncated": True} if hits else None
+                fp = os.path.join(dirpath, fn)
+                rel = os.path.relpath(fp, str(child)).replace(os.sep, "/")
+                if ql in fn.lower():
+                    hits.append({"path": rel, "kind": "name"})
+                    if len(hits) >= per_ws_hits:
+                        return {"files": hits, "truncated": True}
+                    continue  # name hit is enough for this file
+                # Content read: only for files that actually stay inside the workspace
+                # root (never follow a symlink out to another user's or a host file).
+                # Hardlinks are intentionally NOT containment-checked: a hardlink is
+                # indistinguishable from a native file by path (its directory entry
+                # genuinely lives in the workspace, same inode), and fs.protected_hardlinks
+                # (the modern-Linux default) already forbids linking a file the user
+                # cannot read - so a hardlink can only surface content the owner could
+                # read directly anyway; it is not a cross-user escape.
+                try:
+                    if os.path.islink(fp):
+                        real = os.path.realpath(fp)
+                        if real != root_real and not real.startswith(_root_prefix):
+                            continue  # escapes the workspace - name-only, no content leak
+                    if budget is not None:
+                        budget.files -= 1
+                    if os.path.getsize(fp) > max_bytes:
+                        continue
+                    with open(fp, "rb") as f:
+                        raw = f.read(max_bytes)
+                    if b"\0" in raw[:8192]:
+                        continue  # binary: name-only matching
+                    text = raw.decode("utf-8", errors="ignore")
+                    idx = text.lower().find(ql)
+                    if idx < 0:
+                        continue
+                    start = max(0, idx - 40)
+                    snippet = " ".join(text[start:idx + len(q) + 60].split())
+                    hits.append({"path": rel, "kind": "content", "snippet": snippet[:140]})
+                    if len(hits) >= per_ws_hits:
+                        return {"files": hits, "truncated": True}
+                except OSError:
+                    continue
+            if budget is not None:
+                budget.entries -= (len(dirnames) + len(filenames))
+    except Exception:
+        truncated = True
+    return {"files": hits, "truncated": truncated} if hits else None
+
+
+@app.get("/api/workspaces/search")
+async def search_my_workspaces(request: Request, q: str = ""):
+    """Search the requesting user's workspaces: file/folder names and text-file
+    contents (workspace display names are filtered client-side, which already has
+    them). Scoped to the caller's own VAF_Projects/<uid[:8]>/ root exactly like
+    /api/workspaces; the query is the only client input - never a path."""
+    from vaf.api.config_routes import get_current_user_or_local_admin
+    from vaf.core.session import get_user_projects_root
+    q = str(q or "").strip()
+    if len(q) < 2:
+        return {"results": {}, "query": q}
+    user = get_current_user_or_local_admin(request) or {}
+    scope = str(user.get("user_scope_id") or "")
+    root = get_user_projects_root(scope)
+    if not root or not root.is_dir():
+        return {"results": {}, "query": q}
+
+    def _walk_all():
+        results = {}
+        budget = _SearchBudget(time.monotonic() + _SEARCH_DEADLINE_S,
+                               _SEARCH_GLOBAL_FILES, _SEARCH_GLOBAL_ENTRIES)
+        try:
+            # Only real subdirectories that stay inside the user's root - never follow a
+            # top-level symlink pointing at another user's tree (user-isolation critical).
+            root_canon = os.path.realpath(str(root))
+            root_prefix = root_canon.rstrip(os.sep) + os.sep
+            for child in sorted(root.iterdir()):
+                if budget.exhausted():
+                    break
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                child_real = os.path.realpath(str(child))
+                if child_real != root_canon and not child_real.startswith(root_prefix):
+                    continue  # symlink escaping the user's root
+                found = _search_one_workspace(child, q, budget=budget, root_real=child_real)
+                if found:
+                    results[child.name] = found
+        except Exception:
+            pass
+        return results
+
+    return {"results": await asyncio.to_thread(_walk_all), "query": q}
 
 
 class WorkspaceLabelRequest(BaseModel):

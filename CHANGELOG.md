@@ -12,6 +12,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Data Explorer legibility**: deleting a chat now saves the chat's title
+  into the surviving workspace folder, so folders left behind by deleted
+  chats keep their human name instead of showing a raw internal folder name
+  (an explicit rename always wins; folders orphaned before this change keep
+  their old names). The badge on such folders now reads "chat deleted"
+  instead of the jargon "orphan", the list sorts live chats first and
+  deleted-chat folders to the end, and a new info button in the header
+  explains the folder colors, the badge, and the current-chat dot. The
+  window now keeps a fixed height with a refined scrollbar instead of
+  growing and shrinking with the workspace count, and each tile counts
+  its folders too (a workspace holding only a subfolder no longer reads
+  "0 files" as if it were empty).
+- **Data Explorer search**: a search field in the "My Workspaces" header
+  filters workspaces by name instantly and also searches file names and
+  text-file contents inside them (server-side, scoped to the user's own
+  workspaces, bounded per workspace); matching files are shown under each
+  workspace tile with a content snippet in the tooltip.
 - **Three new developer docs make the existing machinery usable from
   outside**, each verified against the code: an observability guide
   (structured tool/gate events via the engine's event sink, plus the

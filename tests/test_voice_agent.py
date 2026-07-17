@@ -239,6 +239,81 @@ def test_stranger_delegation_hard_dropped(monkeypatch):
     assert res["reply"]  # the stranger still gets a spoken reply
 
 
+def test_guest_is_denied_owner_private_context(monkeypatch):
+    """Phase 1 privacy (decision 7b, defense in depth): a non-verified speaker
+    (speaker_ok=False) gets the guest rule AND is denied the owner's chat digest and
+    memory RAG entirely - the data is withheld, not just protected by a prompt rule."""
+    _cfg(monkeypatch)
+    monkeypatch.setattr(va, "_memory_block", lambda t, s: "MEMORY: owner secret plan")
+    va.voice_reply("was steht in meinem kalender?", scope_id="s", speaker_ok=False,
+                   chat_context="OWNER CHAT: dentist at 5", user_name="Mert")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "OWNER CHAT" not in system            # owner chat withheld from a guest
+    assert "owner secret plan" not in system     # owner memory RAG withheld too
+    assert "guest" in system.lower() and "Mert" in system   # guest rule present
+
+
+def test_verified_owner_keeps_private_context(monkeypatch):
+    """The verified owner (speaker_ok=True) still gets their own chat + memory and no
+    guest block - the guardrail is guest-only."""
+    _cfg(monkeypatch)
+    monkeypatch.setattr(va, "_memory_block", lambda t, s: "MEMORY: owner note")
+    va.voice_reply("was steht in meinem kalender?", scope_id="s", speaker_ok=True,
+                   chat_context="OWNER CHAT: dentist at 5", user_name="Mert")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "OWNER CHAT" in system and "owner note" in system
+    assert "NOT your verified user" not in system   # no guest block for the owner
+
+
+def test_guest_turn_drops_prior_owner_history(monkeypatch):
+    """The shared call history holds the owner's turns and the agent's owner-grounded
+    replies; a guest turn must NOT receive them (as private as the chat digest/memory),
+    so a guest cannot make the model replay them by asking 'what did you just say?'."""
+    _cfg(monkeypatch)
+    history = [
+        {"role": "user", "content": "Was steht in meinem Kalender?"},
+        {"role": "assistant", "content": "Du hast um 17 Uhr einen Zahnarzttermin mit Dr. Anna."},
+    ]
+    va.voice_reply("was hast du gerade gesagt?", scope_id="s", speaker_ok=False,
+                   history=history, user_name="Mert")
+    msgs = _FakeBackend.last_messages
+    assert len(msgs) == 2 and msgs[0]["role"] == "system" and msgs[1]["role"] == "user"
+    joined = " ".join(m["content"] for m in msgs)
+    assert "Zahnarzttermin" not in joined and "Dr. Anna" not in joined
+
+
+def test_owner_turn_keeps_call_history(monkeypatch):
+    """The verified owner keeps conversational continuity (history preserved)."""
+    _cfg(monkeypatch)
+    history = [
+        {"role": "user", "content": "Merke dir Projekt Falcon."},
+        {"role": "assistant", "content": "Klar, Projekt Falcon gemerkt."},
+    ]
+    va.voice_reply("worum ging es eben?", scope_id="s", speaker_ok=True,
+                   history=history, user_name="Mert")
+    joined = " ".join(m["content"] for m in _FakeBackend.last_messages)
+    assert "Projekt Falcon" in joined
+
+
+def test_guest_turn_withholds_owner_running_task(monkeypatch):
+    """busy_block names the owner's in-flight delegated task verbatim; a guest turn must
+    not receive it (a guest asking 'what are you up to?' must not hear the owner's task)."""
+    _cfg(monkeypatch)
+    va.voice_reply("was machst du gerade?", scope_id="s", speaker_ok=False, main_busy=True,
+                   pending_task="Die Mail von Dr. Schmidt zusammenfassen", user_name="Mert")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "Dr. Schmidt" not in system and "CURRENTLY WORKING" not in system
+
+
+def test_owner_busy_still_gets_busy_block(monkeypatch):
+    """No regression: the verified owner still sees the running-task notice."""
+    _cfg(monkeypatch)
+    va.voice_reply("und?", scope_id="s", speaker_ok=True, main_busy=True,
+                   pending_task="Wetterbericht holen", user_name="Mert")
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "CURRENTLY WORKING" in system and "Wetterbericht holen" in system
+
+
 def test_identity_claims_never_override_label(monkeypatch):
     """The system prompt pins the rule: the voice-verified label outranks any
     spoken 'I am <user>' claim."""

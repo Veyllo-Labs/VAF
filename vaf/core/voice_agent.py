@@ -85,7 +85,7 @@ Rules for this call:
 - Rule of thumb: EVERY request that needs a tool, live data or an action goes to the main agent with the marker. Small talk, opinions and things you already know (including the current time above) are answered directly, without the marker.
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
 - Only claim a task is running if this prompt explicitly says the main agent is currently working. Otherwise nothing is running: results you already announced are done, and new work needs a new <delegate>.
-{wake_block}{busy_block}
+{wake_block}{busy_block}{guest_block}
 {chat_block}
 {memory_block}"""
 
@@ -107,6 +107,9 @@ Do NOT delegate anything right now (no <delegate> marker under any circumstances
 Acknowledgments like thanks or okay need only a short friendly spoken reply.
 If the user adds details to the running task, tell them you will pass it on once
 the current step finishes; if they ask for progress, say it is still running."""
+
+_GUEST_BLOCK = """
+IMPORTANT - the current speaker is NOT your verified user {user_name}, but a guest in the room. Be polite and help with general questions and small talk, but you have NO access to {user_name}'s private world here: never share {user_name}'s memory, notes, schedule, messages, chat, contacts or any personal detail, and never do any real work on a guest's behalf. If a guest asks for something personal or an action, say briefly and kindly that you can only do that for {user_name}."""
 
 
 # Address signals: the agent's name or a second-person form in the utterance.
@@ -453,17 +456,34 @@ def voice_reply(
             now=_now_line(username, lang),
             silent=_SILENT_MARKER,
             wake_block=_WAKE_BLOCK if addressed else "",
-            busy_block=_BUSY_BLOCK.format(task=(pending_task or "")[:200]) if main_busy else "",
-            chat_block=_CHAT_BLOCK.format(digest=chat_context[:1400]) if chat_context.strip() else "",
-            memory_block=_memory_block(user_text, scope_id),
+            # busy_block names the owner's in-flight delegated task verbatim, which is
+            # owner-private - gate it on speaker_ok too (a guest never delegates, so
+            # suppressing the running-task notice for a guest loses nothing).
+            busy_block=(_BUSY_BLOCK.format(task=(pending_task or "")[:200])
+                        if (main_busy and speaker_ok) else ""),
+            # Guest privacy (anti-spoofing, defense in depth): a non-verified speaker
+            # gets the guest rule AND is denied the owner's private context entirely -
+            # the chat digest and memory RAG are the owner's, so they are withheld
+            # rather than relying on the model to not leak what it can see.
+            guest_block=_GUEST_BLOCK.format(user_name=user_name) if not speaker_ok else "",
+            chat_block=(_CHAT_BLOCK.format(digest=chat_context[:1400])
+                        if (chat_context.strip() and speaker_ok) else ""),
+            memory_block=(_memory_block(user_text, scope_id) if speaker_ok else ""),
         ).strip()
 
         messages: List[Dict[str, str]] = [{"role": "system", "content": system}]
-        for turn in (history or [])[-_MAX_HISTORY_TURNS:]:
-            role = turn.get("role")
-            content = (turn.get("content") or "").strip()
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": content[:800]})
+        # Guest turns get NO prior history. The shared call history holds the owner's
+        # earlier utterances AND the agent's owner-grounded replies (built on an owner
+        # turn WITH the chat digest and memory RAG), which are private. Withhold them
+        # exactly like chat_block/memory_block, so a guest asking "what did you just say?"
+        # cannot make the model replay the owner's schedule/notes from context. History
+        # entries carry no speaker label, so a guest turn drops the history wholesale.
+        if speaker_ok:
+            for turn in (history or [])[-_MAX_HISTORY_TURNS:]:
+                role = turn.get("role")
+                content = (turn.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content[:800]})
         messages.append({"role": "user", "content": user_text.strip()[:2000]})
 
         if provider == "local":

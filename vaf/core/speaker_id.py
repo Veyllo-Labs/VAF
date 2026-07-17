@@ -17,7 +17,9 @@ over 5-20s of concatenated speech separated same/other by ~0.5 cosine
 
 Rules (from the RAG memory-safety charter, vaf/memory/rag.py):
 - process-wide singletons behind a lock, num_threads=1, CPU provider default;
-- gated behind config ``speaker_id_enabled`` (default OFF, fail-closed);
+- gated behind config ``speaker_id_enabled`` (DEFAULTS to True in config.py; the
+  getter falls back to False only when the key is absent, so an unreadable config
+  fails closed);
 - every public function catches everything and returns a safe default;
 - profiles are stored PER user_scope_id (user-isolation invariant), and are
   only ever written by explicit enrollment - never from live conversations

@@ -11,6 +11,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **Voice call, guest privacy**: on a live call with an enrolled voice profile, a guest
+  (a speaker the voice check does not verify as you) who talks to the agent now gets a
+  reply built WITHOUT your private context - your chat digest, your memory, and the
+  prior call history are all withheld from that turn entirely, not just guarded by a
+  prompt rule, and the agent is told to help only with general questions and never share
+  your memory, notes, schedule, messages or contacts. So a guest cannot make the agent
+  replay your earlier turns by asking "what did you just say?". Tool actions already
+  stayed yours alone; this closes the matching information side.
+
 ### Added
 - **Per-speaker language hint for cloud STT**: the shared speech client now caches
   the language the cloud provider already returns and passes it as a hint on the

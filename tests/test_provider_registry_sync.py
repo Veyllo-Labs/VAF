@@ -133,7 +133,7 @@ def test_workflow_engine_scope_injection_covers_python_sandbox():
     from pathlib import Path
     import re
 
-    src = (Path(__file__).resolve().parents[1] / "vaf" / "workflows" / "engine.py").read_text()
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "workflows" / "engine.py").read_text(encoding="utf-8")
     match = re.search(
         r"def _inject_user_scope.*?(?=\n                # Retry logic)", src, re.DOTALL
     )

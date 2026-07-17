@@ -9,7 +9,7 @@ from pathlib import Path
 
 from vaf import markers
 
-AGENT_SRC = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_text()
+AGENT_SRC = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
 
 
 def test_markers_are_imported_via_the_facade():

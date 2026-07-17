@@ -3301,7 +3301,11 @@ function VAFDashboardContent() {
                     // A custom kind can open as soon as it is known (the custom view renders a loading shell
                     // without data) — START already opened it; this keeps a status tick consistent. (The old
                     // data gate also missed document + the browser object.)
-                    const shouldOpen = isRunning && !subAgentUserClosedRef.current;
+                    // Never during a running workflow: the workflow terminal is the single display
+                    // for embedded sub-agent steps (the stream handlers already route there) - this
+                    // direct isOpen set bypassed openSubAgentWindow's workflow guard, so the coder
+                    // heartbeat opened a duplicate window next to the runtime panel (live incident).
+                    const shouldOpen = isRunning && !subAgentUserClosedRef.current && !isWorkflowRunningRef.current;
                     return {
                         ...prev,
                         isOpen: shouldOpen ? true : prev.isOpen,

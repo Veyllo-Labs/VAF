@@ -79,6 +79,25 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
         args[_arg] = os.path.join(workflow_project_path, p)
 
 
+# Primary instruction parameter per tool - shared by _infer_args (input-only
+# steps) and the input-into-args merge (steps with input + PARTIAL args).
+_PRIMARY_ARG_BY_TOOL = {
+    "web_search": "query",
+    "webfetch": "url",
+    "coding_agent": "task",
+    "librarian_agent": "task",
+    "document_agent": "task",
+    "document_writer": "task",
+    "browser_agent": "task",
+    "research_agent": "topic",
+    "read_file": "path",
+    "write_file": "content",  # Usually needs path too
+    "bash": "command",
+    "list_files": "path",
+    "move_file": "source",
+}
+
+
 def summarize_run_steps(steps) -> str:
     """One bounded line per step (tool, status, result head) for the workflow
     completion message. The completion used to show ONLY the LAST step's
@@ -482,6 +501,25 @@ class WorkflowEngine:
                                         UI.event("System", f"  Variable '{var_name}': {var_size} chars", style="dim")
                         else:
                             args[k] = v
+                    # Merge the step's input into the missing PRIMARY parameter.
+                    # A step with input + PARTIAL args (e.g. web_search with
+                    # only max_results) used to silently DROP its input - the
+                    # args path ignored it entirely and web_search ran
+                    # query-less ("Error: No query provided", live incident)
+                    # although the author had supplied the query as input, in
+                    # exactly the shape the tool schema teaches (args for the
+                    # extra parameters). Steps whose args already carry the
+                    # primary parameter (every saved template) are unchanged;
+                    # their input stays what it always was, a display label.
+                    _primary = _PRIMARY_ARG_BY_TOOL.get(step.tool, "input")
+                    if str(step.input_template or "").strip() and _primary not in args:
+                        args[_primary] = self._resolve_template(
+                            step.input_template, outputs, defaults
+                        )
+                        if step.tool == "web_search":
+                            # Parity with _infer_args: no per-result LLM
+                            # synthesis inside workflows.
+                            args.setdefault("deep", False)
                 else:
                     resolved_input = self._resolve_template(step.input_template, outputs, defaults)
             except KeyError as e:
@@ -1506,24 +1544,8 @@ class WorkflowEngine:
         """
         Infer the argument name for a tool based on its expected parameters.
         """
-        # Common tool argument mappings
-        ARG_MAPPINGS = {
-            "web_search": "query",  # deep=False injected separately below
-            "webfetch": "url",
-            "coding_agent": "task",
-            "librarian_agent": "task",
-            "document_agent": "task",
-            "document_writer": "task",
-            "browser_agent": "task",
-            "research_agent": "topic",
-            "read_file": "path",
-            "write_file": "content",  # Usually needs path too
-            "bash": "command",
-            "list_files": "path",
-            "move_file": "source",
-        }
-        
-        arg_name = ARG_MAPPINGS.get(tool_name, "input")
+        # Shared primary-arg mapping (also used by the input-into-args merge).
+        arg_name = _PRIMARY_ARG_BY_TOOL.get(tool_name, "input")
         args = {arg_name: value}
         # In workflow context, disable per-result LLM synthesis for web_search.
         # deep=True triggers a query_llm() call per result which blocks on DeepSeek latency.

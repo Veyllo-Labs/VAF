@@ -100,6 +100,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A workflow step's instruction survives the presence of extra
+  parameters.** The retest's model authored a step exactly the way the
+  tool schema teaches - instruction in input, extra parameters in args
+  ({"max_results": 3}) - and the engine built the tool call ONLY from
+  args, silently dropping the input: web_search ran without a query and
+  the whole run failed with "Error: No query provided." The resolved
+  input now fills the tool's missing primary parameter; steps whose args
+  already carry it (every saved template) are untouched.
 - **A workflow's completion message shows the real work of every step, and
   three templates no longer end on a filesystem agent asked to write
   prose.** A retest run succeeded end to end (11-minute coder step, HTML

@@ -206,6 +206,13 @@ create_agent_workflow(
   templates via `execute_workflow`, the CLI `@workflow` lane, automations with workflow steps).
   The full authored step list is logged as a `[RUN_TEMP]` line (backend log) so the next forensic
   is a grep, not an inference.
+- **`input` + partial `args` merge:** a step may carry its instruction in `input` and only the
+  EXTRA parameters in `args` (`{"max_results": 3}`) - exactly the shape the tool schema teaches.
+  The engine used to build the call ONLY from `args` when present, silently dropping the input;
+  web_search ran query-less and the whole run failed with "Error: No query provided." (live
+  incident). The resolved `input` now fills the tool's missing PRIMARY parameter
+  (`_PRIMARY_ARG_BY_TOOL`); steps whose `args` already carry it - every saved template - are
+  untouched (their `input` stays a display label).
 - **Completion carries every step's result:** both completion messages (saved workflows via
   `execute_workflow` and temporary ones) append a bounded "Step results" summary - one line per
   step with tool, status and result head (`engine.summarize_run_steps`). The completion used to

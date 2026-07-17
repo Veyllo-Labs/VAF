@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Session-derived paths must key on the session, never process-global state.
 
-Live incident (green778499, 2026-07-11): with parallel main workers, the fresh
+Live incident (2026-07-11): with parallel main workers, the fresh
 chat's system prompt advertised ANOTHER chat's folder as "this chat's workspace"
 because the prompt builder resolved it via the process-global session pointer -
 the model dutifully saved the deliverable into the foreign chat's workspace.

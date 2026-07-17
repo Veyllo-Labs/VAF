@@ -11,7 +11,7 @@ CONTENT_ONLY generation step writes the Markdown summary, write_file saves it
 into the chat workspace.
 
 Composed from a live session where the agent built this lane ad-hoc over
-host_bash (chat cyan375464): this template runs the same recipe fully inside
+host_bash (live chat): this template runs the same recipe fully inside
 the Docker sandbox instead - no host pip install, no per-command confirmations.
 If the video has no subtitles at all, the summary step writes an honest note
 instead of hallucinating content.

@@ -283,7 +283,7 @@ When the Coding Agent creates a new project (website, script, document, etc.), i
 ```
 ~/Documents/VAF_Projects/
 ├── <user_scope_id[:8]>/         # per-user subdirectory (authenticated users)
-│   └── <session_id>/            # per-chat subdirectory (e.g. green432633)
+│   └── <session_id>/            # per-chat subdirectory (e.g. green123456)
 │       ├── My Website/          # project created in this chat
 │       └── Game Space Shooter/
 └── Demo Website/                # legacy path (local/admin, no session context)

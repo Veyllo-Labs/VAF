@@ -850,7 +850,7 @@ def record_created_file(session_id: Optional[str], file_path) -> None:
     /api/workflow/update HTTP endpoint, which is the SUBPROCESS notification
     fallback: files written in-process (main-agent write_file, workflow engine)
     updated the UI but never anchored the session, so the workspace note never
-    fired for those chats (live incident, session red543900). Both notify paths
+    fired for those chats (live incident). Both notify paths
     call this now. Fail-safe: never raises.
     """
     try:

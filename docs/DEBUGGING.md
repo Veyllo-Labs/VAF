@@ -71,7 +71,7 @@ Admins can list and tail `.log` files over HTTP: `GET /api/logs` and
 ## Reading a session
 
 Sessions live in `~/.vaf/sessions/<session_id>.json` (atomic writes; ids look
-like `blue378604`). Top-level keys: `id`, `name`, `created_at`, `updated_at`,
+like `green123456`). Top-level keys: `id`, `name`, `created_at`, `updated_at`,
 `model`, `project_path`, `messages`, `metadata` (carries `user_scope_id`),
 `runtime_state`, `state_version`.
 

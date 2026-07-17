@@ -8,7 +8,7 @@ Before this queue, a record that failed the delivery quality gate (stale after a
 schema change, declare-mode, draft, failed challenge) simply rotted: it was never
 delivered AND nothing ever re-trained it -- on 2026-07-11, 18 of 67 live records
 were in that state, including the two whose know-how would have prevented the
-blue378604 incident. Now every gate reject is enqueued here, and the queue is
+original incident. Now every gate reject is enqueued here, and the queue is
 drained either manually (``vaf ww retrain --pending`` / ``vaf ww queue``) or
 automatically inside the eager worker thread (opt-in via the existing
 ``whare_wananga_eager_enabled`` flag; one training at a time).

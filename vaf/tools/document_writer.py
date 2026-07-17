@@ -68,7 +68,7 @@ For large/complex documents, use document_agent instead."""
 
     # The ONLY formats this tool can actually produce. Anything else silently
     # rendered as "text" in the past (a .svg happened to survive, a .html spec
-    # came out as an rst-like text file - blue378604 audit): now rejected with
+    # came out as an rst-like text file - tool-friction audit): now rejected with
     # a redirect to the right tool.
     _ALLOWED_SUFFIXES = (".txt", ".md", ".docx")
 
@@ -92,7 +92,7 @@ For large/complex documents, use document_agent instead."""
         # in the WebUI workspace browser); legacy VAF_Documents otherwise.
         # Main-agent calls inject _session_id: the workspace must key on THIS
         # chat - the process-global fallback races under parallel workers and
-        # resolved another chat's folder (Rule 4; live incident green778499).
+        # resolved another chat's folder (Rule 4; live incident).
         _sid = kwargs.get('_session_id') or None
         vaf_docs_dir = resolve_agent_output_dir(
             Platform.documents_dir() / "VAF_Documents", session_id=_sid

@@ -96,8 +96,8 @@ def test_phrase_form_keeps_file_extension():
 
 def test_bare_unix_path_stops_at_quotes():
     # Pre-fix \S+ swallowed the closing quote: '/home/x/proj/site.html"' survived rstrip.
-    got = _extract_explicit_task_path('Speichere unter "/home/mert/proj/site.html".')
-    assert got == "/home/mert/proj/site.html"
+    got = _extract_explicit_task_path('Speichere unter "/home/user/proj/site.html".')
+    assert got == "/home/user/proj/site.html"
 
 
 def test_bare_windows_path_keeps_extension():
@@ -113,12 +113,12 @@ def test_incident_task_text_extracts_full_file_path():
     # extension heuristic (continue-project case).
     task = (
         "Erstelle eine vollständige, standalone HTML-Datei und speichere sie unter "
-        "/home/nobody9x/Documents/VAF_Projects/a74e6e21/blue378604/marktmodell_juli2026.html"
+        "/home/nobody9x/Documents/VAF_Projects/ab12cd34/green123456/marktmodell_juli2026.html"
     )
     got = _extract_explicit_task_path(task)
-    assert got == "/home/nobody9x/Documents/VAF_Projects/a74e6e21/blue378604/marktmodell_juli2026.html"
+    assert got == "/home/nobody9x/Documents/VAF_Projects/ab12cd34/green123456/marktmodell_juli2026.html"
     d, hint = _split_explicit_path(got)
-    assert d == "/home/nobody9x/Documents/VAF_Projects/a74e6e21/blue378604"
+    assert d == "/home/nobody9x/Documents/VAF_Projects/ab12cd34/green123456"
     assert hint == "marktmodell_juli2026.html"
 
 

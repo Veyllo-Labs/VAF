@@ -62,11 +62,11 @@ def test_paren_leaked_plan_bullets_with_json_args():
     bullets; unrecovered they became the FINAL ANSWER and were read aloud on a
     voice call. Exact shape from the incident chat."""
     txt = ("Keine Treffer. Lass mich die E-Mails von heute direkt durchgehen.\n"
-           '- find_mail({"query": "mert1997", "limit": 20})\n'
+           '- find_mail({"query": "alice1985", "limit": 20})\n'
            '- find_mail({"query": "after", "limit": 10})\n'
            '- mail_inbox({"account": "user@example.com", "limit": 10, "query": "afterparty"})')
     assert parse_paren(txt, TOOLS) == [
-        ("find_mail", {"query": "mert1997", "limit": 20}),
+        ("find_mail", {"query": "alice1985", "limit": 20}),
         ("find_mail", {"query": "after", "limit": 10}),
         ("mail_inbox", {"account": "user@example.com", "limit": 10, "query": "afterparty"}),
     ]

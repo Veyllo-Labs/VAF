@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""write_file as a main-agent tool (blue378604 audit, Fix 1).
+"""write_file as a main-agent tool (tool-friction audit, Fix 1).
 
 The python_sandbox persistence guard redirects the model to write_file, but the
 tool was excluded from the main agent (dead signpost: a perfectly formed
@@ -159,12 +159,12 @@ def test_admin_scope_none_is_not_jailed(fake_home):
 
 
 def test_local_admin_scope_uuid_is_not_jailed(fake_home, monkeypatch):
-    # Live regression (acceptance test green080979): the logged-in OWNER session
+    # Live regression: the logged-in OWNER session
     # carries the admin's real UUID, not None - it must not be jailed out of the
     # VAF_Projects root (librarian _compute_jail semantics: no scope OR the
     # local-admin scope = admin).
     import vaf.core.config as config_mod
-    admin_uuid = "a74e6e21-3516-4305-85a0-ecaef07111e8"
+    admin_uuid = "ab12cd34-0000-4000-8000-000000000001"
     monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: admin_uuid)
     target = fake_home / "Documents" / "VAF_Projects" / "flat_root.py"
     out = WriteFileTool().run(path=str(target), content="print(1)", user_scope_id=admin_uuid)
@@ -175,7 +175,7 @@ def test_local_admin_scope_uuid_is_not_jailed(fake_home, monkeypatch):
 def test_non_admin_scope_still_jailed(fake_home, monkeypatch):
     import vaf.core.config as config_mod
     monkeypatch.setattr(config_mod, "get_local_admin_scope_id",
-                        lambda: "a74e6e21-3516-4305-85a0-ecaef07111e8")
+                        lambda: "ab12cd34-0000-4000-8000-000000000001")
     target = fake_home / "Documents" / "VAF_Projects" / "flat_root.py"
     out = WriteFileTool().run(path=str(target), content="x",
                               user_scope_id="deadbeef-0000-0000-0000-000000000000")
@@ -221,7 +221,7 @@ def test_explicit_empty_content_still_writes_empty_file(fake_home):
 
 
 def test_write_outside_workspace_carries_ui_visibility_note(fake_home):
-    # Live case (red543900): the deliverable was copied to the VAF_Projects ROOT,
+    # Live case: the deliverable was copied to the VAF_Projects ROOT,
     # invisible to the UI file browser / LAN clients. Absolute writes outside the
     # injected workspace stay ALLOWED (admin freedom) but must say so.
     ws = fake_home / "Documents" / "VAF_Projects" / "sess1"

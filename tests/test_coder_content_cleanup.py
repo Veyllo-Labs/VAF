@@ -24,7 +24,7 @@ def test_real_content_only_temp_dir_is_removed():
 
 def test_injected_user_workspace_survives(tmp_path):
     """THE regression: a per-chat workspace passed in as project_path must survive."""
-    ws = tmp_path / "VAF_Projects" / "a74e6e21" / "purple636998" / "Workflow"
+    ws = tmp_path / "VAF_Projects" / "ab12cd34" / "green123456" / "Workflow"
     ws.mkdir(parents=True)
     f = ws / "draft.txt"
     f.write_text("user data")

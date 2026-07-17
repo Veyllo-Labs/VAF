@@ -446,7 +446,7 @@ def show_tools_menu(agent):
     
     # 2. Coder Sub-Agent only tools (not given to Main Agent; shown for reference)
     # write_file/read_file/list_files are NOT in this list: they are registered to
-    # the main agent too (write_file since the blue378604 audit fix).
+    # the main agent too (write_file since the tool-friction audit fix).
     CODER_SUBAGENT_TOOLS = [
         ("read_file", "Read a file's contents", "Coder Sub-Agent"),
         ("list_files", "List files in directory", "Coder Sub-Agent"),

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Whare Wananga delivery-gate split (blue378604 audit, Fix 3).
+"""Whare Wananga delivery-gate split (tool-friction audit, Fix 3).
 
 The strict quality gate silenced 18 of 67 live records COMPLETELY - including
 document_writer, whose stored pitfalls held exactly the knowledge that would

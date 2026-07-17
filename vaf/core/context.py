@@ -37,12 +37,12 @@ TURN_CONTEXT_PREFIX = "[Context:"
 # the agent's retry guard (agent.py) and this per-turn summarizer so the two
 # copies can never drift again (a drift left this summarizer labeling a failed
 # write_file as OK, which a weak local model then reported to the user as
-# success - session cyan123670). NOTE: the tool_end observability `ok` flag in
+# success - live incident). NOTE: the tool_end observability `ok` flag in
 # agent.py intentionally does NOT use this helper - it is a narrower,
 # dispatch-level check (it must not mark a "Failed..."-style semantic output
 # as not-ok).
 #
-# A second incident (fresh adversarial review of the cyan123670 fix itself)
+# A second incident (fresh adversarial review of that fix itself)
 # found this list, while internally consistent, covered only a handful of the
 # failure-string SHAPES tools actually return - a repo-wide sweep of every
 # vaf/tools/*.py file found ~30 more currently-shipping families this missed

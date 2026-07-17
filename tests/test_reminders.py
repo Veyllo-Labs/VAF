@@ -17,7 +17,7 @@ import vaf.core.reminders as rem
 from vaf.core.platform import Platform
 from vaf.tools.schedule_reminder import ScheduleReminderTool
 
-SCOPE = "a74e6e21-3516-4305-85a0-ecaef07111e8"
+SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 
 
 def _isolate(monkeypatch, tmp_path):

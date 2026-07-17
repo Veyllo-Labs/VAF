@@ -717,7 +717,7 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
         # session workspace) is bypassed here, so run the shared setter directly.
         # Without this, files written by the main agent or the workflow engine
         # never set session.project_path and the [SESSION WORKSPACE] note never
-        # fired for such chats (live incident red543900).
+        # fired for such chats (live incident).
         try:
             from vaf.core.session import record_created_file
             record_created_file(session_id, file_path)

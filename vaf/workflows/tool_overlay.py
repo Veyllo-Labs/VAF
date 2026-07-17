@@ -8,8 +8,7 @@ call": the in-chat executor (vaf/tools/workflow_executor.py), the @workflow CLI
 subprocess (vaf/cli/cmd/workflow.py) and the run_temp overlay in agent.py. The
 copies drifted: the CLI subprocess lacked python_sandbox, so the youtube_summary
 template failed its first step with "Tool not found" when invoked via
-@youtube_summary while working fine through execute_workflow (live incident,
-session yellow305153).
+@youtube_summary while working fine through execute_workflow (live incident).
 
 workflow_primitives() is the ONE list now. It must cover every tool any
 BUILT-IN template step names (tests/test_workflow_tool_overlay.py enforces

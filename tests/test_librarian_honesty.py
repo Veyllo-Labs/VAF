@@ -5,7 +5,7 @@
 
 The librarian has NO delete capability, yet four delete/verify tasks were each
 "answered" with canned Documents statistics in ~1s: the fs-map fast path
-keyword-matched 'document' inside the PATH '/home/mert/Documents/...'. The
+keyword-matched 'document' inside the PATH '/home/user/Documents/...'. The
 canned answer neither did nor refused anything, which fueled the caller's
 escalating retries. Fixtures below are the four REAL task payloads.
 """
@@ -14,20 +14,20 @@ from vaf.tools.librarian import LibrarianTool, _is_destruction_request
 
 # The four real payloads from ~/.vaf/subagent_queue/task_payloads/ (paths as delivered).
 PAYLOAD_DELETE_DE = (
-    "Lösche die Datei /home/mert/Documents/VAF_Projects/a74e6e21/blue286275/Workflow/wetter_berlin.html"
+    "Lösche die Datei /home/user/Documents/VAF_Projects/ab12cd34/green123456/Workflow/wetter_berlin.html"
 )
 PAYLOAD_DELETE_EN = (
-    "Delete the file at this exact path: /home/mert/Documents/VAF_Projects/a74e6e21/blue286275/"
+    "Delete the file at this exact path: /home/user/Documents/VAF_Projects/ab12cd34/green123456/"
     "Workflow/wetter_berlin.html -- remove it permanently. Do NOT list directories, do NOT read "
     "anything. Just delete that specific file."
 )
 PAYLOAD_DELETE_RM = (
-    "DELETE the file at /home/mert/Documents/VAF_Projects/a74e6e21/blue286275/Workflow/"
+    "DELETE the file at /home/user/Documents/VAF_Projects/ab12cd34/green123456/Workflow/"
     "wetter_berlin.html -- remove it permanently with rm or unlink. Do NOT list directories, "
     "do NOT read the file. Just DELETE it."
 )
 PAYLOAD_VERIFY = (
-    "Confirm whether the file /home/mert/Documents/VAF_Projects/a74e6e21/blue286275/Workflow/"
+    "Confirm whether the file /home/user/Documents/VAF_Projects/ab12cd34/green123456/Workflow/"
     "wetter_berlin.html still exists. Answer YES if it exists, NO if deleted."
 )
 

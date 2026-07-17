@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Workflow runner tool overlay + variable extraction guards.
 
-Live incident (session yellow305153): @youtube_summary ran in the CLI workflow
+Live incident: @youtube_summary ran in the CLI workflow
 subprocess, whose hand-maintained tool dict lacked python_sandbox -> the first
 step failed with "Tool not found" although the same workflow worked through the
 in-chat executor (which overlays the live agent registry). And the variable

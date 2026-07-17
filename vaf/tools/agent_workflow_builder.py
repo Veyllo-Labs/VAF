@@ -612,7 +612,7 @@ class AgentWorkflowBuilderTool(BaseTool):
         # Stop wiring: let the Stop button abort the workflow — both between steps
         # (engine loop) and *during* a step (bounded-run inside the engine polls this).
         # IMPORTANT: the Stop button targets the *canonical* session id (what the WebSocket
-        # sends / what get_current_session_id() returns, e.g. "orange166279"). That can
+        # sends / what get_current_session_id() returns, e.g. "green123456"). That can
         # differ from `agent.current_session_id` captured above, so we check should_stop for
         # ALL plausible session ids — otherwise Stop silently does nothing.
         _stop_sid = session_id

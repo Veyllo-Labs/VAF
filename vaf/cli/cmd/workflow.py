@@ -272,7 +272,7 @@ def run_workflow(
         # registry to overlay, so the shared list must cover every tool a
         # built-in template names. The previous hand-maintained copy here
         # lacked python_sandbox, failing youtube_summary's first step with
-        # "Tool not found" (live incident, session yellow305153).
+        # "Tool not found" (live incident).
         from vaf.workflows.tool_overlay import workflow_primitives
         tools = workflow_primitives()
         if not tools:

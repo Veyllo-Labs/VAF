@@ -4,7 +4,7 @@
 """YouTube Summary workflow template guards.
 
 The template runs the caption recipe an agent composed ad-hoc over host_bash
-(chat cyan375464) fully inside the sandbox. These tests pin the properties that
+fully inside the sandbox. These tests pin the properties that
 make it safe: sandbox-only lane, honest no-subs/rate-limit behavior instead of
 hallucination, armed step validation, and brace-safety of the embedded Python
 code under the engine's {variable} substitution (a brace block containing a dot

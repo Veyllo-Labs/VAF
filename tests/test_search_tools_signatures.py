@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""search_tools parameter signatures (blue378604 audit, Fix 4).
+"""search_tools parameter signatures (tool-friction audit, Fix 4).
 
 search_tools returned only name + one description line, so a freshly discovered
 tool had to be called with GUESSED parameters (observed live: document_writer

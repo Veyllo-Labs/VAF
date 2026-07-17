@@ -254,7 +254,7 @@ attach the failed tool's know-how to their existing failure message via the shar
 
 Unlike the A-track, the reactive lane runs **relaxed** (`allow_unverified=True`): a record that
 fails the quality gate (declare-mode, stale, draft) is still delivered, prefixed with an explicit
-`UNVERIFIED - <reason>` tag. Rationale (blue378604 incident): the call has ALREADY failed, so a
+`UNVERIFIED - <reason>` tag. Rationale (live incident): the call has ALREADY failed, so a
 possibly-imperfect hint costs little -- while the withheld record often holds exactly the missing
 knowledge (document_writer's declare-mode record contained the fix for the live failure and was
 never delivered). The vacuous-pitfall filter still applies. The A-track schema injection stays

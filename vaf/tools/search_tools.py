@@ -8,7 +8,7 @@ The model calls this when it does not know which tool to use for a task.
 Returns a short list of matching tool names + one-line descriptions; the TOP
 matches additionally carry a compact call signature (from tool.parameters) so
 the model does not have to guess parameter names after discovery — that guessing
-produced real schema-validation failures (blue378604 audit).
+produced real schema-validation failures (tool-friction audit).
 
 The agent router already limits which tools are in-context per turn.
 search_tools lets the *model itself* discover tools on-demand, complementing

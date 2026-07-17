@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """tool_result_is_error (vaf/core/context.py) is THE single source of truth for
 "did this tool call fail" - shared by the per-turn summarizer and the tool_end
-web event. Incident cyan123670 showed a missed prefix lets a weak model report
+web event. A live incident showed a missed prefix lets a weak model report
 a failed write as success; a follow-up adversarial review of that very fix then
 found the detector covered only a handful of the failure-string shapes tools
 actually return (a repo-wide sweep of vaf/tools/*.py found ~30 more shipping

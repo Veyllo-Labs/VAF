@@ -5,7 +5,7 @@
 
 The tool was attachment-only; once the agent could produce images itself
 (python_sandbox export_files), it had no way to quality-check them and spiraled
-into struct/identify/OCR detours until the user aborted (live: green778499).
+into struct/identify/OCR detours until the user aborted (live incident).
 image_path is jailed to the chat's workspace, keyed on the dispatcher-injected
 session id - an arbitrary host path would let a remote user exfiltrate foreign
 files through the vision model's description.

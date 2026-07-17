@@ -707,8 +707,8 @@ Then use the results to answer. Do NOT guess from your training data!
                 # fallback. With parallel_main_workers > 1 the global points at
                 # whichever session touched it last: a fresh chat's system prompt
                 # advertised ANOTHER chat's folder as "this chat's workspace" and
-                # the model dutifully wrote the deliverable there (live incident,
-                # session green778499 -> red543900's workspace).
+                # the model dutifully wrote the deliverable there (live incident:
+                # one chat's prompt advertised another chat's workspace).
                 _ws = get_session_workspace_dir(session_id, create=False) if session_id else None
                 if _ws:
                     _proj_base = str(_ws).rstrip("/") + "/"

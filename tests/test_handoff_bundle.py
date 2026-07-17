@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 import vaf.core.handoff_bundle as hb
 from vaf.core.platform import Platform
 
-SCOPE_A = "5bd4005a-3428-427e-9620-913e55273fb7"   # e.g. Max
-SCOPE_B = "a74e6e21-3516-4305-85a0-ecaef07111e8"   # e.g. Mert
+SCOPE_A = "0a0b0c0d-0000-4000-8000-000000000002"   # e.g. user A
+SCOPE_B = "ab12cd34-0000-4000-8000-000000000001"   # e.g. user B
 
 _HIST = [
     {"role": "system", "content": "sys"},

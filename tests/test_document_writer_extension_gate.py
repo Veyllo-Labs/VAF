@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""document_writer extension allowlist (blue378604 audit, Fix 5).
+"""document_writer extension allowlist (tool-friction audit, Fix 5).
 
 The tool declared .txt/.md/.docx but silently accepted ANY extension and rendered
 it as "text": a raw .svg happened to survive the pipeline, an .html spec came out

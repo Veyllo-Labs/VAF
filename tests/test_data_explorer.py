@@ -45,9 +45,9 @@ def hermetic_home(tmp_path, monkeypatch):
 # ── workspace label helpers ───────────────────────────────────────────────────
 
 def test_get_user_projects_root_uid8():
-    r = get_user_projects_root("a74e6e21-3516-4305-85a0-ecaef07111e8")
-    assert r is not None and r.name == "a74e6e21"
-    assert r == Platform.documents_dir() / "VAF_Projects" / "a74e6e21"
+    r = get_user_projects_root("ab12cd34-0000-4000-8000-000000000001")
+    assert r is not None and r.name == "ab12cd34"
+    assert r == Platform.documents_dir() / "VAF_Projects" / "ab12cd34"
     assert get_user_projects_root("") is None
     assert get_user_projects_root(None) is None
 
@@ -56,12 +56,12 @@ def test_label_roundtrip_and_display_precedence():
     d = pathlib.Path(tempfile.mkdtemp())
     # No label -> fallbacks: live title, then folder name (== session_id)
     assert read_workspace_label(d) is None
-    assert resolve_workspace_display_name(d, "orange641045", None) == "orange641045"
-    assert resolve_workspace_display_name(d, "orange641045", "Chat Title") == "Chat Title"
+    assert resolve_workspace_display_name(d, "green123456", None) == "green123456"
+    assert resolve_workspace_display_name(d, "green123456", "Chat Title") == "Chat Title"
     # Explicit label wins and round-trips
     assert write_workspace_label(d, "My Export Run") is True
     assert read_workspace_label(d) == "My Export Run"
-    assert resolve_workspace_display_name(d, "orange641045", "Chat Title") == "My Export Run"
+    assert resolve_workspace_display_name(d, "green123456", "Chat Title") == "My Export Run"
 
 
 def test_label_corrupt_json_falls_back(tmp_path):
@@ -86,11 +86,11 @@ def test_jail_noop_when_unset(hermetic_home):
 
 
 def test_jail_remote_user_is_isolated(hermetic_home):
-    A, B = "a74e6e21", "cafe1234"
+    A, B = "ab12cd34", "cafe1234"
     tok = set_librarian_scope({"is_admin": False, "uid8": A,
                                "allowed_roots": [Platform.documents_dir() / "VAF_Projects" / A]})
     try:
-        assert is_safe_path(_p(A, "orange641045", "doc.txt"))[0] is True    # own uid8: allowed
+        assert is_safe_path(_p(A, "green123456", "doc.txt"))[0] is True    # own uid8: allowed
         assert is_safe_path(_p(B, "secret.txt"))[0] is False                # other uid8: DENIED
         assert is_safe_path(str(pathlib.Path.home() / "Downloads"))[0] is False  # no personal folders
     finally:

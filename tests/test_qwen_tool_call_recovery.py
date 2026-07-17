@@ -4,7 +4,7 @@
 """_parse_qwen_tool_calls recovers Qwen/Hermes-style text tool calls that a
 reasoning model sometimes emits instead of a native call.
 
-Live incident (session yellow276227): a local model wrote a tool call as
+Live incident: a local model wrote a tool call as
 text but garbled its own closing tags -
 `<tool_call><function=update_working_memory><parameter=plan>[...]</parameter></tasks></working_memory>`
 (hallucinated `</tasks></working_memory>` instead of `</parameter></function>

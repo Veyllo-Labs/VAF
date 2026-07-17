@@ -107,7 +107,7 @@ def async_failure_hint(agent, tool: str, error: str):
 
     Sub-agent failures never trigger the sync reactive lane: the tool result was
     only the "[!] TASK DELEGATED" marker, and the real error arrives later via
-    the runner/CLI drain (blue378604 audit). Both drains call this instead:
+    the runner/CLI drain (tool-friction audit). Both drains call this instead:
     returns the failed tool's know-how (relaxed gate, tagged UNVERIFIED when the
     record is gate-failing) and triggers the background re-learn for novel
     errors EVEN when no deliverable know-how exists (a confirmed record whose

@@ -365,7 +365,7 @@ class PythonSandboxTool(BaseTool):
                           session_id) -> list:
         """Copy files the code produced OUT of the container into the chat workspace.
 
-        This is the sanctioned exit for binary artifacts (blue378604 wish item
+        This is the sanctioned exit for binary artifacts (tool-friction-audit wish item
         "sandbox_persist"): the base64-through-context lane truncates anything
         beyond the model's output budget (live incident: a 400KB chart arrived
         as 2.5KB of corrupt PNG). docker cp runs BEFORE the per-exec workdir is

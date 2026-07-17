@@ -212,7 +212,7 @@ Sessions are stored as JSON in `~/.vaf/sessions/<session_id>.json`:
 
 ```json
 {
-    "id": "blue464411",
+    "id": "green123456",
     "name": "Session 2026-01-27 05:30",
     "created_at": "2026-01-27T05:30:00.000Z",
     "updated_at": "2026-01-27T05:45:00.000Z",

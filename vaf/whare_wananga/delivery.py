@@ -54,7 +54,7 @@ def _load_classified(name: str, _mtime_key: float):
 
     A record that EXISTS but fails the gate is enqueued for re-training (once per
     (name, mtime) thanks to the cache): before the queue existed, such records
-    rotted silently -- never delivered, never re-trained (blue378604 audit)."""
+    rotted silently -- never delivered, never re-trained (tool-friction audit)."""
     try:
         rec = store.load(name)
         if not rec:
@@ -150,7 +150,7 @@ def tool_knowhow(name: str, *, procedure_first: bool = False, allow_unverified: 
     `allow_unverified=True` (B-track only) also delivers gate-failing records (declare/stale/
     draft), clearly tagged UNVERIFIED: the call already failed, so a possibly-imperfect hint
     costs little and the stored knowledge is usually exactly what was missing (the document_writer
-    record held the fix for the blue378604 failure and was never delivered). The A-track schema
+    record held the fix for that live failure and was never delivered). The A-track schema
     injection stays strictly gated. Fail-safe.
     """
     try:

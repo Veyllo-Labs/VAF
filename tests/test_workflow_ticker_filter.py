@@ -148,7 +148,7 @@ def test_bounded_run_sets_cancel_event_for_the_abandoned_worker():
 
 
 def test_tool_result_is_error_recognizes_all_failure_prefixes():
-    """Incident cyan123670: a failed write_file rendered '-> OK: Tool Error'
+    """Live incident: a failed write_file rendered '-> OK: Tool Error'
     because context.py's detector missed the 'Tool Error:' prefix, and the
     local model reported the (non-existent) file as created. One shared
     detector now backs the retry guard, the summarizer and the tool_end flag."""

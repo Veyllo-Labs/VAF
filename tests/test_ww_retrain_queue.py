@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Whare Wananga re-training queue (blue378604 audit, Fix 3).
+"""Whare Wananga re-training queue (tool-friction audit, Fix 3).
 
 Gate-failing records (stale/draft/declare/interrupted) used to rot silently.
 The queue persists them for re-training with an attempt cap and cooldown; the

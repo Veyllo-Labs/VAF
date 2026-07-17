@@ -23,8 +23,8 @@ def _blocked(code: str) -> bool:
 # An example write to a host persistence path that does not survive an isolated run.
 BUG_CODE = (
     'content = "..."\n'
-    'open("/home/user/Documents/VAF_Projects/a74e6e21/session01/example_notes.md", "w").write(content)\n'
-    'print("Saved: /home/user/Documents/VAF_Projects/a74e6e21/session01/example_notes.md")'
+    'open("/home/user/Documents/VAF_Projects/ab12cd34/session01/example_notes.md", "w").write(content)\n'
+    'print("Saved: /home/user/Documents/VAF_Projects/ab12cd34/session01/example_notes.md")'
 )
 
 

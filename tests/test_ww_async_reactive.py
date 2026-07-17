@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""WW B-track for ASYNC sub-agent failures (blue378604 audit, Fix 6).
+"""WW B-track for ASYNC sub-agent failures (tool-friction audit, Fix 6).
 
 Sub-agent failures never trigger the sync reactive lane: the tool result is only
 the "[!] TASK DELEGATED" marker, the real error arrives later via the IPC drain.

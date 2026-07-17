@@ -927,29 +927,6 @@ class Config:
         return merged
 
     @classmethod
-    def save(cls, config: dict):
-        if not cls.APP_DIR.exists():
-            cls.APP_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Preserve protected keys from existing config
-        existing_config = cls.load()
-        for key in cls.PROTECTED_KEYS:
-            if key in existing_config and key not in config:
-                config[key] = existing_config[key]
-
-        with open(cls.CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
-
-        # config.json holds secrets (KEK, JWT secret, base64 API keys): owner-only.
-        # Lazy import avoids a circular dependency (secure_store imports Config).
-        try:
-            from vaf.core.secure_store import harden_dir, harden_path
-            harden_dir(cls.APP_DIR)
-            harden_path(cls.CONFIG_FILE)
-        except Exception:
-            pass
-
-    @classmethod
     def get(cls, key: str, default=None):
         return cls.load().get(key, default if default is not None else cls.DEFAULTS.get(key))
 

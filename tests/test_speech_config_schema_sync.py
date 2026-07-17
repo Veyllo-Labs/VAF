@@ -147,3 +147,19 @@ def test_config_save_seed_respects_explicit_local_across_key_add(tmp_path, monke
     Config.save({"provider": "local", "speech_stt_provider": "", "speech_stt_engine": "local"})
     Config.set_api_key("veyllo", "vaf_live_secret")
     assert (Config.load().get("speech_stt_provider") or "") == ""  # local opt-out preserved
+
+
+def test_config_save_is_singular_and_complete():
+    """Guard against the duplicate-def incident: Config.save had been defined TWICE
+    (an old simpler copy left in place when a newer TLS/observer-aware version was
+    added below it), so the older one was dead and a future edit could have patched
+    the wrong body. Pin exactly one save, carrying every concern the live one must
+    keep: the TLS security invariant, critical-key change notifications, and the
+    Veyllo-key STT-default seed."""
+    import inspect
+
+    class_src = inspect.getsource(Config)
+    assert class_src.count("    def save(cls") == 1, "Config.save is defined more than once (shadowing bug)"
+    save_src = inspect.getsource(Config.save)
+    for marker in ("local_network_tls_enabled", "notify_observers", "apply_veyllo_stt_default"):
+        assert marker in save_src, f"active Config.save is missing a required concern: {marker}"

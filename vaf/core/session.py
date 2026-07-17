@@ -944,11 +944,20 @@ def _workspace_has_real_content(path: Path) -> bool:
     """True if `path` holds anything but dotfiles - checked RECURSIVELY, so a
     tree of only empty subfolders (no dotfiles) still counts as empty. Any
     walk error is treated as "has content" (fail toward keeping the folder,
-    never toward deleting something we could not fully inspect)."""
+    never toward deleting something we could not fully inspect).
+
+    onerror=raise is what makes that fail-safe REAL: os.walk's default
+    (onerror=None) silently SKIPS unreadable subdirectories instead of
+    raising, so a permission-denied subtree full of files classified the
+    whole workspace as "empty" and the except-clause below was dead code
+    (audit finding, fbf9250..HEAD range)."""
     import os as _os
 
+    def _walk_error(err):
+        raise err
+
     try:
-        for _root, dirs, files in _os.walk(path):
+        for _root, dirs, files in _os.walk(path, onerror=_walk_error):
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             if any(not f.startswith(".") for f in files):
                 return True
@@ -967,8 +976,24 @@ def _cleanup_empty_session_workspace(session_id: str) -> None:
     uid-scoped lookup inside get_session_workspace_dir needs the session to
     still be loadable). Best-effort: any failure is swallowed, deleting the
     session must never be blocked by a workspace-folder problem.
+
+    Live sub-agent guard: while a sub-agent/workflow is still RUNNING (or
+    pending) for this session it may be writing into the workspace at this
+    very moment - "empty right now" says nothing, the first output file can
+    land between the emptiness check and the rmtree. Skip workspace removal
+    entirely then (the session record is still deleted; the folder stays and
+    is at worst an orphan the central explorer can still reach). Same
+    ipc.get_active_tasks(session_id=...) probe the WS stop handler uses.
     """
     try:
+        try:
+            from vaf.core.subagent_ipc import get_ipc as _get_ipc
+            _ipc = _get_ipc()
+            if _ipc.get_active_tasks(session_id=str(session_id)) or \
+                    _ipc.get_pending_tasks(session_id=str(session_id)):
+                return  # a live run may be writing here - never rmtree under it
+        except Exception:
+            pass  # IPC unavailable: fall through, emptiness check still applies
         path = get_session_workspace_dir(session_id, create=False)
         if not path or not path.is_dir():
             return

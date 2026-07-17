@@ -9,6 +9,7 @@ indicator for every open chat, even before anything was ever saved into it
 abandoned empty folders, SessionManager.delete() removes the workspace too
 when it is still empty at delete time - never when it holds real content.
 """
+import os
 import shutil
 
 import pytest
@@ -110,3 +111,74 @@ def test_delete_still_removes_the_session_when_workspace_cleanup_errors(session,
     # path), so the folder is untouched - but the session record is gone
     # either way, which is the invariant this test protects.
     assert chat_dir.is_dir()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_delete_keeps_a_workspace_with_an_unreadable_subtree(session):
+    """The fail-safe must be real: os.walk's default (onerror=None) silently
+    SKIPS a permission-denied subdirectory, so a subtree full of files was
+    classified 'empty' and rmtree'd (audit finding, fbf9250..HEAD range).
+    With onerror=raise the walk error now takes the documented 'treat as has
+    content' path - anything we cannot fully inspect is kept."""
+    mgr, sess, chat_dir = session
+    locked = chat_dir / "locked"
+    locked.mkdir(parents=True)
+    (locked / "data.txt").write_text("real content behind a permission wall")
+    locked.chmod(0o000)
+    try:
+        mgr.delete(sess.id)
+        assert chat_dir.is_dir()  # kept: could not prove it is empty
+    finally:
+        locked.chmod(0o755)  # so the fixture teardown can rmtree
+
+
+def test_delete_skips_workspace_removal_while_a_subagent_runs(session, monkeypatch):
+    """Delete-vs-concurrent-write race: a live sub-agent/workflow may drop its
+    first output file between the emptiness check and the rmtree. With a
+    RUNNING (or pending) IPC task for this session, workspace removal is
+    skipped outright - the session record still goes."""
+    import types
+
+    import vaf.core.subagent_ipc as ipc_mod
+
+    mgr, sess, chat_dir = session
+    chat_dir.mkdir(parents=True)
+
+    fake_task = types.SimpleNamespace(task_id="t1", agent_type="workflow:research")
+
+    class _FakeIpc:
+        def get_active_tasks(self, session_id=None):
+            return [fake_task] if session_id == str(sess.id) else []
+
+        def get_pending_tasks(self, session_id=None):
+            return []
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIpc())
+
+    assert mgr.delete(sess.id) is True
+    assert chat_dir.is_dir()  # empty, but a live run may be about to write
+
+
+def test_delete_removes_empty_workspace_when_other_sessions_have_subagents(session, monkeypatch):
+    """The guard is session-scoped: someone ELSE's running sub-agent must not
+    keep this chat's empty folder alive."""
+    import types
+
+    import vaf.core.subagent_ipc as ipc_mod
+
+    mgr, sess, chat_dir = session
+    chat_dir.mkdir(parents=True)
+
+    other = types.SimpleNamespace(task_id="t2", agent_type="workflow:research")
+
+    class _FakeIpc:
+        def get_active_tasks(self, session_id=None):
+            return [] if session_id == str(sess.id) else [other]
+
+        def get_pending_tasks(self, session_id=None):
+            return []
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIpc())
+
+    assert mgr.delete(sess.id) is True
+    assert not chat_dir.exists()

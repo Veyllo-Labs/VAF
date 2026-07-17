@@ -154,6 +154,35 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   empty directories, deleting a chat now also removes its workspace
   folder when it is still empty at that point (a folder holding real
   content is left untouched either way).
+- **The delete-time workspace cleanup got two safety rails** (audit
+  findings on the entry above). While a sub-agent or workflow is still
+  running for the chat, deleting the chat skips workspace removal
+  entirely: the run may drop its first output file between the "is it
+  empty" check and the removal, and files must never be deleted out from
+  under a live run. And the recursive emptiness check now surfaces
+  unreadable subdirectories instead of silently skipping them (the
+  underlying directory walk ignores permission errors by default), so a
+  permission-denied subtree full of files can no longer classify the
+  whole workspace as "empty" and get it deleted - anything that cannot be
+  fully inspected is kept.
+- **A session without a recorded owner is no longer treated as owned by
+  everyone in the workspace endpoints.** The HTTP workspace lane (browse,
+  upload, file delete, plus the image-describe session cache) accepted
+  any authenticated user as the owner of a legacy session that predates
+  user scoping, while the WebSocket gate treats exactly those sessions as
+  admin-only - so on a multi-user server, a non-admin user could browse,
+  upload into, create, or delete files inside such a session's workspace.
+  Both HTTP checks now enforce the same rule as the WebSocket gate:
+  scopeless sessions are admin-only, admin detected role-aware. Scopeless
+  sessions were not purely theoretical: an automation delivering to a
+  messenger contact BEFORE that user ever wrote inbound created the
+  channel session without an owner scope (the inbound lane always stamped
+  it; the two outbound-first creators did not, despite having the scope
+  in hand) - those sessions are now stamped with their owner at creation,
+  so their real owner keeps normal access on multi-user servers instead
+  of falling into the admin-only legacy bucket. Pre-existing scopeless
+  session files on disk stay admin-only in both lanes, exactly as the
+  WebSocket gate already treated them.
 - **A local model calling the wrong "workflow" tool now gets redirected,
   not just a template list.** `execute_workflow(workflow_id=...)` takes a
   saved template id; a weak model tried

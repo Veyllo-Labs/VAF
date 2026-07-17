@@ -389,6 +389,13 @@ def _record_outbound(
             session = sm.load(session_id, restore_state=False)
         except FileNotFoundError:
             session = Session(id=session_id, name=f"{channel.capitalize()} {endpoint}")
+            # Stamp the owner scope on an outbound-FIRST session (automation
+            # message before the user ever wrote inbound), like the inbound
+            # lane (headless_runner) does. A scopeless session is admin-only
+            # under the ownership gates - without this stamp its real owner
+            # could see it in the sidebar but never open its workspace.
+            if user_scope_id:
+                session.metadata["user_scope_id"] = str(user_scope_id)
         session.add_message(role="assistant", content=text)
         sm.save(session, sync_state=False)
     except Exception:

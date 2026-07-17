@@ -83,3 +83,66 @@ def test_create_true_never_creates_for_an_unowned_session(monkeypatch, owned_ses
         ws._resolve_session_workspace(sess.id, request=None, create=True)
 
     assert not chat_dir.exists()
+
+
+# ── Scopeless sessions are ADMIN-ONLY (audit finding, fbf9250..HEAD) ────────
+# _resolve_session_workspace originally treated a session with NO recorded
+# user_scope_id as owned by ANY authenticated user, while the sibling
+# WebSocket gate (_ws_session_owner_ok) treats scopeless as admin-only. The
+# divergence let an unrelated user create/browse/delete inside another user's
+# (legacy) workspace. The policies are now identical.
+
+@pytest.fixture
+def scopeless_session():
+    mgr = SessionManager()
+    sess = mgr.new(name="scopeless-legacy-test")  # no user_scope_id recorded
+    mgr.save(sess, sync_state=False)
+    # Scopeless sessions resolve to the legacy non-uid path VAF_Projects/<sid>.
+    chat_dir = Platform.documents_dir() / "VAF_Projects" / sess.id
+
+    yield sess, chat_dir
+
+    if chat_dir.exists():
+        shutil.rmtree(chat_dir)
+    mgr.delete(sess.id)
+
+
+def test_scopeless_session_is_denied_for_a_plain_user(monkeypatch, scopeless_session):
+    sess, chat_dir = scopeless_session
+    monkeypatch.setattr(
+        config_routes,
+        "get_current_user_or_local_admin",
+        lambda request: {"user_scope_id": "abcd1234-0000-0000-0000-000000000000",
+                         "role": "user"},
+    )
+
+    with pytest.raises(Exception):  # HTTPException(403), same as the WS gate
+        ws._resolve_session_workspace(sess.id, request=None, create=True)
+
+    assert not chat_dir.exists()
+
+
+def test_scopeless_session_stays_reachable_for_the_admin_role(monkeypatch, scopeless_session):
+    """Legacy/pre-isolation sessions belong to the local admin - the admin
+    must not be locked out by the tightened policy."""
+    sess, chat_dir = scopeless_session
+    monkeypatch.setattr(
+        config_routes,
+        "get_current_user_or_local_admin",
+        lambda request: {"user_scope_id": "abcd1234-0000-0000-0000-000000000000",
+                         "role": "admin"},
+    )
+
+    result = ws._resolve_session_workspace(sess.id, request=None, create=True)
+
+    assert result != ""
+
+
+def test_owner_without_role_field_is_still_allowed(monkeypatch, owned_session):
+    """The pre-fix caller contract (dict without 'role') keeps working for a
+    genuine owner - only the scopeless hole was closed."""
+    sess, chat_dir = owned_session
+
+    result = ws._resolve_session_workspace(sess.id, request=None, create=True)
+
+    assert result == str(chat_dir)

@@ -109,6 +109,11 @@ class SendDiscordTool(BaseTool):
                 session = sm.load(session_id, restore_state=False)
             except FileNotFoundError:
                 session = Session(id=session_id, name=f"Discord {user_id}")
+                # Stamp the owner scope on an outbound-first session (see
+                # _record_outbound in messaging_connections.py): a scopeless
+                # session is admin-only under the ownership gates.
+                if user_scope_id:
+                    session.metadata["user_scope_id"] = str(user_scope_id)
             session.add_message(role="assistant", content=out)
             sm.save(session, sync_state=False)
         except Exception:

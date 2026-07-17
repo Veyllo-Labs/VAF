@@ -1349,11 +1349,15 @@ ALLOWED_SOUND_FILES = {"tts01.mp3", "sst.mp3"}  # Only serve known files
 def _resolve_session_workspace(session_id: str, request: Request, create: bool = False) -> str:
     """Workspace dir of a chat session ('' if none/unsafe).
 
-    User isolation: the session must belong to the requesting user (same
-    ownership rule as the WebSocket load_session handler — sessions without a
-    scope are legacy/local, the local admin may access everything). Prefers
-    the stable workspace anchor, falls back to the most recently used project.
-    Unsafe dirs (home, ~/.vaf, ...) are never exposed.
+    User isolation: the session must belong to the requesting user - the SAME
+    policy as _ws_session_owner_ok (the WebSocket gate): a session with NO
+    recorded scope is ADMIN-ONLY (legacy/pre-isolation sessions belong to the
+    local admin), never "open to any authenticated user". An earlier version
+    treated scopeless as owned-by-everyone here, which let an unrelated user
+    create/browse/delete inside another user's workspace (audit finding,
+    fbf9250..HEAD range). Admin is detected role-aware, like the WS gate.
+    Prefers the stable workspace anchor, falls back to the most recently used
+    project. Unsafe dirs (home, ~/.vaf, ...) are never exposed.
 
     create: when True and no existing workspace folder is found for an
     otherwise valid/owned session, create the (empty) per-chat folder. Used
@@ -1371,10 +1375,14 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
     try:
         from vaf.api.config_routes import get_current_user_or_local_admin
         from vaf.core.config import get_local_admin_scope_id
-        user_scope_id = (get_current_user_or_local_admin(request) or {}).get("user_scope_id")
+        _user = get_current_user_or_local_admin(request) or {}
+        user_scope_id = _user.get("user_scope_id")
+        role = str(_user.get("role") or "").lower()
         session_scope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
-        is_owner = not session_scope or str(session_scope) == str(user_scope_id)
-        is_admin = str(user_scope_id) == str(get_local_admin_scope_id())
+        is_admin = role == "admin" or (
+            user_scope_id is not None and str(user_scope_id) == str(get_local_admin_scope_id())
+        )
+        is_owner = session_scope is not None and str(session_scope) == str(user_scope_id)
         if not (is_owner or is_admin):
             raise HTTPException(status_code=403, detail="Session does not belong to this user")
     except HTTPException:
@@ -1915,16 +1923,22 @@ async def describe_image(request: Request):
     except Exception:
         sess = None
     # User isolation: never read or write another user's session (same ownership rule as
-    # _resolve_session_workspace / the WS load_session gate). A session with no scope is
-    # legacy/local; the local admin may access any. Fail closed if it can't be verified.
+    # _resolve_session_workspace / the WS load_session gate). A session with NO recorded
+    # scope is ADMIN-ONLY (legacy/pre-isolation sessions belong to the local admin) -
+    # this copy had the same owned-by-everyone hole as _resolve_session_workspace and was
+    # tightened with it (audit finding, fbf9250..HEAD). Fail closed if unverifiable.
     if sess is not None:
         try:
             from vaf.api.config_routes import get_current_user_or_local_admin
             from vaf.core.config import get_local_admin_scope_id
-            _uscope = (get_current_user_or_local_admin(request) or {}).get("user_scope_id")
+            _uinfo = get_current_user_or_local_admin(request) or {}
+            _uscope = _uinfo.get("user_scope_id")
+            _urole = str(_uinfo.get("role") or "").lower()
             _sscope = (getattr(sess, "metadata", None) or {}).get("user_scope_id")
-            _owner = (not _sscope) or str(_sscope) == str(_uscope)
-            _admin = str(_uscope) == str(get_local_admin_scope_id())
+            _admin = _urole == "admin" or (
+                _uscope is not None and str(_uscope) == str(get_local_admin_scope_id())
+            )
+            _owner = _sscope is not None and str(_sscope) == str(_uscope)
             if not (_owner or _admin):
                 raise HTTPException(status_code=403, detail="Session does not belong to this user")
         except HTTPException:

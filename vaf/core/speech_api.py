@@ -62,6 +62,51 @@ _LANGUAGE_NAME_TO_ISO2 = {
     "czech": "cs", "swedish": "sv", "danish": "da", "norwegian": "no",
 }
 
+# Some STT providers (e.g. ElevenLabs Scribe) report the DETECTED language as an
+# ISO-639-3 code (eng/spa/tur...). A blind [:2] truncation mangles many of them
+# (spa->sp not es, tur->tu not tr, swe->sw = Swahili not Swedish), which is wrong
+# even cosmetically and actively harmful once the value is fed back as an input
+# hint. Map the common ones properly; unknown codes normalize to None (auto-detect).
+_ISO639_3_TO_1 = {
+    "eng": "en", "deu": "de", "ger": "de", "fra": "fr", "fre": "fr", "spa": "es",
+    "por": "pt", "ita": "it", "nld": "nl", "dut": "nl", "pol": "pl", "rus": "ru",
+    "tur": "tr", "ukr": "uk", "ces": "cs", "cze": "cs", "swe": "sv", "dan": "da",
+    "nor": "no", "nob": "no", "fin": "fi", "ell": "el", "gre": "el", "hun": "hu",
+    "ron": "ro", "rum": "ro", "bul": "bg", "hrv": "hr", "srp": "sr", "slk": "sk",
+    "slo": "sk", "slv": "sl", "lit": "lt", "lav": "lv", "est": "et", "ara": "ar",
+    "heb": "he", "hin": "hi", "ben": "bn", "tam": "ta", "tel": "te", "urd": "ur",
+    "fas": "fa", "per": "fa", "tha": "th", "vie": "vi", "ind": "id", "msa": "ms",
+    "may": "ms", "jpn": "ja", "kor": "ko", "zho": "zh", "chi": "zh", "cmn": "zh",
+    "cat": "ca", "eus": "eu", "baq": "eu", "glg": "gl", "isl": "is", "ice": "is",
+    "gle": "ga", "cym": "cy", "wel": "cy", "mlt": "mt", "afr": "af", "swa": "sw",
+}
+
+
+def _norm_iso_lang(raw) -> Optional[str]:
+    """Normalize a provider-reported language to an ISO-639-1 code, or None.
+
+    Handles a bare 2-letter code (trusted as 639-1), a locale form like `en-US`
+    (keeps `en`), and an ISO-639-3 code (mapped via `_ISO639_3_TO_1`). An unknown
+    or unparseable value returns None so it is never cached or sent as a hint - a
+    wrong hint would be worse than the provider's own auto-detect."""
+    code = str(raw or "").strip().lower()
+    code = code.split("-", 1)[0].split("_", 1)[0]  # locale -> base language
+    if len(code) == 2 and code.isalpha():
+        return code
+    if len(code) == 3:
+        return _ISO639_3_TO_1.get(code)
+    return None
+
+
+def _norm_stt_hint(raw) -> Optional[str]:
+    """Normalize a language HINT to send to a provider. `multi` passes through (Veyllo
+    code-switching for mixed-language audio); anything else normalizes to an ISO-639-1
+    base code, or None to auto-detect. Never blind-truncates - a raw ``[:2]`` would turn
+    ``multi`` into ``mu`` and a locale like ``zh-TW`` into an unintended code."""
+    if str(raw or "").strip().lower() == "multi":
+        return "multi"
+    return _norm_iso_lang(raw)
+
 
 def _api_key(provider: str) -> str:
     from vaf.core.config import Config
@@ -148,18 +193,26 @@ def transcribe(
     *,
     mime: str = "audio/ogg",
     filename: str = "voice.ogg",
+    language: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Cloud STT: audio bytes to (text, iso2_language). (None, None) on any problem."""
+    """Cloud STT: audio bytes to (text, iso2_language). (None, None) on any problem.
+
+    `language` is an OPTIONAL hint (e.g. from a previous turn's detected language, or
+    `multi` for known code-switching audio): when set it is passed to the provider for
+    a more precise/cheaper call; when None the provider auto-detects (Veyllo defaults
+    to `multi`, robust across all its supported languages). Callers still get the
+    ACTUALLY detected language back in the result, so a wrong hint self-reports."""
     try:
         provider, model = select_stt_backend()
         if not provider or not audio:
             return None, None
+        lang_hint = _norm_stt_hint(language)
         if provider == "elevenlabs":
-            result = _elevenlabs_stt(audio, mime, filename, model)
+            result = _elevenlabs_stt(audio, mime, filename, model, lang_hint)
         elif provider == "veyllo":
-            result = _veyllo_stt(audio, mime, filename, model)
+            result = _veyllo_stt(audio, mime, filename, model, lang_hint)
         else:
-            result = _openai_stt(audio, mime, filename, model)
+            result = _openai_stt(audio, mime, filename, model, lang_hint)
         if result and result[0]:
             _domain_log(f"{provider} STT ok (lang={result[1]}, model={model})")
             return result
@@ -195,14 +248,18 @@ def _elevenlabs_tts(text: str, lang_short: str, model: str, voice: str, want_for
     return resp.content
 
 
-def _elevenlabs_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Optional[str], Optional[str]]:
+def _elevenlabs_stt(audio: bytes, mime: str, filename: str, model: str,
+                    language: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     import httpx
 
+    data = {"model_id": model}
+    if language and language != "multi":  # Scribe has no `multi`; omit -> auto-detect
+        data["language_code"] = language  # ElevenLabs STT hint field
     resp = httpx.post(
         f"{_ELEVENLABS_BASE}/v1/speech-to-text",
         headers={"xi-api-key": _api_key("elevenlabs")},
         files={"file": (filename, audio, mime)},
-        data={"model_id": model},
+        data=data,
         timeout=_STT_TIMEOUT,
     )
     if resp.status_code != 200:
@@ -210,9 +267,8 @@ def _elevenlabs_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple
         return None, None
     data = resp.json()
     text = (data.get("text") or "").strip()
-    lang = (data.get("language_code") or "").strip().lower() or None
-    if lang and len(lang) > 2:
-        lang = lang[:2]
+    # Scribe reports ISO-639-3 (eng/spa/...): map it, never blind-truncate.
+    lang = _norm_iso_lang(data.get("language_code"))
     return (text or None), lang
 
 
@@ -241,17 +297,21 @@ def _openai_tts(text: str, model: str, voice: str) -> Optional[bytes]:
     return resp.content
 
 
-def _openai_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Optional[str], Optional[str]]:
+def _openai_stt(audio: bytes, mime: str, filename: str, model: str,
+                language: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     import httpx
 
     # verbose_json (and with it the detected-language field) is whisper-1
     # only; the gpt-4o-*-transcribe models reject it and support plain json.
     response_format = "verbose_json" if model.startswith("whisper") else "json"
+    data = {"model": model, "response_format": response_format}
+    if language and language != "multi":  # OpenAI has no `multi`; omit -> auto-detect
+        data["language"] = language  # ISO-639-1 hint (OpenAI transcriptions)
     resp = httpx.post(
         f"{_OPENAI_BASE}/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {_api_key('openai')}"},
         files={"file": (filename, audio, mime)},
-        data={"model": model, "response_format": response_format},
+        data=data,
         timeout=_STT_TIMEOUT,
     )
     if resp.status_code != 200:
@@ -271,20 +331,26 @@ def _openai_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Opt
 # veyllo_base_url already includes the /v1 suffix). STT only for now.
 # ---------------------------------------------------------------------------
 
-def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Optional[str], Optional[str]]:
+def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str,
+                language: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     import httpx
     from vaf.core.config import Config
 
     base = (Config.get("veyllo_base_url", "") or _VEYLLO_DEFAULT_BASE).rstrip("/")
     # verbose_json adds the detected language + duration; unlike OpenAI whisper
     # (which returns an English language NAME), Veyllo returns an ISO-639-1 code
-    # directly. Omitting an input `language` lets the server auto-detect, which
-    # is correct; a known language could be passed for best accuracy later.
+    # directly. Omitting `language` lets the server auto-detect; a known hint (from
+    # a previous turn) yields a more precise, cheaper call, and the response still
+    # reports the ACTUALLY detected language so a stale hint is caught by the caller.
+    # Veyllo/Deepgram supports `multi` (automatic code-switching across its languages);
+    # default to it when no specific hint so detection is robust for ANY of the
+    # supported languages, then a confidently detected language pins subsequent turns.
+    data = {"model": model, "response_format": "verbose_json", "language": language or "multi"}
     resp = httpx.post(
         f"{base}/audio/transcriptions",
         headers={"Authorization": f"Bearer {_api_key('veyllo')}"},
         files={"file": (filename, audio, mime)},
-        data={"model": model, "response_format": "verbose_json"},
+        data=data,
         timeout=_STT_TIMEOUT,
     )
     if resp.status_code != 200:
@@ -292,9 +358,8 @@ def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str) -> Tuple[Opt
         return None, None
     data = resp.json()
     text = (data.get("text") or "").strip()
-    lang = (data.get("language") or "").strip().lower() or None
-    if lang and len(lang) > 2:
-        lang = lang[:2]  # defensive: keep the ISO-639-1 short form
+    # Veyllo returns ISO-639-1 already; normalize defensively (locale / stray 639-3).
+    lang = _norm_iso_lang(data.get("language"))
     return (text or None), lang
 
 

@@ -12,6 +12,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Per-speaker language hint for cloud STT**: the shared speech client now caches
+  the language the cloud provider already returns and passes it as a hint on the
+  next transcription (a more precise, cheaper call), instead of running a local
+  model to pre-detect it. The cache is keyed per speaker (the web mic uses the
+  user's scope, so it stays user-isolated), and to catch a mid-conversation
+  language switch it re-detects hint-free every few turns and always refreshes from
+  the actually-detected language. No new dependency and no pre-call overhead. The
+  hint is language-agnostic (normalized to ISO-639-1, ISO-639-3 mapped, locales
+  reduced to base) so it works across every supported language, and the Veyllo lane
+  auto-detects with `multi` (automatic code-switching) when no language is pinned.
 - **Veyllo speech-to-text**: Veyllo is now selectable as a cloud STT provider
   (`speech_stt_provider = veyllo`, model `veyllo-transcribe`), using the same
   API key and base URL as the Veyllo chat/vision provider. The first time a Veyllo

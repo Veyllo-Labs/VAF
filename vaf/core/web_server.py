@@ -5983,9 +5983,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             from vaf.core import speech_client
                             loop = asyncio.get_running_loop()
                             filename = f"audio{suffix}"
+                            # Per-speaker language hint keyed on the user's scope (the
+                            # language is a trait of the speaker, and the key is
+                            # user-isolated); "local" for the no-scope local admin.
+                            _stt_key = (manager.get_connection_user(websocket) if manager else None) or "local"
                             stt_text, _stt_lang = await loop.run_in_executor(
                                 None,
-                                lambda: speech_client.transcribe(temp_path, mime=mime_type, filename=filename),
+                                lambda: speech_client.transcribe(temp_path, mime=mime_type, filename=filename, cache_key=_stt_key),
                             )
                             if not stt_text:
                                 # Detail is in the server log (speech_client warns).

@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -34,6 +36,63 @@ logger = logging.getLogger(__name__)
 
 _STT_TIMEOUT = 60
 _TTS_TIMEOUT = 60
+
+# ── Per-speaker language cache for the cloud STT hint ─────────────────────────
+# Passing a known language to a cloud STT (Veyllo/OpenAI/ElevenLabs) yields a more
+# precise, cheaper call than auto-detect - but the spoken language is a trait of the
+# SPEAKER, not global state, so the cache is keyed on the CALLER's cache_key (the
+# web mic passes the user's scope, messaging the channel session). That keeps it
+# user-isolated. Providers like Veyllo/Deepgram treat `language` as a hard
+# selection, so a stale hint after a mid-conversation language switch would hurt;
+# we therefore send hint-free (re-detect) every _LANG_HINT_MAX_STREAK turns and
+# always refresh the cache from the ACTUALLY detected language the provider returns,
+# so a switch is caught within the window. No local model, no dependency, no
+# pre-call overhead - the language comes from the transcription VAF already runs.
+_LANG_CACHE: "OrderedDict[str, tuple]" = OrderedDict()  # cache_key -> (iso_lang, hint_streak)
+_LANG_CACHE_LOCK = threading.Lock()
+_LANG_CACHE_MAX = 512          # LRU cap
+_LANG_HINT_MAX_STREAK = 3      # after 3 hinted turns, force one hint-free re-detect
+
+
+def _lang_hint_for(cache_key: Optional[str]) -> Optional[str]:
+    """The cached language to hint this turn, or None to auto-detect / re-detect."""
+    if not cache_key:
+        return None
+    with _LANG_CACHE_LOCK:
+        entry = _LANG_CACHE.get(cache_key)
+        if not entry:
+            return None
+        lang, streak = entry
+        return None if streak >= _LANG_HINT_MAX_STREAK else lang
+
+
+def _lang_cache_update(cache_key: Optional[str], detected: Optional[str], used_hint: bool) -> None:
+    """Record the detected language; grow the hint streak only when a hint was used
+    AND matched, else reset it (a hint-free re-detect or a detected switch), so a
+    language change is caught within _LANG_HINT_MAX_STREAK + 1 turns."""
+    if not cache_key or not detected:
+        return
+    lang = str(detected).strip().lower()[:2]
+    if not lang:
+        return
+    with _LANG_CACHE_LOCK:
+        prev = _LANG_CACHE.get(cache_key)
+        streak = (prev[1] + 1) if (used_hint and prev and prev[0] == lang) else 0
+        _LANG_CACHE[cache_key] = (lang, streak)
+        _LANG_CACHE.move_to_end(cache_key)
+        while len(_LANG_CACHE) > _LANG_CACHE_MAX:
+            _LANG_CACHE.popitem(last=False)
+
+
+def _lang_cache_forget(cache_key: Optional[str]) -> None:
+    """Drop a speaker's cached hint so the next turn auto-detects. Called when a
+    HINTED cloud call failed, so a rejected/stale hint can never get stuck being
+    re-sent every turn (a turn that would have succeeded hint-free must not become
+    a persistent failure)."""
+    if not cache_key:
+        return
+    with _LANG_CACHE_LOCK:
+        _LANG_CACHE.pop(cache_key, None)
 
 
 def _stt_base_url() -> str:
@@ -53,12 +112,21 @@ def transcribe(
     *,
     mime: str = "audio/ogg",
     filename: str = "voice.ogg",
+    cache_key: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Transcribe an audio file or raw bytes via the Docker Whisper service.
+    """Transcribe an audio file or raw bytes via the cloud lane or Docker Whisper.
 
     Returns (text, detected_language); (None, None) on any failure. The
     /asr endpoint is tried first, with a /transcribe fallback on 404 (older
     whisper-asr-webservice images).
+
+    `cache_key` (e.g. the speaker's user scope) enables the per-speaker language
+    hint: the cloud provider is told the language detected on a previous turn for a
+    more precise call, and the cache is refreshed from each result (with a periodic
+    hint-free re-detect so a language switch is caught). `language` forces an
+    explicit hint for this call, overriding the cache. Both are optional and only
+    affect the cloud lane; the Docker lane always auto-detects.
     """
     try:
         if isinstance(audio, (str, Path)):
@@ -69,13 +137,23 @@ def transcribe(
             logger.warning("STT: empty audio input")
             return None, None
 
+        # Explicit `language` (incl. "multi") passes through untruncated; otherwise the
+        # per-speaker cached language is used. speech_api normalizes/validates it.
+        hint = (language or "").strip().lower() or _lang_hint_for(cache_key)
+        used_hint = bool(hint) and hint != "multi"  # "multi" is auto-detect, not a pin
+
         # Cloud provider lane first (speech_stt_provider); returns (None, None)
         # when unconfigured or on any API error -> Docker lane below.
         from vaf.core import speech_api
         if speech_api.select_stt_backend()[0]:
-            text, lang = speech_api.transcribe(payload, mime=mime, filename=filename)
+            text, lang = speech_api.transcribe(payload, mime=mime, filename=filename, language=hint)
             if text:
+                _lang_cache_update(cache_key, lang, used_hint)
                 return text, lang
+            if used_hint:
+                # The hinted cloud call failed - forget the hint so the next turn
+                # auto-detects instead of re-sending a possibly-rejected code.
+                _lang_cache_forget(cache_key)
 
         base_url = _stt_base_url()
         resp = _post_stt(f"{base_url}/asr", payload, mime, filename)
@@ -97,6 +175,9 @@ def transcribe(
             text = (data["results"][0].get("transcript") or "").strip()
         language = data.get("language") or None
 
+        # Docker Whisper always auto-detects (the hint is a cloud-only feature), so
+        # refresh the cache as a hint-free detection.
+        _lang_cache_update(cache_key, language, used_hint=False)
         logger.info("STT transcribed: lang=%s, text=%s...", language, (text or "")[:50])
         return (text or None), language
     except Exception as e:

@@ -223,11 +223,41 @@ explicit opt-in: the seed just writes that explicit value, and any later choice
   the recommended STT model.
 - **Veyllo STT**: `POST {veyllo_base_url}/audio/transcriptions` (default
   `https://api.veyllo.app/v1`, which already includes the `/v1` suffix) with a
-  Bearer `api_key_veyllo`, multipart field `file`, `model=veyllo-transcribe`, and
-  `response_format=verbose_json`. Unlike OpenAI whisper (which returns an English
-  language NAME), Veyllo returns an ISO-639-1 language code directly, so the
-  reply-in-same-language pairing works without a name-to-code table. Batch only;
-  live-mic streaming stays on the local lane.
+  Bearer `api_key_veyllo`, multipart field `file`, `model=veyllo-transcribe`,
+  `response_format=verbose_json`, and a `language` field: a pinned ISO-639-1 code
+  when a hint is known (see the per-speaker hint above) or `multi` otherwise
+  (automatic code-switching across the supported languages). Unlike OpenAI whisper
+  (which returns an English language NAME), Veyllo returns an ISO-639-1 language code
+  directly, so the reply-in-same-language pairing works without a name-to-code table.
+  Batch only; live-mic streaming stays on the local lane.
+
+### Per-speaker language hint (precise call, zero overhead)
+
+Passing a known language to a cloud STT gives a more precise, cheaper call than
+auto-detect. Rather than run a local model to pre-detect the language (which would
+add a heavy optional dependency and duplicate compute for something the cloud does
+for free), `speech_client.transcribe` caches the language the provider ALREADY
+returns and hints it on the next turn (`speech_api.transcribe(..., language=...)`,
+threaded into each provider request: Veyllo/OpenAI `language`, ElevenLabs
+`language_code`). The cache is keyed on a caller-supplied `cache_key` - the web mic
+passes the speaker's user scope, so it is user-isolated and language is treated as a
+trait of the speaker, not global state. Providers like Veyllo/Deepgram treat
+`language` as a hard selection, so to catch a mid-conversation language switch the
+client sends hint-free (re-detects) every few turns and always refreshes the cache
+from the actually-detected language, bounding staleness. The Docker lane always
+auto-detects. Messaging voice notes (Telegram/WhatsApp) currently transcribe without
+a cache_key (auto-detect); wiring a per-sender key there is a follow-up.
+
+The hint is **language-agnostic** - it is whatever the provider itself detected on a
+prior turn, so it works across every language a provider supports, not a hardcoded
+subset. Codes are normalized to ISO-639-1 (`_norm_iso_lang`: 2-letter passthrough,
+locale like `zh-TW`/`de-CH` to its base, ISO-639-3 like `spa` mapped to `es` via
+`_ISO639_3_TO_1`, unknown to None so a bad code is never cached or re-sent). When
+there is no specific hint, the **Veyllo** lane auto-detects with `language=multi`
+(Deepgram automatic code-switching across all its supported languages), so a
+multilingual or unknown-language utterance is handled robustly; a confidently
+detected single language then pins the following turns. `multi` is never cached as if
+it were a language, and it is dropped for OpenAI/ElevenLabs (which have no `multi`).
 
 ### Settings catalogs (fetched vs hardcoded)
 

@@ -192,3 +192,81 @@ def test_synthesize_legacy_fallback_base64(monkeypatch):
 
     monkeypatch.setattr(sc.requests, "post", fake_post)
     assert sc.synthesize("hi", "en") == wav
+
+
+# ---------------------------------------------------------------------------
+# Per-speaker language hint cache (zero-overhead precise call + switch safety)
+# ---------------------------------------------------------------------------
+
+def test_lang_hint_none_without_cache():
+    sc._LANG_CACHE.clear()
+    assert sc._lang_hint_for(None) is None      # no key -> no hint
+    assert sc._lang_hint_for("u1") is None       # empty cache -> no hint
+
+
+def test_lang_cache_streak_then_periodic_redetect():
+    sc._LANG_CACHE.clear()
+    key = "user-1"
+    sc._lang_cache_update(key, "de", used_hint=False)     # first (auto) detection
+    for _ in range(sc._LANG_HINT_MAX_STREAK):
+        assert sc._lang_hint_for(key) == "de"             # hinted turns
+        sc._lang_cache_update(key, "de", used_hint=True)
+    # Streak reached the cap -> force one hint-free re-detect to catch a switch.
+    assert sc._lang_hint_for(key) is None
+
+
+def test_lang_cache_switch_updates_on_redetect():
+    sc._LANG_CACHE.clear()
+    key = "user-2"
+    sc._lang_cache_update(key, "de", used_hint=False)
+    sc._lang_cache_update(key, "en", used_hint=False)     # re-detect finds a new language
+    assert sc._lang_hint_for(key) == "en"
+
+
+def test_lang_cache_is_per_key_isolated():
+    sc._LANG_CACHE.clear()
+    sc._lang_cache_update("alice", "de", used_hint=False)
+    sc._lang_cache_update("bob", "tr", used_hint=False)
+    assert sc._lang_hint_for("alice") == "de"
+    assert sc._lang_hint_for("bob") == "tr"
+
+
+def test_lang_cache_lru_capped():
+    sc._LANG_CACHE.clear()
+    for i in range(sc._LANG_CACHE_MAX + 10):
+        sc._lang_cache_update(f"k{i}", "en", used_hint=False)
+    assert len(sc._LANG_CACHE) <= sc._LANG_CACHE_MAX
+
+
+def test_transcribe_uses_then_passes_cached_hint(monkeypatch):
+    """Turn 1 auto-detects (hint None) and caches the result; turn 2 sends it."""
+    sc._LANG_CACHE.clear()
+    import vaf.core.speech_api as sa
+    monkeypatch.setattr(sa, "select_stt_backend", lambda: ("veyllo", "veyllo-transcribe"))
+    seen = []
+
+    def fake_transcribe(payload, mime=None, filename=None, language=None):
+        seen.append(language)
+        return ("hallo welt", "de")
+
+    monkeypatch.setattr(sa, "transcribe", fake_transcribe)
+    sc.transcribe(b"audio", cache_key="spk")
+    assert seen[-1] is None            # first turn: no hint
+    sc.transcribe(b"audio", cache_key="spk")
+    assert seen[-1] == "de"            # second turn: cached hint passed
+
+
+def test_hinted_cloud_failure_forgets_the_hint(monkeypatch):
+    """A hinted cloud call that fails clears the cache, so the next turn
+    auto-detects instead of re-sending a possibly-rejected hint forever."""
+    sc._LANG_CACHE.clear()
+    import vaf.core.speech_api as sa
+    monkeypatch.setattr(sa, "select_stt_backend", lambda: ("veyllo", "veyllo-transcribe"))
+    sc._lang_cache_update("spk", "de", used_hint=False)     # seed a cached hint
+    assert sc._lang_hint_for("spk") == "de"
+    # Cloud fails, Docker unavailable -> whole cloud+docker turn misses.
+    monkeypatch.setattr(sa, "transcribe", lambda payload, mime=None, filename=None, language=None: (None, None))
+    monkeypatch.setattr(sc, "_stt_base_url", lambda: "http://localhost:5003")
+    monkeypatch.setattr(sc, "_post_stt", lambda *a, **kw: None)
+    sc.transcribe(b"audio", cache_key="spk")
+    assert sc._lang_hint_for("spk") is None                 # hint forgotten, not stuck

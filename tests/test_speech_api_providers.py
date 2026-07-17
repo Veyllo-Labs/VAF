@@ -288,7 +288,7 @@ def test_provider_precedence_in_speech_client(monkeypatch):
     assert sc.synthesize("hi", "en") == WAV
 
     monkeypatch.setattr(sa, "select_stt_backend", lambda: ("elevenlabs", "scribe_v2"))
-    monkeypatch.setattr(sa, "transcribe", lambda payload, mime=None, filename=None: ("hi", "en"))
+    monkeypatch.setattr(sa, "transcribe", lambda payload, mime=None, filename=None, language=None: ("hi", "en"))
     monkeypatch.setattr(sc, "_post_stt", lambda *a, **kw: pytest.fail("docker lane must not be hit"))
     assert sc.transcribe(b"OggS....") == ("hi", "en")
 
@@ -367,3 +367,128 @@ def test_veyllo_transcribe_filtered_from_chat_models():
     assert is_veyllo_chat_model("veyllo-chat") is True
     assert is_veyllo_chat_model("veyllo-transcribe") is False
     assert is_veyllo_chat_model("veyllo-tts") is False
+
+
+# ---------------------------------------------------------------------------
+# Language hint threading (per-speaker cache -> provider request)
+# ---------------------------------------------------------------------------
+
+def test_veyllo_stt_passes_language_hint(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(data=data)
+        return _Resp(200, {"text": "hallo", "language": "de"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"RIFFdata", language="de")
+    assert captured["data"]["language"] == "de"
+
+
+def test_veyllo_stt_defaults_to_multi_when_no_hint(monkeypatch):
+    """No specific hint -> Veyllo auto-detects with `multi` (code-switching, robust
+    across all supported languages), not a plain omit."""
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(data=data)
+        return _Resp(200, {"text": "hi", "language": "en"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"RIFFdata")  # no hint
+    assert captured["data"]["language"] == "multi"
+
+
+def test_veyllo_stt_explicit_multi_passes_through(monkeypatch):
+    """An explicit `multi` hint is NOT truncated to `mu` and reaches Veyllo intact."""
+    _cfg(monkeypatch, {"speech_stt_provider": "veyllo"}, keys={"veyllo": "vaf_live_x"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(data=data)
+        return _Resp(200, {"text": "hallo hello", "language": "de"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"RIFFdata", language="multi")
+    assert captured["data"]["language"] == "multi"
+
+
+def test_openai_elevenlabs_never_get_multi(monkeypatch):
+    """OpenAI/ElevenLabs have no `multi`; it must be dropped (auto-detect), not sent."""
+    for provider, key, field in (("openai", "sk-x", "language"), ("elevenlabs", "el-key", "language_code")):
+        _cfg(monkeypatch, {"speech_stt_provider": provider}, keys={provider: key})
+        captured = {}
+
+        def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+            captured.update(data=data)
+            return _Resp(200, {"text": "hi", "language": "english", "language_code": "eng"})
+
+        _mock_httpx(monkeypatch, fake_post)
+        sa.transcribe(b"RIFFdata", language="multi")
+        assert field not in captured["data"], f"{provider} must not receive multi"
+
+
+def test_norm_stt_hint_allows_multi_and_codes():
+    assert sa._norm_stt_hint("multi") == "multi"
+    assert sa._norm_stt_hint("MULTI") == "multi"
+    assert sa._norm_stt_hint("de") == "de"
+    assert sa._norm_stt_hint("zh-TW") == "zh"   # locale base, not truncated garbage
+    assert sa._norm_stt_hint("german") is None  # a name is not a valid hint
+
+
+def test_openai_stt_passes_language_hint(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "openai"}, keys={"openai": "sk-x"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(data=data)
+        return _Resp(200, {"text": "guten tag", "language": "german"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"RIFFdata", language="de")
+    assert captured["data"]["language"] == "de"
+
+
+def test_elevenlabs_stt_passes_language_code_hint(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "elevenlabs"}, keys={"elevenlabs": "el-key"})
+    captured = {}
+
+    def fake_post(url, headers=None, files=None, data=None, timeout=None, **kw):
+        captured.update(data=data)
+        return _Resp(200, {"text": "hi", "language_code": "de"})
+
+    _mock_httpx(monkeypatch, fake_post)
+    sa.transcribe(b"OggS....", language="de")
+    assert captured["data"]["language_code"] == "de"
+
+
+# ---------------------------------------------------------------------------
+# Language-code normalization (ISO-639-3 -> 639-1), so a cached hint is valid
+# ---------------------------------------------------------------------------
+
+def test_norm_iso_lang_maps_and_rejects():
+    assert sa._norm_iso_lang("de") == "de"
+    assert sa._norm_iso_lang("en-US") == "en"      # locale -> base
+    assert sa._norm_iso_lang("spa") == "es"        # NOT "sp"
+    assert sa._norm_iso_lang("swe") == "sv"        # NOT "sw" (Swahili)
+    assert sa._norm_iso_lang("tur") == "tr"        # NOT "tu"
+    assert sa._norm_iso_lang("zzz") is None        # unknown 639-3 -> None
+    assert sa._norm_iso_lang("") is None
+    assert sa._norm_iso_lang(None) is None
+
+
+def test_elevenlabs_stt_maps_iso639_3_not_truncate(monkeypatch):
+    """Scribe reports ISO-639-3; must be MAPPED (spa->es), never truncated (spa->sp),
+    so the value is a valid hint when fed back next turn."""
+    _cfg(monkeypatch, {"speech_stt_provider": "elevenlabs"}, keys={"elevenlabs": "el-key"})
+    _mock_httpx(monkeypatch, lambda *a, **kw: _Resp(200, {"text": "hola", "language_code": "spa"}))
+    assert sa.transcribe(b"OggS....") == ("hola", "es")
+
+
+def test_elevenlabs_stt_unknown_iso639_3_is_none(monkeypatch):
+    _cfg(monkeypatch, {"speech_stt_provider": "elevenlabs"}, keys={"elevenlabs": "el-key"})
+    _mock_httpx(monkeypatch, lambda *a, **kw: _Resp(200, {"text": "hi", "language_code": "zzz"}))
+    text, lang = sa.transcribe(b"OggS....")
+    assert text == "hi" and lang is None   # unknown -> no bad hint

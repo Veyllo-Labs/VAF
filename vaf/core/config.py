@@ -358,6 +358,12 @@ class Config:
                 "speaker_id_band": 0.05,               # Uncertainty band below threshold -> "unsure"
                 "speaker_id_confirmation_enabled": True,  # Ask the owner on "unsure" (messenger/web card)
 
+                # Voice reflex awareness (docs/agents/VOICE_REFLEX.md). User-writable
+                # preferences (not admin/billing/security): they only scale a LOCAL
+                # policy threshold and never redirect inference or spend API quota.
+                "voice_awareness_activity": 0.5,       # ONE dial 0..1 (quiet..active): how readily the agent chimes in on interesting overheard talk. At 0 it only takes notes (never interrupts).
+                "voice_awareness_topics": [],          # The owner's interest topics; a proactive chime-in must embedding-match one of these (empty = the agent never chimes in unprompted)
+
                 # Cloud TTS provider lane (mirrors vision_provider). "" = local engine above.
                 "speech_tts_provider": "",             # "" | "elevenlabs" | "openai"
                 "speech_tts_api_model": "",            # "" = provider default (eleven_flash_v2_5 / gpt-4o-mini-tts)

@@ -133,6 +133,104 @@ def is_interesting(text: str, topics: Optional[Sequence[str]] = None,
     return interest_score(text, topics) >= thr
 
 
+# Internal, system-chosen behavior modes (docs/agents/VOICE_REFLEX.md). These are
+# NOT a user toggle and are never switched by voice command - the policy derives
+# them deterministically from the scene, the speaker label and the activity dial.
+MODE_ACTIVE = "active"        # 1:1 with the owner - ready to chime in (low bar)
+MODE_NOTES = "notes_only"     # record only, never chime in audibly
+MODE_QUIET = "quiet"          # default - audible only on a high interestingness score
+
+_NOTES_FLOOR = 0.05     # dial at/below this = notes-only (record, never interrupt)
+_SCENE_BIAS = 0.15      # 1:1-with-owner eases the bar; a busy room raises it
+_DEDUP_SIM = 0.86       # a chime-in this close to a recent one is a repeat
+
+
+def derive_scene(label: Optional[str], recent_labels: Optional[Sequence[str]] = None) -> str:
+    """'one_to_one' when only the owner is speaking, else 'multi' (someone else is
+    in the room, or the owner is talking to another person). Deterministic, no LLM."""
+    if label in ("other", "named"):
+        return "multi"
+    for prev in list(recent_labels or []):
+        if prev in ("other", "named"):
+            return "multi"
+    return "one_to_one"
+
+
+def derive_mode(scene: str, label: Optional[str], activity: float = 0.5) -> str:
+    """The internal behavior mode for this scene. The dial at its floor pins
+    notes_only (record, never interrupt); a 1:1 with the verified owner tends to
+    active; anything else stays quiet (the safe default)."""
+    a = 0.0 if activity is None else max(0.0, min(1.0, float(activity)))
+    if a <= _NOTES_FLOOR:
+        return MODE_NOTES
+    if scene == "one_to_one" and label == "self":
+        return MODE_ACTIVE
+    return MODE_QUIET
+
+
+def _mode_activity(mode: str, activity: float) -> float:
+    """Fold the scene mode into the ONE activity dial as a threshold shift (the
+    owner sets a single ruler; the mode biases it per scene). Active eases the bar,
+    quiet raises it - never a separate knob for the user to manage."""
+    a = 0.0 if activity is None else max(0.0, min(1.0, float(activity)))
+    if mode == MODE_ACTIVE:
+        return min(1.0, a + _SCENE_BIAS)
+    if mode == MODE_QUIET:
+        return max(0.0, a - _SCENE_BIAS)
+    return a
+
+
+def chime_decision(text: str, label: Optional[str], *,
+                   recent_labels: Optional[Sequence[str]] = None,
+                   topics: Optional[Sequence[str]] = None,
+                   activity: float = 0.5) -> dict:
+    """Whether to AUDIBLY chime in on an overheard (store_only) utterance. Returns
+    {mode, scene, score, interesting, trigger, speak}. `speak` requires GROUNDING
+    (is_interesting: embedding match to the owner's topics above the mode-scaled bar)
+    AND a mode that permits audible output - notes_only never speaks. Never forced:
+    the content LLM still gets the final say and may stay silent. Fail-safe to no
+    chime-in on any error."""
+    try:
+        scene = derive_scene(label, recent_labels)
+        mode = derive_mode(scene, label, activity)
+        if mode == MODE_NOTES:
+            return {"mode": mode, "scene": scene, "score": 0.0,
+                    "interesting": False, "trigger": None, "speak": False}
+        eff = _mode_activity(mode, activity)
+        trig = trigger_match(text)
+        score = interest_score(text, topics) if topics else 0.0
+        thr = _threshold(eff)
+        if trig:
+            thr = max(_GROUND_FLOOR, thr - _TRIGGER_RELAX)
+        interesting = score >= thr
+        return {"mode": mode, "scene": scene, "score": round(score, 4),
+                "interesting": interesting, "trigger": trig, "speak": interesting}
+    except Exception:
+        return {"mode": MODE_QUIET, "scene": "multi", "score": 0.0,
+                "interesting": False, "trigger": None, "speak": False}
+
+
+def similar_to_any(text: str, recent_texts: Optional[Sequence[str]],
+                   threshold: float = _DEDUP_SIM) -> bool:
+    """True if `text` is embedding-close to any recent chime-in, so the agent does
+    not repeat itself within a call. Local, embedding-based, fail-open to False
+    (an embedding hiccup must never block a genuinely new remark)."""
+    try:
+        cand = str(text or "").strip()
+        if not cand or not recent_texts:
+            return False
+        v = _embed_one(cand)
+        if not v:
+            return False
+        for prev in recent_texts:
+            pv = _embed_one(str(prev or ""))
+            if pv and _cosine(v, pv) >= threshold:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def classify(text: str, label: Optional[str], agent_name: str = "", *,
              topics: Optional[Sequence[str]] = None, activity: float = 0.5) -> dict:
     """The reflex decision. Returns a dict with the three-way `verdict`, the Tier-1

@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **Voice call, the agent chimes in on interesting talk**: during a live call the agent
+  now keeps a short rolling transcript of what it hears, and when someone else in the
+  room says something that matches your configured interest topics, it can briefly and
+  naturally chime in with a grounded remark instead of staying silent - a livelier
+  presence, not a chatbot answering one line at a time. It never invents a reason to
+  speak (a chime-in must be grounded in your topics, and the agent may still stay
+  silent), never chimes in while it is busy with a task, and does not repeat itself. One
+  simple dial, `voice_awareness_activity` (quiet..active), sets how readily it joins in
+  (at the lowest setting it only listens); it behaves calmly on its own when you are in a
+  conversation with someone else and more readily one-to-one, without you managing any
+  modes. It also asks "did you mean me?" when an unclear speaker says something like "can
+  you hear me?" and it cannot tell whether it was addressed. Tool actions stay yours
+  alone (a guest still cannot make it do anything), and your private context is never
+  used to chime in for a guest.
+
 ### Changed
 - **Voice call, guest privacy**: on a live call with an enrolled voice profile, a guest
   (a speaker the voice check does not verify as you) who talks to the agent now gets a

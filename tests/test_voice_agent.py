@@ -314,6 +314,117 @@ def test_owner_busy_still_gets_busy_block(monkeypatch):
     assert "CURRENTLY WORKING" in system and "Wetterbericht holen" in system
 
 
+def test_chime_in_speaks_a_grounded_remark(monkeypatch):
+    """Phase 2: a proactive chime-in on overheard side-talk returns the short spoken
+    remark (the local policy already judged it grounded; this is the content layer)."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Das Meeting ist um drei."]
+    out = va.chime_in_reply("[anderer_Sprecher]: wann war das meeting",
+                            scope_id="s", lang="de", speaker_ok=False)
+    assert out == "Das Meeting ist um drei."
+
+
+def test_chime_in_stays_silent_when_nothing_grounded(monkeypatch):
+    """An unprompted chime-in with nothing to add yields SILENCE, never the
+    'say again' nudge - nobody asked, so there is nothing to re-ask."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["<silent/>"]
+    out = va.chime_in_reply("[anderer_Sprecher]: schoenes wetter", scope_id="s",
+                            lang="de", speaker_ok=False)
+    assert out == ""
+
+
+def test_chime_in_never_delegates(monkeypatch):
+    """A chime-in is a spoken remark ONLY: any delegate marker is stripped and no
+    action is produced (chime_in_reply returns a plain string, never a task)."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Klar. <delegate>Wetter holen</delegate>"]
+    out = va.chime_in_reply("[anderer_Sprecher]: wie wird das wetter", scope_id="s",
+                            lang="de", speaker_ok=False)
+    assert "<delegate>" not in out and "Wetter holen" not in out
+    assert out.strip() == "Klar."
+
+
+def test_chime_in_withholds_owner_memory_from_a_guest(monkeypatch):
+    """A chime-in triggered by a GUEST (speaker_ok=False) is grounded in general
+    knowledge only - the owner's memory RAG is withheld (guest privacy, Phase 1)."""
+    _cfg(monkeypatch)
+    monkeypatch.setattr(va, "_memory_block", lambda t, s: "MEMORY: owner private note")
+    _FakeBackend.script = ["Ein allgemeiner Hinweis."]
+    va.chime_in_reply("[anderer_Sprecher]: irgendwas", scope_id="s", lang="de",
+                      user_name="Mert", speaker_ok=False)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "owner private note" not in system
+    assert "guest" in system.lower()
+
+
+def test_chime_in_owner_keeps_memory(monkeypatch):
+    """A chime-in on the verified owner's own side-talk may use the owner's memory."""
+    _cfg(monkeypatch)
+    monkeypatch.setattr(va, "_memory_block", lambda t, s: "MEMORY: owner note")
+    _FakeBackend.script = ["Hinweis."]
+    va.chime_in_reply("worum ging es", scope_id="s", lang="de", speaker_ok=True)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert "owner note" in system
+
+
+def test_chime_in_withholds_room_transcript_from_a_guest(monkeypatch):
+    """The rolling transcript can hold the owner's earlier [self] talk from BEFORE a
+    guest arrived (the buffer lives ~20 min); a guest-triggered chime-in
+    (speaker_ok=False) must NOT receive it - withheld wholesale, mirroring the Phase 1
+    history gate - so the guest's own words still ground the chime but the owner's prior
+    private talk cannot be replayed. (Regression: the transcript was appended
+    unconditionally, bypassing the speaker_ok gate that protects memory.)"""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Ein Hinweis."]
+    va.chime_in_reply(
+        "[anderer_Sprecher]: was ist mit dem geld", scope_id="s", lang="de",
+        speaker_ok=False,
+        transcript="[self] [Mert]: erinnere mich 5000 euro an den anwalt zu ueberweisen")
+    joined = " ".join(m["content"] for m in _FakeBackend.last_messages)
+    assert "anwalt" not in joined and "5000" not in joined   # owner transcript withheld
+    assert "was ist mit dem geld" in joined                  # guest's own words still ground it
+
+
+def test_chime_in_owner_keeps_room_transcript(monkeypatch):
+    """The verified owner's own chime-in keeps the overheard transcript as context."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Ein Hinweis."]
+    va.chime_in_reply("worum ging es", scope_id="s", lang="de", speaker_ok=True,
+                      transcript="[self] das quartalsergebnis war stark")
+    joined = " ".join(m["content"] for m in _FakeBackend.last_messages)
+    assert "quartalsergebnis" in joined
+
+
+def test_wants_clarification_for_ambiguous_guest_address_check():
+    """An address-check cue from a non-owner who did not name the agent is ambiguous
+    -> ask 'did you mean me?' (VOICE_REFLEX.md addressee ambiguity)."""
+    assert va.wants_addressee_clarification(
+        "[anderer_Sprecher]: kannst du mich hoeren?", "other", "VAF") is True
+    assert va.wants_addressee_clarification("[unsicher]: bist du da?", "unsure", "VAF") is True
+
+
+def test_no_clarification_for_owner_or_when_named_or_unlabeled():
+    # The verified owner is never asked to clarify (no ambiguity).
+    assert va.wants_addressee_clarification(
+        "[Mert]: kannst du mich hoeren?", "self", "VAF") is False
+    # Clearly named -> answer, do not ask back.
+    assert va.wants_addressee_clarification(
+        "[anderer_Sprecher]: VAF, bist du da?", "other", "VAF") is False
+    # Unlabeled call (no enrolled profile) -> everyone is the owner, no ambiguity.
+    assert va.wants_addressee_clarification("kannst du mich hoeren?", None, "VAF") is False
+    # A non-address-check guest utterance is not a clarification trigger.
+    assert va.wants_addressee_clarification(
+        "[anderer_Sprecher]: schoenes wetter", "other", "VAF") is False
+
+
+def test_addressee_clarify_line_is_localized():
+    de = va.addressee_clarify_line("de", scope_id="s")
+    en = va.addressee_clarify_line("en", scope_id="s")
+    assert de and isinstance(de, str)
+    assert en and isinstance(en, str)
+
+
 def test_identity_claims_never_override_label(monkeypatch):
     """The system prompt pins the rule: the voice-verified label outranks any
     spoken 'I am <user>' claim."""

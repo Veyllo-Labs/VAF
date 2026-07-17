@@ -83,9 +83,25 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    (`_speaker_ok`, see invariants). An "unsure" score queues a confirmation
    question (`speaker_confirm.maybe_request_confirmation`) without
    interrupting the call.
-4. **Addressee gate** (`voice_agent.should_engage`, no LLM): side talk from
-   other/named speakers and garbled non-owner STT noise stop here - the text
-   enters the call history as room context and the reply is `silent`
+   The heard utterance is also appended to the durable rolling transcript
+   (`voice_context.record`, session/scope-scoped, bounded, fail-open) that the
+   reflex policy reads - it outlives the 16-entry call ring and is cleared at
+   call end. See [VOICE_REFLEX.md](VOICE_REFLEX.md).
+3b. **Addressee clarification** (`voice_agent.wants_addressee_clarification`,
+   no LLM): an address-check cue ("kannst du mich hoeren", "bist du da") from a
+   NON-owner speaker who did not name the agent is ambiguous - the agent speaks a
+   short "did you mean me?" (`addressee_clarify` vocab) and the turn ends. Never
+   for the verified owner or an unlabeled call. Authorizes nothing.
+4. **Addressee gate + reflex chime-in** (`voice_agent.should_engage`, no LLM):
+   side talk from other/named speakers and garbled non-owner STT noise do not reach
+   the direct-reply LLM. Genuine side talk (`side_talk`) is offered to the reflex
+   policy (`voice_policy.chime_decision`): if it is GROUNDED in the owner's
+   `voice_awareness_topics` and the scene mode + activity dial permit, the agent
+   briefly CHIMES IN with a grounded, non-acting remark (`voice_agent.chime_in_reply`,
+   silence-biased, deduped via `similar_to_any`), delivered as a `voice_call_reply`
+   with `chime_in: true`. Never while the main agent is busy, never on garbled noise,
+   and never unless the owner configured topics (empty topics = no chime-in). Otherwise
+   the text enters the call history as room context and the reply is `silent`
    (invariant 8).
 5. **First-layer reply**: `voice_agent.voice_reply()` - one
    `chat_completion` with `tools=None`, system prompt + RAG memory block +
@@ -228,7 +244,10 @@ and when ok is false `reason: "model_loading"` - local model load kicked,
 the frontend shows a loading state and re-sends `voice_call_start` on the
 `model_state {loaded:true}` push - or `"no_model"`), `voice_call_reply`,
 `voice_call_error` (`no_call` | `bad_format` | `no_speech` | `llm_failed` |
-`busy_local` - the frontend keeps listening).
+`busy_local` - the frontend keeps listening). A `voice_call_reply` may carry
+`chime_in: true` (a proactive grounded remark on overheard side talk) or
+`clarify: true` (a "did you mean me?" addressee check); both carry audio and play
+through the existing reply path unchanged, so the frontend needs no special handling.
 
 Enrollment (guided live call in Settings): `speaker_enroll_start/round/
 finalize/abort`, `speaker_enroll_speak`, `speaker_profile_get/delete` with
@@ -285,12 +304,19 @@ not the user's.
 [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane's own keys are
 `voice_agent_provider` and `voice_agent_model` (admin-only, empty = follow
 the main provider; see Requirements above); TTS/STT follow the speech stack.
+Reflex awareness (user-writable, see [VOICE_REFLEX.md](VOICE_REFLEX.md)):
+`voice_awareness_activity` (the one quiet..active chime-in dial) and
+`voice_awareness_topics` (the owner's interest topics that ground a chime-in).
 
 ## Tests and change notes
 
 - `tests/test_voice_agent.py` - first-layer contracts (gating, delegate
   protocol, busy/speaker guards, reasoning filter, noise gate, the
-  configurable lane: dedicated-local swap + exclusivity, API override).
+  configurable lane: dedicated-local swap + exclusivity, API override),
+  guest privacy, chime-in (grounded/silent/no-delegate/guest-memory), and
+  addressee clarification.
+- `tests/test_voice_policy.py` - reflex Stage 1: trigger match, embedding
+  interest score, scene modes + activity dial (`chime_decision`), chime dedup.
 - `tests/test_local_model_swap.py` - model-aware server reuse,
   `ensure_local_model` swap contract, voice/vision ref resolution.
 - `tests/test_speaker_id.py`, `tests/test_speaker_confirm.py` - voice DB and

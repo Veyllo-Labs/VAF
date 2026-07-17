@@ -7,8 +7,10 @@ before touching the reflex/policy pieces (`vaf/core/voice_policy.py`, the
 `vaf/core/voice_agent.py` + `vaf/core/web_server.py`). It complements, and does not
 replace, [VOICE_AGENT.md](VOICE_AGENT.md), which documents the live-call lane itself.
 
-Status: design + phased build. Phase 0 (foundation) is being implemented; phases 1-3
-follow. A visual reflex schema with the latency budget accompanies this doc.
+Status: phased build. Phase 0 (foundation), Phase 1 (guest privacy) and Phase 2
+(continuous listening + grounded chime-in, scene modes, the activity dial, addressee
+clarification) are implemented; Phase 3 (barge-in) follows. A visual reflex schema with
+the latency budget accompanies this doc.
 
 ## Why
 
@@ -52,14 +54,17 @@ The policy layer classifies each completed utterance into exactly one state:
 Two of these already exist in seed form: `should_engage()` (`voice_agent.py:172`) is a
 no-LLM gate, and `<silent/>` is the "store, do not speak" primitive.
 
-**Addressee-ambiguity clarification (Phase 2).** Some cues are address checks -
-"kannst du mich hoeren", "bist du da", "can you hear me", "are you there" (in the
-`awareness_triggers` lexicon). When such a cue arrives but the agent cannot tell it was
-addressed at IT (an unclear speaker, or possibly directed at another person in the
-room), the agent should ASK a short clarification - "meinst du mich?" / "hast du mich
-gemeint?" / "ich?" - instead of either barging in or silently ignoring it. The
-clarification phrasing lives in a vocab key (`addressee_clarify`, to be added in
-Phase 2); it never authorizes anything (anti-spoofing unchanged).
+**Addressee-ambiguity clarification (Phase 2, implemented).** Some cues are address
+checks - "kannst du mich hoeren", "bist du da", "can you hear me", "are you there". When
+such a cue arrives from a NON-owner speaker (label `other`/`named`/`unsure`) who did not
+name the agent, it is ambiguous whether it was addressed at IT or at another person in
+the room, so the agent ASKS a short clarification - "meinst du mich?" / "hast du mich
+gemeint?" / "ich?" - instead of barging in or silently ignoring it. The cue lexicon is
+the vocab key `addressee_check`; the clarification phrasing is `addressee_clarify`. This
+runs Tier-1 (no LLM: `voice_agent.wants_addressee_clarification` + a deterministic spoken
+line) and never fires for the verified owner (`self`) nor for an unlabeled call (no
+enrolled profile -> everyone is the owner, so there is no ambiguity). It authorizes
+nothing - anti-spoofing is unchanged; it is only a spoken question.
 
 `interesting` = ( rule / keyword / embedding match ) AND ( docks onto the owner's
 memory/interests OR is on the owner's configured topic list ). No free guessing, no
@@ -79,9 +84,36 @@ The mode is derived deterministically from scene (1:1 / call with another person
 multi-person room, from diarization + channel), speaker label, and score.
 
 Orthogonal to the modes there is exactly ONE high-level user setting,
-`voice_awareness_activity` (continuous, quiet .. active), implemented as a THRESHOLD in
-the policy scoring - not extra cognitive load, not mode micromanagement. It scales how
-often the agent, on an interesting utterance, actually chimes in audibly.
+`voice_awareness_activity` (continuous, quiet .. active, config default `0.5`),
+implemented as a THRESHOLD in the policy scoring - not extra cognitive load, not mode
+micromanagement. It scales how often the agent, on an interesting utterance, actually
+chimes in audibly.
+
+This is implemented in `voice_policy`: `derive_scene(label, recent_labels)` reads the
+scene from the current speaker label plus the recent transcript labels;
+`derive_mode(scene, label, activity)` picks the mode (dial at its `0.0` floor pins
+`notes_only`; a 1:1 with the verified owner tends to `active`; anything else stays
+`quiet`); `chime_decision(...)` folds the mode into the one dial as a threshold shift and
+returns the final `speak` verdict. The owner sets a single ruler; the mode biases it per
+scene - there is never a second knob to manage.
+
+**Chime-in delivery (Phase 2).** The browser already VAD-segments the open mic and sends
+EVERY utterance as a `voice_call_turn` (it holds the mic only while the agent speaks), so
+overheard side-talk already reaches the backend. A chime-in therefore rides the RESPONSE
+to the turn that carried the overheard utterance (a `voice_call_reply` with `chime_in:
+true` and synthesized audio) - it needs no separate server-push event and no bypass of
+the request/response frame. A genuinely server-INITIATED spoken push (the agent speaking
+during a silence with no incoming audio) is only needed for continuous listening OUTSIDE
+a call, which is deferred (see the roadmap). The chime-in content is produced by
+`voice_agent.chime_in_reply` - a silence-biased, non-acting second opinion that may still
+decline - and deduped within the call via `voice_policy.similar_to_any` so the agent does
+not repeat itself. The owner-privacy gate extends here too: a chime-in triggered by a
+guest (`speaker_ok=False`) is grounded only in general knowledge and the guest's own
+words - the rolling room transcript is WITHHELD, because it can hold the owner's earlier
+private talk from before the guest arrived (the buffer lives ~20 min), exactly like the
+call history is withheld from a guest reply. The two ONNX-backed policy calls
+(`chime_decision`, `similar_to_any`) run off the shared event loop (executor), like every
+other blocking step in the live turn.
 
 ## Unknown speakers (guests)
 
@@ -112,11 +144,16 @@ who writes genuinely private facts into the Soul is choosing to voice them). Not
 guarantee holds only with an enrolled voice profile: without one there is no signal to
 tell speakers apart, so everyone is treated as the owner (documented fail-open).
 
-Unknown, unenrolled speakers are meant to get an ephemeral session id (`Gast A/B`);
-distinguishing guest A from guest B needs the Phase 2 diarization-light (the current
-whole-clip scoring cannot separate speakers), so ephemeral guest identity ships with
-Phase 2. A real profile is created only on explicit owner confirmation via the existing
-lane (`vaf/core/speaker_confirm.py`).
+Unknown, unenrolled speakers are meant to get an ephemeral session id (`Gast A/B`).
+Distinguishing guest A from guest B needs a per-speaker voice-print cluster, which needs
+the whole-clip scorer to expose the utterance embedding (`score_wav` today returns only
+`{score, label, name}`) plus a small per-call cluster with its own match threshold and
+eviction. That is a refinement, not part of the three core wishes (a guest already gets a
+guarded spoken reply and is tool-locked in Phase 1; the labels already separate
+owner/known-named/unknown, which is what anti-spoofing needs), so it is DEFERRED rather
+than shipped as a half-tuned heuristic that would mislabel people. A real profile is
+still created only on explicit owner confirmation via the existing lane
+(`vaf/core/speaker_confirm.py`).
 
 ## Reflex/policy module (local, non-llama)
 
@@ -132,6 +169,17 @@ lane (`vaf/core/speaker_confirm.py`).
 
 Stage 2 is a small ONNX classifier for the ambiguous middle, built to the same
 memory-safe recipe so it coexists with the one llama server without contending for it.
+It is not built yet - Phase 2 ships Stage 1 only (the grounding gate is sufficient and
+conservative); Stage 2 plugs in later for the borderline cases.
+
+The Phase 2 chime-in decision lives in `voice_policy.chime_decision(text, label, *,
+recent_labels, topics, activity)`: it derives the scene and mode, folds the activity dial
+into a threshold, and requires GROUNDING (`is_interesting` - an embedding match to the
+owner's `voice_awareness_topics` above the mode-scaled bar; a trigger phrase only lowers
+the bar, never satisfies it alone). No topics configured => no chime-in ever (the safe
+default). The durable transcript that feeds the mode/context is
+`voice_context` (session/scope-scoped, bounded, fail-open), recorded on every heard
+utterance in the live turn handler and cleared at call end.
 
 ## Hard invariants (must not break)
 
@@ -160,9 +208,17 @@ memory-safe recipe so it coexists with the one llama server without contending f
 - **Phase 1 - guests:** a guest who addresses the agent gets a spoken (never acting)
   reply with the owner's private context WITHHELD (guest-privacy guardrail); anti-spoofing
   unchanged. Ephemeral guest ids move to Phase 2 (they need diarization).
-- **Phase 2 - continuous + chime-in:** durable buffer, the policy gate, a
-  server-initiated spoken chime-in path behind the existing grounding/dedup/tracked-
-  request lifecycle (not the thinking scheduler), scene-based modes and the activity dial.
+- **Phase 2 - continuous + chime-in (implemented):** the durable rolling transcript is
+  wired into the live turn handler (`voice_context.record` on every heard utterance,
+  cleared at call end); the policy chime-in gate (`voice_policy.chime_decision`, grounding
+  required) upgrades interesting overheard side-talk into a brief grounded spoken remark
+  (`voice_agent.chime_in_reply`, silence-biased, never acting) that rides the turn
+  response (`chime_in: true`) and is deduped within the call (`similar_to_any`); the
+  scene-based internal modes (`derive_scene`/`derive_mode`) and the one activity dial
+  (`voice_awareness_activity`) drive it; addressee-ambiguity clarification asks "did you
+  mean me?" on an ambiguous non-owner address-check. Deferred here on purpose: ephemeral
+  guest ids `Gast A/B` (need per-speaker clustering, see the guests section), Stage 2
+  ONNX, and any server-INITIATED push (only needed for out-of-call always-on).
 - **Phase 3 - barge-in (web-call first):** browser AEC + full-duplex capture during TTS,
   streaming/chunked TTS, the barge-in trigger with in-flight LLM abort, `stop&listen`
   first (smart-resume later).

@@ -70,3 +70,72 @@ def test_classify_phase0_mirrors_tier1_verdict_and_exposes_signals(monkeypatch):
                      topics=["termine"], activity=0.9)
     assert r2["verdict"] == "store_only" and r2["reason"] == "side_talk"
     assert r2["interesting"] is True
+
+
+# ── Phase 2: scene-based internal modes + the one activity dial ────────────────
+
+def test_derive_scene_one_to_one_vs_multi():
+    assert vp.derive_scene("self", ["self", "self"]) == "one_to_one"
+    assert vp.derive_scene("self", []) == "one_to_one"
+    # A non-owner speaker now, OR one recently in the transcript -> multi.
+    assert vp.derive_scene("other", ["self"]) == "multi"
+    assert vp.derive_scene("named", []) == "multi"
+    assert vp.derive_scene("self", ["other", "self"]) == "multi"
+
+
+def test_derive_mode_system_chosen_from_scene_and_dial():
+    # 1:1 with the verified owner tends to active; a busy room stays quiet.
+    assert vp.derive_mode("one_to_one", "self", activity=0.5) == vp.MODE_ACTIVE
+    assert vp.derive_mode("multi", "other", activity=0.5) == vp.MODE_QUIET
+    # The dial at its floor pins notes_only (record, never interrupt), regardless of scene.
+    assert vp.derive_mode("one_to_one", "self", activity=0.0) == vp.MODE_NOTES
+    assert vp.derive_mode("multi", "other", activity=0.0) == vp.MODE_NOTES
+
+
+def test_chime_decision_notes_mode_never_speaks(monkeypatch):
+    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 1.0)  # maximally grounded
+    dec = vp.chime_decision("das quartalsergebnis war stark", "other",
+                            recent_labels=["self"], topics=["arbeit"], activity=0.0)
+    assert dec["mode"] == vp.MODE_NOTES and dec["speak"] is False
+
+
+def test_chime_decision_speaks_only_when_grounded(monkeypatch):
+    # Grounded overheard side-talk in a busy room -> chime in.
+    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 0.95)
+    dec = vp.chime_decision("[anderer_Sprecher]: das quartalsergebnis war stark", "other",
+                            recent_labels=["self"], topics=["arbeit"], activity=0.6)
+    assert dec["mode"] == vp.MODE_QUIET and dec["speak"] is True
+    # Ungrounded chatter -> no chime-in even at high activity (anti-fabrication).
+    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 0.0)
+    dec2 = vp.chime_decision("[anderer_Sprecher]: schönes wetter heute", "other",
+                             recent_labels=["self"], topics=["arbeit"], activity=1.0)
+    assert dec2["speak"] is False
+
+
+def test_chime_decision_no_topics_never_speaks(monkeypatch):
+    # A real embedding path, but the owner configured no topics -> score 0 -> silent.
+    dec = vp.chime_decision("[anderer_Sprecher]: irgendwas", "other",
+                            recent_labels=["self"], topics=[], activity=1.0)
+    assert dec["speak"] is False and dec["score"] == 0.0
+
+
+def test_activity_dial_shifts_chime_frequency(monkeypatch):
+    """The ONE dial (quiet..active) demonstrably changes how readily the agent
+    chimes in: the same grounded utterance speaks at high activity, stays silent
+    at low activity (mid grounding between the two mode-scaled bars)."""
+    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 0.62)
+    args = dict(recent_labels=["self"], topics=["arbeit"])
+    hot = vp.chime_decision("[anderer_Sprecher]: bericht", "other", activity=1.0, **args)
+    cold = vp.chime_decision("[anderer_Sprecher]: bericht", "other", activity=0.3, **args)
+    assert hot["speak"] is True and cold["speak"] is False
+
+
+def test_similar_to_any_dedups_recent_chime_ins(monkeypatch):
+    vecs = {"das meeting ist um drei": [1.0, 0.0],
+            "das meeting ist um 3 uhr": [0.99, 0.01],
+            "willst du kaffee": [0.0, 1.0]}
+    monkeypatch.setattr(vp, "_embed_one", lambda t: vecs.get(str(t).strip().lower()))
+    recent = ["das meeting ist um drei"]
+    assert vp.similar_to_any("das meeting ist um 3 uhr", recent) is True   # near-duplicate
+    assert vp.similar_to_any("willst du kaffee", recent) is False          # unrelated
+    assert vp.similar_to_any("anything", []) is False                      # nothing to dedup against

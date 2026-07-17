@@ -58,6 +58,18 @@ def test_speech_provider_keys_admin_write_only():
         assert Config.filter_for_non_admin({key: "x"}) == {}, f"{key} escapes filter_for_non_admin"
 
 
+def test_voice_awareness_keys_documented_and_user_writable():
+    """The reflex activity dial + topic list are per-user PREFERENCES (they only
+    scale a local policy threshold - no inference redirect, no billing), so they
+    must be documented AND user-writable, and must not collide with the
+    voice_agent_ (inference/billing) admin prefix."""
+    doc = _SCHEMA.read_text(encoding="utf-8")
+    for key in ("voice_awareness_activity", "voice_awareness_topics"):
+        assert f"`{key}`" in doc, f"CONFIG_SCHEMA.md is missing a row for {key}"
+        assert key in Config.DEFAULTS, f"{key} is not in Config.DEFAULTS"
+        assert not Config.is_global_config_key(key), f"{key} must stay user-writable"
+
+
 def test_tts_auto_speak_stays_user_writable():
     # Deliberate: playback preference; billing exposure is bounded by the
     # admin-gated enable/provider keys.

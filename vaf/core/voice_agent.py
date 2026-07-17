@@ -111,6 +111,21 @@ the current step finishes; if they ask for progress, say it is still running."""
 _GUEST_BLOCK = """
 IMPORTANT - the current speaker is NOT your verified user {user_name}, but a guest in the room. Be polite and help with general questions and small talk, but you have NO access to {user_name}'s private world here: never share {user_name}'s memory, notes, schedule, messages, chat, contacts or any personal detail, and never do any real work on a guest's behalf. If a guest asks for something personal or an action, say briefly and kindly that you can only do that for {user_name}."""
 
+# Chime-in: the agent overheard something (it was NOT addressed) and the local
+# policy already judged it interesting/grounded. This prompt is silence-biased -
+# the model may still decline. A chime-in is a spoken remark ONLY: no tools, no
+# delegation (any stray marker is stripped in _postprocess_chime).
+_CHIME_SYSTEM = """You are {agent_name}, quietly present on a LIVE VOICE CALL. The microphone is always open and you have been LISTENING without being directly addressed - no one asked you anything. Below is what you just overheard.
+
+Decide whether you have something genuinely useful, brief and NATURAL to add, grounded in what you actually know. Answer in the user's language: {lang}.
+
+Rules:
+- If you have a genuinely helpful, grounded remark - a relevant fact you know, a gentle reminder, a small correction - say it in ONE short spoken sentence, the way a helpful person in the room would briefly chime in. No preamble like "I could not help but overhear".
+- If you have nothing solidly grounded and useful to add, reply with EXACTLY {silent} and nothing else. Silence is the correct, expected default - most overheard talk needs no comment from you. Never invent a reason to speak, never guess, never state something you are not sure of.
+- No markdown, no lists, no follow-up questions, no meta about listening, labels or your reasoning. Just the one natural remark, or {silent}.
+- You have NO tools here and take NO action - this is only a spoken remark.{guest_block}
+{memory_block}"""
+
 
 # Address signals: the agent's name or a second-person form in the utterance.
 _ADDRESS_RE = re.compile(r"\b(vaf|du|dich|dir|dein\w*|you|your|yours)\b", re.I)
@@ -212,6 +227,61 @@ def should_engage(text: str, label: Optional[str], agent_name: str = ""):
     verdict from ``classify_utterance`` directly."""
     verdict, reason = classify_utterance(text, label, agent_name)
     return verdict == "respond_now", reason
+
+
+def _addressee_check_match(core: str) -> bool:
+    """True if the utterance is an address-verification cue ('can you hear me',
+    'bist du da', ...) from the `addressee_check` lexicon. Language-agnostic
+    substring match (the phrases are per-language but any language may match);
+    fail-open to False so a vocab hiccup never forces a clarification."""
+    try:
+        low = str(core or "").strip().lower()
+        if not low:
+            return False
+        from vaf.core import vocab
+        for _lang in vocab.available_languages("addressee_check"):
+            for phrase in vocab.phrasings("addressee_check", _lang):
+                phrase = (phrase or "").strip().lower()
+                if phrase and phrase in low:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def wants_addressee_clarification(text: str, label: Optional[str],
+                                  agent_name: str = "") -> bool:
+    """True when an ambiguous address-check cue ('kannst du mich hoeren') arrives
+    from a NON-owner speaker and the agent was not clearly named - the agent should
+    ASK 'did you mean me?' rather than answer or silently ignore it (see
+    docs/agents/VOICE_REFLEX.md, addressee ambiguity). Never fires for the verified
+    owner (label 'self') nor for an unlabeled call (no profile -> everyone is the
+    owner, so there is no ambiguity to resolve). It never authorizes anything -
+    anti-spoofing is unchanged."""
+    try:
+        if label not in ("other", "named", "unsure"):
+            return False
+        core = _LABEL_PREFIX_RE.sub("", text or "").strip()
+        if not core:
+            return False
+        if agent_name and addressed_by_name(core, agent_name):
+            return False  # clearly named -> answer, no ambiguity
+        return _addressee_check_match(core)
+    except Exception:
+        return False
+
+
+def addressee_clarify_line(lang: str = "de", scope_id: str = "") -> str:
+    """A short spoken 'did you mean me?' clarification, from the `addressee_clarify`
+    vocab (rotates per scope). Falls back to a built-in phrase if the key is empty."""
+    try:
+        from vaf.core import vocab
+        line = vocab.pick("addressee_clarify", lang, scope=scope_id)
+        if line:
+            return line
+    except Exception:
+        pass
+    return "Meinst du mich?" if str(lang).startswith("de") else "Do you mean me?"
 
 
 def build_chat_digest(messages, max_items: int = 8, per_item: int = 220,
@@ -378,6 +448,70 @@ def _local_chat(messages) -> Optional[str]:
         return None
 
 
+def _call_model(messages: List[Dict[str, str]], provider: str, model) -> Optional[str]:
+    """One first-layer completion on the resolved backend. Returns the raw
+    assistant text (local: reasoning still wrapped in <think> for the
+    post-processor to strip; API: reasoning already stripped from the stream) or
+    None on any failure. Shared by voice_reply and chime_in_reply so the delicate
+    reasoning-strip and tool-call-leak filtering live in exactly one place."""
+    if provider == "local":
+        # Time-shared single llama server: one non-streaming call. The caller
+        # pauses turns while the main agent holds the model.
+        if model:
+            # Dedicated voice model: make the one server hold it (fast no-op
+            # when it already does; a ~seconds swap right after a delegated
+            # task handed the server back - the busy belt keeps turns away
+            # WHILE the task runs, so this only pays on the first turn after).
+            from vaf.core import voice_model
+            if not voice_model.ensure_voice_model(reason="voice turn"):
+                return None
+        return _local_chat(messages)
+
+    from vaf.core.api_backend import APIBackendManager
+    backend = APIBackendManager(provider)
+    text = ""
+    saw_error = False
+    in_reasoning = False
+    for chunk in backend.chat_completion(
+        messages, temperature=0.6, max_tokens=_MAX_REPLY_TOKENS,
+        stream=True, model=model, tools=None,
+    ):
+        if isinstance(chunk, dict):
+            piece = chunk.get("content") or ""
+        else:
+            piece = str(chunk)
+        if "[API Error from" in piece:
+            saw_error = True
+            continue
+        # Reasoning models (deepseek/veyllo v4): api_backend wraps the thought
+        # stream in <think>...</think> sentinel chunks. NEVER collect them -
+        # thoughts must not reach TTS, and a truncated stream must not leave an
+        # unclosed block behind. A single piece may carry open tag, close tag
+        # and answer text together, so walk it.
+        kept = ""
+        while piece:
+            if in_reasoning:
+                if "</think>" in piece:
+                    piece = piece.split("</think>", 1)[1]
+                    in_reasoning = False
+                else:
+                    piece = ""
+            else:
+                if "<think>" in piece:
+                    before, piece = piece.split("<think>", 1)
+                    kept += before
+                    in_reasoning = True
+                else:
+                    kept += piece
+                    piece = ""
+        piece = kept
+        if piece and not any(k in piece for k in ('"tool_calls"', '"tool_use"', '"finish_reason"')):
+            text += piece
+    if saw_error:
+        return None
+    return text
+
+
 def _now_line(username: str, lang: str) -> str:
     """User-local "Tuesday, 15.07.2026 18:39:52" for the system prompt.
 
@@ -486,71 +620,111 @@ def voice_reply(
                     messages.append({"role": role, "content": content[:800]})
         messages.append({"role": "user", "content": user_text.strip()[:2000]})
 
-        if provider == "local":
-            # Time-shared single llama server: one non-streaming call. The
-            # caller pauses turns while the main agent holds the model.
-            if model:
-                # Dedicated voice model: make the one server hold it (fast
-                # no-op when it already does; a ~seconds swap right after a
-                # delegated task handed the server back - the busy belt
-                # keeps turns away WHILE the task runs, so this only pays
-                # on the first turn after the result).
-                from vaf.core import voice_model
-                if not voice_model.ensure_voice_model(reason="voice turn"):
-                    return None
-            _local = _local_chat(messages)
-            if _local is None:
-                return None
-            return _postprocess_reply(_local, lang=lang, main_busy=main_busy,
-                                       speaker_ok=speaker_ok)
-
-        from vaf.core.api_backend import APIBackendManager
-        backend = APIBackendManager(provider)
-        text = ""
-        saw_error = False
-        in_reasoning = False
-        for chunk in backend.chat_completion(
-            messages, temperature=0.6, max_tokens=_MAX_REPLY_TOKENS,
-            stream=True, model=model, tools=None,
-        ):
-            if isinstance(chunk, dict):
-                piece = chunk.get("content") or ""
-            else:
-                piece = str(chunk)
-            if "[API Error from" in piece:
-                saw_error = True
-                continue
-            # Reasoning models (deepseek/veyllo v4): api_backend wraps the
-            # thought stream in <think>...</think> sentinel chunks. NEVER
-            # collect them - thoughts must not reach TTS, and a truncated
-            # stream must not leave an unclosed block behind. A single piece
-            # may carry open tag, close tag and answer text together, so walk it.
-            kept = ""
-            while piece:
-                if in_reasoning:
-                    if "</think>" in piece:
-                        piece = piece.split("</think>", 1)[1]
-                        in_reasoning = False
-                    else:
-                        piece = ""
-                else:
-                    if "<think>" in piece:
-                        before, piece = piece.split("<think>", 1)
-                        kept += before
-                        in_reasoning = True
-                    else:
-                        kept += piece
-                        piece = ""
-            piece = kept
-            if piece and not any(k in piece for k in ('"tool_calls"', '"tool_use"', '"finish_reason"')):
-                text += piece
-        if saw_error:
+        raw = _call_model(messages, provider, model)
+        if raw is None:
             return None
-        return _postprocess_reply(text, lang=lang, main_busy=main_busy,
+        return _postprocess_reply(raw, lang=lang, main_busy=main_busy,
                                   speaker_ok=speaker_ok)
     except Exception as e:
         _log.warning("voice_agent: voice_reply failed: %s", e)
         return None
+
+
+def chime_in_reply(
+    overheard: str,
+    *,
+    scope_id: str,
+    lang: str = "de",
+    user_name: str = "Mert",
+    agent_name: str = "",
+    speaker_ok: bool = True,
+    transcript: str = "",
+) -> str:
+    """A proactive, unprompted chime-in on something OVERHEARD (not addressed to
+    the agent). The local policy has already judged it interesting/grounded; this
+    is the content layer's silence-biased second opinion. Returns the spoken remark,
+    or "" when the agent has nothing grounded to add (the common, expected case).
+
+    A chime-in NEVER acts: no delegation, no tool-call (any stray marker is stripped).
+    The owner's private context is included ONLY for a verified owner (speaker_ok):
+    a chime-in triggered by a guest is grounded in general knowledge and the guest's
+    own words, never the owner's memory OR the rolling room transcript (which can hold
+    the owner's earlier private talk from before the guest was present) - guest-privacy
+    invariant, Phase 1."""
+    try:
+        core = (overheard or "").strip()
+        if not core:
+            return ""
+        provider, model = _resolve_backend()
+        if not provider:
+            return ""
+        system = _CHIME_SYSTEM.format(
+            agent_name=(agent_name or "").strip() or "VAF",
+            lang=lang,
+            silent=_SILENT_MARKER,
+            guest_block=_GUEST_BLOCK.format(user_name=user_name) if not speaker_ok else "",
+            memory_block=(_memory_block(core, scope_id) if speaker_ok else ""),
+        ).strip()
+
+        messages: List[Dict[str, str]] = [{"role": "system", "content": system}]
+        # Owner privacy (defense in depth, mirrors voice_reply's guest history gate):
+        # the rolling transcript can hold the owner's earlier [self] utterances and
+        # owner-grounded remarks from BEFORE this guest was present (the buffer lives
+        # ~20 min), which the guest never heard. Withhold it wholesale for a guest
+        # (speaker_ok=False) - the guest's own words still reach the model via the
+        # "Latest:" line below - rather than trusting the model not to replay it.
+        ctx = (transcript or "").strip() if speaker_ok else ""
+        if ctx:
+            messages.append({"role": "user",
+                             "content": "Recently overheard in the room:\n" + ctx[:1200]})
+        messages.append({"role": "user", "content": "Latest: " + core[:800]})
+
+        raw = _call_model(messages, provider, model)
+        if raw is None:
+            return ""
+        return _postprocess_chime(raw, lang=lang)
+    except Exception as e:
+        _log.warning("voice_agent: chime_in_reply failed: %s", e)
+        return ""
+
+
+def _postprocess_chime(text: str, *, lang: str) -> str:
+    """Post-process a chime-in: strip reasoning, honor the silence marker, drop any
+    stray delegate marker (a chime-in never acts), guard the CoT leak, cap length.
+    Returns the spoken remark, or "" when the agent stays silent. Unlike a direct
+    reply, an empty/tangled chime-in yields SILENCE, never the 'say again' nudge -
+    nobody asked, so there is nothing to re-ask."""
+    try:
+        if not text.strip():
+            return ""
+        text = _strip_reasoning(text)
+        if not text.strip():
+            return ""
+        if _SILENT_MARKER in text:
+            remainder = text.replace(_SILENT_MARKER, "").strip()
+            if not remainder:
+                return ""
+            text = remainder
+        # A chime-in never delegates: strip any marker the model emitted anyway.
+        text = _DELEGATE_RE.sub("", text).strip()
+        if not text or _looks_like_meta_leak(text, lang):
+            return ""
+        return _cap_spoken(text)
+    except Exception:
+        return ""
+
+
+def _looks_like_meta_leak(text: str, lang: str) -> bool:
+    """True if the text reads like a leaked chain-of-thought or internal-machinery
+    mention rather than a spoken answer (see _postprocess_reply for the incidents).
+    Internal-machinery mention = leak in any language. A CoT opener drops directly
+    on non-English calls; on an English call it also needs the third-person signal
+    (else "We need to check your calendar" would be a false positive - the call
+    language follows the UI locale, which can be English for a German speaker)."""
+    return bool(_META_INTERNAL_RE.search(text)
+                or (_META_REASONING_RE.match(text)
+                    and (not lang.startswith("en")
+                         or _META_THIRD_PERSON_RE.search(text))))
 
 
 def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
@@ -589,19 +763,7 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
         if m:
             delegate = m.group(1).strip() or None
             text = _DELEGATE_RE.sub("", text).strip()
-        def _meta(s: str) -> bool:
-            # Internal-machinery mention = leak in any language. A CoT opener
-            # drops directly on non-English calls; on English calls it also
-            # needs the third-person signal (else "We need to check your
-            # calendar" would be a false positive). Note: the CALL language
-            # follows the UI locale, which can be English for a German
-            # speaker - hence the content-based signal (live incident 21:13).
-            return bool(_META_INTERNAL_RE.search(s)
-                        or (_META_REASONING_RE.match(s)
-                            and (not lang.startswith("en")
-                                 or _META_THIRD_PERSON_RE.search(s))))
-
-        if _meta(text.strip()):
+        if _looks_like_meta_leak(text.strip(), lang):
             # Plain-content CoT leak (live incidents: 'We need to parse the
             # user's utterance...', German 'Wir haben einen Sprecher mit dem
             # Label "[unsicher]"...', and 'We need to respond to this user
@@ -609,7 +771,7 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             # real answer paragraph if one exists, else degrade.
             parts = [p.strip() for p in text.split("\n\n") if p.strip()]
             tail = parts[-1] if parts else ""
-            if len(parts) > 1 and not _meta(tail):
+            if len(parts) > 1 and not _looks_like_meta_leak(tail, lang):
                 _log.info("voice_agent: plain CoT stripped, tail salvaged")
                 text = tail
             else:

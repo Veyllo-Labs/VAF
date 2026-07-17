@@ -1,9 +1,9 @@
 # Vocabulary Book (backend canned phrases)
 
 The Vocabulary Book is the backend counterpart to the Web UI i18n system. The Web UI uses next-intl, which
-is **frontend-only** — backend and CLI text are explicitly out of its scope (see [I18N.md](I18N.md)). The
-Vocabulary Book localizes the small set of **fixed phrases that the backend emits itself** — for example the
-thinking-run "are you there?" nudge — so they can vary and follow the user's language **without an LLM call at
+is **frontend-only** - backend and CLI text are explicitly out of its scope (see [I18N.md](I18N.md)). The
+Vocabulary Book localizes the small set of **fixed phrases that the backend emits itself** - for example the
+thinking-run "are you there?" nudge - so they can vary and follow the user's language **without an LLM call at
 runtime**.
 
 ## Scope
@@ -11,8 +11,8 @@ runtime**.
 - **In scope:** short, fixed phrases the backend sends to the user, where we want variation and the user's
   language but do not want to pay for an LLM call (e.g. the thinking-run nudge).
 - **Out of scope:**
-  - Full agent replies and proactive questions — the model already writes those in the user's language.
-  - Web UI strings — handled by next-intl ([I18N.md](I18N.md), [TRANSLATION_SYSTEM.md](TRANSLATION_SYSTEM.md)).
+  - Full agent replies and proactive questions - the model already writes those in the user's language.
+  - Web UI strings - handled by next-intl ([I18N.md](I18N.md), [TRANSLATION_SYSTEM.md](TRANSLATION_SYSTEM.md)).
   - Long-form or dynamic content.
 
 ## Architecture
@@ -40,7 +40,7 @@ runtime**.
 vaf/core/vocab/
 ├── __init__.py          # API: pick(), phrasings(), resolve_user_language(), available_languages()
 ├── source/
-│   └── <key>.json       # hand-authored seed (en) — the translation source
+│   └── <key>.json       # hand-authored seed (en) - the translation source
 └── data/
     └── <key>.json       # generated: { "en": [...], "de": [...], "es": [...], ... }
 
@@ -60,6 +60,10 @@ follows the same word/phrase-list pattern: per-language cue phrases ("can you",
 "remind me", "how do i", ...) that the voice reflex policy
 (`vaf/core/voice_policy.py`, see [VOICE_REFLEX.md](../agents/VOICE_REFLEX.md))
 substring-matches as its fast, no-LLM prefilter for "worth engaging".
+`addressee_check` is the same list pattern: address-verification cues ("can you hear
+me", "bist du da") that flag an ambiguous "was that meant for me?" from a non-owner
+speaker; `addressee_clarify` is a normal phrasing list of the spoken responses
+("meinst du mich?", "do you mean me?") the agent then asks.
 
 ## API
 
@@ -70,12 +74,12 @@ lang = vocab.resolve_user_language(user_scope_id, username)   # 'de', 'en', ...
 text = vocab.pick("nudge", lang, scope=user_scope_id, name="Mert")
 ```
 
-- **`pick(key, lang, scope=None, **fmt) -> str`** — returns one phrasing for `key` in `lang`, formatted with
+- **`pick(key, lang, scope=None, **fmt) -> str`** - returns one phrasing for `key` in `lang`, formatted with
   `**fmt`. Picks **rotate** per `(scope, key)` so consecutive calls differ. A missing `{placeholder}` returns
   the raw phrasing instead of raising. Returns `''` only if the key has no phrasings at all.
-- **`resolve_user_language(user_scope_id=None, username=None) -> str`** — best-effort 2-letter language:
+- **`resolve_user_language(user_scope_id=None, username=None) -> str`** - best-effort 2-letter language:
   `user_identity.preferred_language` (`vaf/auth/user_workspace.py`) → config `default_language` → `"en"`.
-- **`available_languages(key) -> list[str]`** — languages a key currently has (diagnostics / the generator).
+- **`available_languages(key) -> list[str]`** - languages a key currently has (diagnostics / the generator).
 
 **Language fallback (in `pick`):** exact base language (`de-DE` → `de`) → `en` → first available. So a user
 whose language is not yet in the book still gets a sensible English phrasing.
@@ -106,16 +110,19 @@ python scripts/generate_vocab.py --key nudge --provider deepseek
 
 The default target set is a broad built-in list (the Web UI `languages.ts` is UI-only and currently minimal).
 The script is **dev/build-time** tooling and requires a working LLM provider; the runtime does not depend on
-it. Review generated phrasings before shipping — machine translations of casual idioms are not always perfect.
+it. Review generated phrasings before shipping - machine translations of casual idioms are not always perfect.
 
 ## Current keys
 
 | Key | Used by | Placeholders |
 |-----|---------|--------------|
 | `nudge` | Thinking-run "are you there?" follow-up nudge (`_send_nudge`, `vaf/core/thinking_mode.py`) | `{name}` |
+| `awareness_triggers` | Voice reflex policy fast prefilter, per-language cue phrases consumed as full lists via `phrasings()` (`vaf/core/voice_policy.py`) | none (word/phrase lists) |
+| `addressee_check` | Voice reflex addressee-ambiguity detector, per-language address-check cues consumed as full lists (`voice_agent.wants_addressee_clarification`) | none (word/phrase lists) |
+| `addressee_clarify` | Voice reflex "did you mean me?" spoken response (`voice_agent.addressee_clarify_line`) | none |
 
 ## Related documentation
 
-- [I18N.md](I18N.md) — Web UI internationalization (next-intl); the frontend counterpart.
-- [TRANSLATION_SYSTEM.md](TRANSLATION_SYSTEM.md) — how UI strings are resolved per locale.
-- [Thinking-Mode.md](../agents/Thinking-Mode.md) — the nudge and the follow-up flow that consume the `nudge` key.
+- [I18N.md](I18N.md) - Web UI internationalization (next-intl); the frontend counterpart.
+- [TRANSLATION_SYSTEM.md](TRANSLATION_SYSTEM.md) - how UI strings are resolved per locale.
+- [Thinking-Mode.md](../agents/Thinking-Mode.md) - the nudge and the follow-up flow that consume the `nudge` key.

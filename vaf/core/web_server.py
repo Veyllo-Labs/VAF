@@ -6193,7 +6193,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _VOICE_CALLS[_conn_key] = {"history": [], "lang": _lang,
                                                    "scope": _scope, "chat_context": _chat_ctx,
                                                    "agent_name": _agent_name,
-                                                   "agent_soul": _agent_soul}
+                                                   "agent_soul": _agent_soul,
+                                                   # Reflex system (VOICE_REFLEX.md): a
+                                                   # session/scope key for the durable
+                                                   # rolling transcript, and a small
+                                                   # ring of recent chime-ins for dedup.
+                                                   "session": (cmd.get("sessionId") or str(_conn_key)),
+                                                   "chime_recent": []}
                         def _any_live_subagents() -> bool:
                             """A live sub-agent (any session) holds the ONE
                             local model - no model swap may run then (a swap
@@ -6339,7 +6345,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 log("WebServer", f"voice_call greeting failed: {_greet_e}")
 
                     elif type == "voice_call_end":
-                        _VOICE_CALLS.pop(_conn_key, None)
+                        _ended = _VOICE_CALLS.pop(_conn_key, None)
+                        # Retention: drop the rolling transcript at call end (it is
+                        # context, not a record - the age cap would prune it anyway).
+                        try:
+                            from vaf.core import voice_context as _vctx_end
+                            if _ended is not None:
+                                _vctx_end.clear(_ended.get("scope"), _ended.get("session"))
+                        except Exception:
+                            pass
                         await websocket.send_json({"type": "voice_call_ended"})
 
                     elif type == "voice_call_turn":
@@ -6456,13 +6470,144 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception:
                             pass
 
-                        # 2b. Addressee gate (tier 1, no LLM): side talk from
+                        # 2b. Rolling transcript (durable, session/scope-scoped):
+                        # every heard utterance becomes context the reflex policy can
+                        # read, outliving the 16-entry call ring (VOICE_REFLEX.md).
+                        # Best-effort, never blocks the realtime path.
+                        _session = _call.get("session") or str(_conn_key)
+                        try:
+                            from vaf.core import voice_context as _vctx
+                            _vctx.record(_call["scope"], _session, _text, label=_label)
+                        except Exception:
+                            pass
+
+                        # 2c. Addressee ambiguity (tier 1, no LLM): an address-check
+                        # cue ("kannst du mich hoeren", "bist du da") from a NON-owner
+                        # speaker who did not name the agent - ask "did you mean me?"
+                        # instead of answering or silently ignoring. Authorizes
+                        # nothing (anti-spoofing unchanged); it is a spoken question.
+                        try:
+                            if _va.wants_addressee_clarification(
+                                    _text, _label, _call.get("agent_name", "")):
+                                _clar = _va.addressee_clarify_line(_turn_lang, _call["scope"])
+                                _clar_audio = None
+                                try:
+                                    from vaf.core.speech import SpeechManager as _SMc
+                                    _ca = await asyncio.wait_for(
+                                        loop.run_in_executor(
+                                            None, lambda: _SMc.get_instance().synthesize_audio(
+                                                _clar, _turn_lang, force_engine="docker")),
+                                        timeout=30.0)
+                                    if _ca:
+                                        _clar_audio = _b64v.b64encode(_ca).decode("utf-8")
+                                except Exception:
+                                    _clar_audio = None
+                                _call["history"].append({"role": "user", "content": _text[:200]})
+                                _call["history"].append({"role": "assistant", "content": _clar})
+                                _call["history"] = _call["history"][-16:]
+                                log("WebServer", f"voice_call: addressee clarify text={_text[:60]!r}")
+                                await websocket.send_json({
+                                    "type": "voice_call_reply", "user_text": _text,
+                                    "speaker_label": _label, "reply": _clar,
+                                    "audio": _clar_audio, "delegated": None, "clarify": True,
+                                })
+                                continue
+                        except Exception as _clar_e:
+                            log("WebServer", f"voice_call clarify failed: {_clar_e}")
+
+                        # 2d. Addressee gate (tier 1, no LLM): side talk from
                         # other speakers and garbled non-owner input never
                         # reach the LLM - the text still enters the call
                         # history as room context (the labels exist for this).
                         _engage, _gate_reason = _va.should_engage(
                             _text, _label, agent_name=_call.get("agent_name", ""))
                         if not _engage:
+                            # Reflex chime-in: side talk from another speaker normally
+                            # stores + stays silent, but the LOCAL policy may find it
+                            # interesting enough (GROUNDED in the owner's topics) for a
+                            # brief spoken remark - a living presence, not a chatbot.
+                            # Never forced: grounding is required AND the content LLM
+                            # may still stay silent. Skipped on garbled noise, while the
+                            # main agent is busy (a chime-in over a running task is
+                            # noise), and deduped against recent chime-ins.
+                            _chimed = False
+                            try:
+                                if _gate_reason == "side_talk" and not bool(cmd.get("main_busy")):
+                                    from vaf.core import voice_policy as _vpol
+                                    from vaf.core.config import Config as _CfgA
+                                    _topics = _CfgA.get("voice_awareness_topics", []) or []
+                                    if not isinstance(_topics, list):
+                                        _topics = []
+                                    _activity = _CfgA.get("voice_awareness_activity", 0.5)
+                                    _recent_labels = [e[1] for e in
+                                                      _vctx.recent(_call["scope"], _session, n=8)]
+                                    # chime_decision runs ONNX embeddings - offload off
+                                    # the shared event loop, like every other blocking
+                                    # call in this handler (STT, scoring, TTS, replies).
+                                    _dec = await loop.run_in_executor(
+                                        None,
+                                        lambda: _vpol.chime_decision(
+                                            _text, _label, recent_labels=_recent_labels,
+                                            topics=_topics, activity=_activity))
+                                    if _dec.get("speak"):
+                                        # Owner privacy: the rolling transcript can hold
+                                        # the owner's earlier private [self] talk from
+                                        # before this guest arrived; a guest chime-in
+                                        # (speaker_ok False) must not receive it. Do not
+                                        # even build it here (chime_in_reply also withholds
+                                        # it - belt and suspenders).
+                                        _digest = (_vctx.digest(_call["scope"], _session, n=8)
+                                                   if _speaker_ok else "")
+                                        _remark = await loop.run_in_executor(
+                                            None,
+                                            lambda: _va.chime_in_reply(
+                                                _text, scope_id=_call["scope"],
+                                                lang=_turn_lang, user_name=_display,
+                                                agent_name=_call.get("agent_name", ""),
+                                                speaker_ok=_speaker_ok, transcript=_digest))
+                                        _chime_recent = _call.setdefault("chime_recent", [])
+                                        _dup = False
+                                        if _remark:
+                                            _dup = await loop.run_in_executor(
+                                                None,
+                                                lambda: _vpol.similar_to_any(_remark, list(_chime_recent)))
+                                        if _remark and not _dup:
+                                            _chime_audio = None
+                                            try:
+                                                from vaf.core.speech import SpeechManager as _SMi
+                                                _ia = await asyncio.wait_for(
+                                                    loop.run_in_executor(
+                                                        None, lambda: _SMi.get_instance().synthesize_audio(
+                                                            _remark, _turn_lang, force_engine="docker")),
+                                                    timeout=60.0)
+                                                if _ia:
+                                                    _chime_audio = _b64v.b64encode(_ia).decode("utf-8")
+                                            except Exception:
+                                                _chime_audio = None
+                                            _chime_recent.append(_remark)
+                                            _call["chime_recent"] = _chime_recent[-6:]
+                                            _call["history"].append({"role": "user", "content": _text[:200]})
+                                            _call["history"].append({"role": "assistant", "content": _remark})
+                                            _call["history"] = _call["history"][-16:]
+                                            try:
+                                                _vctx.record(_call["scope"], _session, _remark,
+                                                             label="agent", verdict="chime_in")
+                                            except Exception:
+                                                pass
+                                            log("WebServer",
+                                                f"voice_call: CHIME-IN mode={_dec.get('mode')} "
+                                                f"score={_dec.get('score')} text={_remark[:80]!r}")
+                                            await websocket.send_json({
+                                                "type": "voice_call_reply", "user_text": _text,
+                                                "speaker_label": _label, "reply": _remark,
+                                                "audio": _chime_audio, "delegated": None,
+                                                "chime_in": True,
+                                            })
+                                            _chimed = True
+                            except Exception as _chime_e:
+                                log("WebServer", f"voice_call chime-in failed: {_chime_e}")
+                            if _chimed:
+                                continue
                             _call["history"].append({"role": "user", "content": _text[:200]})
                             _call["history"] = _call["history"][-16:]
                             log("WebServer",

@@ -82,25 +82,34 @@ def test_execute_workflow_blocks_a_duplicate_live_run(monkeypatch):
     """Live incident 2026-07-16: after empty-response snapshot resets the
     model re-called execute_workflow while the first run was still live -
     two concurrent research workflows on one GPU. Session-scoped IPC is the
-    truth; a duplicate must be refused with an honest status."""
+    truth; a duplicate must be refused with an honest status. The guard now
+    runs on SubAgentIPC.has_live_task (shared with the async terminal lane;
+    full concurrency/self-registration coverage lives in
+    test_workflow_duplicate_guard.py)."""
+    import types
+
     import vaf.core.subagent_ipc as ipc_mod
     from vaf.tools.workflow_executor import ExecuteWorkflowTool
 
-    class _Task:
-        agent_type = "workflow:research_and_document"
+    seen = {}
 
     class _FakeIpc:
-        def get_active_tasks_for_current_session(self):
-            return [_Task()]
+        def has_live_task(self, agent_type, session_id, **kw):
+            seen["args"] = (agent_type, session_id)
+            return agent_type == "workflow:research_and_document"
 
     monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIpc())
-    result = ExecuteWorkflowTool().run("research_and_document", {"topic": "x"})
+    _agent = types.SimpleNamespace(current_session_id="sess-dup-test", tools={})
+    result = ExecuteWorkflowTool().run("research_and_document", {"topic": "x"}, _agent=_agent)
     assert "ALREADY RUNNING" in result
+    # The guard must check THIS session, not the module-global fallback.
+    assert seen["args"] == ("workflow:research_and_document", "sess-dup-test")
 
     # A different workflow id is NOT blocked by the guard (it proceeds into
     # normal resolution; unknown id yields the not-found message).
-    result2 = ExecuteWorkflowTool().run("some_other_wf_xyz", {})
+    result2 = ExecuteWorkflowTool().run("some_other_wf_xyz", {}, _agent=_agent)
     assert "ALREADY RUNNING" not in result2
+    assert "not found" in result2
 
 
 def test_bounded_run_sets_cancel_event_for_the_abandoned_worker():

@@ -215,7 +215,38 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   was still live (observed: two concurrent research workflows sharing one
   GPU). Both launch lanes now check the session's live tasks and refuse a
   duplicate with an honest still-in-progress status, mirroring the
-  sub-agent re-delegation guard.
+  sub-agent re-delegation guard. An adversarial re-audit then found the
+  first version of that guard structurally broken for the in-process
+  `execute_workflow` lane: it read the task registry but the tool never
+  registered its own runs there, so two concurrent calls both sailed past
+  it (verified with a live repro). The tool now registers itself for the
+  duration of the run (deregistered on every exit path), both lanes share
+  one guard predicate, and that predicate also counts a freshly-created
+  task whose spawned terminal has not reached "running" yet, closing the
+  spawn-window race in the terminal lane. A second adversarial pass on
+  the fix itself then forced two more rounds of hardening: the
+  registration now heartbeats (without one, the zombie reaper failed it
+  90 seconds into exactly the multi-minute runs the guard protects,
+  silently reopening the guard and queueing a spurious crash report), and
+  both lanes verify AFTER registering who won the registry slot, since
+  the pre-check alone still let two barrier-synced concurrent calls both
+  through. The tool's cleanup also consumes any result another actor
+  (stop-all, a reaper) queued for its task id while it ran, so a
+  synchronous run can never additionally surface as a phantom sub-agent
+  delivery. A failed terminal spawn now deregisters its task and falls
+  back to inline execution instead of reporting an async run that never
+  started.
+- **Sub-agent task registry updates can no longer erase each other.** The
+  IPC task queues (pending/active/results) are JSON files mutated by
+  read-modify-write sequences whose per-file locks only covered a single
+  read or write - two concurrent mutations (for example two tasks being
+  marked running at once) could interleave and silently drop one side's
+  update, observed live as two workflow launches erasing each other's
+  registry entry and both slipping past the duplicate guard. All registry
+  mutations now serialize through one reentrant in-process lock plus a
+  bounded cross-process file lock held for the whole read-modify-write,
+  with a best-effort fallback (a stuck lock degrades to the old behavior
+  after five seconds rather than wedging a chat turn).
 - **The workflow terminal stream no longer freezes the app window.** When a
   workflow step drew a live progress animation (the research agent), every
   animation frame line was forwarded to the Web UI as its own event -

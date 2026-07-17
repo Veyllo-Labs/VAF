@@ -371,6 +371,19 @@ two inferences at once. Kill-switch: `subagent_concurrent_chat_enabled`. See
         └── {task_id}.txt            # Used when task exceeds command-line limit (~3K chars)
 ```
 
+**Mutation serialization:** the queue JSONs are mutated by read-modify-write
+sequences, and the per-file locks inside `_read_json`/`_write_json` only cover a
+single read or write - two concurrent mutators could interleave and silently drop
+one side's update (live-caught: two concurrent `mark_task_running` calls erased
+each other's active entry, letting two workflow launches both past the duplicate
+guard). Every registry mutation therefore runs inside `SubAgentIPC._mutation_guard()`:
+one reentrant in-process RLock plus a bounded cross-process lock on
+`.mutation.lock`, held by the outermost guard level only (flock is not reentrant
+across a second file descriptor in the same process) for the whole
+read-modify-write, degrading to the old best-effort behavior after a 5s timeout
+rather than wedging a chat turn. New mutators MUST wrap their read-modify-write in
+this guard.
+
 **Task Payloads:** When a task description exceeds ~3000 characters (e.g., detailed document requests), the full text is stored in `task_payloads/{task_id}.txt`. The sub-agent is spawned with `--task-id` only and retrieves the task via `ipc.get_task_payload(task_id)`. This avoids Windows command-line limits (~8191 chars).
 
 ---
@@ -509,7 +522,46 @@ tasks = ipc.get_active_tasks_for_current_session()
 
 # Or explicitly filter by session
 tasks = ipc.get_active_tasks(session_id="session_abc123")
+
+# Created-but-not-yet-running tasks (create_task done, spawn in flight)
+tasks = ipc.get_pending_tasks(session_id="session_abc123")
+
+# Duplicate-delegation predicate (see below)
+already = ipc.has_live_task("workflow:research_and_document", "session_abc123")
 ```
+
+**Duplicate-launch guard (`has_live_task` + `claim_task_slot`):** the ONE shared
+predicate pair behind every "is this workflow already running for this chat?"
+check - used by both the async terminal lane in `agent.py` and
+`execute_workflow`'s in-process lane (`vaf/tools/workflow_executor.py`).
+`has_live_task` counts a task as live when it is RUNNING for the session, or when
+it is PENDING and young (default grace 120s): between `create_task` and the
+spawned process's own `mark_task_running` lie terminal spawn and Python import, so
+an active-only check had a real blind window in which a second identical launch
+slipped through. Stale pending entries (crashed spawns; only active tasks are
+reaped by `cleanup_stale_active_tasks`) age out of the predicate and can never
+wedge future launches. Without a session id it always returns False - the guard
+must never block on another user's run (Rule 4.4).
+
+Because `has_live_task` alone is check-then-act (adversarial review: two
+barrier-synced concurrent calls both passed it and both executed), every launcher
+also calls `claim_task_slot` AFTER registering: winner = the smallest
+(created_at, task_id) among all live tasks of the type, a total order every racer
+computes identically, so exactly one proceeds and losers deregister themselves and
+report a duplicate. `execute_workflow` registers ITSELF (`create_task` +
+`mark_task_running`, deregistered via `cancel_task` on every exit path) for the
+duration of its synchronous run so the guard can see it, and runs a 5s HEARTBEAT
+thread while executing - without one, `check_zombies` (fired ~1s by the runner
+drain, 90s timeout) reaped the registration mid-run, silently reopening the guard
+for exactly the multi-minute runs it protects and enqueueing a spurious CRASH
+result. It deliberately does NOT use `complete_task`, because its result returns
+synchronously as the tool result and must not ALSO be enqueued for the drain
+(exactly-once delivery); its finally additionally consumes any result another
+actor (stop-all's `fail_task`, a reaper) queued for its task id while it ran. A
+failed terminal spawn in the async lane cancels its task and falls back to inline
+execution instead of returning the async marker for a run that never started
+(that inline fallback runs unregistered, like the lane's normal inline path -
+an accepted residual).
 
 **Automatic Cleanup:** When a new session starts, `cleanup_other_sessions()` is called
 automatically. This moves any active tasks from previous sessions to the results queue

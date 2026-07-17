@@ -40,6 +40,16 @@ def _wf_log(run_id: str, event: str, **kwargs) -> None:
         pass
 
 
+# Heartbeat cadence for the IPC self-registration below. The zombie reaper
+# (SubAgentIPC.check_zombies, fired every ~1s by the headless runner drain)
+# fails ANY active task whose last_heartbeat-or-created_at is older than its
+# timeout (default 90s) - so a registration without a heartbeat gets reaped
+# mid-run for exactly the multi-minute workflows the duplicate guard exists
+# for, silently reopening the guard AND enqueueing a spurious CRASH result.
+# Module-level so tests can shrink it.
+_HEARTBEAT_INTERVAL_S = 5.0
+
+
 class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
     permission_level = "write"
@@ -82,26 +92,39 @@ class ExecuteWorkflowTool(BaseTool):
     def run(self, workflow_id: str, variables: dict = None, **kwargs) -> str:
         _ws_started = False  # True after workflow_start is pushed; used by outer except
         wf_id = None         # set after run ID is assigned
+        _ipc = None          # set once the guard resolves the IPC
+        _ipc_task_id = None  # set once THIS run registers itself; cleaned up in finally
+        _hb_stop = None      # heartbeat thread stop event; set in finally
         try:
             from vaf.workflows.templates import get_template, list_templates
             from vaf.workflows.engine import WorkflowEngine, create_workflow
 
-            # Prefer injected agent's session_id — more reliable than module-global
+            # Resolve the session ONCE, up front: prefer the injected agent's
+            # session_id (survives worker threads), fall back to the module
+            # global. The guard, the WebUI push and the IPC registration below
+            # must all agree on the same session or the guard checks a
+            # different scope than the run it is guarding.
             _agent = kwargs.get("_agent")
             _agent_session_id = getattr(_agent, "current_session_id", None)
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                session_id = _agent_session_id or get_current_session_id()
+            except Exception:
+                session_id = _agent_session_id
 
-            # Re-delegation guard (mirrors the async terminal lane in
-            # agent.py): a snapshot-reset model may call execute_workflow for
-            # the SAME workflow again while the first run is still live.
+            # Re-delegation guard (same predicate as the async terminal lane in
+            # agent.py): a snapshot-reset model - or a second worker-thread chat
+            # turn - may call execute_workflow for the SAME workflow again while
+            # the first run is still live. has_live_task also counts a young
+            # PENDING task, closing the create_task->mark_task_running spawn
+            # race the old active-only check could not see. Without a session
+            # the guard is skipped (never check globally: Rule 4.4).
             try:
                 from vaf.core.subagent_ipc import get_ipc as _get_ipc
-
-                _dup = [
-                    t for t in _get_ipc().get_active_tasks_for_current_session()
-                    if getattr(t, "agent_type", "") == f"workflow:{workflow_id}"
-                ]
+                _ipc = _get_ipc()
+                _dup = _ipc.has_live_task(f"workflow:{workflow_id}", session_id)
             except Exception:
-                _dup = []
+                _dup = False
             if _dup:
                 return (
                     f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
@@ -121,7 +144,7 @@ class ExecuteWorkflowTool(BaseTool):
                 # explain the actual mistake.
                 _agent_ref = kwargs.get("_agent")
                 _tool_names = set(getattr(_agent_ref, "tools", {}) or {})
-                if workflow_id in _tool_names:
+                if workflow_id in _tool_names and workflow_id != self.name:
                     return (
                         f"❌ '{workflow_id}' is the name of a TOOL, not a saved workflow "
                         f"template - execute_workflow's workflow_id only accepts one of the "
@@ -133,6 +156,15 @@ class ExecuteWorkflowTool(BaseTool):
                             f"Call the '{workflow_id}' tool directly instead of execute_workflow.\n\n"
                         )
                         + f"Saved workflow templates (for execute_workflow):\n{workflow_list}"
+                    )
+                if workflow_id == self.name:
+                    # Passing the tool's OWN name would otherwise produce the
+                    # circular advice "call the 'execute_workflow' tool directly
+                    # instead of execute_workflow".
+                    return (
+                        f"❌ '{workflow_id}' is this tool itself, not a workflow template. "
+                        f"Pass one of the saved template ids below as workflow_id.\n\n"
+                        f"Saved workflow templates (for execute_workflow):\n{workflow_list}"
                     )
                 return (
                     f"❌ Workflow '{workflow_id}' not found.\n\n"
@@ -185,12 +217,8 @@ class ExecuteWorkflowTool(BaseTool):
                 return "❌ No tools available for workflow execution."
 
             # ── WebUI wiring ──────────────────────────────────────────────────
-            try:
-                from vaf.core.subagent_ipc import get_current_session_id
-                session_id = _agent_session_id or get_current_session_id()
-            except Exception:
-                session_id = _agent_session_id
-
+            # session_id was resolved once at the top of run() - guard, IPC
+            # registration and WebUI pushes all share it.
             _wf_log(wf_run_id, "SESSION_RESOLVED", session_id=str(session_id))
 
             def _push(payload: dict) -> None:
@@ -215,6 +243,64 @@ class ExecuteWorkflowTool(BaseTool):
                     f"{var_descriptions}\n\n"
                     f"Please provide them using the 'variables' parameter."
                 )
+
+            # ── IPC self-registration ─────────────────────────────────────────
+            # The guard above reads the IPC task registry, so THIS run must be
+            # visible in it - the original guard could catch a workflow started
+            # via the async terminal lane (agent.py registers those), but never
+            # a duplicate of execute_workflow itself: nothing here ever wrote to
+            # the registry, so two concurrent run() calls both sailed past it
+            # (live-verified with a background-thread repro). Registered only
+            # after all validation early-returns (a rejected call is not a run)
+            # and deregistered in the finally below on every exit path. NOTE:
+            # cancel_task, not complete_task - this tool returns its result
+            # synchronously; enqueueing an IPC result too would double-deliver
+            # (Rule 4.3: results are delivered exactly once, by the drain).
+            if _ipc is not None and session_id:
+                try:
+                    _ipc_task_id = _ipc.create_task(
+                        agent_type=f"workflow:{workflow_id}",
+                        task_description=f"execute_workflow: {template.get('name', workflow_id)}",
+                        session_id=session_id,
+                    )
+                    _ipc.mark_task_running(_ipc_task_id)
+                    _wf_log(wf_run_id, "IPC_REGISTERED", task_id=_ipc_task_id)
+                except Exception as _reg_err:
+                    _ipc_task_id = None
+                    _wf_log(wf_run_id, "IPC_REGISTER_FAILED", err=str(_reg_err))
+                # Register-then-verify: the pre-check above is check-then-act
+                # (template/variable/tool resolution sits between it and this
+                # registration), so two truly concurrent calls can both pass
+                # it - verified with a two-thread repro. Every racer now asks
+                # the registry "am I the winner among my type?" AFTER
+                # registering; the deterministic (created_at, task_id) order
+                # lets exactly one proceed. The loser's finally deregisters it.
+                if _ipc_task_id and not _ipc.claim_task_slot(
+                        _ipc_task_id, f"workflow:{workflow_id}", session_id):
+                    _wf_log(wf_run_id, "IPC_CLAIM_LOST", task_id=_ipc_task_id)
+                    return (
+                        f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
+                        "- not starting a duplicate. Tell the user the workflow is "
+                        "still in progress; the result will arrive when it finishes."
+                    )
+                # Keep the registration alive: without a heartbeat the zombie
+                # reaper (check_zombies, ~1s cadence from the runner drain,
+                # default timeout 90s) fails this task mid-run - reopening the
+                # duplicate guard for exactly the long runs it protects and
+                # enqueueing a spurious CRASH result (see _HEARTBEAT_INTERVAL_S).
+                # Same pattern as the terminal lane (vaf/cli/cmd/workflow.py).
+                if _ipc_task_id:
+                    _hb_stop = threading.Event()
+
+                    def _heartbeat_loop(ipc_ref=_ipc, tid=_ipc_task_id, stop=_hb_stop):
+                        while not stop.wait(_HEARTBEAT_INTERVAL_S):
+                            try:
+                                ipc_ref.update_heartbeat(tid)
+                            except Exception:
+                                pass
+
+                    threading.Thread(target=_heartbeat_loop, daemon=True,
+                                     name="wf-exec-heartbeat").start()
 
             ui_steps = [
                 {
@@ -433,3 +519,26 @@ class ExecuteWorkflowTool(BaseTool):
                 _push({"type": "workflow_done", "workflowId": wf_id,
                        "success": False, "error": str(e)})
             return f"❌ Error executing workflow: {str(e)}"
+        finally:
+            if _hb_stop is not None:
+                _hb_stop.set()
+            # Deregister on EVERY exit path (success, failure, watchdog abort,
+            # outer exception) so a finished run can never block the next one.
+            if _ipc is not None and _ipc_task_id:
+                try:
+                    _ipc.cancel_task(_ipc_task_id)
+                    _wf_log(wf_id or "??", "IPC_DEREGISTERED", task_id=_ipc_task_id)
+                except Exception:
+                    pass
+                # A stop-all press (or a stale-task reaper) may have fail_task'd
+                # the registration into the RESULTS queue while the run was
+                # live. This lane returns its result synchronously as the tool
+                # result - any queued result for its task id is spurious by
+                # definition and would surface as a phantom sub-agent delivery
+                # via the drain (Rule 4.3: exactly-once). Consume it.
+                try:
+                    if _ipc.consume_result(_ipc_task_id) is not None:
+                        _wf_log(wf_id or "??", "IPC_SPURIOUS_RESULT_CONSUMED",
+                                task_id=_ipc_task_id)
+                except Exception:
+                    pass

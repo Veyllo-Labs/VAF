@@ -5601,14 +5601,18 @@ class Agent:
                         # after an empty-response snapshot reset the model forgets
                         # it already delegated and starts the SAME workflow again
                         # (live incident: duplicate research run, double GPU load).
-                        # Session-scoped IPC is the truth (Rule 4.4).
+                        # Session-scoped IPC is the truth (Rule 4.4). has_live_task
+                        # (the shared predicate, also used by execute_workflow's
+                        # guard) counts young PENDING tasks too: between the
+                        # create_task below and the spawned terminal's own
+                        # mark_task_running lie terminal spawn + Python import -
+                        # an active-only check was blind for that whole window.
                         try:
-                            _dup = [
-                                t for t in ipc.get_active_tasks_for_current_session()
-                                if getattr(t, "agent_type", "") == f"workflow:{workflow_id}"
-                            ]
+                            _dup = ipc.has_live_task(
+                                f"workflow:{workflow_id}", get_current_session_id()
+                            )
                         except Exception:
-                            _dup = []
+                            _dup = False
                         if _dup:
                             _debug_log(f"BLOCKED duplicate workflow launch: {workflow_id}")
                             return (
@@ -5622,6 +5626,28 @@ class Agent:
                             session_id=get_current_session_id()
                         )
                         _debug_log(f"STEP 2: IPC task created: {task_id}")
+                        # Register-then-verify (same as execute_workflow's lane):
+                        # the guard above is check-then-act; a concurrent launch
+                        # in the check-to-register window slips past it. After
+                        # registering, exactly one racer wins the deterministic
+                        # (created_at, task_id) order; losers withdraw.
+                        try:
+                            _claimed = ipc.claim_task_slot(
+                                task_id, f"workflow:{workflow_id}", get_current_session_id()
+                            )
+                        except Exception:
+                            _claimed = True
+                        if not _claimed:
+                            _debug_log(f"CLAIM LOST - duplicate workflow launch: {workflow_id}")
+                            try:
+                                ipc.cancel_task(task_id)
+                            except Exception:
+                                pass
+                            return (
+                                f"Workflow '{workflow_id}' is ALREADY RUNNING for this chat "
+                                "- not starting a duplicate. Tell the user the workflow is "
+                                "still in progress; the result will arrive when it finishes."
+                            )
 
                         # Build command to run workflow in separate terminal
                         import json as json_module
@@ -5665,13 +5691,39 @@ class Agent:
                         _debug_log(f"STEP 7: open_new_terminal returned: {result_ok}")
                     except Exception as e:
                         _debug_log(f"ERROR: {type(e).__name__}: {e}")
+                        # The task was registered but no runner will ever pick it
+                        # up - remove it, or it reads as a live run (blocking the
+                        # duplicate guard) until the stale-task reaper fires.
+                        try:
+                            ipc.cancel_task(task_id)
+                        except Exception:
+                            pass
                         raise
-                    
-                    UI.event("Workflow", msg_running_separate.format(task_id=task_id[:8]), style="cyan")
-                    UI.info(msg_runs_independently)
-                    
-                    # Return async marker
-                    return msg_async_return.format(task_id=task_id, workflow_id=workflow_id, name=template['name'])
+
+                    if result_ok:
+                        UI.event("Workflow", msg_running_separate.format(task_id=task_id[:8]), style="cyan")
+                        UI.info(msg_runs_independently)
+
+                        # Return async marker
+                        return msg_async_return.format(task_id=task_id, workflow_id=workflow_id, name=template['name'])
+
+                    # Spawn reported failure (no terminal opened): the old code
+                    # returned the async marker anyway - the user was told a
+                    # workflow was running that never existed. Deregister and
+                    # fall through to the inline execution below instead (the
+                    # same fallback the sub-agent spawns use, see cancel_task).
+                    # Known residual (accepted): the inline run below executes
+                    # UNREGISTERED - like this lane's normal inline path always
+                    # has - so for its duration the duplicate guard and the
+                    # workspace-delete rail cannot see it. Registering inline
+                    # runs here would need the same heartbeat+deregistration
+                    # lifecycle execute_workflow now has; do that if inline
+                    # duplicates ever show up in practice.
+                    _debug_log("STEP 7b: spawn failed - falling back to inline execution")
+                    try:
+                        ipc.cancel_task(task_id)
+                    except Exception:
+                        pass
             
             # Execute workflow inline (without defaults parameter).
             # Pass check_stop so user can abort via Stop button (checked between each step).

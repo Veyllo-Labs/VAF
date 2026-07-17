@@ -18,6 +18,7 @@ import json
 import os
 import uuid
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # fcntl is Unix-only, use msvcrt on Windows for file locking
@@ -206,16 +207,88 @@ class SubAgentIPC:
         # Queue files stored in VAF data directory
         self.queue_dir = Platform.vaf_dir() / "subagent_queue"
         self.queue_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Separate files for pending tasks and completed results
         self.pending_file = self.queue_dir / "pending_tasks.json"
         self.results_file = self.queue_dir / "completed_results.json"
         self.active_file = self.queue_dir / "active_tasks.json"
         self.paused_workflows_file = self.queue_dir / "paused_workflows.json"
         self.task_payloads_dir = self.queue_dir / "task_payloads"
-        
+
+        # Serializes read-modify-write mutations (see _mutation_guard).
+        self._mutation_tlock = threading.RLock()
+        self._mutation_lock_file = self.queue_dir / ".mutation.lock"
+
         # Initialize files if they don't exist
         self._init_queue_files()
+
+    @contextmanager
+    def _mutation_guard(self, timeout_s: float = 5.0):
+        """Serialize read-modify-write mutations of the queue files.
+
+        _read_json/_write_json lock only their own single call (and the
+        atomic-rename write path bypasses even that), so any
+        read -> modify -> write sequence could interleave with another
+        mutator's and silently drop its update. This was not theoretical:
+        two concurrent mark_task_running calls erased each other's
+        active-task entry, which let two execute_workflow racers both past
+        the duplicate guard (caught by the guard's concurrency test under
+        full-suite load).
+
+        In-process: one RLock (reentrant, so mutators may nest - e.g.
+        mark_task_running calls _update_task_status). Across processes: a
+        bounded blocking lock on a dedicated lockfile, held only by the
+        OUTERMOST guard level - flock is NOT reentrant across a second file
+        descriptor within the same process, so a nested acquisition would
+        spin against itself for the whole timeout (caught live: every
+        mark_task_running stalled 5s). On timeout or platform error we
+        proceed WITHOUT the cross-process half (best-effort, same spirit as
+        the per-file locks) rather than wedging a chat turn on a stuck lock.
+        """
+        with self._mutation_tlock:
+            # Depth only changes under the RLock, so plain int is safe.
+            self._mutation_depth = getattr(self, "_mutation_depth", 0) + 1
+            outermost = self._mutation_depth == 1
+            fh = None
+            locked = False
+            try:
+                if outermost:
+                    try:
+                        fh = open(self._mutation_lock_file, "a+")
+                        deadline = time.time() + timeout_s
+                        while True:
+                            try:
+                                if HAS_FCNTL:
+                                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                    locked = True
+                                elif HAS_MSVCRT:
+                                    import msvcrt
+                                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                                    locked = True
+                                break
+                            except (IOError, OSError):
+                                if time.time() >= deadline:
+                                    break
+                                time.sleep(0.02)
+                    except Exception:
+                        fh = None
+                yield
+            finally:
+                self._mutation_depth -= 1
+                if fh is not None:
+                    if locked:
+                        try:
+                            if HAS_FCNTL:
+                                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                            elif HAS_MSVCRT:
+                                import msvcrt
+                                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                        except Exception:
+                            pass
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
     
     def _init_queue_files(self):
         """Initialize queue files with empty arrays if they don't exist."""
@@ -340,11 +413,12 @@ class SubAgentIPC:
             created_at=datetime.now().isoformat(),
             session_id=effective_session_id
         )
-        
+
         # Add to pending tasks
-        pending = self._read_json(self.pending_file)
-        pending.append(task.to_dict())
-        self._write_json(self.pending_file, pending)
+        with self._mutation_guard():
+            pending = self._read_json(self.pending_file)
+            pending.append(task.to_dict())
+            self._write_json(self.pending_file, pending)
 
         # Store full task payload for sub-agents that need it (e.g. document_agent with long tasks)
         # Enables retrieval via get_task_payload() when command-line would exceed OS limits
@@ -375,21 +449,22 @@ class SubAgentIPC:
     
     def mark_task_running(self, task_id: str):
         """Mark a task as running (sub-agent started)."""
-        self._update_task_status(task_id, SubAgentStatus.RUNNING.value)
-        
-        # Move from pending to active
-        pending = self._read_json(self.pending_file)
-        active = self._read_json(self.active_file)
-        
-        for i, task in enumerate(pending):
-            if task.get('task_id') == task_id:
-                task['status'] = SubAgentStatus.RUNNING.value
-                active.append(task)
-                pending.pop(i)
-                break
-        
-        self._write_json(self.pending_file, pending)
-        self._write_json(self.active_file, active)
+        with self._mutation_guard():
+            self._update_task_status(task_id, SubAgentStatus.RUNNING.value)
+
+            # Move from pending to active
+            pending = self._read_json(self.pending_file)
+            active = self._read_json(self.active_file)
+
+            for i, task in enumerate(pending):
+                if task.get('task_id') == task_id:
+                    task['status'] = SubAgentStatus.RUNNING.value
+                    active.append(task)
+                    pending.pop(i)
+                    break
+
+            self._write_json(self.pending_file, pending)
+            self._write_json(self.active_file, active)
     
     def cancel_task(self, task_id: str) -> bool:
         """
@@ -399,18 +474,19 @@ class SubAgentIPC:
         so we don't later report a false startup timeout.
         """
         removed = False
-        pending = self._read_json(self.pending_file)
-        pending_after = [task for task in pending if task.get('task_id') != task_id]
-        if len(pending_after) != len(pending):
-            removed = True
-            self._write_json(self.pending_file, pending_after)
-        
-        active = self._read_json(self.active_file)
-        active_after = [task for task in active if task.get('task_id') != task_id]
-        if len(active_after) != len(active):
-            removed = True
-            self._write_json(self.active_file, active_after)
-        
+        with self._mutation_guard():
+            pending = self._read_json(self.pending_file)
+            pending_after = [task for task in pending if task.get('task_id') != task_id]
+            if len(pending_after) != len(pending):
+                removed = True
+                self._write_json(self.pending_file, pending_after)
+
+            active = self._read_json(self.active_file)
+            active_after = [task for task in active if task.get('task_id') != task_id]
+            if len(active_after) != len(active):
+                removed = True
+                self._write_json(self.active_file, active_after)
+
         return removed
 
     def get_pending_results(self, session_id: str = None) -> List[SubAgentTask]:
@@ -442,14 +518,15 @@ class SubAgentIPC:
         Returns:
             The SubAgentTask if found, None otherwise
         """
-        results = self._read_json(self.results_file)
-        
-        for i, result in enumerate(results):
-            if result.get('task_id') == task_id:
-                task = SubAgentTask.from_dict(results.pop(i))
-                self._write_json(self.results_file, results)
-                return task
-        
+        with self._mutation_guard():
+            results = self._read_json(self.results_file)
+
+            for i, result in enumerate(results):
+                if result.get('task_id') == task_id:
+                    task = SubAgentTask.from_dict(results.pop(i))
+                    self._write_json(self.results_file, results)
+                    return task
+
         return None
     
     def get_active_tasks(self, session_id: str = None) -> List[SubAgentTask]:
@@ -474,6 +551,132 @@ class SubAgentIPC:
         if not current:
             return []
         return self.get_active_tasks(session_id=current)
+
+    def get_pending_tasks(self, session_id: str = None) -> List[SubAgentTask]:
+        """
+        Get created-but-not-yet-running tasks (create_task done, spawn still in
+        flight: mark_task_running only fires once the child process is up).
+
+        Args:
+            session_id: If provided, only return tasks for this session.
+                       If None, returns all pending tasks.
+        """
+        pending = self._read_json(self.pending_file)
+        tasks = [SubAgentTask.from_dict(t) for t in pending]
+
+        if session_id:
+            tasks = [t for t in tasks if t.session_id == session_id]
+
+        return tasks
+
+    def has_live_task(self, agent_type: str, session_id: str,
+                      pending_grace_s: int = 120) -> bool:
+        """
+        Duplicate-delegation check: is a task of this agent_type either RUNNING
+        for the session, or CREATED within the last pending_grace_s seconds and
+        not yet running (spawn in flight)?
+
+        THE shared guard predicate for every duplicate-launch check (agent.py
+        async workflow lane, workflow_executor.py) - a guard that looks only at
+        active_tasks.json has a real race window: between create_task (pending)
+        and mark_task_running (active, only after the OS spawned the terminal
+        and Python finished importing) a second identical launch sees nothing.
+        Pending entries count as live only while YOUNG: a stale pending task
+        (crashed spawn - only active tasks get reaped by
+        cleanup_stale_active_tasks) must never wedge future launches.
+
+        Returns False when session_id is falsy: without a session the check
+        would have to run globally and could block on ANOTHER user's run
+        (Rule 4.4 - never key session behavior on cross-session state).
+        """
+        if not session_id or not agent_type:
+            return False
+        try:
+            if any(getattr(t, "agent_type", "") == agent_type
+                   for t in self.get_active_tasks(session_id=session_id)):
+                return True
+            now = datetime.now().timestamp()
+            for t in self.get_pending_tasks(session_id=session_id):
+                if getattr(t, "agent_type", "") != agent_type:
+                    continue
+                try:
+                    age = now - datetime.fromisoformat(t.created_at).timestamp()
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= age <= pending_grace_s:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def claim_task_slot(self, task_id: str, agent_type: str, session_id: str,
+                        pending_grace_s: int = 120) -> bool:
+        """
+        Post-registration winner check, the second half of the duplicate-launch
+        guard. has_live_task alone is check-then-act: two genuinely concurrent
+        launches can both see "nothing live" and both register (verified with a
+        two-thread repro). So after registering, a launcher calls this to ask
+        "am I the winner among ALL live tasks of my type for this session?" -
+        winner = the entry with the smallest (created_at, task_id), a total
+        order every racer computes identically from the shared registry, so
+        exactly one proceeds and every loser deregisters itself and reports a
+        duplicate. Rivals in PENDING count only while young (same grace rule
+        and reason as has_live_task); the caller's own entry always counts.
+
+        Returns True when task_id may proceed. A missing OWN entry returns
+        False (withdraw): so soon after registering, the realistic cause is a
+        concurrent racer's read-modify-write clobbering our registry entry
+        (lost update) - and "could not secure a slot" must never mean "run
+        anyway". Only an EXCEPTION while reading the registry fails open: a
+        broken duplicate check degrades to the pre-guard behavior rather than
+        blocking legitimate runs.
+
+        Known micro-residual (accepted): the order is decided by created_at
+        (stamped just before the lock-serialized registry write), so a racer
+        whose timestamp is OLDER but whose write lands AFTER the other racer's
+        claim-read could in theory let both proceed. That needs sub-millisecond
+        preemption between stamping and writing, on top of losing the
+        pre-registration has_live_task check; closing it fully would need a
+        cross-lane claim mutex (Windows-safe) around register+verify, which is
+        not worth the machinery for a duplicate-run nicety.
+        """
+        if not task_id or not session_id or not agent_type:
+            return True
+        try:
+            now = datetime.now().timestamp()
+            live = []
+            for t in self.get_active_tasks(session_id=session_id):
+                if getattr(t, "agent_type", "") == agent_type:
+                    live.append(t)
+            for t in self.get_pending_tasks(session_id=session_id):
+                if getattr(t, "agent_type", "") != agent_type:
+                    continue
+                if getattr(t, "task_id", "") == task_id:
+                    live.append(t)  # own entry counts regardless of age
+                    continue
+                try:
+                    age = now - datetime.fromisoformat(t.created_at).timestamp()
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= age <= pending_grace_s:
+                    live.append(t)
+            if not any(getattr(t, "task_id", "") == task_id for t in live):
+                # Own registration not visible. The realistic cause this soon
+                # after registering is a LOST UPDATE: create_task /
+                # mark_task_running are read-modify-write on shared JSON files,
+                # so a concurrent racer's write can clobber ours. Treating this
+                # as fail-open let BOTH racers proceed (caught by the
+                # concurrency test under full-suite load); "I could not secure
+                # a slot" must mean withdrawing. The racer whose entry survived
+                # wins; in the pathological case where every entry was lost,
+                # nobody runs and the next attempt starts clean - safe, unlike
+                # a duplicate GPU run.
+                return False
+            winner = min(live, key=lambda t: (getattr(t, "created_at", "") or "",
+                                              getattr(t, "task_id", "") or ""))
+            return getattr(winner, "task_id", "") == task_id
+        except Exception:
+            return True
     
     def has_pending_results(self) -> bool:
         """Check if there are any pending sub-agent results."""
@@ -503,53 +706,54 @@ class SubAgentIPC:
         to ensure the result is never lost.
         """
         completed_at = datetime.now().isoformat()
-        
-        # Retry reading to handle race conditions
-        for attempt in range(3):
-            try:
-                active = self._read_json(self.active_file)
-                results = self._read_json(self.results_file)
-                break
-            except:
-                time.sleep(0.1 * (attempt + 1))
-                active = []
-                results = []
-        
-        task_data = None
-        for i, task in enumerate(active):
-            if task.get('task_id') == task_id:
-                task_data = active.pop(i)
-                break
-        
-        # If not in active, check pending (might have started very quickly)
-        if not task_data:
-            pending = self._read_json(self.pending_file)
-            for i, task in enumerate(pending):
-                if task.get('task_id') == task_id:
-                    task_data = pending.pop(i)
-                    self._write_json(self.pending_file, pending)
+
+        with self._mutation_guard():
+            # Retry reading to handle race conditions
+            for attempt in range(3):
+                try:
+                    active = self._read_json(self.active_file)
+                    results = self._read_json(self.results_file)
                     break
-        
-        # If still not found, create synthetic task data to ensure result isn't lost
-        if not task_data:
-            task_data = {
-                'task_id': task_id,
-                'agent_type': 'unknown',
-                'task_description': 'Task completed but metadata not found',
-                'status': SubAgentStatus.PENDING.value,
-                'created_at': completed_at,
-                'session_id': get_current_session_id()
-            }
-        
-        # Mark as completed
-        task_data['status'] = SubAgentStatus.COMPLETED.value
-        task_data['completed_at'] = completed_at
-        task_data['result'] = result
-        results.append(task_data)
-        
-        # Write with retry
-        self._write_json(self.active_file, active)
-        self._write_json(self.results_file, results)
+                except:
+                    time.sleep(0.1 * (attempt + 1))
+                    active = []
+                    results = []
+
+            task_data = None
+            for i, task in enumerate(active):
+                if task.get('task_id') == task_id:
+                    task_data = active.pop(i)
+                    break
+
+            # If not in active, check pending (might have started very quickly)
+            if not task_data:
+                pending = self._read_json(self.pending_file)
+                for i, task in enumerate(pending):
+                    if task.get('task_id') == task_id:
+                        task_data = pending.pop(i)
+                        self._write_json(self.pending_file, pending)
+                        break
+
+            # If still not found, create synthetic task data to ensure result isn't lost
+            if not task_data:
+                task_data = {
+                    'task_id': task_id,
+                    'agent_type': 'unknown',
+                    'task_description': 'Task completed but metadata not found',
+                    'status': SubAgentStatus.PENDING.value,
+                    'created_at': completed_at,
+                    'session_id': get_current_session_id()
+                }
+
+            # Mark as completed
+            task_data['status'] = SubAgentStatus.COMPLETED.value
+            task_data['completed_at'] = completed_at
+            task_data['result'] = result
+            results.append(task_data)
+
+            # Write with retry
+            self._write_json(self.active_file, active)
+            self._write_json(self.results_file, results)
 
         # <ipc-notification>: wake the consumer NOW instead of waiting for its poll.
         _push_result_ready(task_id, task_data.get('session_id'))
@@ -561,39 +765,40 @@ class SubAgentIPC:
         """
         completed_at = datetime.now().isoformat()
         
-        # Find and move task
-        active = self._read_json(self.active_file)
-        results = self._read_json(self.results_file)
-        
-        task_data = None
-        for i, task in enumerate(active):
-            if task.get('task_id') == task_id:
-                task_data = active.pop(i)
-                break
-        
-        if task_data:
-            task_data['status'] = SubAgentStatus.FAILED.value
-            task_data['completed_at'] = completed_at
-            task_data['error'] = error
-            results.append(task_data)
-            
-            self._write_json(self.active_file, active)
-            self._write_json(self.results_file, results)
-        else:
-             # Also check pending if it failed fast
-            pending = self._read_json(self.pending_file)
-            for i, task in enumerate(pending):
+        with self._mutation_guard():
+            # Find and move task
+            active = self._read_json(self.active_file)
+            results = self._read_json(self.results_file)
+
+            task_data = None
+            for i, task in enumerate(active):
                 if task.get('task_id') == task_id:
-                    task_data = pending.pop(i)
-                    self._write_json(self.pending_file, pending)
+                    task_data = active.pop(i)
                     break
-            
+
             if task_data:
                 task_data['status'] = SubAgentStatus.FAILED.value
                 task_data['completed_at'] = completed_at
                 task_data['error'] = error
                 results.append(task_data)
+
+                self._write_json(self.active_file, active)
                 self._write_json(self.results_file, results)
+            else:
+                # Also check pending if it failed fast
+                pending = self._read_json(self.pending_file)
+                for i, task in enumerate(pending):
+                    if task.get('task_id') == task_id:
+                        task_data = pending.pop(i)
+                        self._write_json(self.pending_file, pending)
+                        break
+
+                if task_data:
+                    task_data['status'] = SubAgentStatus.FAILED.value
+                    task_data['completed_at'] = completed_at
+                    task_data['error'] = error
+                    results.append(task_data)
+                    self._write_json(self.results_file, results)
 
         # <ipc-notification>: wake the consumer NOW (only if a result was recorded).
         if task_data:
@@ -601,15 +806,16 @@ class SubAgentIPC:
 
     def update_heartbeat(self, task_id: str):
         """Update the last_heartbeat timestamp for a running task."""
-        active = self._read_json(self.active_file)
-        updated = False
-        for task in active:
-            if task.get('task_id') == task_id:
-                task['last_heartbeat'] = datetime.now().isoformat()
-                updated = True
-                break
-        if updated:
-            self._write_json(self.active_file, active)
+        with self._mutation_guard():
+            active = self._read_json(self.active_file)
+            updated = False
+            for task in active:
+                if task.get('task_id') == task_id:
+                    task['last_heartbeat'] = datetime.now().isoformat()
+                    updated = True
+                    break
+            if updated:
+                self._write_json(self.active_file, active)
 
     def check_zombies(self, timeout_seconds: int = 20):
         """
@@ -619,6 +825,11 @@ class SubAgentIPC:
         Args:
             timeout_seconds: Time without heartbeat before declaring dead.
         """
+        with self._mutation_guard():
+            self._check_zombies_locked(timeout_seconds)
+
+    def _check_zombies_locked(self, timeout_seconds: int):
+        """Body of check_zombies; caller holds the mutation guard."""
         active = self._read_json(self.active_file)
         results = self._read_json(self.results_file)
         pending = self._read_json(self.pending_file)
@@ -682,33 +893,35 @@ class SubAgentIPC:
     
     def _update_task_status(self, task_id: str, status: str):
         """Update task status in whatever queue it's in."""
-        for file in [self.pending_file, self.active_file]:
-            tasks = self._read_json(file)
-            for task in tasks:
-                if task.get('task_id') == task_id:
-                    task['status'] = status
-                    self._write_json(file, tasks)
-                    return
+        with self._mutation_guard():
+            for file in [self.pending_file, self.active_file]:
+                tasks = self._read_json(file)
+                for task in tasks:
+                    if task.get('task_id') == task_id:
+                        task['status'] = status
+                        self._write_json(file, tasks)
+                        return
     
     def cleanup_old_tasks(self, max_age_hours: int = 24):
         """Remove old completed/failed tasks from the results queue."""
-        results = self._read_json(self.results_file)
-        cutoff = datetime.now().timestamp() - (max_age_hours * 3600)
-        
-        filtered = []
-        for result in results:
-            completed_at = result.get('completed_at')
-            if completed_at:
-                try:
-                    task_time = datetime.fromisoformat(completed_at).timestamp()
-                    if task_time > cutoff:
-                        filtered.append(result)
-                except (ValueError, TypeError):
-                    filtered.append(result)  # Keep if can't parse
-            else:
-                filtered.append(result)
-        
-        self._write_json(self.results_file, filtered)
+        with self._mutation_guard():
+            results = self._read_json(self.results_file)
+            cutoff = datetime.now().timestamp() - (max_age_hours * 3600)
+
+            filtered = []
+            for result in results:
+                completed_at = result.get('completed_at')
+                if completed_at:
+                    try:
+                        task_time = datetime.fromisoformat(completed_at).timestamp()
+                        if task_time > cutoff:
+                            filtered.append(result)
+                    except (ValueError, TypeError):
+                        filtered.append(result)  # Keep if can't parse
+                else:
+                    filtered.append(result)
+
+            self._write_json(self.results_file, filtered)
     
     def cleanup_stale_active_tasks(self, max_age_minutes: int = None):
         """
@@ -729,31 +942,32 @@ class SubAgentIPC:
         if max_age_minutes is None:
             max_age_minutes = Config.get("subagent_timeout_minutes", 120)
         
-        active = self._read_json(self.active_file)
-        results = self._read_json(self.results_file)
-        cutoff = datetime.now().timestamp() - (max_age_minutes * 60)
-        
-        still_active = []
-        for task in active:
-            created_at = task.get('created_at')
-            if created_at:
-                try:
-                    task_time = datetime.fromisoformat(created_at).timestamp()
-                    if task_time > cutoff:
+        with self._mutation_guard():
+            active = self._read_json(self.active_file)
+            results = self._read_json(self.results_file)
+            cutoff = datetime.now().timestamp() - (max_age_minutes * 60)
+
+            still_active = []
+            for task in active:
+                created_at = task.get('created_at')
+                if created_at:
+                    try:
+                        task_time = datetime.fromisoformat(created_at).timestamp()
+                        if task_time > cutoff:
+                            still_active.append(task)
+                        else:
+                            # Mark as timed out and move to results
+                            task['status'] = SubAgentStatus.TIMEOUT.value
+                            task['completed_at'] = datetime.now().isoformat()
+                            task['error'] = f"Sub-agent task timed out after {max_age_minutes} minutes"
+                            results.append(task)
+                    except (ValueError, TypeError):
                         still_active.append(task)
-                    else:
-                        # Mark as timed out and move to results
-                        task['status'] = SubAgentStatus.TIMEOUT.value
-                        task['completed_at'] = datetime.now().isoformat()
-                        task['error'] = f"Sub-agent task timed out after {max_age_minutes} minutes"
-                        results.append(task)
-                except (ValueError, TypeError):
+                else:
                     still_active.append(task)
-            else:
-                still_active.append(task)
-        
-        self._write_json(self.active_file, still_active)
-        self._write_json(self.results_file, results)
+
+            self._write_json(self.active_file, still_active)
+            self._write_json(self.results_file, results)
     
     def clear_all(self):
         """Clear all queues (for testing/debugging)."""
@@ -771,9 +985,10 @@ class SubAgentIPC:
         Save a paused workflow state.
         Called when a workflow encounters an async sub-agent and needs to yield control.
         """
-        paused = self._read_json(self.paused_workflows_file)
-        paused.append(workflow.to_dict())
-        self._write_json(self.paused_workflows_file, paused)
+        with self._mutation_guard():
+            paused = self._read_json(self.paused_workflows_file)
+            paused.append(workflow.to_dict())
+            self._write_json(self.paused_workflows_file, paused)
     
     def get_paused_workflow_for_task(self, task_id: str) -> Optional[PausedWorkflow]:
         """
@@ -793,9 +1008,10 @@ class SubAgentIPC:
     
     def remove_paused_workflow(self, workflow_id: str):
         """Remove a paused workflow (after it's resumed or cancelled)."""
-        paused = self._read_json(self.paused_workflows_file)
-        paused = [wf for wf in paused if wf.get('workflow_id') != workflow_id]
-        self._write_json(self.paused_workflows_file, paused)
+        with self._mutation_guard():
+            paused = self._read_json(self.paused_workflows_file)
+            paused = [wf for wf in paused if wf.get('workflow_id') != workflow_id]
+            self._write_json(self.paused_workflows_file, paused)
     
     def has_paused_workflows(self) -> bool:
         """Check if there are any paused workflows."""
@@ -868,10 +1084,16 @@ def cleanup_other_sessions():
     """
     ipc = get_ipc()
     current_session = get_current_session_id()
-    
+
     if not current_session:
         return
-    
+
+    with ipc._mutation_guard():
+        _cleanup_other_sessions_locked(ipc, current_session)
+
+
+def _cleanup_other_sessions_locked(ipc: SubAgentIPC, current_session: str):
+    """Body of cleanup_other_sessions; caller holds the mutation guard."""
     # Read active tasks and results
     active = ipc._read_json(ipc.active_file)
     results = ipc._read_json(ipc.results_file)

@@ -212,25 +212,42 @@ def _parse_qwen_tool_calls(text: str, valid_names=None):
 
         <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
 
-    The closing `</function></tool_call>` is matched but NOT required, PROVIDED the text still
-    contains some (possibly wrong) two-level closing-tag attempt (live incident: a local model
-    trailed off into hallucinated unrelated tags - `</tasks></working_memory>` - instead of closing
-    its own call; the properly-closed `<parameter>` pairs inside were recoverable, but the strict
-    version of this parser returned nothing and the tool call was silently dropped, same failure mode
-    as the docstring above, just one level deeper). The body of a call is bounded by whichever comes
-    first: a real `</function></tool_call>` close, the start of the next `<tool_call>`, or ANY two
-    closing tags in a row (`</whatever> </whatever>`, whitespace between allowed) that are not
-    themselves `</parameter>` - i.e.
-    the model attempted to close SOMETHING, just used the wrong names.
+    Parameters are parsed as a SEQUENCE, one at a time, right after `<function=NAME>`: each
+    `<parameter=KEY>VALUE</parameter>` is consumed in order (VALUE bounded only by its own literal
+    `</parameter>`, however long or tag-like its content is), then whatever immediately follows
+    (whitespace only, no other characters) decides how the call ends:
 
-    Deliberately NOT a bare "match to end of text" fallback: an earlier version fell back that far,
-    and adversarial review found it could turn an incidental, unclosed EXPLANATION of the tool-call
-    format ("tool calls look like <tool_call><function=web_search><parameter=query>example</parameter>
-    when using this format") into a genuinely dispatched call, with no closing attempt of any kind
-    ever appearing before the rest of the response - a real execution risk, not just a parsing
-    curiosity. Requiring a closing-tag-SHAPED sequence (right structure, any names) keeps the real
-    incident recoverable while a plain trailing sentence with no such shape matches nothing, exactly
-    like the strict parser before it.
+    - `</function></tool_call>` - a real close: done, well-formed. Accepted anywhere in the text
+      (a strictly-closed call is unambiguous).
+    - LENIENT recovery, only when the `<tool_call>` open sits at the start of a line (nothing but
+      whitespace before it on its line - how models genuinely emit calls, and what an inline
+      explanatory mention wrapped in prose or markup does NOT look like), either of:
+        * TWO or more OTHER closing tags in a row (`</a></b>...`) - the model attempted to close
+          SOMETHING, just used the wrong names (live incident: a local model trailed off into
+          hallucinated `</tasks></working_memory>` instead of its own close). ONE closing tag alone
+          is NOT enough: a single wrong-named tag is exactly what an example wrapped in inline markup
+          produces (`...</parameter></code>`), and dispatching that is a real execution risk.
+        * the next `<tool_call>` beginning immediately - back-to-back text calls where the model
+          forgot the first call's close entirely (the original incident shape: the call silently
+          vanishes otherwise).
+      Recovered with whatever parameters were already parsed, including zero.
+    - anything else (prose, another `<parameter=` that itself never closes, or nothing before the
+      text simply ends) - REJECTED, call is not recovered.
+
+    Those rules are deliberate and load-bearing, not an afterthought: THREE earlier versions of this
+    function failed adversarial review. One matched an unclosed call to end-of-text, one accepted a
+    closing-tag-shaped substring ANYWHERE later in the text - both let an incidental, never-truly-closed
+    EXPLANATION of the tool-call format ("tool calls look like
+    <tool_call><function=web_search><parameter=query>example</parameter> when using this format")
+    turn into a genuinely dispatched call - and one accepted a SINGLE wrong-named closing tag sitting
+    immediately after the last parameter, which an example wrapped in `<code>`/`<pre>`/list markup
+    satisfies by construction. Requiring (a) the open at a line start, (b) the closing attempt
+    IMMEDIATELY (whitespace only) after the last parsed parameter, and (c) at least two consecutive
+    closing tags (or the next `<tool_call>`) is what tells "the model tried to close its own call and
+    botched it" apart from "the model was talking about the call syntax". Parameters are parsed one at
+    a time bounded by their OWN `</parameter>`, so a value that itself contains closing-tag-shaped
+    text (e.g. a `plan` describing removing stray HTML tags) can never truncate the call early and
+    silently drop it (a second bug the same reviews found).
 
     Returns a list of (name, args_dict). Each parameter VALUE is JSON-decoded when possible (so a list /
     dict / number survives) and otherwise kept as the trimmed string. Tolerant of newlines/whitespace.
@@ -239,23 +256,64 @@ def _parse_qwen_tool_calls(text: str, valid_names=None):
     version was, just more forgiving about how the call ends."""
     import re as _re
     import json as _json
+
     out = []
-    pattern = (
-        r'<tool_call>\s*<function=([\w.\-]+)\s*>(.*?)'
-        r'(?:</function>\s*</tool_call>|(?!</parameter>)</\w+>\s*</\w+>|(?=<tool_call>))'
-    )
-    for m in _re.finditer(pattern, text or "", _re.DOTALL):
+    text = text or ""
+    pos = 0
+    open_re = _re.compile(r'<tool_call>\s*<function=([\w.\-]+)\s*>')
+    param_re = _re.compile(r'\s*<parameter=([\w.\-]+)\s*>(.*?)</parameter>', _re.DOTALL)
+    close_re = _re.compile(r'\s*</function>\s*</tool_call>')
+    trailer_re = _re.compile(r'(?:\s*</[\w.\-]+>){2,}')
+    next_call_re = _re.compile(r'\s*<tool_call>')
+
+    def _at_line_start(p: int) -> bool:
+        nl = text.rfind("\n", 0, p)
+        return text[nl + 1:p].strip() == ""
+
+    while True:
+        m = open_re.search(text, pos)
+        if not m:
+            break
         name = (m.group(1) or "").strip()
-        if not name or (valid_names is not None and name not in valid_names):
-            continue
+        cursor = m.end()
+
         args = {}
-        for pm in _re.finditer(r'<parameter=([\w.\-]+)\s*>(.*?)</parameter>', m.group(2) or "", _re.DOTALL):
+        while True:
+            pm = param_re.match(text, cursor)
+            if not pm:
+                break
             key = (pm.group(1) or "").strip()
             raw = (pm.group(2) or "").strip()
             try:
                 args[key] = _json.loads(raw)
             except Exception:
                 args[key] = raw
+            cursor = pm.end()
+
+        cm = close_re.match(text, cursor)
+        if cm:
+            cursor = cm.end()
+            recovered = True
+        elif _at_line_start(m.start()):
+            tm = trailer_re.match(text, cursor)
+            if tm:
+                cursor = tm.end()
+                recovered = True
+            else:
+                # Back-to-back calls: the model forgot this call's close and
+                # opened the next one right away. Do NOT advance the cursor -
+                # the next loop iteration must parse that following call.
+                recovered = bool(next_call_re.match(text, cursor))
+        else:
+            recovered = False
+
+        # Always advance past this call's opening tag, even when rejected, so a
+        # malformed occurrence can never stall the search or be re-examined.
+        pos = cursor if cursor > m.end() else m.end()
+        if not recovered:
+            continue
+        if not name or (valid_names is not None and name not in valid_names):
+            continue
         out.append((name, args))
     return out
 

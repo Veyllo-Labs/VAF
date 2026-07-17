@@ -96,13 +96,16 @@ _READ_TOOLS_THINKING = frozenset({
 
 # Decision nudge for the PROACTIVE grounding step (there is NO open note/todo there, so the housekeeping
 # "resolve the open item / delete_automation_note" block message misleads the weak model into searching
-# again instead of committing). Returned when it over-searches or reaches for a blocked tool.
+# again instead of committing). Returned when it over-searches or reaches for a blocked tool. The
+# "[BLOCKED]" lead is not decorative: it is what makes tool_result_is_error() (vaf/core/context.py)
+# recognize this soft-block as a failed call instead of a green "OK" - a bare, unmarked sentence here
+# was a Tier-10 gap that same detector's own sweep found and left unfixed.
 _PROACTIVE_DECIDE_NUDGE = (
-    "You have searched enough this run — do NOT call {fn} again. Decide NOW from the real memories you "
-    "retrieved: EITHER ask_user(message=\"<one specific suggestion, ideally an automation that takes "
-    "recurring work off the user>\", proposed_action=\"create automation: <what + when>\", details=\"<a "
-    "VERBATIM quote of one real memory you just saw>\") — OR, only if nothing is genuinely groundable, "
-    "thinking_done(\"Nothing grounded.\"). No more searching, no prose."
+    "[BLOCKED] You have searched enough this run - do NOT call {fn} again. Decide NOW from the real "
+    "memories you retrieved: EITHER ask_user(message=\"<one specific suggestion, ideally an automation "
+    "that takes recurring work off the user>\", proposed_action=\"create automation: <what + when>\", "
+    "details=\"<a VERBATIM quote of one real memory you just saw>\") - OR, only if nothing is genuinely "
+    "groundable, thinking_done(\"Nothing grounded.\"). No more searching, no prose."
 )
 
 
@@ -915,8 +918,8 @@ class Agent:
                     if _proactive:
                         return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
                     return (
-                        f"Gathering is disabled right now — you must resolve the open item. Do NOT call "
-                        f"{function_name}. Call ask_user(message=..., source_note_id=...) or "
+                        f"[BLOCKED] Gathering is disabled right now, you must resolve the open item. Do "
+                        f"NOT call {function_name}. Call ask_user(message=..., source_note_id=...) or "
                         "delete_automation_note(note_id=...) now."
                     )
                 # memory_search allowed for the proactive step -> fall through to the (tighter) read-cap.
@@ -938,9 +941,9 @@ class Agent:
                 if _proactive:
                     return _PROACTIVE_DECIDE_NUDGE.format(fn=function_name)
                 return (
-                    f"You have already called {function_name} {counts[function_name]} times this run. "
-                    "Stop gathering — you have enough context. ACT on what you already have (handle the "
-                    "open note/todo, or ask one specific question), or call thinking_done."
+                    f"[BLOCKED] You have already called {function_name} {counts[function_name]} times "
+                    "this run. Stop gathering, you have enough context. ACT on what you already have "
+                    "(handle the open note/todo, or ask one specific question), or call thinking_done."
                 )
             return None
         except Exception:

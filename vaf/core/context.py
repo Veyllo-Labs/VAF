@@ -41,6 +41,17 @@ TURN_CONTEXT_PREFIX = "[Context:"
 # agent.py intentionally does NOT use this helper - it is a narrower,
 # dispatch-level check (it must not mark a "Failed..."-style semantic output
 # as not-ok).
+#
+# A second incident (fresh adversarial review of the cyan123670 fix itself)
+# found this list, while internally consistent, covered only a handful of the
+# failure-string SHAPES tools actually return - a repo-wide sweep of every
+# vaf/tools/*.py file found ~30 more currently-shipping families this missed
+# entirely (host_bash's "[BLOCKED]"/"[HOST]", the shared filesystem path-safety
+# gate's "Access denied:"/"Invalid path", the whole messaging-tool "X
+# unavailable: {e}" family, github_tools.py's error shapes, mcp_client.py's,
+# and more - see the tiers below). Grouped by the sweep's tiers for
+# maintainability; add new tools' failure shapes here rather than inventing a
+# second detector.
 _ERROR_PREFIXES = (
     "❌",
     "error",
@@ -52,7 +63,68 @@ _ERROR_PREFIXES = (
     # State-changing tool gated until a plan is set: it did NOT run, so it
     # must not read as a green success.
     "[plan required]",
+    # Bracket/tag gate markers, sibling family to [PLAN REQUIRED] - the tool
+    # did NOT run, or its result was blocked/cancelled before completion.
+    "[blocked]",
+    "[host]",
+    "[security]",
+    "[cancelled]",
+    "[confirm required]",
+    "[awaiting user]",
+    "[tool blocked]",
+    "[librarian_error",
+    "[warn]",
+    # Shared filesystem path-safety gate (vaf/tools/filesystem.py is_safe_path
+    # and every tool that wraps it: read/write/edit/tree/find_files, WhatsApp/
+    # Telegram/mail attachment resolution, vision's file lookup, ...).
+    "access denied:",
+    "invalid path",
+    # Other common refusal/precondition-failure openers.
+    "cannot ",
+    "refused:",
+    "blocked:",
+    "missing required parameters",
+    "tests failed",
+    "test run timed out",
+    # Send tools' internal-content firewall: the message was NOT sent.
+    "message was blocked",
+    # Cloud-storage auth precondition (starts every affected result).
+    "authentication failed",
+    # mcp_client.py's two distinct error idioms.
+    "mcp error:",
+    "http error:",
+    # filesystem.py's move/copy wrapper re-labels an inner path-safety
+    # failure under its own prefix; edit_file's outcome marker.
+    "source error:",
+    "dest error:",
+    "edit failed:",
+    # Connection/account preconditions common across integrations
+    # (calendar, GitHub, cloud storage, WhatsApp contacts).
+    "not connected",
+    "no calendar account connected",
+    "no github account",
+    "no whatsapp contact found",
+    "could not schedule reminder",
 )
+
+
+# Anchored-regex belt: failure families whose MESSAGE starts the string but
+# with a variable lead ("<Noun> unavailable:", "<Verb phrase> failed:", ...),
+# so a fixed startswith prefix cannot express them. Anchored at the string
+# start with a bounded, single-line, colon-free lead - NEVER a free substring
+# scan: content-carrying results (read_file, web fetches, chat/mail reads)
+# embed arbitrary text, and an unanchored " failed:"/"unavailable:" flagged
+# ordinary successful reads whose CONTENT mentioned failures (adversarial
+# review of the first version of this expansion: 10/10 realistic
+# content-carrying success strings misclassified).
+_ERROR_HEAD_RES = tuple(re.compile(p) for p in (
+    # "Telegram unavailable:", "Messenger delivery unavailable:", ...
+    r"^[^\n:]{0,40}unavailable:",
+    # "Vision is unavailable (no API backend...)"
+    r"^[^\n:]{0,40}is unavailable \(",
+    # "Screenshot failed:", "CAPTCHA analysis failed:", "Git commit failed:"
+    r"^[^\n:]{0,30} failed:",
+))
 
 
 def tool_result_is_error(content: str) -> bool:
@@ -62,9 +134,33 @@ def tool_result_is_error(content: str) -> bool:
     head = content[:50].lower().strip()
     if head.startswith(_ERROR_PREFIXES):
         return True
-    # Substring belts for wrapped tracebacks / generic runner errors and an
-    # embedded cross-mark that do not lead with a known prefix.
     low = content.lower()
+    # Anchored-regex belt: variable-lead failure openers (see _ERROR_HEAD_RES).
+    for _hr in _ERROR_HEAD_RES:
+        if _hr.match(low):
+            return True
+    # Head-bounded belts: markers a short banner or one explanation line can
+    # push off the string start (so neither the prefix anchor nor the
+    # start-regexes see them), still specific literal markers, and bounded to
+    # the first 200 chars so a long content-carrying result (read_file, web
+    # fetch) that merely EMBEDS such text deeper down stays green.
+    head200 = low[:200]
+    if (
+        # python_exec.py: "<warning banner>\n\n[ERROR] (exit=1):..."
+        "[error] (exit=" in head200
+        # sandbox_test_runner.py: a docker/tar explanation can precede it.
+        or "cannot run tests:" in head200
+    ):
+        return True
+    # Short-result belts: permanently-unimplemented tool stubs whose ENTIRE
+    # result is one short sentence ("Editing events is not yet supported for
+    # CalDAV calendars."). Gated on the result being short - a document or
+    # file that CONTAINS such a sentence is content, not an outcome.
+    if len(low) <= 240 and ("is not yet supported" in low or "not implemented yet" in low):
+        return True
+    # Pre-existing whole-content belts (unchanged; kept narrow deliberately -
+    # broad substring scans over content-carrying results are how the first
+    # version of this expansion misclassified successful reads as failures).
     return (
         "❌" in content
         or "error executing tool" in low

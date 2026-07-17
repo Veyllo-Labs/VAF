@@ -170,7 +170,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   then told the user the file existed when it did not (live incident). The
   three copies of the "is this a failed tool result" check (retry guard,
   per-turn summary) now share one prefix-anchored helper so they cannot
-  drift again.
+  drift again. A follow-up adversarial review of that fix then found the
+  shared detector covered only a handful of the failure shapes shipping
+  tools actually return; a repo-wide sweep added roughly thirty more
+  currently-live families (the `[BLOCKED]`/`[HOST]`/`[SECURITY]` gate
+  markers, the filesystem `Access denied:`/`Invalid path` refusals, the
+  messaging "unavailable:" family, "X failed:" shapes, MCP/HTTP error
+  idioms, connection preconditions, unimplemented-stub replies, and the
+  banner-prefixed python runner marker), each pinned by a test built from
+  the tool's real return string. A third adversarial pass then caught the
+  first version of THAT expansion over-rotating: it scanned whole results
+  with free substrings, so a successful `read_file` of a log mentioning
+  "connection failed:" rendered as a failure (10/10 realistic
+  content-carrying reads misclassified). The shipped detector therefore
+  anchors every family that starts the message, bounds banner-tolerant
+  markers to the first 200 characters, gates stub-reply phrases on the
+  result being short, and pins the content-carrying success class with
+  its own tests. The three thinking-mode soft-block nudges now lead with
+  `[BLOCKED]` so a blocked gather call also reads as blocked instead of
+  green.
 - **Common weak-model argument-name mistakes are now repaired.** A local
   model called `write_file` with `file_path`/`message` instead of
   `path`/`content`; the call failed schema validation and the write was

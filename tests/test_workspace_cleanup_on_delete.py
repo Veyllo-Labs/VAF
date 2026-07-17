@@ -113,7 +113,10 @@ def test_delete_still_removes_the_session_when_workspace_cleanup_errors(session,
     assert chat_dir.is_dir()
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs POSIX file permissions and a non-root user (os.geteuid does "
+           "not exist on Windows - the bare call broke collection there)")
 def test_delete_keeps_a_workspace_with_an_unreadable_subtree(session):
     """The fail-safe must be real: os.walk's default (onerror=None) silently
     SKIPS a permission-denied subdirectory, so a subtree full of files was

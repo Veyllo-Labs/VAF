@@ -55,7 +55,11 @@ the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
 consumed as a FULL ordered list via `phrasings()`, not `pick()`), and
 `stopwords` - per-language function-word lists (not phrasings) consumed as
 full lists, e.g. by the memory lexical-search query filter; new consumers
-should read them from here instead of hardcoding word lists.
+should read them from here instead of hardcoding word lists. `awareness_triggers`
+follows the same word/phrase-list pattern: per-language cue phrases ("can you",
+"remind me", "how do i", ...) that the voice reflex policy
+(`vaf/core/voice_policy.py`, see [VOICE_REFLEX.md](../agents/VOICE_REFLEX.md))
+substring-matches as its fast, no-LLM prefilter for "worth engaging".
 
 ## API
 

@@ -361,6 +361,34 @@ def test_should_engage_matrix():
     assert va.should_engage("Wie wird das Wetter morgen?", None)[0] is True
 
 
+def test_classify_utterance_three_way_verdict():
+    """The reflex verdict (docs/agents/VOICE_REFLEX.md): every utterance maps to
+    exactly respond_now | store_only | ignore, and should_engage is its boolean view."""
+    cases = [
+        ("", None, "ignore", "empty"),
+        ("[anderer_Sprecher]: Und dann sind wir essen gegangen", "other", "store_only", "side_talk"),
+        ("[Peter]: Ich glaube der Zug faehrt um acht", "named", "store_only", "side_talk"),
+        ("[anderer_Sprecher]: Warum ist deine Stimme anders?", "other", "respond_now", "ok"),
+        ("4x8. Wan2 4x8. WeiTai", None, "store_only", "garbled"),
+        ("[Mert]: Wie wird das Wetter?", "self", "respond_now", "ok"),
+        ("Wie wird das Wetter morgen?", None, "respond_now", "ok"),
+    ]
+    for text, label, exp_verdict, exp_reason in cases:
+        verdict, reason = va.classify_utterance(text, label)
+        assert verdict in va.ENGAGE_VERDICTS
+        assert verdict == exp_verdict, (text, label, verdict)
+        assert reason == exp_reason, (text, label, reason)
+        # should_engage stays the exact boolean view: engage iff respond_now.
+        assert va.should_engage(text, label)[0] is (verdict == "respond_now")
+
+
+def test_classify_utterance_wake_word_overrides():
+    """Wake word engages any speaker/label, mirroring should_engage."""
+    v, r = va.classify_utterance("[anderer_Sprecher]: Jarvis, wie spaet ist es?", "other", "Jarvis")
+    assert (v, r) == ("respond_now", "wake_word")
+    assert va.should_engage("[anderer_Sprecher]: Jarvis, wie spaet ist es?", "other", "Jarvis")[0] is True
+
+
 def test_looks_garbled_heuristic():
     assert va.looks_garbled("4x8. Wan2 4x8. WeiTai") is True
     assert va.looks_garbled("la la la la la") is True          # heavy repetition

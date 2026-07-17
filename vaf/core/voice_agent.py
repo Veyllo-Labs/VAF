@@ -169,29 +169,46 @@ def addressed_by_name(text: str, agent_name: str, threshold: float = 0.59) -> bo
     return False
 
 
-def should_engage(text: str, label: Optional[str], agent_name: str = ""):
-    """Tier-1 addressee gate, BEFORE any LLM call. Returns (engage, reason).
+# The reflex verdict (see docs/agents/VOICE_REFLEX.md): the policy layer maps every
+# completed utterance to exactly one of these. respond_now wakes the content LLM;
+# store_only keeps it as room context and stays silent (the <silent/> primitive);
+# ignore drops it. This is the seed of the two-stage local policy - Tier-1 (no LLM).
+ENGAGE_VERDICTS = ("respond_now", "store_only", "ignore")
 
-    - Another (or a named) speaker who does not address the agent (no name,
-      no second-person form) is side talk: no LLM, no TTS - the caller keeps
-      the text as room context in the call history.
-    - Garbled STT noise from anyone but the verified owner is dropped.
-    - The owner always reaches the LLM; the silence protocol in the prompt
-      handles owner side talk there (same call, zero extra turns).
+
+def classify_utterance(text: str, label: Optional[str], agent_name: str = ""):
+    """Tier-1 reflex verdict, BEFORE any LLM call. Returns (verdict, reason) where
+    verdict is one of ENGAGE_VERDICTS. NO LLM - pure rules (the fast policy tier).
+
+    - Empty after stripping the speaker label -> ignore.
+    - Wake word (the agent is called by name) -> respond_now, even for other/unsure
+      speakers and garbled STT (authorization still stays voice-verified elsewhere).
+    - Another (or a named) speaker who does not address the agent is side talk ->
+      store_only: no LLM, no TTS, but kept as room context.
+    - Garbled STT noise from anyone but the verified owner -> store_only (kept as
+      context, never spoken to).
+    - The owner always reaches the LLM (respond_now); the silence protocol in the
+      prompt handles owner side talk there (same call, zero extra turns).
     """
     core = _LABEL_PREFIX_RE.sub("", text or "").strip()
     if not core:
-        return False, "empty"
+        return "ignore", "empty"
     if agent_name and addressed_by_name(core, agent_name):
-        # Wake word: the agent was called by name - always engage, even for
-        # other/unsure speakers and garbled STT (the model can still ask to
-        # repeat; authorization stays voice-verified regardless).
-        return True, "wake_word"
+        return "respond_now", "wake_word"
     if label in ("other", "named") and not _addresses_agent(core):
-        return False, "side_talk"
+        return "store_only", "side_talk"
     if label != "self" and looks_garbled(core):
-        return False, "garbled"
-    return True, "ok"
+        return "store_only", "garbled"
+    return "respond_now", "ok"
+
+
+def should_engage(text: str, label: Optional[str], agent_name: str = ""):
+    """Backward-compatible boolean view of ``classify_utterance``: returns
+    ``(engage, reason)`` where engage is True only for the ``respond_now`` verdict.
+    Existing callers keep their exact behavior; new code should read the 3-way
+    verdict from ``classify_utterance`` directly."""
+    verdict, reason = classify_utterance(text, label, agent_name)
+    return verdict == "respond_now", reason
 
 
 def build_chat_digest(messages, max_items: int = 8, per_item: int = 220,

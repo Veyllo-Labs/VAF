@@ -49,6 +49,12 @@ class PythonExecTool(BaseTool):
         "required": ["code"],
     }
 
+    # "task" observed live (live incident: a weak model's schema-rejected
+    # calls); "script" is the other common name for a code payload.
+    input_aliases = {
+        "code": ["task", "script"],
+    }
+
     def run(self, **kwargs) -> str:
         code = str(kwargs.get("code") or "").strip()
         timeout = int(kwargs.get("timeout") or 30)

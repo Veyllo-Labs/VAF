@@ -50,7 +50,11 @@ already supplied, and it does nothing when two aliases are present at once
 keyword never reaches a model-facing tool definition (a strict provider such
 as Google Gemini could otherwise reject the whole tool). Example: `write_file`
 maps `path` <- `file_path`/`filepath`/`filename`/`file` and `content` <-
-`message`/`text`/`body`/`data`, so a weak model's `{file_path, message}` call
+`message`/`text`/`body`/`data`/`file_content`/`contents`, and `python_exec`
+maps `code` <- `task`/`script` (the `file_content` and `task` shapes were both
+observed live: eight schema-rejected calls in one turn
+before the model stumbled onto a mapped name), so a weak model's
+`{file_path, message}` call
 is remapped and dispatched instead of lost (incident: a local model's HTML
 write silently failed, then the model reported the file as created).
 

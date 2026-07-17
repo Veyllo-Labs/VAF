@@ -107,7 +107,7 @@ def test_send_mail_string_attachment_is_wrapped_not_dropped():
 
 
 def test_enum_violation_not_rendered_as_type_mismatch():
-    # Live bug (session green080979): tasks.0.status carried a VALID string that
+    # Live bug: tasks.0.status carried a VALID string that
     # violated an enum, but _localize rendered every field error with the type
     # wording -> "expects string, got str", which the model cannot repair from.
     schema = {
@@ -141,7 +141,7 @@ def test_real_type_mismatch_keeps_expects_got_wording():
 
 
 def test_r0_key_aliases_remap_to_canonical_names():
-    """Incident cyan123670: a weak local model sent write_file
+    """Live incident: a weak local model sent write_file
     {file_path, message} and the write was silently lost. R0 remaps declared
     aliases to the canonical property name before validation."""
     from vaf.core.tool_input_repair import repair_tool_input
@@ -226,6 +226,51 @@ def test_write_file_aliases_live_and_off_the_model_schema():
     Draft202012Validator.check_schema(tool.parameters)
     import json
     assert '"aliases"' not in json.dumps(tool.parameters)
+
+
+def test_write_file_file_content_alias_from_live_incident():
+    """Live incident: a 4B model burned four write_file calls on
+    file_content= before stumbling onto a mapped name - 44-step turn. The
+    observed alias (and the obvious 'contents' variant) must repair."""
+    from vaf.core.tool_input_repair import repair_tool_input
+    from vaf.tools.filesystem import WriteFileTool
+
+    tool = WriteFileTool()
+    rep, applied, errors = repair_tool_input(
+        tool.parameters, {"path": "wetter.html", "file_content": "<html>"},
+        tool.input_aliases,
+    )
+    assert rep == {"path": "wetter.html", "content": "<html>"}
+    assert not errors
+
+    rep2, _, errors2 = repair_tool_input(
+        tool.parameters, {"path": "wetter.html", "contents": "<html>"},
+        tool.input_aliases,
+    )
+    assert rep2 == {"path": "wetter.html", "content": "<html>"}
+    assert not errors2
+
+
+def test_python_exec_task_and_script_aliases_from_live_incident():
+    """Same incident: python_exec called with task= failed schema validation
+    twice. task (observed) and script (the other common name for a code
+    payload) must repair to code; a supplied canonical code= is never
+    clobbered."""
+    from vaf.core.tool_input_repair import repair_tool_input
+    from vaf.tools.python_exec import PythonExecTool
+
+    tool = PythonExecTool()
+    for alias in ("task", "script"):
+        rep, applied, errors = repair_tool_input(
+            tool.parameters, {alias: "print(1)"}, tool.input_aliases,
+        )
+        assert rep == {"code": "print(1)"}, alias
+        assert not errors, alias
+
+    rep, _, _ = repair_tool_input(
+        tool.parameters, {"code": "print(1)", "task": "IGNORED"}, tool.input_aliases,
+    )
+    assert rep.get("code") == "print(1)"  # canonical key wins, never clobbered
 
 
 def test_repair_without_aliases_arg_is_unchanged():

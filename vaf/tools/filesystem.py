@@ -630,11 +630,13 @@ class WriteFileTool(BaseTool):
 
     # Weak models often send synonyms; repair_tool_input (R0) remaps them to
     # the canonical names before dispatch. Kept OFF the model-facing schema
-    # above (incident cyan123670: a local model sent file_path/message and the
+    # above (live incident: a local model sent file_path/message and the
     # write was silently lost).
     input_aliases = {
         "path": ["file_path", "filepath", "filename", "file"],
-        "content": ["message", "text", "body", "data"],
+        # "file_content" observed live (live incident: a 4B model burned
+        # four calls on it before finding a mapped name).
+        "content": ["message", "text", "body", "data", "file_content", "contents"],
     }
 
     def run(self, **kwargs) -> str:
@@ -651,7 +653,7 @@ class WriteFileTool(BaseTool):
             # "no scope OR the configured local-admin scope". A logged-in owner
             # session carries the admin's real UUID, not None - without this
             # comparison the machine owner got jailed out of their own
-            # VAF_Projects root (live regression, acceptance test green080979).
+            # VAF_Projects root (live regression, live acceptance test).
             try:
                 from vaf.core.config import get_local_admin_scope_id
                 if str(_scope) == str(get_local_admin_scope_id() or ""):

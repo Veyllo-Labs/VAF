@@ -109,6 +109,50 @@ _PROACTIVE_DECIDE_NUDGE = (
 )
 
 
+def _mentions_workflow(text: str) -> bool:
+    """Typo-tolerant "did the user speak of a workflow" check, shared by the
+    router's no-match hint and the [WORKFLOW SUGGESTION] advisory (one copy,
+    the two must agree). Substring on purpose: the live incident's message had
+    "workflow" transposed to "workflwo", which a whole-word match missed.
+    "workf(?!orce)" excludes the one common real word sharing the prefix;
+    other topical false positives are left to the model's judgment - every
+    consumer of this check words its hint as ADVISORY, never directive."""
+    return bool(re.search(r"\bworkf(?!orce)", text or "", re.IGNORECASE))
+
+
+def _build_workflow_suggestion_note(wf_hint: dict, user_text: str) -> str:
+    """Render the [WORKFLOW SUGGESTION] block for a router-matched template.
+
+    When the user's own message mentions a workflow (shared detection with the
+    router's no-match hint), the note also surfaces
+    create_agent_workflow(action='run_temp'): a WRONG template match must not
+    eat the user's explicit workflow request - live incident: the
+    mismatched suggestion was the only workflow path shown, the model declined
+    it and did all steps manually, because the run_temp hint lived only in the
+    NO-match branch. Advisory wording, like everything this router emits.
+    Pure function (module-level) so tests can pin the exact note."""
+    vars_repr = ", ".join(
+        f'{k}="{v}"' for k, v in (wf_hint.get("variables") or {}).items()
+    ) or "no variables pre-extracted"
+    note = (
+        f"[WORKFLOW SUGGESTION] The workflow \"{wf_hint['name']}\" "
+        f"({wf_hint['workflow_id']}) looks relevant to this request.\n"
+        f"Pre-extracted variables: {vars_repr}\n"
+        f"To start it call: execute_workflow(workflow_id=\"{wf_hint['workflow_id']}\", "
+        f"variables={{...}})\n"
+        f"IMPORTANT: If the user is asking to edit or modify an existing project "
+        f"(see [SESSION WORKSPACE] above), use coding_agent with project_path instead "
+        f"- do NOT start a creation workflow.\n"
+    )
+    if _mentions_workflow(user_text):
+        note += (
+            "If this template does NOT fit what the user asked for, "
+            "create_agent_workflow with action='run_temp' can build and "
+            "run a temporary workflow instead (2+ chained steps).\n"
+        )
+    return note
+
+
 def _synth_tool_call_id() -> str:
     """Mint an id for a tool call VAF created ITSELF (text-recovery fallbacks,
     streams that never delivered an id, sanitizer repairs). The provider never
@@ -2006,7 +2050,7 @@ class Agent:
                         # read_file and list_files are intentionally INCLUDED — the main agent
                         # needs them to verify work, answer user questions about files, etc.
                         # librarian_agent is for heavy analysis tasks, not simple file reads.
-                        # write_file is intentionally INCLUDED (since the blue378604 audit): the
+                        # write_file is intentionally INCLUDED (since the tool-friction audit): the
                         # python_sandbox persistence guard redirects the model to write_file, and
                         # simple single-file artifacts (svg/html/txt) need no coding_agent run.
                         # Main-agent calls get session workspace + per-user jail via execute_tool.
@@ -5212,16 +5256,29 @@ class Agent:
             UI.event("Debug", f"Workflow Analysis Failed: {e}", style="dim")
             return None
 
-    def _try_workflow(self, user_input: str, stream_callback=None) -> str:
+    def _try_workflow(self, user_input: str, stream_callback=None, route_input: str = None) -> str:
         """
         Check if user input matches a workflow template and execute if so.
-        
+
+        route_input: the RAW user message for ROUTING decisions (router match,
+        variable extraction, explicit @workflow parse, language detection).
+        The WebUI lane enriches user_input with the [SESSION WORKSPACE]
+        preamble BEFORE this runs, and the router routed on that: preamble
+        words (coding_agent, projects, write_file) steered the match to a
+        code workflow for a plain websearch request, and the variable
+        extractor stuffed the whole preamble into query= (live incident). Gate checks that look for enrichment MARKERS
+        (the editor block) deliberately stay on the enriched user_input.
+        Falls back to user_input when not provided (CLI and other lanes pass
+        the raw message as user_input already).
+
         Returns:
             Result string if workflow executed, None if no match
         """
         from vaf.cli.ui import UI
         import os
-        
+
+        route_input = route_input or user_input
+
         # Skip workflow matching in automation mode - automations should execute prompts directly
         # Automations have their own workflow_steps if they need multi-step execution
         if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
@@ -5248,13 +5305,14 @@ class Agent:
         # the main agent — which has full conversation context and [SESSION WORKSPACE] —
         # decides whether to execute, edit an existing project, or do something else.
             
-        # Determine language for UI messages
+        # Determine language for UI messages - from the RAW message: the WebUI
+        # enrichment preamble is English and skewed detection for German users.
         lang = "auto"
         if hasattr(self, 'prompt_manager') and self.prompt_manager.user_language != "auto":
             lang = self.prompt_manager.user_language
         else:
-            lang = self._detect_user_language(user_input)
-            
+            lang = self._detect_user_language(route_input)
+
         # Fallback to config if detection failed
         if lang == "auto":
             lang = (self.config.get("language", "auto") or "auto").strip().lower()
@@ -5294,9 +5352,9 @@ class Agent:
             if not self.config.get("workflows_enabled", True):
                 return None
 
-            explicit_workflow_id, cleaned_input = self._extract_explicit_workflow(user_input)
+            explicit_workflow_id, cleaned_input = self._extract_explicit_workflow(route_input)
             if explicit_workflow_id:
-                user_input = cleaned_input or user_input
+                route_input = cleaned_input or route_input
                 workflow_id = explicit_workflow_id
                 self._workflow_selection_tier = 0
                 msg_analyzing = f"Step 1/2: Analyzing workflow match... (User selected: {workflow_id})"
@@ -5326,7 +5384,7 @@ class Agent:
             UI_Class.event("Info", msg_analyzing, style="dim")
             with UI_Class.console.status(f"[bold cyan](O_O)  {msg_analyzing}[/bold cyan]", spinner="dots"):
                 if not explicit_workflow_id:
-                    workflow_id = self.analyze_workflow(user_input)
+                    workflow_id = self.analyze_workflow(route_input)
             
             if not workflow_id:
                 # The unified router may have matched a SKILL instead. Convert that
@@ -5358,20 +5416,15 @@ class Agent:
                 # the model called list_tools, saw run_temp buried on page 1 of a 15KB
                 # dump, and just did the steps manually instead).
                 #
-                # Detection is a cheap, imprecise substring match (typo-tolerant on
-                # purpose: the real incident's message had "workflow" transposed to
-                # "workflwo", which a whole-word match would have missed), so it WILL
-                # also match unrelated mentions ("workforce" news, "review my workflow
-                # doc"). Both branches below stay ADVISORY, not directive - matching
-                # this file's own "agent decides" design principle (see "New Flow"
-                # above) - specifically so a false match cannot push the model into an
-                # unwanted run_temp call; only the STRENGTH of the suggestion differs.
-                # "workf(?!orce)" excludes the one common real word that shares the
-                # prefix; other topical false positives are left to the model's
-                # judgment, which the wording below explicitly invites.
-                _user_asked_for_workflow = bool(
-                    re.search(r"\bworkf(?!orce)", user_input or "", re.IGNORECASE)
-                )
+                # Detection via _mentions_workflow (shared with the [WORKFLOW
+                # SUGGESTION] advisory; see its docstring for the typo-tolerance
+                # rationale) - it WILL also match unrelated mentions ("review my
+                # workflow doc"), so both branches below stay ADVISORY, not
+                # directive - matching this file's own "agent decides" design
+                # principle (see "New Flow" above) - specifically so a false
+                # match cannot push the model into an unwanted run_temp call;
+                # only the STRENGTH of the suggestion differs.
+                _user_asked_for_workflow = _mentions_workflow(route_input)
                 if _user_asked_for_workflow:
                     _no_match_hint = (
                         "ℹ️ No SAVED workflow template matched this request, and the "
@@ -5403,7 +5456,10 @@ class Agent:
                 _is_thinking_mode = os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes")
                 if not _is_thinking_mode:
                     try:
-                        self.main_persistence.update_user_intent(user_input)
+                        # Store the RAW request as the intent: the enriched text
+                        # would put the whole workspace preamble into the
+                        # <user_intent> prompt block (observed live).
+                        self.main_persistence.update_user_intent(route_input)
                         self.main_persistence.reset_validation_retry_count()
                     except Exception:
                         pass
@@ -5431,9 +5487,11 @@ class Agent:
             from vaf.cli.ui import UI
             UI.event("Brain", msg_extracting, style="dim")
             
-            # Use WorkflowSelector to extract variables
+            # Use WorkflowSelector to extract variables - on the RAW message:
+            # extraction on the enriched text stuffed the whole [SESSION
+            # WORKSPACE] preamble into query= (live incident).
             selector = WorkflowSelector()
-            variables, missing = selector._extract_variables(user_input, template)
+            variables, missing = selector._extract_variables(route_input, template)
             
             # Get required variables from template
             template_variables = template.get("variables", {})
@@ -5459,7 +5517,7 @@ class Agent:
                 selector = WorkflowSelector()
                 missing_copy = list(missing)  # Use copy to avoid modification during iteration
                 for var_name in missing_copy:
-                    extracted = selector._extract_value(user_input, var_name, template_variables.get(var_name, ""))
+                    extracted = selector._extract_value(route_input, var_name, template_variables.get(var_name, ""))
                     if extracted:
                         variables[var_name] = extracted
                         missing.remove(var_name)
@@ -5622,7 +5680,7 @@ class Agent:
                             )
                         task_id = ipc.create_task(
                             agent_type=f"workflow:{workflow_id}",
-                            task_description=user_input,
+                            task_description=route_input,
                             session_id=get_current_session_id()
                         )
                         _debug_log(f"STEP 2: IPC task created: {task_id}")
@@ -6584,6 +6642,7 @@ class Agent:
         images: Optional[List[Dict]] = None,
         force_tool_choice: Optional[str] = None,
         allow_memory_search: bool = False,
+        raw_user_input: Optional[str] = None,
     ):
         """Run one full turn: routing, LLM/tool loop, guardrails, persistence.
 
@@ -6593,6 +6652,12 @@ class Agent:
         meaningful strings for workflow results / errors / stop / loop
         protection). Full return contract and parameter semantics:
         docs/CORE_AGENT.md. The vaf.Agent facade wraps this correctly.
+
+        raw_user_input: the user's message BEFORE lane enrichment (workspace
+        preamble, front-office block, ...). Used only for ROUTING decisions
+        (workflow/skill router, variable extraction, workflow-mention
+        advisory) - the LLM still sees the enriched user_input. Callers that
+        pass the raw message as user_input already (CLI) omit it.
         """
         from vaf.cli.ui import UI
         # Turn-local flag: avoids cross-thread leakage from process-wide env vars.
@@ -6885,8 +6950,11 @@ class Agent:
         # var can leak across concurrent threads).
         if not skip_input and not disable_workflows and not thinking_mode:
             workflow_tried = True
-            # Try workflow matching BEFORE adding to history
-            workflow_result = self._try_workflow(user_input, stream_callback)
+            # Try workflow matching BEFORE adding to history. Routing decisions
+            # run on the RAW message (raw_user_input) when the lane provides it
+            # - see _try_workflow's docstring.
+            workflow_result = self._try_workflow(user_input, stream_callback,
+                                                 route_input=raw_user_input)
             if workflow_result:
                 # Workflow executed successfully (explicit @workflow_id path) - return result
                 return workflow_result
@@ -6897,20 +6965,10 @@ class Agent:
             _wf_hint = getattr(self, "_pending_workflow_hint", None)
             if _wf_hint:
                 self._pending_workflow_hint = None  # one-shot — clear immediately
-                _vars_repr = ", ".join(
-                    f'{k}="{v}"' for k, v in (_wf_hint.get("variables") or {}).items()
-                ) or "no variables pre-extracted"
-                _wf_note = (
-                    f"[WORKFLOW SUGGESTION] The workflow \"{_wf_hint['name']}\" "
-                    f"({_wf_hint['workflow_id']}) looks relevant to this request.\n"
-                    f"Pre-extracted variables: {_vars_repr}\n"
-                    f"To start it call: execute_workflow(workflow_id=\"{_wf_hint['workflow_id']}\", "
-                    f"variables={{...}})\n"
-                    f"IMPORTANT: If the user is asking to edit or modify an existing project "
-                    f"(see [SESSION WORKSPACE] above), use coding_agent with project_path instead "
-                    f"— do NOT start a creation workflow.\n\n"
+                _wf_note = _build_workflow_suggestion_note(
+                    _wf_hint, raw_user_input or user_input
                 )
-                user_input = _wf_note + user_input
+                user_input = _wf_note + "\n" + user_input
 
             # Skills are the second routing tier. If the router matched a SKILL
             # (and not a workflow), surface it the same way: the router only saw

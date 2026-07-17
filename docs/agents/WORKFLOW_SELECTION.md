@@ -93,7 +93,7 @@ workflow hint (the two are mutually exclusive). Skill matching is described in
 
 ### Step 3 — Workflow Hint Injection
 
-If the router matched a workflow, `chat_step()` prepends a `[WORKFLOW SUGGESTION]` block to the user input before calling the LLM:
+If the router matched a workflow, `chat_step()` prepends a `[WORKFLOW SUGGESTION]` block to the user input before calling the LLM (built by `_build_workflow_suggestion_note`, a pure module-level function so tests can pin the exact note):
 
 ```
 [WORKFLOW SUGGESTION] The workflow "Create Website" (create_website) looks relevant to this request.
@@ -106,13 +106,17 @@ IMPORTANT: If the user is asking to edit or modify an existing project
 <original user message>
 ```
 
+When the user's own message mentions a workflow (same shared detection as Step 3b, `_mentions_workflow`), the note additionally offers `create_agent_workflow(action="run_temp")` as the fallback: a WRONG template match must not eat an explicit workflow request. Live incident: the suggestion was the only workflow path shown, the model rightly declined the mismatched template - and then did every step manually, because the run_temp hint lived only in the no-match branch. Advisory wording, like everything this router emits.
+
 The hint is **one-shot** — it is consumed and cleared immediately. The next message starts fresh with no pre-set hint.
+
+**Routing runs on the RAW user message.** The WebUI lane enriches the user input (the `[SESSION WORKSPACE]` preamble, front-office blocks) BEFORE `chat_step()`, and the router used to route on that enriched text: the preamble's wording (`coding_agent`, `projects`, `write_file`) steered a plain websearch request to a CODE workflow, and the variable extractor stuffed the entire preamble into `query=` (the same incident). `chat_step(raw_user_input=...)` now carries the pre-enrichment message; `_try_workflow(route_input=...)` uses it for the router match, variable extraction, the explicit `@workflow` parse, the workflow-mention detection, language detection and the intent lock. The LLM still sees the enriched text; gate checks that look for enrichment markers (the editor block) deliberately keep reading the enriched input. Lanes that pass the raw message as `user_input` already (CLI) omit the parameter.
 
 ### Step 3b - No SAVED Template Matched
 
 When the router finds nothing (most requests), `_try_workflow()` appends a short system hint instead of the `[WORKFLOW SUGGESTION]` block. This hint is NOT a "workflows are usually unnecessary" note - a saved-template miss says nothing about whether an **ad-hoc** workflow (`create_agent_workflow(action="run_temp")`) would help, since the router only ever matches against saved templates.
 
-The hint branches on whether the user's own message mentions a workflow at all (prefix-matched on `workf`, excluding "workforce" - case-insensitive and typo-tolerant on purpose, since a live incident's real request had "workflow" transposed to "workflwo", which a whole-word match would have missed):
+The hint branches on whether the user's own message mentions a workflow at all (`_mentions_workflow` in `agent.py`, the ONE shared detection also used by the Step 3 suggestion advisory: prefix-matched on `workf`, excluding "workforce" - case-insensitive and typo-tolerant on purpose, since a live incident's real request had "workflow" transposed to "workflwo", which a whole-word match would have missed):
 
 - **Mentions a workflow, no template fits**: `create_agent_workflow(action="run_temp")` is surfaced as the option to reach for, not `list_workflows` (which would only surface saved templates - the wrong tool here).
 - **No mention**: a lighter hint still offers `run_temp` for genuinely multi-step work, alongside `list_workflows`.

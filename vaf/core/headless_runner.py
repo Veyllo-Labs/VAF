@@ -1602,6 +1602,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             disable_workflows=disable_workflows,
                             memory_context=memory_context or None,
                             images=_task_images,
+                            # Routing (workflow/skill router + variable extraction)
+                            # must see the user's RAW message: effective_input
+                            # carries the workspace/front-office enrichment, whose
+                            # wording (coding_agent, projects, write_file) steered
+                            # the router to wrong templates and leaked into
+                            # extracted variables (live incident).
+                            raw_user_input=(input_text or ""),
                         )
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")

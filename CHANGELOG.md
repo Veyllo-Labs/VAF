@@ -100,6 +100,32 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **The workflow router routes on what the user actually said.** The WebUI
+  lane prepends a workspace context preamble to the user message before the
+  agent runs, and the workflow router matched templates against that
+  combined text: the preamble's wording (coding_agent, projects,
+  write_file) steered a plain websearch-and-HTML request to a CODE
+  workflow, and the variable extractor stuffed the entire preamble into
+  the workflow's query variable (live incident: a 44-step turn in which
+  the model rightly declined the garbage suggestion and then did every
+  step manually). Routing decisions - the template match, variable
+  extraction, the explicit workflow parse, workflow-mention detection,
+  language detection and the intent lock - now run on the raw,
+  pre-enrichment message; the LLM still sees the enriched text.
+- **A wrong template match can no longer eat an explicit workflow
+  request.** The run_temp advisory used to exist only in the no-match
+  branch, so when the router matched ANY template (even a bad one) for a
+  message that explicitly asked for a workflow, the suggestion block was
+  the only workflow path shown. When the user's own message mentions a
+  workflow, the suggestion now also offers
+  create_agent_workflow(action='run_temp') as the fallback - advisory,
+  with the same typo-tolerant detection both hints share.
+- **Two more weak-model argument names are repaired instead of rejected.**
+  The same incident burned eight calls on schema rejections: write_file
+  with file_content instead of content (four times) and python_exec with
+  task instead of code (twice). Both observed names (plus contents and
+  script) are now in the tools' alias maps, so the call is repaired and
+  dispatched on the first attempt.
 - **A tool call is no longer silently dropped when a model garbles its own
   closing tags.** The recovery parser for text-written tool calls (a
   reasoning model sometimes emits `<tool_call><function=NAME>...` as plain

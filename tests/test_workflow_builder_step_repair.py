@@ -96,6 +96,7 @@ def test_run_temp_auto_enables_validation_instead_of_bouncing(monkeypatch):
     )
     assert "VALIDATION CHECK" not in str(result)   # no bounce
     assert "steps" in captured                      # it RAN
+    assert "THE WORK IS DONE" in str(result)        # imperative do-not-redo lead
     coder_steps = [s for s in captured["steps"] if s.tool == "coding_agent"]
     assert coder_steps and all(s.validate for s in coder_steps)  # auto-enabled
 

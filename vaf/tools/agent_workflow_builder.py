@@ -821,10 +821,15 @@ class AgentWorkflowBuilderTool(BaseTool):
         if result.success:
             # Per-step summary so a weird FINAL step can never hide the real
             # deliverables (see engine.summarize_run_steps for the incident).
+            # Imperative lead: a weak model skims past a bare success banner
+            # and redoes finished work (see workflow_executor's twin comment).
             from vaf.workflows.engine import summarize_run_steps
             _summary = summarize_run_steps(steps)
             return (
-                f"Temporary workflow '{name}' completed.\n\n{result.final_output}"
+                f"Temporary workflow '{name}' completed.\n"
+                f"THE WORK IS DONE. Do NOT redo any step, do NOT re-run searches, do NOT "
+                f"rebuild files. Read the results below and present them to the user now, "
+                f"including any file path shown.\n\n{result.final_output}"
                 + (f"\n\nStep results:\n{_summary}" if _summary else "")
             )
         # Lead with "Error:" so the UI status heuristic flags this as a failure (red),

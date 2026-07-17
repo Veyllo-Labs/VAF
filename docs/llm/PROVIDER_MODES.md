@@ -73,9 +73,40 @@ Switching provider (Local ↔ API) and its memory handling — see [MODEL_AND_PR
 | Reasoning models — internal LLM calls (`query_llm`) | The local server splits output into `reasoning_content` (chain-of-thought) and `content` (answer); `query_llm` reads `content`. Tool-side utility completions (web_search page summaries/synthesis) now send `chat_template_kwargs: {enable_thinking: false}` on the local lane — the voice-lane precedent — because live evidence showed a reasoning model burning the ENTIRE small budget on `reasoning_content` and returning empty `content` every time (`finish_reason="length"`, `reasoning_len=2691` at `max_tokens=600`); a chain of thought adds nothing to a 3-sentence page summary. Belts stay: generous `max_tokens` + real `timeout`, and the `reasoning_content` fallback (logging `finish_reason`/`reasoning_len`) for models/templates that ignore the flag. | `tools/base.py` `query_llm`, `tools/search.py` (synthesis) | — |
 | Generation sampling (anti-loop) | The main local generation sends `repeat_penalty` (1.1), `top_p` (0.95), `top_k` (40) and a `max_tokens` cap (`max_generation_tokens`, 10000) — all config-driven. Without a repetition penalty (llama.cpp default is 1.0 = off) a reasoning model can degenerate into a verbatim loop, repeating the same paragraph until it fills the context. These are llama.cpp extensions and are sent **only** on the local `:8080` path; cloud APIs are untouched. | `agent.py` (local generation payload), `config.py` DEFAULTS | — |
 | web_search time budget | `web_search` does a per-page LLM synthesis for each fetched page plus a final synthesis — slow with a reasoning model, so without a budget it can hit the 120s tool-timeout (`tool_timeout_seconds`) and be killed with all gathered results discarded. It self-bounds against that budget: snippets are always in the result, per-page synthesis stops once the per-page deadline passes, and the final synthesis is skipped (gathered answers returned raw) once the deadline passes — so it always returns what it has, well before the kill. Per-call synthesis budgets are small (per-page 600 tok / 30s, final 1000 tok / 35s) and lean on the `query_llm` `reasoning_content` fallback. | `tools/search.py`, `core/bounded_run.py` `agent_timeout_seconds` | — |
-| Text tool-call fallback | A reasoning model sometimes writes a tool call **as text inside `<think>`** instead of making a native call, so the server never converts it and the call is dropped. When the native parse finds nothing, VAF searches the content **and** the reasoning for known text formats - JSON `<tool_call>{…}</tool_call>`, ` ```json `, `name(args)`, the Gemma-4 native format, and the Qwen/Hermes `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>…</function></tool_call>` form - and executes any match (filtered to known tool names). The Qwen/Hermes form's closing `</function></tool_call>` is matched but not required, provided SOME two-level closing-tag shape still appears (live incident: a model trailed off into hallucinated unrelated closing tags - `</tasks></working_memory>` - instead of its own; a well-formed call is delimited exactly as before, and a malformed one is recovered only if it attempted to close SOMETHING). Deliberately not a bare "match to end of text" fallback - review found that let an incidental, never-closed explanation of the call syntax turn into a genuinely dispatched call; a plain trailing sentence with no closing-tag shape still matches nothing, like before. | `agent.py` `_parse_qwen_tool_calls` / `_parse_gemma4_tool_calls` + the fallback block | - |
+| Text tool-call fallback | A reasoning model sometimes writes a tool call **as text inside `<think>`** instead of making a native call, so the server never converts it and the call is dropped. When the native parse finds nothing, VAF searches the content **and** the reasoning for known text formats - JSON `<tool_call>{…}</tool_call>`, ` ```json `, `name(args)`, the Gemma-4 native format, and the Qwen/Hermes `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>…</function></tool_call>` form - and executes any match (filtered to known tool names). The Qwen/Hermes form: a strict `</function></tool_call>` close is accepted anywhere; LENIENT recovery of a garbled close (a live model trailed off into hallucinated `</tasks></working_memory>` instead of its own tags) additionally requires the `<tool_call>` open to sit at a LINE START and either two-plus consecutive wrong-named closing tags immediately after the last parameter, or the next `<tool_call>` beginning right there (back-to-back calls with the first close forgotten). Three earlier drafts failed adversarial review (end-of-text fallback; closing shape anywhere later; a single wrong-named tag, which an example wrapped in inline markup satisfies by construction) - each could dispatch a call out of PROSE about the syntax. Pinned by `tests/test_qwen_tool_call_recovery.py`. Text-recovered calls pass the same cross-lane duplicate filter as streamed ones. | `agent.py` `_parse_qwen_tool_calls` / `_parse_gemma4_tool_calls` + the fallback block | - |
 
 Tool input validation & repair (provider-agnostic, but most relevant for weak local models): arguments that are valid JSON but the wrong shape — a bare string for an array, a stringified array, `null` on an optional field — are validated against the tool schema and repaired before dispatch; unrepairable cases return a localized `Tool Error:`. See [TOOL_INPUT_REPAIR.md](../agents/TOOL_INPUT_REPAIR.md).
+
+### Small local models - known behavioral limits (honest expectations)
+
+A ~4B local model can complete the full agentic chain (router → workflow → coder → deliverable),
+but a long live-hardening session (2026-07-17) established a recurring class of failures that are
+MODEL limitations, not framework bugs - the framework mitigates them, it cannot remove them:
+
+- **Redoing completed work / missing its own success signals.** Observed live: a workflow ran to a
+  verified ✅ with a finished HTML on disk, and the model rebuilt everything manually and reported
+  total failure. Mitigations: the completion message now leads with an explicit
+  do-not-redo directive and a per-step result summary; the windowed redundant-read filter blocks
+  verbatim re-searches; but a model that does not read its own results can still repeat work.
+- **Narrating intentions as facts** ("Web-Suche: läuft", "Workflow erfolgreich gestartet" without
+  any tool call). Mitigations: the working-memory note firewall, the deterministic
+  result-grounding rule and the anti-spin escalation - see AGENT_LOOP.md loop protection.
+- **Round-trip fragility.** Any bounce ("call again with flags", schema rejection, plan-gate
+  bounce) tends to cost the model the whole thread. The framework therefore repairs or decides
+  server-side wherever the intent is unambiguous (step-field repair, validation auto-enable,
+  plan seeding, echo-back redirects) - the design principle is: never bounce a weak actor that
+  already committed to the right action.
+- **More coder loops.** The coder's documented loop-until-done design absorbs weak-model flailing
+  (idle nudges, stuck detection at 15 loops/task with goal verification, retry stages, honest
+  PARTIAL status) - a 4B run may take many more loops than a strong model, and that is the
+  machinery working, not a runaway.
+
+**The user-facing lever:** sub-agents and the coder can run on a DIFFERENT, stronger model than
+the chat - `subagent_model` (Settings; empty = same as chat) routes tool/workflow steps to the
+configured model on API lanes, and per-lane overrides exist for specific agents (e.g. the voice
+lane). For local-only setups the single-server invariant applies (one llama server; a stronger
+coder model means the VRAM must carry it). Choosing that trade-off is deliberately a user
+decision, not something the framework can fix.
 
 ### Gemma local mode (`model_mode` = `gemma4` / `gemma3n`)
 

@@ -103,3 +103,8 @@ def test_execute_workflow_result_contains_step_results(monkeypatch):
     result = ExecuteWorkflowTool().run(workflow_id="research_and_code", _agent=agent)
     assert "Step results:" in result
     assert "File written successfully to /home/user/wetter.html" in result
+    # Imperative do-not-redo lead: a weak model skims a bare success banner
+    # and rebuilds finished work (live incident) - the directive must come
+    # BEFORE the output so it cannot be missed.
+    assert "THE WORK IS DONE" in result
+    assert result.index("THE WORK IS DONE") < result.index("Step results:")

@@ -100,6 +100,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A finished workflow now tells the model, imperatively, not to redo the
+  work.** A verified successful run (finished HTML on disk) was followed
+  by the model rebuilding every step manually and reporting total failure
+  - it had skimmed past the bare success banner. Both completion messages
+  now lead with an explicit directive (work is done; do not redo steps,
+  re-run searches or rebuild files; present the results and file path)
+  before the output and the per-step summary. The docs also gained an
+  honest "small local models - known behavioral limits" section
+  (PROVIDER_MODES.md): redo-after-success, narrated intentions and
+  round-trip fragility are model limitations the framework mitigates but
+  cannot remove; assigning a stronger sub-agent/coder model
+  (subagent_model) is the user-facing lever.
 - **A workflow step's instruction survives the presence of extra
   parameters.** The retest's model authored a step exactly the way the
   tool schema teaches - instruction in input, extra parameters in args

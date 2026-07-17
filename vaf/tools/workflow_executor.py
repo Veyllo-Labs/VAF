@@ -552,8 +552,16 @@ class ExecuteWorkflowTool(BaseTool):
                 from vaf.workflows.engine import summarize_run_steps
                 _summary = summarize_run_steps(steps)
                 _wf_log(wf_run_id, "RETURN_SUCCESS", output_len=len(_out))
+                # Lead with an imperative directive: a weak model skims past a
+                # bare success banner - live incident: a verified ✅ run with a
+                # finished HTML on disk, and the model rebuilt everything
+                # manually and reported total failure. Explicit instructions in
+                # tool results are what weak models actually follow.
                 return (
-                    f"✅ Workflow '{template['name']}' completed successfully!\n\n{_out}"
+                    f"✅ Workflow '{template['name']}' completed successfully!\n"
+                    f"THE WORK IS DONE. Do NOT redo any step, do NOT re-run searches, do NOT "
+                    f"rebuild files. Read the results below and present them to the user now, "
+                    f"including any file path shown.\n\n{_out}"
                     + (f"\n\nStep results:\n{_summary}" if _summary else "")
                 )
             else:

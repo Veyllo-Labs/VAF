@@ -100,6 +100,161 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   enrollment intro instead of blocking the first round.
 
 ### Fixed
+- **A workflow's completion message shows the real work of every step, and
+  three templates no longer end on a filesystem agent asked to write
+  prose.** A retest run succeeded end to end (11-minute coder step, HTML
+  written) - but the template's final step asked the librarian agent, a
+  FILESYSTEM agent, to "write a short completion message ... where the
+  file was saved". It parsed that as a file search and returned "No files
+  found matching '*was*'", which became the workflow's final output. The
+  model read that next to "completed successfully", concluded the run
+  produced nothing, and redid every step manually - 42 steps, three
+  duplicate deliverables. The librarian completion step is removed from
+  research_and_code, generate_docs and create_file (the save step's own
+  "File written successfully to <path>" is the honest completion), and
+  both completion messages (saved workflows and temporary ones) now
+  append a bounded per-step result summary, so one weird step can never
+  hide the actual deliverables again.
+- **The validation question no longer costs the workflow run - the system
+  answers it itself.** When a temporary workflow's content steps carried
+  no validate flags, run_temp bounced with "[VALIDATION CHECK] ... call
+  run_temp again with the flags or skip_validation". A live retest showed
+  a weak model bouncing off that twice (retrying without the flags both
+  times) and then doing every step manually while its correctly authored
+  workflow never ran. Validation on deliverable steps is exactly what the
+  bounce text recommended - so run_temp now enables it on those steps
+  automatically and runs; skip_validation stays the explicit opt-out.
+- **A temporary workflow with mangled step field names is repaired instead
+  of rejected.** The retest's model got everything right except the step
+  FIELD NAMES: tool in "action", instruction in "description", no "input"
+  - and the nested schema requirement rejected the entire call with
+  "'input' is a required property", a message the model could not act on;
+  it regressed into planning spin until the loop guards ended the turn
+  with nothing produced. Steps are now repaired before validation (tool
+  also accepted from action/agent_id; input falls back through
+  task/prompt/instruction/query/description/name; args-only steps get a
+  synthesized label), the hard nested requirement is gone, and a step
+  with truly nothing usable gets a targeted error instead of a schema
+  dump. Applies to temporary and saved workflow authoring alike.
+- **A model can no longer talk itself into believing its own fictional
+  diary.** Two consecutive retest chats failed the same way: the model
+  narrated its INTENTIONS into working-memory notes ("Web-Suche: läuft",
+  "Workflow wurde erfolgreich gestartet") without calling one real tool;
+  the working-memory block re-injected that fiction as trusted context,
+  the anti-spin guard then forced a text-only turn whose wording ("state
+  your result") invited a result, and the model coherently reported a
+  finished workflow with an invented file path. The result-grounding
+  judge (the same small local model) waved it through. Four guards now
+  close the loop end to end: (1) a note firewall refuses outcome- or
+  progress-claiming notes while no real tool has run this turn (facts,
+  not intentions - the note is re-fed as truth later); (2) result
+  grounding gained a deterministic rule that needs no LLM judge: a final
+  reply asserting tool outcomes after a bookkeeping-only turn is
+  ungrounded by construction (purely conversational recap turns still go
+  to the judge); (3) the anti-spin escalation now explicitly forbids
+  claiming results and demands an honest still-open answer; (4)
+  working-memory timestamps are rendered in the user's timezone in the
+  prompt (they were UTC, so the model misdated its own recent actions by
+  hours).
+- **A healthy coder inside a workflow is no longer executed at minute
+  five.** The generic sub-agent hard cap (300s) applied to workflow steps
+  too, and killed a perfectly healthy coding-agent step mid-loop - linter
+  green, actively streaming - with SIGTERM, failing the whole workflow at
+  its last step (live incident). Heavy agent steps (coder, research,
+  document) inside a workflow now get a worst-case floor of 30 minutes
+  (workflow_agent_step_timeout_seconds); this is safe because a dead or
+  stuck child is caught much earlier by the heartbeat liveness guard
+  (~60s) - the hard cap is only the absolute-runaway backstop, and it was
+  doing the killing instead. All other tools keep their normal budgets.
+- **The SubAgent window no longer opens on top of a running workflow.**
+  The intended design routes an embedded sub-agent step's output into the
+  workflow panel's terminal, and the window-open helper honors that - but
+  the sub-agent heartbeat handler set the window open directly, bypassing
+  the guard, so the coder step opened a duplicate window next to the
+  runtime panel. The heartbeat path now carries the same workflow guard;
+  a manual open by the user still works.
+- **The plan gate no longer bounces a workflow launch - the launch IS the
+  plan.** The retest showed the exact cost of that bounce: the model
+  committed to execute_workflow with the suggested template, got
+  [PLAN REQUIRED], dutifully set a plan - and then did the steps manually,
+  the workflow forgotten. A saved template id or a run_temp steps list is
+  precisely the approach the gate exists to demand, so the gate now seeds
+  working memory's plan from the launch call itself (observability
+  preserved, placeholder detection unaffected) and lets it through.
+  Launch calls without a plan payload (list/delete actions) still bounce,
+  and every other state-changing tool is gated unchanged.
+- **The duplicate-call guards now cover text-recovered tool calls too.**
+  The in-batch dedupe and the windowed redundant-read check lived inside
+  the streamed-call loop, but a weak local model's calls often arrive via
+  the text-recovery fallback parsers, which bypassed both - the retest
+  ran the same two searches twice within one second out of a
+  fallback-parsed batch. Both checks moved into one cross-lane filter
+  that runs after every parsing lane and before the calls are committed
+  to history, so streamed and recovered calls get identical protection.
+- **A temporary workflow's final build step now actually receives the data
+  the earlier steps gathered.** The engine passes step results only through
+  explicit placeholders in the next step's template - and a weak model
+  reliably NAMES its outputs but never references them: the retest's
+  workflow ran both web searches perfectly and then told the coder "use
+  the results from the previous searches" in prose, with no placeholder
+  anywhere. The coder received zero data and, correctly following the
+  strict factual-data policy, rendered [DATA NOT FOUND] into every field
+  of an otherwise finished page. When a task-consuming agent step (the
+  coding agent, document writer, document agent, librarian and browser
+  agents - builders and analyzers alike) references no prior step output,
+  the engine now auto-attaches a bounded digest of the actual results to
+  that step's instruction, in every lane the engine runs (temporary
+  workflows, saved templates, the CLI lane, automations). The research
+  agent is deliberately excluded (its input is a short topic query, and
+  its job is producing data, not consuming it); templates that DO
+  reference outputs - every saved template - are never touched. The
+  authored step list of a temporary workflow is now also logged in full,
+  since during the forensic it existed nowhere.
+- **A pending background question can no longer hijack the user's next
+  request.** The proactive thinking pass asks questions over the user's
+  messenger and latches "waiting for a reply" per user. When the user
+  then typed a brand-new task into a fresh chat, the pickup classified
+  it as THE reply: the model got told "the user answered your background
+  question", blended both topics (they happened to be similar), replied
+  over the messenger unprompted, and the reply-confirmation gate then
+  blocked the user's own workflow-builder calls twice - the turn ended
+  after 27 confused steps with a stale answer, although the task had
+  been completed midway. Three fixes: (1) the pickup lane now reads the
+  RAW message - the WebUI workspace preamble had defeated the leading
+  -text confirmation check (proven: raw "Okay fuehre bitte..." passes,
+  enriched fails) and was even stored as the recorded reply; (2) the
+  reply is classified three-way - short yes carries the proposal, short
+  no declines it, and a LONG task-shaped message counts as a NEW topic:
+  light context note only, no "carry out the proposal" framing, and the
+  mutation gate stays disarmed so the user's own request is never
+  confirmation-blocked; (3) a TTL safety net (default 12h) expires a
+  stale waiting latch at read time, since the regular 10-minute skip
+  only runs while thinking runs actually fire.
+- **A model that builds the right workflow in the wrong wrapper now gets
+  its own call handed back to copy.** Follow-up to the routing fix below,
+  from the retest: the model merged the two workflow hints into
+  execute_workflow(workflow_id="create_agent_workflow", variables={action,
+  steps}) - a complete, CORRECT temporary-workflow payload inside the
+  wrong tool. The prose-only redirect explained the mistake, and the
+  model gave up on workflows and did every step manually. When the
+  mistaken call carries usable steps, the redirect now echoes the exact
+  create_agent_workflow(...) call to copy, arguments verbatim - weak
+  models copy reliably but rephrase poorly. Still a message, never an
+  auto-forward.
+- **Verbatim re-runs of a lookup that already succeeded this turn are
+  refused, and an identical duplicate within one response is dropped.**
+  The redundant-call guard compared a new tool call only against the
+  newest tool message, so a single interleaved call (a failed workflow
+  attempt, a plan-gate bounce) hid an exact repeat from it - the same
+  retest burned four calls re-running two web searches word for word,
+  including the same search accepted twice in one second (for a send
+  tool that same hole would have meant a double-send). Pure lookups
+  (searches, reads, listings) whose identical call already succeeded in
+  the current turn are now refused with a pointer to the existing
+  result, EXCEPT when a mutating tool succeeded in between (a re-read
+  after a write is legitimate; the guard fails open). Exact duplicates
+  within one model response are dropped silently for all tools - one
+  logical call, one result.
 - **The workflow router routes on what the user actually said.** The WebUI
   lane prepends a workspace context preamble to the user message before the
   agent runs, and the workflow router matched templates against that

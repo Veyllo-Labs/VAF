@@ -7,10 +7,12 @@ before touching the reflex/policy pieces (`vaf/core/voice_policy.py`, the
 `vaf/core/voice_agent.py` + `vaf/core/web_server.py`). It complements, and does not
 replace, [VOICE_AGENT.md](VOICE_AGENT.md), which documents the live-call lane itself.
 
-Status: phased build. Phase 0 (foundation), Phase 1 (guest privacy) and Phase 2
+Status: phased build. Phase 0 (foundation), Phase 1 (guest privacy), Phase 2
 (continuous listening + grounded chime-in, scene modes, the activity dial, addressee
-clarification) are implemented; Phase 3 (barge-in) follows. A visual reflex schema with
-the latency budget accompanies this doc.
+clarification) and the first half of Phase 3 (barge-in: interrupt the speaking agent,
+8a stop-and-listen, with browser AEC) are implemented; the rest of Phase 3
+(thinking-window barge-in, streaming TTS, cooperative cancel, 8b smart-resume) follows.
+A visual reflex schema with the latency budget accompanies this doc.
 
 ## Why
 
@@ -219,9 +221,18 @@ utterance in the live turn handler and cleared at call end.
   mean me?" on an ambiguous non-owner address-check. Deferred here on purpose: ephemeral
   guest ids `Gast A/B` (need per-speaker clustering, see the guests section), Stage 2
   ONNX, and any server-INITIATED push (only needed for out-of-call always-on).
-- **Phase 3 - barge-in (web-call first):** browser AEC + full-duplex capture during TTS,
-  streaming/chunked TTS, the barge-in trigger with in-flight LLM abort, `stop&listen`
-  first (smart-resume later).
+- **Phase 3 - barge-in (web-call first):** the first half is implemented - browser AEC
+  (`getUserMedia echoCancellation`) so the mic can stay live while the agent speaks, and
+  the barge-in trigger (`watchForBargeIn` in `VoiceCallLayer.tsx`): sustained user speech
+  above the gate plus a margin cuts the agent off mid-sentence (`agentAudioRef.pause()`)
+  and hands control back to the listen loop (8a stop-and-listen). A barge-in during
+  playback has no in-flight backend work (the LLM turn and TTS finished before the audio
+  played), so pausing is enough. Deferred to the next increment: interrupting during the
+  backend "thinking" window (needs the mic live before the reply arrives, a cooperative
+  `voice_call_cancel` so the one local model is freed sooner, and discarding the
+  superseded reply), streaming/chunked TTS, and 8b smart-resume (continue the interrupted
+  reply instead of dropping it). A reference-signal AEC is a later fallback only if the
+  browser AEC proves insufficient in live use.
 
 Continuous listening OUTSIDE a call (e.g. during a film) is carried by this
 architecture but productionized only after phase 2/3.

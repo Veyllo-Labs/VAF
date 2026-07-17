@@ -39,6 +39,16 @@ const SILENCE_MS = 1500;
 // value 20). Everything below is ignored - not spoken over, not recorded.
 const MIN_SPEECH_MS = 350;    // noise gate: a click is 1-2 voiced frames, real words accumulate
 const UNMUTE_GRACE_MS = 400;  // swallow the click/pop of the unmute toggle itself
+// Barge-in (interrupt the SPEAKING agent - Phase 3, 8a stop-and-listen). The
+// mic is opened with echoCancellation, so the agent's own TTS is cancelled from
+// the mic input and full-duplex is possible. During playback a watcher listens
+// for the user: sustained voiced energy above the gate PLUS a margin (browser
+// AEC is imperfect - the margin rejects residual echo) cuts the agent off and
+// hands control straight back to listening. Tunables - if the agent talks over
+// you, lower these; if it trips on its own voice, raise BARGE_MARGIN. Onset loss
+// is bounded by BARGE_SUSTAIN_MS (the user keeps talking; the rest is captured).
+const BARGE_MARGIN = 8;         // extra level above the VAD gate to count as a real interruption
+const BARGE_SUSTAIN_MS = 280;   // sustained voiced time before the agent is cut off
 
 export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false }: Props) {
     // Ref mirror: the recorder/turn closures are long-lived and must read
@@ -57,6 +67,19 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
     const agentAudioRef = useRef<HTMLAudioElement | null>(null);
     const agentCtxRef = useRef<AudioContext | null>(null);
     const agentRafRef = useRef<number>(0);
+    // Barge-in watcher: a mic analyser that runs ONLY while the agent speaks, to
+    // catch the user interrupting (Phase 3, 8a). Its own context so it never
+    // fights the per-utterance listen-loop context or the agent pulse analyser.
+    const bargeCtxRef = useRef<AudioContext | null>(null);
+    // Full teardown of the CURRENTLY live agent playback: its barge watcher, its
+    // pulse RAF loop and its Blob object URL. Kept in a ref so a SUPERSEDING
+    // playback - or call teardown - can release the previous one even when its
+    // audio was preempted via pause() and so never ran its own done(): the result
+    // readout does exactly that. Without it each overlap orphans a RAF loop + a
+    // mic/analyser node + an object URL on the shared contexts (and a stale barge
+    // watcher could still fire a spurious resume mid-playback). This app has a
+    // documented QtWebEngine GPU-leak history, so at most one playback is ever live.
+    const playbackTeardownRef = useRef<() => void>(() => { /* noop */ });
     const eyePulseRef = useRef<HTMLSpanElement | null>(null);
     const pendingTts = useRef<((b64: string | null) => void) | null>(null);
     const mutedRef = useRef(false);
@@ -94,6 +117,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         if (eyePulseRef.current) eyePulseRef.current.style.transform = 'scale(1)';
         try { agentCtxRef.current?.close(); } catch { /* noop */ }
         agentCtxRef.current = null;
+        try { playbackTeardownRef.current(); } catch { /* noop */ }
+        playbackTeardownRef.current = () => { /* noop */ };
+        try { bargeCtxRef.current?.close(); } catch { /* noop */ }
+        bargeCtxRef.current = null;
         pendingTts.current = null;
     }, []);
 
@@ -148,8 +175,69 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         return () => clearInterval(id);
     }, [active]);
 
+    // Barge-in watcher (Phase 3, 8a): while the agent speaks, watch the (AEC'd)
+    // mic for the user interrupting. Sustained voiced energy above the gate PLUS a
+    // margin (residual-echo guard) fires onBarge once. Returns a stop function.
+    // Purely a level detector - it never records; the interrupted turn is captured
+    // by the normal listen loop that resumes right after the agent is cut off.
+    const watchForBargeIn = useCallback((onBarge: () => void) => {
+        // The caller (playAgentAudio) has already torn down any prior playback via
+        // playbackTeardownRef, so at most one watcher is ever live here.
+        const stream = streamRef.current;
+        if (!stream) return () => { /* noop */ };
+        let raf = 0;
+        let voiced = 0;
+        let last = 0;
+        let stopped = false;
+        let src: MediaStreamAudioSourceNode | null = null;
+        try {
+            const ctx = bargeCtxRef.current ?? new AudioContext();
+            bargeCtxRef.current = ctx;
+            ctx.resume().catch(() => { /* noop */ });
+            src = ctx.createMediaStreamSource(stream);
+            const an = ctx.createAnalyser();
+            an.fftSize = 256;
+            src.connect(an);
+            const buf = new Uint8Array(an.frequencyBinCount);
+            const tick = () => {
+                if (stopped || stopFlag.current) return;
+                an.getByteFrequencyData(buf);
+                const now = performance.now();
+                const dt = last ? now - last : 0;
+                last = now;
+                // Muted or in the unmute grace window: never barge (same gates as
+                // the listen loop). Otherwise require gate + margin, sustained.
+                const level = (mutedRef.current || now < graceUntilRef.current)
+                    ? 0 : buf.reduce((a, b) => a + b, 0) / buf.length;
+                const gate = useVoiceCallStore.getState().gateLevel;
+                if (level > gate + BARGE_MARGIN) {
+                    voiced += dt;
+                    if (voiced >= BARGE_SUSTAIN_MS) { onBarge(); return; }
+                } else {
+                    voiced = 0;
+                }
+                raf = requestAnimationFrame(tick);
+            };
+            raf = requestAnimationFrame(tick);
+        } catch {
+            return () => { /* noop */ };
+        }
+        return () => {
+            stopped = true;
+            cancelAnimationFrame(raf);
+            try { src?.disconnect(); } catch { /* noop */ }
+        };
+    }, []);
+
     // Play a base64 WAV with the eye following the amplitude; resolves via onDone.
     const playAgentAudio = useCallback((b64: string, onDone: () => void) => {
+        // Supersede any still-live prior playback FULLY (its pulse RAF, barge
+        // watcher and object URL) BEFORE creating this one's - a playback preempted
+        // via pause() never runs its own done(), so each overlap would otherwise
+        // orphan those on the shared contexts. Running it first also means the
+        // prior pulse cancels the (still-current) shared RAF id before this one
+        // overwrites it.
+        playbackTeardownRef.current();
         try {
             const bytes = atob(b64);
             const arr = new Uint8Array(bytes.length);
@@ -188,11 +276,42 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                     if (voiceCallAudio.agentAnalyser === an) voiceCallAudio.agentAnalyser = null;
                 };
             } catch { /* analyser optional */ }
-            const done = () => {
+            let finished = false;
+            let stopBarge = () => { /* set below */ };
+            // Idempotent teardown of THIS playback's resources (watcher + pulse +
+            // URL), reachable both from done() and from a superseding playback.
+            // Setting finished here (not only in done()) makes a later onended a
+            // no-op even when this playback was superseded WITHOUT a pause() - so
+            // a stale onended can never cancel a newer playback's pulse RAF or fire
+            // a spurious resume, independent of how the caller supersedes.
+            const teardown = () => {
+                finished = true;
+                stopBarge();
                 stopPulse();
                 URL.revokeObjectURL(url);
+            };
+            const done = () => {
+                if (finished) return;   // barge + onended can both fire; run once
+                finished = true;
+                teardown();
                 if (!stopFlag.current) onDone();
             };
+            // Barge-in (8a stop-and-listen): the user talking over the agent cuts
+            // it off mid-sentence and hands control straight back to listening
+            // (done() -> onDone resumes the listen loop). A short "go ahead" cue
+            // acknowledges the interruption.
+            stopBarge = watchForBargeIn(() => {
+                if (finished) return;
+                try { audio.pause(); } catch { /* noop */ }
+                playEarcon('accept');
+                useVoiceCallStore.getState().set({
+                    speaker: 'user', agentMode: 'listening', statusKey: 'listening',
+                });
+                done();
+            });
+            // This playback is now the live one: a later playback (or teardown)
+            // releases it through here even if its audio is preempted via pause().
+            playbackTeardownRef.current = teardown;
             audio.onplay = () => useVoiceCallStore.getState().set({
                 speaker: 'agent', agentMode: 'talking', statusKey: 'speaking',
             });
@@ -202,7 +321,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         } catch {
             onDone();
         }
-    }, []);
+    }, [watchForBargeIn]);
 
     // Hands-free listen loop: one utterance -> one voice_call_turn.
     const listenLoop = useCallback(() => {
@@ -457,7 +576,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         stopFlag.current = false;
         (async () => {
             try {
-                streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // echoCancellation is what makes barge-in possible: the browser
+                // cancels the agent's own TTS from the mic input, so the mic can
+                // stay live while the agent speaks without hearing itself (Phase 3).
+                streamRef.current = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                });
                 // Hand the stream to the call bar: its waveform is a REAL
                 // level meter on this stream (user decision - like the
                 // recognition test, not an animation).

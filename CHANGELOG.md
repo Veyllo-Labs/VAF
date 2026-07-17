@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Voice call, you can interrupt the agent**: while the agent is speaking you can now
+  just start talking and it stops and listens, like a real conversation, instead of
+  making you wait for it to finish. The microphone is opened with echo cancellation so it
+  does not hear its own voice, and it only yields to a real, sustained interruption (a
+  brief noise will not cut it off). For now this covers interrupting while it is
+  speaking, on a web call; interrupting while it is still thinking, and having it resume
+  where it left off, are planned next.
 - **Voice call, the agent chimes in on interesting talk**: during a live call the agent
   now keeps a short rolling transcript of what it hears, and when someone else in the
   room says something that matches your configured interest topics, it can briefly and

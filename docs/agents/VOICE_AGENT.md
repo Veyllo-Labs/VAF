@@ -275,6 +275,30 @@ Speaker confirmation events (`speaker_confirm_*`) are documented in
 - During a call the chat avatars animate away (`voice-call-hide-avatars`);
   the window is the single agent presence.
 
+## Barge-in (Phase 3, 8a stop-and-listen)
+
+The user can interrupt the SPEAKING agent naturally. The mic is opened with
+`echoCancellation` (plus `noiseSuppression`/`autoGainControl`), so the browser
+cancels the agent's own TTS from the mic input and the two lanes can be live at
+once. While the agent speaks, `watchForBargeIn` (`VoiceCallLayer.tsx`) runs a
+level detector on the AEC'd mic; sustained voiced energy above the VAD gate PLUS
+`BARGE_MARGIN` (a residual-echo guard, since browser AEC is imperfect) for
+`BARGE_SUSTAIN_MS` pauses the agent audio (`agentAudioRef.current.pause()`) and
+hands control straight back to the listen loop, with a short "go ahead" earcon.
+The interrupted reply is abandoned (8a: stop and listen, not resume); the user's
+continued speech is captured by the resumed listen loop. The onset lost before
+the cut is bounded by `BARGE_SUSTAIN_MS`; those tunables are meant to be adjusted
+live if the agent talks over the user or trips on its own voice.
+
+Because the reply's LLM turn and TTS finish on the backend BEFORE the audio plays,
+a barge-in during playback has no in-flight backend work to cancel - pausing the
+audio is enough. Interrupting during the "thinking" window (backend still
+generating), streaming/chunked TTS, a cooperative `voice_call_cancel`, and 8b
+smart-resume are the deferred next increment (see
+[VOICE_REFLEX.md](VOICE_REFLEX.md), Phase 3). Barge-in is web-call only for now;
+a reference-signal AEC is the fallback only if the browser AEC proves insufficient
+in live use.
+
 ## Speaker identification and confirmation
 
 The voice DB (owner profile + named third parties), the "unsure" confirmation

@@ -117,9 +117,9 @@ it. Review generated phrasings before shipping - machine translations of casual 
 | Key | Used by | Placeholders |
 |-----|---------|--------------|
 | `nudge` | Thinking-run "are you there?" follow-up nudge (`_send_nudge`, `vaf/core/thinking_mode.py`) | `{name}` |
-| `awareness_triggers` | Voice reflex policy fast prefilter, per-language cue phrases consumed as full lists via `phrasings()` (`vaf/core/voice_policy.py`) | none (word/phrase lists) |
-| `addressee_check` | Voice reflex addressee-ambiguity detector, per-language address-check cues consumed as full lists (`voice_agent.wants_addressee_clarification`) | none (word/phrase lists) |
-| `addressee_clarify` | Voice reflex "did you mean me?" spoken response (`voice_agent.addressee_clarify_line`) | none |
+| `awareness_triggers` | Voice reflex policy fast prefilter, per-language cue phrases consumed as full lists via `phrasings()` (`vaf/core/voice_policy.py`); ~35 langs | none (word/phrase lists) |
+| `addressee_check` | Voice reflex addressee-ambiguity detector, per-language address-check cues consumed as full lists (`voice_agent.wants_addressee_clarification`); ~35 langs | none (word/phrase lists) |
+| `addressee_clarify` | Voice reflex "did you mean me?" spoken response (`voice_agent.addressee_clarify_line`); ~35 langs | none |
 
 ## Related documentation
 

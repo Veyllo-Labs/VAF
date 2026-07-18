@@ -122,8 +122,13 @@ def test_chime_decision_no_topics_never_speaks(monkeypatch):
 def test_activity_dial_shifts_chime_frequency(monkeypatch):
     """The ONE dial (quiet..active) demonstrably changes how readily the agent
     chimes in: the same grounded utterance speaks at high activity, stays silent
-    at low activity (mid grounding between the two mode-scaled bars)."""
-    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: 0.62)
+    at low activity. The mock score is derived to sit BETWEEN the two mode-scaled
+    bars, so the test stays valid if the threshold band is recalibrated."""
+    hot_thr = vp._threshold(vp._mode_activity(vp.MODE_QUIET, 1.0))   # low bar
+    cold_thr = vp._threshold(vp._mode_activity(vp.MODE_QUIET, 0.3))  # high bar
+    mid = (hot_thr + cold_thr) / 2.0
+    assert hot_thr < mid < cold_thr                                  # window is non-empty
+    monkeypatch.setattr(vp, "interest_score", lambda *a, **k: mid)
     args = dict(recent_labels=["self"], topics=["arbeit"])
     hot = vp.chime_decision("[anderer_Sprecher]: bericht", "other", activity=1.0, **args)
     cold = vp.chime_decision("[anderer_Sprecher]: bericht", "other", activity=0.3, **args)

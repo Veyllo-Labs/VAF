@@ -115,20 +115,38 @@ IMPORTANT - the current speaker is NOT your verified user {user_name}, but a gue
 # policy already judged it interesting/grounded. This prompt is silence-biased -
 # the model may still decline. A chime-in is a spoken remark ONLY: no tools, no
 # delegation (any stray marker is stripped in _postprocess_chime).
-_CHIME_SYSTEM = """You are {agent_name}, quietly present on a LIVE VOICE CALL. The microphone is always open and you have been LISTENING without being directly addressed - no one asked you anything. Below is what you just overheard.
+_CHIME_SYSTEM = """You are {agent_name}, quietly present on a LIVE VOICE CALL. The microphone is always open and you just OVERHEARD the line below - it was NOT addressed to you, but it touches on something your user cares about. Like an attentive, friendly person in the room, you MAY add one brief remark. Answer in the user's language: {lang}.
 
-Decide whether you have something genuinely useful, brief and NATURAL to add, grounded in what you actually know. Answer in the user's language: {lang}.
+Give exactly ONE short, natural spoken sentence: a light relevant comment, a bit of context you are genuinely sure of, or a warm reaction - the way someone nearby would casually chime in. No preamble like "I could not help but overhear".
 
 Rules:
-- If you have a genuinely helpful, grounded remark - a relevant fact you know, a gentle reminder, a small correction - say it in ONE short spoken sentence, the way a helpful person in the room would briefly chime in. No preamble like "I could not help but overhear".
-- If you have nothing solidly grounded and useful to add, reply with EXACTLY {silent} and nothing else. Silence is the correct, expected default - most overheard talk needs no comment from you. Never invent a reason to speak, never guess, never state something you are not sure of.
-- No markdown, no lists, no follow-up questions, no meta about listening, labels or your reasoning. Just the one natural remark, or {silent}.
-- You have NO tools here and take NO action - this is only a spoken remark.{guest_block}
+- Do NOT invent facts. No made-up scores, dates, numbers or names. If you are not certain of a specific detail, keep the remark general ("klingt nach einem spannenden Spiel") instead of stating a claim you cannot back up.
+- ONE sentence only. No markdown, no lists, no questions back, no meta about listening, labels or your reasoning. You take no action here, only speak.
+- Reply with EXACTLY {silent} and nothing else ONLY if the line is truly irrelevant to your user, or a remark would just be empty filler. Otherwise a short natural remark is welcome - you do not need a useful fact to justify speaking.{guest_block}
 {memory_block}"""
 
 
 # Address signals: the agent's name or a second-person form in the utterance.
-_ADDRESS_RE = re.compile(r"\b(vaf|du|dich|dir|dein\w*|you|your|yours)\b", re.I)
+# Multilingual (matched against STT output, which can be any of the ~44 STT
+# languages). Only reasonably distinctive whole-word forms are listed - the goal
+# is a rough "was this aimed at someone" heuristic, and addressing BY NAME
+# (addressed_by_name) already works language-agnostically. A false hit at worst
+# makes the agent answer a guest instead of just overhearing; it never authorizes
+# anything (anti-spoofing is unchanged).
+_ADDRESS_RE = re.compile(
+    r"\b(vaf"
+    r"|you|your|yours"                       # en
+    r"|du|dich|dir|dein\w*"                   # de
+    r"|tú|usted|ustedes|vosotros"            # es
+    r"|você|voce|vocês|voces"                # pt
+    r"|tu|toi|vous|votre|voi"                 # fr / it
+    r"|jij|jou|jouw"                          # nl
+    r"|ty|wy|cię|twój"                        # pl
+    r"|sen|seni|sana|siz"                     # tr
+    r"|ты|вы|тебя|тебе|вас|твой|твій"        # ru / uk
+    r")\b",
+    re.I,
+)
 _LABEL_PREFIX_RE = re.compile(r"^\s*\[[^\]]{1,40}\]:\s*")
 
 

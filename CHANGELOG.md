@@ -12,6 +12,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **Voice call, the reflex features speak your language**: the agent's "did you mean me?"
+  clarification and the cue words behind it now ship in about 35 languages (generated
+  from English, so unlisted languages fall back to English), and it detects being spoken
+  to across the major languages, not just German and English. What it hears (speech
+  recognition) and what it says (the spoken reply) were already multilingual; this widens
+  the small fixed phrases in between. The proactive chime-in was also tuned so it actually
+  speaks up on genuinely on-topic overheard talk instead of staying silent.
 - **Voice call, you can interrupt the agent**: while the agent is speaking you can now
   just start talking and it stops and listens, like a real conversation, instead of
   making you wait for it to finish. The microphone is opened with echo cancellation so it

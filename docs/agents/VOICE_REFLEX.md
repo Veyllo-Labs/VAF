@@ -183,6 +183,26 @@ default). The durable transcript that feeds the mode/context is
 `voice_context` (session/scope-scoped, bounded, fail-open), recorded on every heard
 utterance in the live turn handler and cleared at call end.
 
+## Languages
+
+The reflex system is broadly multilingual, with a few layers that are language-scoped:
+
+- **Language-agnostic (all STT languages):** speaker labels (voice embeddings, not text),
+  barge-in (energy), the chime-in REMARK and the clarification question (the LLM writes
+  them in the call language), and the per-turn language follow.
+- **Vocab cue/response lexicons** (`awareness_triggers`, `addressee_check`,
+  `addressee_clarify`): shipped in ~35 languages, generated from the English seed with
+  `scripts/generate_vocab.py` (the runtime never translates - it reads the generated
+  `data/` files; unlisted languages fall back to English).
+- **Address heuristic** (`_ADDRESS_RE`, "was this aimed at someone"): distinctive
+  second-person forms for ~11 major languages, plus fully language-agnostic
+  addressing-by-name (`addressed_by_name`).
+- **Grounding embedding** (`all-MiniLM-L6-v2`): English-native with usable cross-lingual
+  reach (German scores comparably); weaker for distant languages. A multilingual
+  embedding model would lift non-Latin-script grounding - deferred.
+- **Spoken output** is bounded by the installed TTS voices (the language follow only
+  switches to a language the call lane can actually speak).
+
 ## Hard invariants (must not break)
 
 - **One llama server, never two concurrent inferences** (CLAUDE.md Rule 4.6,

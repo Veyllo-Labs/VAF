@@ -1,12 +1,48 @@
 {
-  "en": [
-    "can you hear me",
-    "can you hear us",
-    "are you there",
-    "you still there",
-    "are you there vaf",
-    "are you listening",
-    "did you get that"
+  "ar": [
+    "هل تسمعني",
+    "هل تسمعنا",
+    "هل أنت هنا",
+    "هل ما زلت هنا",
+    "هل أنت هنا فاف",
+    "هل تستمع",
+    "هل فهمت ذلك"
+  ],
+  "bg": [
+    "чуваш ли ме",
+    "чуваш ли ни",
+    "там ли си",
+    "още ли си там",
+    "там ли си, вав",
+    "слушаш ли",
+    "разбра ли"
+  ],
+  "bn": [
+    "তুমি কি আমাকে শুনতে পাচ্ছ",
+    "তোমরা কি আমাদের শুনতে পাচ্ছ",
+    "তুমি কি আছো",
+    "তুমি এখনো আছো",
+    "তুমি কি আছো ভ্যাফ",
+    "তুমি কি শুনছ",
+    "তুমি কি সেটা বুঝতে পেরেছ"
+  ],
+  "cs": [
+    "slyšíš mě",
+    "slyšíš nás",
+    "jsi tam",
+    "jsi pořád tam",
+    "jsi tam vaf",
+    "posloucháš",
+    "pochopil jsi to"
+  ],
+  "da": [
+    "kan du høre mig",
+    "kan du høre os",
+    "er du der",
+    "er du stadig der",
+    "er du der vaf",
+    "lytter du",
+    "fik du det"
   ],
   "de": [
     "kannst du mich hören",
@@ -17,5 +53,266 @@
     "bist du noch da",
     "hörst du zu",
     "hast du das mitbekommen"
+  ],
+  "el": [
+    "με ακούς",
+    "μας ακούς",
+    "είσαι εκεί",
+    "είσαι ακόμα εκεί",
+    "είσαι εκεί vaf",
+    "ακούς",
+    "το κατάλαβες"
+  ],
+  "en": [
+    "can you hear me",
+    "can you hear us",
+    "are you there",
+    "you still there",
+    "are you there vaf",
+    "are you listening",
+    "did you get that"
+  ],
+  "es": [
+    "me escuchas",
+    "nos escuchas",
+    "estás ahí",
+    "sigues ahí",
+    "estás ahí vaf",
+    "me estás escuchando",
+    "entendiste eso"
+  ],
+  "fa": [
+    "صدای منو می‌شنوی",
+    "صدای ما رو می‌شنوی",
+    "اونجا هستی",
+    "هنوز اونجایی",
+    "اونجا هستی وواف",
+    "داری گوش می‌دی",
+    "فهمیدی چی گفتم"
+  ],
+  "fi": [
+    "kuuluuko",
+    "kuuluuko meille",
+    "oletko siellä",
+    "oletko yhä siellä",
+    "oletko siellä vaf",
+    "kuunteletko",
+    "saitko sen"
+  ],
+  "fr": [
+    "tu m'entends",
+    "vous nous entendez",
+    "t'es là",
+    "t'es toujours là",
+    "t'es là vaf",
+    "tu écoutes",
+    "t'as compris"
+  ],
+  "he": [
+    "אתה שומע אותי",
+    "אתה שומע אותנו",
+    "אתה שם",
+    "אתה עדיין שם",
+    "אתה שם ווף",
+    "אתה מקשיב",
+    "קלטת את זה"
+  ],
+  "hi": [
+    "क्या आप सुन सकते हैं",
+    "क्या आप हमें सुन सकते हैं",
+    "क्या आप वहाँ हैं",
+    "क्या आप अभी भी वहाँ हैं",
+    "क्या आप वहाँ हैं वाफ",
+    "क्या आप सुन रहे हैं",
+    "क्या आपने सुना"
+  ],
+  "hr": [
+    "čuješ li me",
+    "čuješ li nas",
+    "jesi li tu",
+    "još si tu",
+    "jesi li tamo vaf",
+    "slušaš li",
+    "jesi li to shvatio"
+  ],
+  "hu": [
+    "hallasz",
+    "hallotok",
+    "itt vagy",
+    "még itt vagy",
+    "itt vagy vaf",
+    "figyelsz",
+    "megvan"
+  ],
+  "id": [
+    "bisa dengar saya",
+    "bisa dengar kami",
+    "apakah kamu di sana",
+    "masih di sana",
+    "apakah kamu di sana vaf",
+    "apakah kamu mendengarkan",
+    "kamu dapat itu"
+  ],
+  "it": [
+    "mi senti",
+    "ci senti",
+    "sei lì",
+    "sei ancora lì",
+    "sei lì vaf",
+    "stai ascoltando",
+    "hai capito"
+  ],
+  "ja": [
+    "聞こえますか",
+    "聞こえていますか",
+    "いますか",
+    "まだいますか",
+    "いますか、VAF",
+    "聞いていますか",
+    "わかりましたか"
+  ],
+  "ko": [
+    "들리세요",
+    "우리 소리 들리세요",
+    "거기 있어요",
+    "아직 거기 있어요",
+    "거기 있어요 vaf",
+    "듣고 있어요",
+    "알아들었어요"
+  ],
+  "ms": [
+    "boleh dengar saya",
+    "boleh dengar kami",
+    "awak ada di situ",
+    "masih ada di situ",
+    "awak ada di situ vaf",
+    "awak mendengar tak",
+    "awak faham tak"
+  ],
+  "nl": [
+    "kun je me horen",
+    "kun je ons horen",
+    "ben je daar",
+    "ben je er nog",
+    "ben je daar vaf",
+    "luister je",
+    "heb je dat begrepen"
+  ],
+  "no": [
+    "hører du meg",
+    "hører du oss",
+    "er du der",
+    "er du fortsatt der",
+    "er du der vaf",
+    "lytter du",
+    "fikk du med deg det"
+  ],
+  "pl": [
+    "słyszysz mnie",
+    "słyszysz nas",
+    "jesteś tam",
+    "wciąż tam jesteś",
+    "jesteś tam vaf",
+    "słuchasz",
+    "zrozumiałaś to"
+  ],
+  "pt": [
+    "você me ouve",
+    "você nos ouve",
+    "você está aí",
+    "ainda está aí",
+    "você está aí vaf",
+    "você está ouvindo",
+    "você entendeu"
+  ],
+  "ro": [
+    "mă auzi",
+    "ne auzi",
+    "ești acolo",
+    "mai ești acolo",
+    "ești acolo vaf",
+    "asculti",
+    "ai prins asta"
+  ],
+  "ru": [
+    "ты меня слышишь",
+    "ты нас слышишь",
+    "ты здесь",
+    "ты ещё здесь",
+    "ты здесь, вав",
+    "ты слушаешь",
+    "ты это понял"
+  ],
+  "sk": [
+    "počúvaš ma",
+    "počúvaš nás",
+    "si tam",
+    "si ešte tam",
+    "si tam vaf",
+    "počúvaš",
+    "zachytil si to"
+  ],
+  "sr": [
+    "čuješ li me",
+    "čuješ li nas",
+    "jesi li tu",
+    "još si tu",
+    "jesi li tu vaf",
+    "slušaš li",
+    "jesi li razumeo"
+  ],
+  "sv": [
+    "hör du mig",
+    "hör du oss",
+    "är du där",
+    "är du kvar",
+    "är du där vaf",
+    "lyssnar du",
+    "förstod du det"
+  ],
+  "th": [
+    "ได้ยินฉันไหม",
+    "ได้ยินพวกเราไหม",
+    "อยู่ไหม",
+    "ยังอยู่ไหม",
+    "อยู่ไหม vaf",
+    "ฟังอยู่ไหม",
+    "เข้าใจไหม"
+  ],
+  "tr": [
+    "beni duyabiliyor musun",
+    "bizi duyabiliyor musun",
+    "orada mısın",
+    "hala orada mısın",
+    "orada mısın vaf",
+    "dinliyor musun",
+    "anladın mı"
+  ],
+  "uk": [
+    "ти мене чуєш",
+    "ти нас чуєш",
+    "ти тут",
+    "ти ще тут",
+    "ти тут вав",
+    "ти слухаєш",
+    "ти зрозумів"
+  ],
+  "vi": [
+    "bạn có nghe tôi không",
+    "bạn có nghe chúng tôi không",
+    "bạn có ở đó không",
+    "bạn vẫn còn đó không",
+    "bạn có ở đó không vaf",
+    "bạn có đang nghe không",
+    "bạn có hiểu không"
+  ],
+  "zh": [
+    "你能听到我吗",
+    "你能听到我们吗",
+    "你在吗",
+    "你还在吗",
+    "你在吗 vaf",
+    "你在听吗",
+    "你听到了吗"
   ]
 }

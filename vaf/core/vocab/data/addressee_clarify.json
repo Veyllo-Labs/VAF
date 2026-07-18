@@ -1,10 +1,38 @@
 {
-  "en": [
-    "Do you mean me?",
-    "Were you talking to me?",
-    "Did you mean me?",
-    "Sorry, were you talking to me?",
-    "Me?"
+  "ar": [
+    "تقصدني أنا؟",
+    "كنت تتحدث إليّ؟",
+    "هل كنت تقصدني؟",
+    "عذرًا، هل كنت تتحدث إليّ؟",
+    "أنا؟"
+  ],
+  "bg": [
+    "Имаш предвид мен?",
+    "Говореше ли на мен?",
+    "Мен ли имаше предвид?",
+    "Извинявай, на мен ли говореше?",
+    "Мен?"
+  ],
+  "bn": [
+    "আমাকে বলছ?",
+    "আমার সাথে কথা বলছিলেন?",
+    "আমাকে বোঝাতে চাইছেন?",
+    "দুঃখিত, আমার সাথে কথা বলছিলেন?",
+    "আমাকে?"
+  ],
+  "cs": [
+    "Myslíš mě?",
+    "Mluvil jsi na mě?",
+    "Měl jsi na mysli mě?",
+    "Promiň, mluvil jsi na mě?",
+    "Já?"
+  ],
+  "da": [
+    "Mener du mig?",
+    "Talte du til mig?",
+    "Mente du mig?",
+    "Undskyld, talte du til mig?",
+    "Mig?"
   ],
   "de": [
     "Meinst du mich?",
@@ -12,5 +40,208 @@
     "Meintest du mich?",
     "Entschuldige, meinst du mich?",
     "Mich?"
+  ],
+  "el": [
+    "Εννοείς εμένα;",
+    "Μιλούσες σε μένα;",
+    "Με εννοούσες;",
+    "Συγγνώμη, μιλούσες σε μένα;",
+    "Εγώ;"
+  ],
+  "en": [
+    "Do you mean me?",
+    "Were you talking to me?",
+    "Did you mean me?",
+    "Sorry, were you talking to me?",
+    "Me?"
+  ],
+  "es": [
+    "¿Te refieres a mí?",
+    "¿Hablabas conmigo?",
+    "¿Te referías a mí?",
+    "Perdón, ¿hablabas conmigo?",
+    "¿Yo?"
+  ],
+  "fa": [
+    "منظورت من بود؟",
+    "داشتی با من صحبت می‌کردی؟",
+    "منظورت من بود؟",
+    "ببخشید، داشتی با من صحبت می‌کردی؟",
+    "من؟"
+  ],
+  "fi": [
+    "Tarkoititko minua?",
+    "Puhuitko minulle?",
+    "Tarkoititko minua?",
+    "Anteeksi, puhuitko minulle?",
+    "Minä?"
+  ],
+  "fr": [
+    "Vous parlez de moi ?",
+    "Vous parliez à moi ?",
+    "Vous vouliez dire moi ?",
+    "Pardon, vous parliez à moi ?",
+    "Moi ?"
+  ],
+  "he": [
+    "אתה מתכוון אליי?",
+    "דיברת אליי?",
+    "התכוונת אליי?",
+    "סליחה, דיברת אליי?",
+    "אני?"
+  ],
+  "hi": [
+    "क्या आप मुझसे कह रहे हैं?",
+    "क्या आप मुझसे बात कर रहे थे?",
+    "क्या आपका मतलब मैं था?",
+    "माफ़ करें, क्या आप मुझसे बात कर रहे थे?",
+    "मैं?"
+  ],
+  "hr": [
+    "Mislite na mene?",
+    "Jeste li pričali sa mnom?",
+    "Jeste li mislili na mene?",
+    "Oprostite, jeste li pričali sa mnom?",
+    "Ja?"
+  ],
+  "hu": [
+    "Engem kérdeztél?",
+    "Hozzám beszéltél?",
+    "Rám gondoltál?",
+    "Bocsánat, hozzám beszéltél?",
+    "Én?"
+  ],
+  "id": [
+    "Maksud kamu saya?",
+    "Apakah kamu bicara dengan saya?",
+    "Kamu maksud saya?",
+    "Maaf, apakah kamu bicara dengan saya?",
+    "Saya?"
+  ],
+  "it": [
+    "Intendi me?",
+    "Stavi parlando con me?",
+    "Volevi dire me?",
+    "Scusa, stavi parlando con me?",
+    "Io?"
+  ],
+  "ja": [
+    "私のことですか？",
+    "私に話していましたか？",
+    "私のことを言いましたか？",
+    "すみません、私に話していましたか？",
+    "私？"
+  ],
+  "ko": [
+    "저를 말씀하신 건가요?",
+    "저한테 하신 말씀인가요?",
+    "저를 말씀하신 건가요?",
+    "죄송한데, 저한테 하신 말씀인가요?",
+    "저요?"
+  ],
+  "ms": [
+    "Maksudkan saya?",
+    "Adakah anda bercakap dengan saya?",
+    "Adakah anda maksudkan saya?",
+    "Maaf, adakah anda bercakap dengan saya?",
+    "Saya?"
+  ],
+  "nl": [
+    "Bedoel je mij?",
+    "Had je het tegen mij?",
+    "Bedoelde je mij?",
+    "Sorry, had je het tegen mij?",
+    "Ik?"
+  ],
+  "no": [
+    "Mente du meg?",
+    "Snakket du til meg?",
+    "Mente du meg?",
+    "Beklager, snakket du til meg?",
+    "Meg?"
+  ],
+  "pl": [
+    "Chodziło o mnie?",
+    "Mówiłeś do mnie?",
+    "Miałeś na myśli mnie?",
+    "Przepraszam, mówiłeś do mnie?",
+    "Ja?"
+  ],
+  "pt": [
+    "Está falando comigo?",
+    "Você estava falando comigo?",
+    "Quis dizer eu?",
+    "Desculpe, estava falando comigo?",
+    "Eu?"
+  ],
+  "ro": [
+    "Te refereai la mine?",
+    "Vorbeai cu mine?",
+    "Te-ai referit la mine?",
+    "Scuze, vorbeai cu mine?",
+    "Eu?"
+  ],
+  "ru": [
+    "Вы меня имеете в виду?",
+    "Вы со мной говорили?",
+    "Вы меня имели в виду?",
+    "Извините, вы со мной говорили?",
+    "Я?"
+  ],
+  "sk": [
+    "Myslíš mňa?",
+    "Hovoril si so mnou?",
+    "Myslel si mňa?",
+    "Prepáč, hovoril si so mnou?",
+    "Ja?"
+  ],
+  "sr": [
+    "Mislite na mene?",
+    "Da li ste pričali sa mnom?",
+    "Da li ste mislili na mene?",
+    "Izvinite, da li ste pričali sa mnom?",
+    "Ja?"
+  ],
+  "sv": [
+    "Menar du mig?",
+    "Pratade du med mig?",
+    "Menade du mig?",
+    "Förlåt, pratade du med mig?",
+    "Mig?"
+  ],
+  "th": [
+    "หมายถึงฉันหรือเปล่า?",
+    "พูดกับฉันหรือเปล่า?",
+    "หมายถึงฉันใช่ไหม?",
+    "ขอโทษนะ พูดกับฉันหรือเปล่า?",
+    "ฉัน?"
+  ],
+  "tr": [
+    "Beni mi kastediyorsun?",
+    "Benimle mi konuşuyordun?",
+    "Beni mi demek istedin?",
+    "Üzgünüm, benimle mi konuşuyordun?",
+    "Ben mi?"
+  ],
+  "uk": [
+    "Ви мене маєте на увазі?",
+    "Ви зі мною говорили?",
+    "Ви мене мали на увазі?",
+    "Вибачте, ви зі мною говорили?",
+    "Я?"
+  ],
+  "vi": [
+    "Ý bạn là tôi?",
+    "Bạn đang nói chuyện với tôi à?",
+    "Ý bạn là tôi phải không?",
+    "Xin lỗi, bạn đang nói chuyện với tôi à?",
+    "Tôi à?"
+  ],
+  "zh": [
+    "你是说我吗？",
+    "你在跟我说话吗？",
+    "你指的是我吗？",
+    "不好意思，你在跟我说话吗？",
+    "我吗？"
   ]
 }

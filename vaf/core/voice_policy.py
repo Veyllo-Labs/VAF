@@ -31,10 +31,15 @@ from vaf.core import voice_agent
 
 # activity in [0,1] shifts the interestingness threshold: quiet (0) => high bar
 # (rarely interesting), active (1) => low bar. Orthogonal to the internal scene modes.
-_THR_QUIET = 0.78
-_THR_ACTIVE = 0.42
-_TRIGGER_RELAX = 0.20   # a cue phrase eases the grounding bar...
-_GROUND_FLOOR = 0.30    # ...but never below this: no grounding, no chime-in
+# Calibrated against REAL embeddings (2026-07-18 live call): MiniLM cosine of a short
+# overheard utterance vs a keyword-rich owner topic sits around 0.35-0.45 for genuinely
+# on-topic speech and below ~0.28 for off-topic/generic speech (player names, filler,
+# STT noise). The band lives in that gap so on-topic side-talk clears it while chatter
+# does not. The earlier 0.42-0.78 band was mock-tested only and never fired live.
+_THR_QUIET = 0.40
+_THR_ACTIVE = 0.28
+_TRIGGER_RELAX = 0.08   # a cue phrase eases the grounding bar...
+_GROUND_FLOOR = 0.28    # ...but never below this: no grounding, no chime-in
 
 _triggers_cache: Optional[List[str]] = None
 _triggers_lock = threading.Lock()

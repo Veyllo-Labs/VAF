@@ -232,6 +232,29 @@ def test_fa_death_retries_without_vquant_and_memoizes(mgr, monkeypatch):
     assert "-ctv" not in spawned[0]
 
 
+def test_fa_death_retries_even_with_empty_log(mgr, monkeypatch):
+    """Core hardening (live Gemma-on-Metal incident): attempt 1 dies but the log has
+    NO Flash-Attention marker - at low --log-verbosity llama-server wrote an EMPTY log,
+    or the marker scrolled out of the old tail window. The retry without -ctv must STILL
+    fire whenever a fallback exists, so an empty/marker-less log can no longer silently
+    disable the f16 fallback. The outcome is NOT memoized (no marker seen -> the flag
+    stays False), so the next start still tries the quantized cache first."""
+    spawned = []
+
+    def factory(cmd, stdout):
+        if "-ctv" in cmd:
+            return FakeProc(1111, lambda: 1, stdout=stdout)  # attempt 1: die, EMPTY log
+        return FakeProc(2222, lambda: None)                  # attempt 2 (f16): healthy
+
+    _wire_http(monkeypatch, lambda _n: FakeResponse(200))
+    monkeypatch.setattr(backend.subprocess, "Popen", _llama_popen(spawned, factory))
+
+    assert mgr.start_server(mgr._test["model"], n_ctx=8192) is True
+    assert len(spawned) == 2                            # retry fired despite the empty log
+    assert "-ctv" in spawned[0] and "-ctv" not in spawned[1]
+    assert mgr._kv_vquant_unsupported is False          # not memoized: the marker was never seen
+
+
 def test_previous_log_survives_one_generation(mgr, monkeypatch):
     """A crashing server is auto-restarted within seconds; the previous start's output
     must survive as server_last.prev.log instead of being truncated away."""

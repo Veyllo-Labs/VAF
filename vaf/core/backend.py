@@ -1048,13 +1048,17 @@ class ServerManager:
             cmd.extend(["--mmproj", mmproj_path, "--image-max-tokens", "1024"])
 
         # Server log verbosity is a THRESHOLD (higher = more output), not a syslog level.
-        # Debug Logs on: 3 = info incl. request/response details. Off: 0 = the default,
-        # which still prints startup and error lines (the FA-fallback diagnosis needs
-        # those) but no per-request dumps into the rolling server_last.log.
+        # Debug Logs on: 3 = info incl. request/response details. Off: 1 = errors +
+        # startup, no per-request dumps into the rolling server_last.log.
+        # NOT 0: measured on llama-server b9857, verbosity 0 writes an EMPTY log — it
+        # suppresses even fatal errors like "quantized V cache requires Flash Attention".
+        # That blinded the -ctv fallback (it scans the log for that string) AND left
+        # non-debug installs with zero diagnostics — live incident: Gemma voice model
+        # failed to start on macOS with only "Server failed to start" and an empty log.
         if is_debug_logging_enabled():
             cmd.extend(["--log-verbosity", "3"])
         else:
-            cmd.extend(["--log-verbosity", "0"])
+            cmd.extend(["--log-verbosity", "1"])
         
         # Prompt cache RAM (MB): configurable to avoid OOM on limited systems
         cache_ram_mb = Config.get("llama_cache_ram", 4096)
@@ -1230,13 +1234,22 @@ class ServerManager:
                 except Exception:
                     pass
                 self._log_file = None
-                log_tail = ""
+                # Read the FULL log, not just the tail: the retry decision below scans
+                # it for "requires Flash Attention". That marker is printed EARLY (at
+                # context init), and verbose models emit lots of load warnings AFTER it
+                # (Gemma: per-token control warnings + per-layer sched_reserve). With a
+                # 800-char tail the marker scrolled out for Gemma (error at char 114,
+                # ~816 chars followed) → the -ctv fallback never fired → "Server failed
+                # to start" although a retry without -ctv starts fine. Qwen happened to
+                # keep the marker inside 800 chars, which is why it worked and Gemma didn't.
+                log_full = ""
                 if log_file is not None:
                     try:
                         with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                            log_tail = f.read()[-800:]
+                            log_full = f.read()
                     except Exception:
                         pass
+                log_tail = log_full[-800:]  # user-facing snippet only
 
                 if timed_out:
                     # Still alive but not ready within the budget: stop it, so no
@@ -1257,8 +1270,18 @@ class ServerManager:
                     self._remove_pid()
                     return False
 
-                if attempt < len(attempt_cmds) and "requires Flash Attention" in log_tail:
-                    self._kv_vquant_unsupported = True
+                if attempt < len(attempt_cmds):
+                    # attempt 1 carries -ctv q4_0; the next attempt drops it (V cache
+                    # f16). The dominant cause is "quantized V cache requires Flash
+                    # Attention" (Metal has no FA kernel for many models). We do NOT
+                    # gate the retry on finding that string in the log: at low
+                    # --log-verbosity llama-server prints nothing, so the string was
+                    # invisible and the fallback silently never fired (live incident:
+                    # Gemma voice model on macOS, verbosity 0 -> empty log). Retry
+                    # whenever attempt 1 died and a no-ctv fallback exists — the only
+                    # cost is one extra load if the death was unrelated to -ctv.
+                    if "requires Flash Attention" in log_full:
+                        self._kv_vquant_unsupported = True  # skip the doomed attempt next time
                     if debug_logs:
                         try:
                             with open(get_dated_log_path("server_cmd", "log"), "a", encoding="utf-8") as _f:
@@ -1267,7 +1290,8 @@ class ServerManager:
                             pass
                     UI.event(
                         "Server",
-                        "V-cache quant needs Flash Attention (no backend support for this model) - retrying with f16 V cache...",
+                        "Local model failed to start with quantized V cache "
+                        "(usually: no Flash Attention for this model) - retrying with f16 V cache...",
                         style="yellow",
                     )
                     continue

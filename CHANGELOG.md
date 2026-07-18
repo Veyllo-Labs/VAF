@@ -11,6 +11,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The local voice model now starts on Apple Silicon Macs.** The recommended local
+  German voice model (Gemma) could fail to start on macOS/Metal with only "Server failed
+  to start" and an empty log. A fallback for the quantized cache existed but never fired:
+  the non-debug log level wrote an empty log, hiding the very error the retry looked for.
+  The fallback now runs whenever the first start attempt dies and an alternative exists,
+  non-debug logging captures fatal errors again, and the retry scans the full log. So an
+  empty or low-verbosity log can no longer silently disable it.
+
 ## [0.1.0a15] - 2026-07-18
 
 ### Added

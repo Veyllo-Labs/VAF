@@ -58,7 +58,7 @@ VAF supports multiple TTS engines configured via `speech_tts_engine`:
 | `docker` | HTTP TTS service (Piper in container) | **Recommended** - Best quality |
 | `chatterbox` | Chatterbox-style HTTP TTS server (`speech_tts_chatterbox_url`) | Alternative HTTP TTS backend |
 | `piper` | Local Piper binary | Offline without Docker |
-| `system` | macOS `say` command only (pyttsx3 removed — caused 1-4 GB RAM explosion on Windows via SAPI/comtypes) | macOS fallback only |
+| `system` | macOS `say` command only (pyttsx3 removed - caused 1-4 GB RAM explosion on Windows via SAPI/comtypes) | macOS fallback only |
 
 When `speech_tts_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
 precedence over `speech_tts_engine`. On any provider error (quota, rate limit,
@@ -290,7 +290,10 @@ call (Settings > Voice); without a stored profile the feature is inert.
 Hard rules:
 
 - Identity comes from the VOICE, never from spoken claims; on live calls only a
-  verified owner turn may trigger delegation (code guard, not just prompt).
+  verified owner turn may trigger delegation (code guard, not just prompt). The same
+  label also gates guest privacy: a non-owner (`speaker_ok=False`) reply is built
+  without the owner's private context. See the voice reflex system in
+  [../agents/VOICE_REFLEX.md](../agents/VOICE_REFLEX.md).
 - The owner profile is written only by explicit re-enrollment or by
   OWNER-APPROVED adaptive learning (`speaker_id_adaptive_enabled`, default
   on): a YES answer to the confirmation question over an authenticated
@@ -677,7 +680,7 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 4. **macOS desktop window:** "Microphone access is not supported by this browser" means the
    host Python.app lost its `NSMicrophoneUsageDescription` (typically after a
-   `brew upgrade python@X.Y`) — re-run `bash scripts/macos_mic_plist.sh ./venv/bin/python`.
+   `brew upgrade python@X.Y`) - re-run `bash scripts/macos_mic_plist.sh ./venv/bin/python`.
    The startup log warns about this state.
 
 ### Telegram Voice Not Working

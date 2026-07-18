@@ -86,7 +86,7 @@ whose language is not yet in the book still gets a sensible English phrasing.
 
 ## Adding a new phrase key (how to expand later)
 
-1. Create the seed `vaf/core/vocab/source/<key>.json` with at least an `en` list (5–6 short variants),
+1. Create the seed `vaf/core/vocab/source/<key>.json` with at least an `en` list (5-6 short variants),
    optionally `de`. Use `{name}` (or other) placeholders as needed.
 2. Generate the translations:
    ```bash
@@ -112,7 +112,11 @@ The default target set is a broad built-in list (the Web UI `languages.ts` is UI
 The script is **dev/build-time** tooling and requires a working LLM provider; the runtime does not depend on
 it. Review generated phrasings before shipping - machine translations of casual idioms are not always perfect.
 
-## Current keys
+## Key reference (selected)
+
+Not exhaustive - the full set of shipped keys is described in the prose above (the
+`voice_*`, `speaker_confirm_*`, `speaker_enroll_*`, `stopwords` and reflex keys). The
+table below spells out the nudge and voice-reflex keys.
 
 | Key | Used by | Placeholders |
 |-----|---------|--------------|

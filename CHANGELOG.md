@@ -20,8 +20,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the small fixed phrases in between. The proactive chime-in was also tuned so it actually
   speaks up on genuinely on-topic overheard talk instead of staying silent.
 - **Voice call, you can interrupt the agent**: while the agent is speaking you can now
-  just start talking and it stops and listens, like a real conversation, instead of
-  making you wait for it to finish. The microphone is opened with echo cancellation so it
+  just start talking and it stops and listens instead of making you wait for it to
+  finish. The microphone is opened with echo cancellation so it
   does not hear its own voice, and it only yields to a real, sustained interruption (a
   brief noise will not cut it off). For now this covers interrupting while it is
   speaking, on a web call; interrupting while it is still thinking, and having it resume
@@ -29,9 +29,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Voice call, the agent chimes in on interesting talk**: during a live call the agent
   now keeps a short rolling transcript of what it hears, and when someone else in the
   room says something that matches your configured interest topics, it can briefly and
-  naturally chime in with a grounded remark instead of staying silent - a livelier
-  presence, not a chatbot answering one line at a time. It never invents a reason to
-  speak (a chime-in must be grounded in your topics, and the agent may still stay
+  naturally chime in with a grounded remark instead of staying silent. It never invents
+  a reason to speak (a chime-in must be grounded in your topics, and the agent may still stay
   silent), never chimes in while it is busy with a task, and does not repeat itself. One
   simple dial, `voice_awareness_activity` (quiet..active), sets how readily it joins in
   (at the lowest setting it only listens); it behaves calmly on its own when you are in a
@@ -40,18 +39,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   you hear me?" and it cannot tell whether it was addressed. Tool actions stay yours
   alone (a guest still cannot make it do anything), and your private context is never
   used to chime in for a guest.
-
-### Changed
-- **Voice call, guest privacy**: on a live call with an enrolled voice profile, a guest
-  (a speaker the voice check does not verify as you) who talks to the agent now gets a
-  reply built WITHOUT your private context - your chat digest, your memory, and the
-  prior call history are all withheld from that turn entirely, not just guarded by a
-  prompt rule, and the agent is told to help only with general questions and never share
-  your memory, notes, schedule, messages or contacts. So a guest cannot make the agent
-  replay your earlier turns by asking "what did you just say?". Tool actions already
-  stayed yours alone; this closes the matching information side.
-
-### Added
 - **Per-speaker language hint for cloud STT**: the shared speech client now caches
   the language the cloud provider already returns and passes it as a hint on the
   next transcription (a more precise, cheaper call), instead of running a local
@@ -173,6 +160,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Setting up a voice profile no longer stalls on slow connections: the
   speaker-engine models (26 MB) now download in the background during the
   enrollment intro instead of blocking the first round.
+
+### Changed
+- **Voice call, guest privacy**: on a live call with an enrolled voice profile, a guest
+  (a speaker the voice check does not verify as you) who talks to the agent now gets a
+  reply built WITHOUT your private context - your chat digest, your memory, and the
+  prior call history are all withheld from that turn entirely, not just guarded by a
+  prompt rule, and the agent is told to help only with general questions and never share
+  your memory, notes, schedule, messages or contacts. So a guest cannot make the agent
+  replay your earlier turns by asking "what did you just say?". Tool actions already
+  stayed yours alone; this closes the matching information side.
 
 ### Fixed
 - **A finished workflow now tells the model, imperatively, not to redo the

@@ -10,8 +10,9 @@ owner's interests/topics. Stage 2 (a small ONNX classifier for the ambiguous mid
 plugs in later. This never becomes a second inference on the one llama server.
 
 "interesting" REQUIRES grounding: the utterance must be relevant to the owner's
-memory/interests or configured topics (embedding similarity above the activity-scaled
-bar). A vocab trigger phrase ("can you", "remind me", ...) only LOWERS that bar - it is
+configured topics (`voice_awareness_topics`), i.e. embedding similarity above the
+activity-scaled bar. A vocab trigger phrase ("can you", "remind me", ...) only LOWERS
+that bar - it is
 a cheap prefilter, never sufficient on its own. No grounding, no chime-in (this is the
 anti-fabrication guard: a bare cue word about something the owner does not care about
 must not make the agent grasp for a reason to speak).
@@ -129,7 +130,7 @@ def _threshold(activity: float) -> float:
 
 def is_interesting(text: str, topics: Optional[Sequence[str]] = None,
                    activity: float = 0.5) -> bool:
-    """True only when the utterance is GROUNDED in the owner's topics/memory above the
+    """True only when the utterance is GROUNDED in the owner's configured topics above the
     activity-scaled bar. A trigger phrase lowers that bar but is never sufficient alone
     - no grounding, no chime-in. This is the signal a chime-in decision will read."""
     thr = _threshold(activity)

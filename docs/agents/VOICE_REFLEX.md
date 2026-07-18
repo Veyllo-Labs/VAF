@@ -19,7 +19,7 @@ A visual reflex schema with the latency budget accompanies this doc.
 Today the voice agent is strictly turn-based and half-duplex: one utterance becomes
 one `voice_call_turn`, then STT, then exactly one LLM call, then TTS; while the agent
 speaks, the microphone is deliberately held so it does not transcribe its own voice.
-That makes it feel like a chatbot answering one word at a time, not a lively presence.
+It answers one utterance at a time, with no way to keep listening or to interject.
 
 The goal is a reflex system, not a bigger chatbot: turn-taking, barge-in and the
 "may I speak?" decision run WITHOUT the big LLM. The large model is called only when a
@@ -35,7 +35,7 @@ expensive-and-rare at the bottom.
    logic: the browser energy VAD plus Silero VAD (sherpa-onnx, CPU) - both already
    present, today used batch-only.
 2. **Policy / awareness (local, two-stage, ~10-40 ms).** Stage 1: rules + vocab/keyword
-   triggers + embedding similarity against the owner's interests/memory. Stage 2: a
+   triggers + embedding similarity against the owner's configured topics. Stage 2: a
    small ONNX classifier for the ambiguous cases. Emits exactly one verdict. It is
    ALWAYS local and non-llama; it never becomes a second inference on the one llama
    server.
@@ -53,7 +53,7 @@ The policy layer classifies each completed utterance into exactly one state:
   (`voice_agent.py` `_SILENT_MARKER`).
 - `ignore` - noise, unrelated side-talk, ungrounded small-talk; dropped, costs nothing.
 
-Two of these already exist in seed form: `should_engage()` (`voice_agent.py:172`) is a
+Two of these already exist in seed form: `should_engage()` (`voice_agent.py`) is a
 no-LLM gate, and `<silent/>` is the "store, do not speak" primitive.
 
 **Addressee-ambiguity clarification (Phase 2, implemented).** Some cues are address
@@ -68,8 +68,8 @@ line) and never fires for the verified owner (`self`) nor for an unlabeled call 
 enrolled profile -> everyone is the owner, so there is no ambiguity). It authorizes
 nothing - anti-spoofing is unchanged; it is only a spoken question.
 
-`interesting` = ( rule / keyword / embedding match ) AND ( docks onto the owner's
-memory/interests OR is on the owner's configured topic list ). No free guessing, no
+`interesting` = ( rule / keyword / embedding match ) AND ( embedding-matches the
+owner's configured topic list, `voice_awareness_topics` ). No free guessing, no
 hallucinated chime-ins.
 
 ## Scene-based internal modes + one activity dial
@@ -77,7 +77,7 @@ hallucinated chime-ins.
 The behavior modes are INTERNAL policy states the system chooses itself; they are NOT
 a user toggle and are never switched by voice command:
 
-- `active` - lively, ready to chime in (tends to apply in a 1:1 with the owner).
+- `active` - ready to chime in (tends to apply in a 1:1 with the owner).
 - `notes_only` - listen and record only, surface later.
 - `quiet` (default) - silent by default, audible only on a high interestingness score
   (tends to apply when the owner is talking to someone else).
@@ -106,10 +106,14 @@ to the turn that carried the overheard utterance (a `voice_call_reply` with `chi
 true` and synthesized audio) - it needs no separate server-push event and no bypass of
 the request/response frame. A genuinely server-INITIATED spoken push (the agent speaking
 during a silence with no incoming audio) is only needed for continuous listening OUTSIDE
-a call, which is deferred (see the roadmap). The chime-in content is produced by
-`voice_agent.chime_in_reply` - a silence-biased, non-acting second opinion that may still
-decline - and deduped within the call via `voice_policy.similar_to_any` so the agent does
-not repeat itself. The owner-privacy gate extends here too: a chime-in triggered by a
+a call, which is deferred (see the roadmap). The chime-in gate fires only on genuine
+`side_talk` (never on garbled non-owner STT) and never while the main agent is busy on a
+delegated task (a remark over a running task is noise). The chime-in content is produced
+by `voice_agent.chime_in_reply` - a non-acting content layer that offers ONE brief,
+natural remark on a relevant line (the policy already decided it is worth a comment, so
+the content layer phrases rather than re-judges) and stays silent on an irrelevant one -
+deduped within the call via `voice_policy.similar_to_any` so the agent does not repeat
+itself. The owner-privacy gate extends here too: a chime-in triggered by a
 guest (`speaker_ok=False`) is grounded only in general knowledge and the guest's own
 words - the rolling room transcript is WITHHELD, because it can hold the owner's earlier
 private talk from before the guest arrived (the buffer lives ~20 min), exactly like the
@@ -125,8 +129,8 @@ Guests may talk to the agent and get answers to factual questions, but:
 - the agent NEVER runs a tool-call or delegation for a guest.
 
 Identity comes from the voice: only a voice-verified owner (`label == self`) may create
-work. The fail-closed gate `_speaker_ok` (`web_server.py:6429-6442`) and the delegate
-drop when `not speaker_ok` (`voice_agent.py:585`) stay exactly as they are. A guest's
+work. The fail-closed gate `_speaker_ok` (`web_server.py`) and the delegate
+drop when `not speaker_ok` (`voice_agent.py`) stay exactly as they are. A guest's
 turn may reach the LLM with `speaker_ok=False` (it can speak, it cannot act).
 
 **Guest privacy (Phase 1, implemented).** A guest who addresses the agent already gets a
@@ -146,7 +150,7 @@ who writes genuinely private facts into the Soul is choosing to voice them). Not
 guarantee holds only with an enrolled voice profile: without one there is no signal to
 tell speakers apart, so everyone is treated as the owner (documented fail-open).
 
-Unknown, unenrolled speakers are meant to get an ephemeral session id (`Gast A/B`).
+Unknown, unenrolled speakers are meant to get an ephemeral session id (`Guest A/B`).
 Distinguishing guest A from guest B needs a per-speaker voice-print cluster, which needs
 the whole-clip scorer to expose the utterance embedding (`score_wav` today returns only
 `{score, label, name}`) plus a small per-call cluster with its own match threshold and
@@ -165,7 +169,7 @@ still created only on explicit owner confirmation via the existing lane
   lists, exactly like the existing `stopwords.json` precedent under
   `vaf/core/vocab/data/`, consumed the way `vaf/memory/rag.py` consumes the stopwords),
   language resolved via `vocab.resolve_user_language`;
-- embedding similarity against the owner's interests/memory + configured topics, using
+- embedding similarity against the owner's configured topics (`voice_awareness_topics`), using
   the existing MiniLM singleton (`vaf/memory/embeddings.py`) under the memory-safe onnx
   recipe (CPU, one thread, singleton behind a lock).
 
@@ -239,7 +243,7 @@ The reflex system is broadly multilingual, with a few layers that are language-s
   scene-based internal modes (`derive_scene`/`derive_mode`) and the one activity dial
   (`voice_awareness_activity`) drive it; addressee-ambiguity clarification asks "did you
   mean me?" on an ambiguous non-owner address-check. Deferred here on purpose: ephemeral
-  guest ids `Gast A/B` (need per-speaker clustering, see the guests section), Stage 2
+  guest ids `Guest A/B` (need per-speaker clustering, see the guests section), Stage 2
   ONNX, and any server-INITIATED push (only needed for out-of-call always-on).
 - **Phase 3 - barge-in (web-call first):** the first half is implemented - browser AEC
   (`getUserMedia echoCancellation`) so the mic can stay live while the agent speaks, and

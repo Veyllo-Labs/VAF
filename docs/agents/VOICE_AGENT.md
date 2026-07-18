@@ -88,7 +88,8 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    reflex policy reads - it outlives the 16-entry call ring and is cleared at
    call end. See [VOICE_REFLEX.md](VOICE_REFLEX.md).
 3b. **Addressee clarification** (`voice_agent.wants_addressee_clarification`,
-   no LLM): an address-check cue ("kannst du mich hoeren", "bist du da") from a
+   no LLM): an address-check cue ("can you hear me", "are you there", "kannst du
+   mich hoeren"; the lexicon is per-language) from a
    NON-owner speaker who did not name the agent is ambiguous - the agent speaks a
    short "did you mean me?" (`addressee_clarify` vocab) and the turn ends. Never
    for the verified owner or an unlabeled call. Authorizes nothing.
@@ -116,7 +117,9 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    session (`origin_channel: "voice_call"`); the main agent runs it as a
    normal turn.
 7. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
-   `reply`, `audio`, `delegated`, `silent` - a silent reply has no audio and
+   `reply`, `audio`, `delegated`, `silent`, and the flags `greeting`/`chime_in`/
+   `clarify` for the call-opening greeting, a proactive chime-in and an addressee
+   check - a silent reply has no audio and
    the frontend simply keeps listening).
 
 Every turn writes one forensic log line (`voice_call turn: active=... label=...
@@ -314,7 +317,10 @@ Every fixed line the voice stack speaks or sends (call greeting, spoken
 fallbacks, the confirmation question and acks, the enrollment script) lives
 in the vocabulary book (`vaf/core/vocab`, see
 [VOCABULARY_BOOK.md](../platform/VOCABULARY_BOOK.md)) under the keys
-`voice_*`, `speaker_confirm_*` and `speaker_enroll_*`. Adding a language
+`voice_*`, `speaker_confirm_*`, `speaker_enroll_*` and the reflex key
+`addressee_clarify` (the spoken "did you mean me?"). The reflex system also
+reads two MATCHED lexicons from the same book, `awareness_triggers` and
+`addressee_check` (cues it substring-matches, not lines it speaks). Adding a language
 means adding phrasings there (or running `scripts/generate_vocab.py`);
 missing languages fall back to English per phrase. Never hardcode a spoken
 string in voice code. Detection heuristics (reasoning-leak patterns) stay in

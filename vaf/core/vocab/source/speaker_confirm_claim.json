@@ -1,0 +1,8 @@
+{
+  "en": [
+    "Someone just used your name and claimed to be you, but I could not recognize the voice (score {score}). Was that actually you? Reply yes or no (or e.g. 'No, that's Peter'). Your voice profile is never changed by this."
+  ],
+  "de": [
+    "Jemand hat gerade deinen Namen benutzt und sich als du ausgegeben, aber ich konnte die Stimme nicht erkennen (Score {score}). Warst das wirklich du? Antworte mit Ja oder Nein (oder z.B. 'Nein, das ist Peter'). Dein Stimmprofil wird dadurch nie veraendert."
+  ]
+}

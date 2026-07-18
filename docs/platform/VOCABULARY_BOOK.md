@@ -124,6 +124,8 @@ table below spells out the nudge and voice-reflex keys.
 | `awareness_triggers` | Voice reflex policy fast prefilter, per-language cue phrases consumed as full lists via `phrasings()` (`vaf/core/voice_policy.py`); ~35 langs | none (word/phrase lists) |
 | `addressee_check` | Voice reflex addressee-ambiguity detector, per-language address-check cues consumed as full lists (`voice_agent.wants_addressee_clarification`); ~35 langs | none (word/phrase lists) |
 | `addressee_clarify` | Voice reflex "did you mean me?" spoken response (`voice_agent.addressee_clarify_line`); ~35 langs | none |
+| `owner_claim` | Speaker-confirm spoofing detector: templates matched against a transcript to spot a non-owner claiming to BE the owner (`speaker_confirm.claims_to_be_owner`) | `{name}` (owner name) |
+| `speaker_confirm_claim` | Speaker-confirm question when a non-owner claims to be the owner (`speaker_confirm.maybe_request_confirmation`, claim path) | `{score}` |
 
 ## Related documentation
 

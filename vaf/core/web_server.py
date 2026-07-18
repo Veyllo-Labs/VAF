@@ -6046,15 +6046,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _payload["speaker_score"] = _speaker["score"]
                             except Exception:
                                 pass
-                            if _speaker.get("label") == "unsure":
-                                # Unsure band: ask the owner to confirm (one
-                                # pending per scope, cooldown inside).
+                            if _speaker.get("label") != "self":
+                                # Non-owner mic turn: speaker_confirm decides whether to
+                                # ask the owner - a spoofing check when the transcript
+                                # CLAIMS to be the owner, or a restrained adaptive reclaim
+                                # on a plain unsure (one pending per scope, cooldown inside).
                                 try:
                                     from vaf.core import speaker_confirm as _sc
                                     _uname = manager.get_connection_username(websocket) or "admin"
                                     await loop.run_in_executor(
                                         None, lambda: _sc.maybe_request_confirmation(
-                                            _scope, _uname, _wav_bytes, _speaker))
+                                            _scope, _uname, _wav_bytes, _speaker,
+                                            transcript=text, owner_name=_name))
                                 except Exception:
                                     pass
                         await websocket.send_json(_payload)
@@ -6454,17 +6457,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         _label = _score.get("label")
                                         _text = _vsid.label_prefix(_score, _display) + _text
                                         _speaker_ok = _label == "self"
-                                        if _label == "unsure":
-                                            # Unsure band: queue ONE confirmation
-                                            # question (messenger/web) without
-                                            # interrupting the running call.
+                                        if not _speaker_ok:
+                                            # Non-owner turn: let speaker_confirm decide
+                                            # whether to queue ONE confirmation
+                                            # (messenger/web) without interrupting the
+                                            # call - a spoofing check when this speaker
+                                            # CLAIMS to be the owner (transcript), or a
+                                            # restrained adaptive reclaim on a plain
+                                            # unsure. The transcript + owner name drive
+                                            # that decision.
                                             try:
                                                 from vaf.core import speaker_confirm as _vsc
                                                 _vuname = manager.get_connection_username(websocket) or "admin"
                                                 await loop.run_in_executor(
                                                     None, lambda: _vsc.maybe_request_confirmation(
                                                         _call["scope"], _vuname, _wav, _score,
-                                                        session_id=cmd.get("sessionId") or ""))
+                                                        session_id=cmd.get("sessionId") or "",
+                                                        transcript=_text, owner_name=_display))
                                             except Exception:
                                                 pass
                         except Exception:

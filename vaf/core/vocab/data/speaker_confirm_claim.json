@@ -1,0 +1,107 @@
+{
+  "ar": [
+    "شخص ما استخدم اسمك وادعى أنه أنت، لكنني لم أتعرف على الصوت (الدرجة {score}). هل كان ذلك فعلاً أنت؟ أجب بنعم أو لا (أو مثلاً 'لا، هذا بيتر'). لن يتغير ملفك الصوتي بسبب هذا."
+  ],
+  "bg": [
+    "Някой току-що използва името ти и се представи за теб, но не разпознах гласа (оценка {score}). Това ти ли беше? Отговори с да или не (или напр. 'Не, това е Петър'). Профилът на гласа ти никога не се променя от това."
+  ],
+  "bn": [
+    "কেউ আপনার নাম ব্যবহার করে দাবি করেছে যে সে আপনি, কিন্তু আমি কণ্ঠস্বর চিনতে পারিনি (স্কোর {score})। এটা কি সত্যিই আপনি ছিলেন? হ্যাঁ বা না উত্তর দিন (অথবা উদাহরণস্বরূপ, 'না, ওটা পিটার')। আপনার কণ্ঠস্বর প্রোফাইল কখনোই এর দ্বারা পরিবর্তিত হয় না।"
+  ],
+  "cs": [
+    "Někdo právě použil vaše jméno a tvrdil, že jste to vy, ale ten hlas jsem nepoznal (skóre {score}). Byl(a) jste to opravdu vy? Odpovězte ano nebo ne (nebo např. 'Ne, to je Petr'). Váš hlasový profil se tímto nikdy nezmění."
+  ],
+  "da": [
+    "Nogen brugte dit navn og hævdede at være dig, men jeg kunne ikke genkende stemmen (score {score}). Var det virkelig dig? Svar ja eller nej (eller f.eks. 'Nej, det er Peter'). Din stemmeprofil ændres aldrig af dette."
+  ],
+  "de": [
+    "Jemand hat gerade deinen Namen benutzt und sich als du ausgegeben, aber ich konnte die Stimme nicht erkennen (Score {score}). Warst das wirklich du? Antworte mit Ja oder Nein (oder z.B. 'Nein, das ist Peter'). Dein Stimmprofil wird dadurch nie veraendert."
+  ],
+  "el": [
+    "Κάποιος μόλις χρησιμοποίησε το όνομά σου και ισχυρίστηκε ότι είσαι εσύ, αλλά δεν αναγνώρισα τη φωνή (βαθμολογία {score}). Ήσουν πραγματικά εσύ; Απάντησε ναι ή όχι (ή π.χ. 'Όχι, αυτός είναι ο Πέτρος'). Το προφίλ φωνής σου δεν αλλάζει ποτέ από αυτό."
+  ],
+  "en": [
+    "Someone just used your name and claimed to be you, but I could not recognize the voice (score {score}). Was that actually you? Reply yes or no (or e.g. 'No, that's Peter'). Your voice profile is never changed by this."
+  ],
+  "es": [
+    "Alguien acaba de usar tu nombre y afirmó ser tú, pero no pude reconocer la voz (puntuación {score}). ¿Eras tú realmente? Responde sí o no (o por ejemplo, 'No, es Peter'). Tu perfil de voz nunca se cambia por esto."
+  ],
+  "fa": [
+    "کسی به اسم شما صحبت کرد و ادعا کرد که شماست، اما من صدایش را نشناختم (امتیاز {score}). واقعاً شما بودید؟ لطفاً با بله یا خیر جواب بدهید (یا مثلاً 'نه، اون پیتره'). پروفایل صدای شما هرگز تغییر نمی‌کند."
+  ],
+  "fi": [
+    "Joku käytti juuri nimeäsi ja väitti olevansa sinä, mutta en tunnistanut ääntä (pisteet {score}). Oliko se oikeasti sinä? Vastaa kyllä tai ei (tai esim. 'Ei, se oli Peter'). Ääniprofiiliasi ei koskaan muuteta tämän perusteella."
+  ],
+  "fr": [
+    "Quelqu'un vient d'utiliser votre nom et a prétendu être vous, mais je n'ai pas reconnu la voix (score {score}). Était-ce vraiment vous ? Répondez par oui ou non (ou par exemple 'Non, c'est Pierre'). Votre profil vocal n'est jamais modifié par cela."
+  ],
+  "he": [
+    "מישהו השתמש בשם שלך וטען שהוא אתה, אבל לא זיהיתי את הקול (ציון {score}). זה באמת היית אתה? השב כן או לא (או למשל 'לא, זה פיטר'). הפרופיל הקולי שלך לא משתנה בעקבות זה."
+  ],
+  "hi": [
+    "किसी ने अभी आपका नाम लेकर दावा किया कि वो आप हैं, लेकिन मैं आवाज़ पहचान नहीं पाया (स्कोर {score})। क्या वो सच में आप थे? हाँ या नहीं में जवाब दें (या जैसे 'नहीं, वो पीटर है')। आपकी आवाज़ प्रोफ़ाइल कभी नहीं बदली जाती।"
+  ],
+  "hr": [
+    "Netko je upravo upotrijebio tvoje ime i tvrdio da si ti, ali nisam prepoznao glas (rezultat {score}). Jesi li to stvarno bio ti? Odgovori da ili ne (ili npr. 'Ne, to je Peter'). Tvoj glasovni profil se nikad ne mijenja zbog ovoga."
+  ],
+  "hu": [
+    "Valaki éppen a nevedet használta és azt állította, hogy te vagy, de nem ismertem fel a hangot (pontszám {score}). Tényleg te voltál? Válaszolj igennel vagy nemmel (vagy például 'Nem, ez Péter'). A hangprofilod sosem változik emiatt."
+  ],
+  "id": [
+    "Seseorang baru saja menggunakan namamu dan mengaku sebagai dirimu, tapi aku tidak mengenali suaranya (skor {score}). Apakah itu benar kamu? Balas ya atau tidak (atau misalnya 'Tidak, itu Peter'). Profil suaramu tidak akan berubah karena ini."
+  ],
+  "it": [
+    "Qualcuno ha appena usato il tuo nome e ha detto di essere te, ma non ho riconosciuto la voce (punteggio {score}). Eri davvero tu? Rispondi sì o no (o ad esempio 'No, è Peter'). Il tuo profilo vocale non viene mai modificato da questo."
+  ],
+  "ja": [
+    "誰かがあなたの名前を使ってあなたになりすましましたが、声が認識できませんでした（スコア{score}）。本当にあなたでしたか？「はい」または「いいえ」で答えてください（例：「いいえ、それはピーターです」）。あなたの声のプロファイルはこれによって変更されることはありません。"
+  ],
+  "ko": [
+    "누군가 당신의 이름을 사용하고 당신인 척 했지만, 목소리를 알아듣지 못했어요 (점수 {score}). 정말 당신이었나요? 예 또는 아니오로 답해주세요 (예: '아니요, 그건 피터예요'). 이로 인해 당신의 음성 프로필은 변경되지 않습니다."
+  ],
+  "ms": [
+    "Seseorang baru saja menggunakan nama anda dan mendakwa sebagai anda, tetapi saya tidak dapat mengenali suara itu (skor {score}). Adakah itu benar-benar anda? Balas ya atau tidak (atau contohnya 'Tidak, itu Peter'). Profil suara anda tidak akan diubah dengan ini."
+  ],
+  "nl": [
+    "Iemand gebruikte net je naam en deed alsof hij jou was, maar ik herkende de stem niet (score {score}). Was jij dat echt? Antwoord ja of nee (of bijvoorbeeld 'Nee, dat is Peter'). Je stemprofiel wordt hierdoor nooit aangepast."
+  ],
+  "no": [
+    "Noen brukte nettopp navnet ditt og hevdet å være deg, men jeg kjente ikke igjen stemmen (score {score}). Var det faktisk deg? Svar ja eller nei (eller f.eks. 'Nei, det er Peter'). Din stemmeprofil blir aldri endret av dette."
+  ],
+  "pl": [
+    "Ktoś właśnie użył twojego imienia i twierdził, że to ty, ale nie rozpoznałem głosu (wynik {score}). Czy to naprawdę byłeś ty? Odpowiedz tak lub nie (lub np. 'Nie, to Peter'). Twój profil głosu nigdy nie jest zmieniany przez to."
+  ],
+  "pt": [
+    "Alguém acabou de usar seu nome e alegou ser você, mas eu não reconheci a voz (pontuação {score}). Era realmente você? Responda sim ou não (ou por exemplo, 'Não, é o Peter'). Seu perfil de voz nunca é alterado por isso."
+  ],
+  "ro": [
+    "Cineva tocmai a folosit numele tău și a pretins că ești tu, dar nu am recunoscut vocea (scor {score}). Ai fost tu de fapt? Răspunde cu da sau nu (sau de exemplu, 'Nu, e Peter'). Profilul tău vocal nu este niciodată schimbat din această cauză."
+  ],
+  "ru": [
+    "Кто-то только что использовал ваше имя и утверждал, что это вы, но я не узнал голос (оценка {score}). Это действительно были вы? Ответьте да или нет (или например, 'Нет, это Питер'). Ваш голосовой профиль не изменяется из-за этого."
+  ],
+  "sk": [
+    "Niekto práve použil tvoje meno a tvrdil, že je to ty, ale nepoznal som ten hlas (skóre {score}). Bol si to naozaj ty? Odpovedz áno alebo nie (alebo napr. 'Nie, to je Peter'). Tvoj hlasový profil sa týmto nikdy nezmení."
+  ],
+  "sr": [
+    "Neko je upravo koristio tvoje ime i tvrdio da je ti, ali nisam prepoznao glas (ocena {score}). Da li si to stvarno bio ti? Odgovori sa da ili ne (ili npr. 'Ne, to je Petar'). Tvoj glasovni profil se nikada ne menja zbog ovoga."
+  ],
+  "sv": [
+    "Någon använde just ditt namn och påstod sig vara du, men jag kände inte igen rösten (poäng {score}). Var det verkligen du? Svara ja eller nej (eller t.ex. 'Nej, det är Peter'). Din röstprofil ändras aldrig av detta."
+  ],
+  "th": [
+    "มีคนใช้ชื่อคุณและบอกว่าเป็นคุณ แต่ฉันจำเสียงไม่ได้ (คะแนน {score}) นั่นคือคุณจริง ๆ หรือเปล่า? ตอบใช่หรือไม่ (หรือเช่น 'ไม่ใช่ นั่นคือปีเตอร์') โปรไฟล์เสียงของคุณจะไม่ถูกเปลี่ยนแปลงจากนี้"
+  ],
+  "tr": [
+    "Birisi adınızı kullanarak sizin olduğunuzu iddia etti, ama sesi tanıyamadım (puan {score}). Bu gerçekten siz miydiniz? Evet veya hayır şeklinde cevap verin (veya örneğin 'Hayır, bu Peter' gibi). Ses profiliniz asla değiştirilmez."
+  ],
+  "uk": [
+    "Хтось щойно використав ваше ім'я і стверджував, що це ви, але я не впізнав голос (оцінка {score}). Це справді були ви? Відповідайте 'так' або 'ні' (або, наприклад, 'Ні, це Петро'). Ваш голосовий профіль ніколи не змінюється через це."
+  ],
+  "vi": [
+    "Có người vừa dùng tên của bạn và tự nhận là bạn, nhưng tôi không nhận ra giọng nói (điểm {score}). Đó có thực sự là bạn không? Trả lời có hoặc không (hoặc ví dụ 'Không, đó là Peter'). Hồ sơ giọng nói của bạn sẽ không bao giờ bị thay đổi bởi điều này."
+  ],
+  "zh": [
+    "刚才有人用你的名字自称是你，但我听不出声音（分数 {score}）。真的是你吗？回复“是”或“不是”（或者例如“不是，那是彼得”）。你的语音资料不会因此改变。"
+  ]
+}

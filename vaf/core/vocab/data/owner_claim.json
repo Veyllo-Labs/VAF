@@ -1,0 +1,279 @@
+{
+  "ar": [
+    "أنا {name}",
+    "هذا {name}",
+    "إنه {name}",
+    "اسمي {name}",
+    "{name} هنا",
+    "{name} يتحدث"
+  ],
+  "bg": [
+    "аз съм {name}",
+    "{name} съм",
+    "това е {name}",
+    "казвам се {name}",
+    "{name} е тук",
+    "{name} говори"
+  ],
+  "bn": [
+    "আমি {name}",
+    "এটা {name}",
+    "আমার নাম {name}",
+    "{name} এখানে",
+    "{name} বলছি"
+  ],
+  "cs": [
+    "jsem {name}",
+    "to je {name}",
+    "jmenuji se {name}",
+    "{name} tady",
+    "{name} u telefonu"
+  ],
+  "da": [
+    "jeg er {name}",
+    "det er {name}",
+    "jeg hedder {name}",
+    "{name} her"
+  ],
+  "de": [
+    "ich bin {name}",
+    "ich bin der {name}",
+    "hier ist {name}",
+    "hier spricht {name}",
+    "das ist {name}",
+    "mein name ist {name}",
+    "{name} hier"
+  ],
+  "el": [
+    "είμαι ο/η {name}",
+    "αυτός/αυτή είναι ο/η {name}",
+    "είναι ο/η {name}",
+    "με λένε {name}",
+    "{name} εδώ",
+    "ο/η {name} μιλάει"
+  ],
+  "en": [
+    "i am {name}",
+    "i'm {name}",
+    "this is {name}",
+    "it's {name}",
+    "it is {name}",
+    "my name is {name}",
+    "{name} here",
+    "{name} speaking"
+  ],
+  "es": [
+    "soy {name}",
+    "este es {name}",
+    "es {name}",
+    "me llamo {name}",
+    "{name} aquí",
+    "habla {name}"
+  ],
+  "fa": [
+    "من {name} هستم",
+    "من {name} ام",
+    "این {name} است",
+    "{name} است",
+    "اسم من {name} است",
+    "{name} اینجاست",
+    "{name} صحبت می‌کند"
+  ],
+  "fi": [
+    "olen {name}",
+    "mä oon {name}",
+    "tässä on {name}",
+    "se on {name}",
+    "mun nimi on {name}",
+    "{name} täällä",
+    "{name} puhuu"
+  ],
+  "fr": [
+    "je suis {name}",
+    "moi c'est {name}",
+    "c'est {name}",
+    "je m'appelle {name}",
+    "{name} ici",
+    "{name} à l'appareil"
+  ],
+  "he": [
+    "אני {name}",
+    "זה {name}",
+    "קוראים לי {name}",
+    "{name} כאן",
+    "{name} מדבר"
+  ],
+  "hi": [
+    "मैं {name} हूँ",
+    "यह {name} है",
+    "मेरा नाम {name} है",
+    "{name} यहाँ",
+    "{name} बोल रहा हूँ"
+  ],
+  "hr": [
+    "ja sam {name}",
+    "ovo je {name}",
+    "to je {name}",
+    "zovem se {name}",
+    "{name} ovdje",
+    "{name} govori"
+  ],
+  "hu": [
+    "én vagyok {name}",
+    "{name} vagyok",
+    "ez {name}",
+    "{name} az",
+    "{name} van",
+    "a nevem {name}",
+    "{name} itt",
+    "{name} beszél"
+  ],
+  "id": [
+    "saya {name}",
+    "aku {name}",
+    "ini {name}",
+    "nama saya {name}",
+    "{name} di sini",
+    "{name} berbicara"
+  ],
+  "it": [
+    "sono {name}",
+    "questo è {name}",
+    "è {name}",
+    "mi chiamo {name}",
+    "{name} qui",
+    "{name} che parla"
+  ],
+  "ja": [
+    "私は{name}です",
+    "{name}です",
+    "こちらは{name}です",
+    "私の名前は{name}です"
+  ],
+  "ko": [
+    "저는 {name}입니다",
+    "{name}입니다",
+    "이쪽은 {name}입니다",
+    "{name}예요",
+    "제 이름은 {name}입니다"
+  ],
+  "ms": [
+    "saya {name}",
+    "ini {name}",
+    "nama saya {name}",
+    "{name} di sini",
+    "{name} bercakap"
+  ],
+  "nl": [
+    "ik ben {name}",
+    "dit is {name}",
+    "het is {name}",
+    "mijn naam is {name}",
+    "{name} hier",
+    "met {name}"
+  ],
+  "no": [
+    "jeg er {name}",
+    "dette er {name}",
+    "det er {name}",
+    "jeg heter {name}",
+    "{name} her",
+    "{name} snakker"
+  ],
+  "pl": [
+    "jestem {name}",
+    "to jest {name}",
+    "to {name}",
+    "nazywam się {name}",
+    "{name} tutaj",
+    "mówi {name}"
+  ],
+  "pt": [
+    "eu sou {name}",
+    "sou {name}",
+    "este é {name}",
+    "é {name}",
+    "meu nome é {name}",
+    "{name} aqui",
+    "{name} falando"
+  ],
+  "ro": [
+    "sunt {name}",
+    "acesta este {name}",
+    "e {name}",
+    "este {name}",
+    "numele meu este {name}",
+    "{name} aici",
+    "{name} la telefon"
+  ],
+  "ru": [
+    "я {name}",
+    "это {name}",
+    "меня зовут {name}",
+    "{name} здесь",
+    "говорит {name}"
+  ],
+  "sk": [
+    "som {name}",
+    "toto je {name}",
+    "to je {name}",
+    "volám sa {name}",
+    "{name} tu",
+    "{name} pri telefóne"
+  ],
+  "sr": [
+    "ja sam {name}",
+    "ovo je {name}",
+    "to je {name}",
+    "zovem se {name}",
+    "{name} ovde",
+    "{name} priča"
+  ],
+  "sv": [
+    "jag är {name}",
+    "det här är {name}",
+    "det är {name}",
+    "jag heter {name}",
+    "{name} här",
+    "{name} talar"
+  ],
+  "th": [
+    "ฉันคือ{name}",
+    "นี่คือ{name}",
+    "ฉันชื่อ{name}",
+    "{name}อยู่ที่นี่",
+    "{name}พูดอยู่"
+  ],
+  "tr": [
+    "ben {name}",
+    "bu {name}",
+    "benim adım {name}",
+    "{name} burada",
+    "{name} konuşuyor"
+  ],
+  "uk": [
+    "я {name}",
+    "це {name}",
+    "мене звати {name}",
+    "{name} тут",
+    "говорить {name}"
+  ],
+  "vi": [
+    "tôi là {name}",
+    "mình là {name}",
+    "đây là {name}",
+    "là {name}",
+    "đó là {name}",
+    "tên tôi là {name}",
+    "{name} đây",
+    "{name} đang nói"
+  ],
+  "zh": [
+    "我是{name}",
+    "这是{name}",
+    "是{name}",
+    "我叫{name}",
+    "{name}在这",
+    "{name}在说话"
+  ]
+}

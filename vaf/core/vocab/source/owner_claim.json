@@ -1,0 +1,21 @@
+{
+  "en": [
+    "i am {name}",
+    "i'm {name}",
+    "this is {name}",
+    "it's {name}",
+    "it is {name}",
+    "my name is {name}",
+    "{name} here",
+    "{name} speaking"
+  ],
+  "de": [
+    "ich bin {name}",
+    "ich bin der {name}",
+    "hier ist {name}",
+    "hier spricht {name}",
+    "das ist {name}",
+    "mein name ist {name}",
+    "{name} hier"
+  ]
+}

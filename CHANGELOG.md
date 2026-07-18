@@ -11,6 +11,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **The agent stops asking "was that you?" on every unrecognized voice.** The speaker
+  confirmation now fires in two more targeted cases: promptly when a voice it does not
+  recognize CLAIMS to be you ("I'm NAME") - a spoofing check that asks you to confirm -
+  and, far more rarely, on a borderline recording of your OWN voice (for the adaptive
+  re-recognition). A stranger simply talking near the mic no longer triggers the
+  question. The claim detection is multilingual.
+
 ### Fixed
 - **The local voice model now starts on Apple Silicon Macs.** The recommended local
   German voice model (Gemma) could fail to start on macOS/Metal with only "Server failed

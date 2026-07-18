@@ -304,11 +304,25 @@ Hard rules:
   authenticated owner, not from audio.
 
 Confirmation flow (`vaf/core/speaker_confirm.py`, gated by
-`speaker_id_confirmation_enabled`): when an utterance lands in the "unsure"
-band, the owner is asked once (max one pending question per user, cooldown,
-1 h expiry). Delivery: main messenger first (question text + the audio segment
-as attachment via `send_to_main_messenger`), else a web-chat card (audio
-player + buttons; events `speaker_confirm_pending` / `speaker_confirm_reply` /
+`speaker_id_confirmation_enabled`) has TWO trigger paths, both scoped to a
+non-owner turn (`label != self`) and both throttled to max one pending question
+per user with a 1 h expiry:
+
+- **Claim (spoofing check).** When a non-owner voice (`unsure`, `other` or a named
+  third party) whose transcript CLAIMS to be the owner - `claims_to_be_owner`
+  matches the `owner_claim` vocab templates ("ich bin NAME", "this is NAME", ...
+  with the owner's name substituted, multilingual) - the owner is asked promptly
+  (short cooldown, `speaker_confirm_claim` question) so a stranger using the owner's
+  name cannot pass silently. It authorizes nothing; the voice-verified label still
+  gates all action.
+- **Unsure (adaptive reclaim).** A borderline OWN voice with no such claim is asked
+  with the plain `speaker_confirm_question`, but restrained (long cooldown) so it does
+  not ask on every unsure turn - this exists mainly for the adaptive-training reclaim.
+
+A plain non-owner utterance with no claim and no "unsure" score is left alone (no
+question). Delivery: main messenger first (question text + the audio segment as
+attachment via `send_to_main_messenger`), else a web-chat card (audio player +
+buttons; events `speaker_confirm_pending` / `speaker_confirm_reply` /
 `speaker_confirm_result`, see WEBUI_WEBSOCKET_FLOW.md). Answers:
 
 - yes: the segment was the owner; nothing is stored (profile untouched).

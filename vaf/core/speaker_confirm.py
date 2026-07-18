@@ -34,8 +34,13 @@ from typing import Dict, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 
-_COOLDOWN_SECONDS = 10 * 60       # min gap between two confirmation questions
-_PENDING_TTL_SECONDS = 60 * 60    # unanswered questions expire after an hour
+# Two trigger paths (see maybe_request_confirmation), each with its own cooldown:
+# a non-owner CLAIM to be the owner is a spoofing check (fire promptly, only a brief
+# anti-spam gap); a borderline OWN voice with no claim is just an occasional adaptive
+# reclaim (restrained, so it does not ask on every unsure turn - the old annoyance).
+_CLAIM_COOLDOWN_SECONDS = 5 * 60      # non-owner claim: brief anti-spam only
+_UNSURE_COOLDOWN_SECONDS = 45 * 60    # borderline own voice: restrained
+_PENDING_TTL_SECONDS = 60 * 60        # unanswered questions expire after an hour
 
 # Question and acknowledgment texts live in the vocabulary book
 # (vaf/core/vocab, keys speaker_confirm_*) - new languages are added THERE.
@@ -135,12 +140,50 @@ def _last_asked_path(scope_id: str) -> Path:
     return _pending_path(scope_id).with_suffix(".last")
 
 
-def _cooldown_active(scope_id: str) -> bool:
+def _cooldown_active(scope_id: str, window_seconds: float) -> bool:
+    """True if the last question went out less than `window_seconds` ago. The window
+    is per trigger kind (short for a spoofing claim, long for a plain unsure)."""
     try:
         p = _last_asked_path(scope_id)
-        return p.exists() and (time.time() - p.stat().st_mtime) < _COOLDOWN_SECONDS
+        return p.exists() and (time.time() - p.stat().st_mtime) < window_seconds
     except Exception:
         return False
+
+
+_LABEL_PREFIX_RE = re.compile(r"^\s*\[[^\]]{1,40}\]:\s*")
+
+
+def claims_to_be_owner(transcript: str, owner_name: str) -> bool:
+    """True if the utterance is a first-person claim to BE the owner (e.g.
+    'ich bin <name>', 'this is <name>'), matched against the `owner_claim` vocab
+    templates across all languages with the owner's name substituted. This is an
+    anti-spoofing SIGNAL only - it never authorizes anything; it just makes the agent
+    ask the REAL owner to confirm over an authenticated channel. Fail-open to False so
+    a vocab hiccup never forces a question."""
+    try:
+        core = _LABEL_PREFIX_RE.sub("", str(transcript or "")).strip().lower()
+        name = str(owner_name or "").strip().lower()
+        # A placeholder display name ("Ich"/"I"/"Me") is not a real identity to claim.
+        if not core or name in ("", "ich", "i", "me"):
+            return False
+        from vaf.core import vocab
+        for lang in vocab.available_languages("owner_claim"):
+            for tmpl in vocab.phrasings("owner_claim", lang):
+                # A claim template must carry a CLAIM cue AROUND the name ("ich bin
+                # NAME", "this is NAME"), not be the bare name: generated data
+                # occasionally yields "{name}" alone, which would match ANY mention of
+                # the owner - including "ich bin NICHT <name>". Require real context.
+                if not str(tmpl).replace("{name}", "").strip():
+                    continue
+                try:
+                    phrase = tmpl.format(name=name).strip().lower()
+                except Exception:
+                    continue
+                if phrase and phrase in core:
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -153,20 +196,35 @@ def maybe_request_confirmation(
     wav_bytes: bytes,
     score_result: Dict,
     session_id: str = "",
+    transcript: str = "",
+    owner_name: str = "",
 ) -> Optional[Dict]:
-    """Ask the owner to confirm an unsure segment. Never raises.
+    """Ask the owner to confirm a non-owner segment. Never raises.
 
-    Returns the pending record if a question went out, else None (feature
-    off, wrong label, already pending, cooldown, storage/delivery failure).
-    Delivery: main messenger first (text + audio attachment), else a
-    user-scoped web card event - never a global broadcast.
+    Two trigger paths (Variante B):
+    - CLAIM: any non-owner voice (unsure/other/named) whose transcript claims to BE the
+      owner (`claims_to_be_owner`) - a spoofing check that asks the real owner promptly.
+    - UNSURE: a borderline own voice with no such claim - an occasional adaptive reclaim,
+      kept restrained (long cooldown) so it does not ask on every unsure turn.
+
+    Returns the pending record if a question went out, else None (feature off, verified
+    owner, no claim and not unsure, already pending, cooldown, storage/delivery failure).
+    Delivery: main messenger first (text + audio attachment), else a user-scoped web
+    card event - never a global broadcast.
     """
     try:
         if not is_enabled() or not scope_id:
             return None
-        if (score_result or {}).get("label") != "unsure":
+        label = (score_result or {}).get("label")
+        if label == "self":            # the verified owner is never asked to confirm
             return None
-        if get_pending(scope_id) is not None or _cooldown_active(scope_id):
+        is_claim = claims_to_be_owner(transcript, owner_name)
+        is_unsure = label == "unsure"
+        if not (is_claim or is_unsure):
+            return None
+        kind = "claim" if is_claim else "unsure"
+        cooldown = _CLAIM_COOLDOWN_SECONDS if is_claim else _UNSURE_COOLDOWN_SECONDS
+        if get_pending(scope_id) is not None or _cooldown_active(scope_id, cooldown):
             return None
 
         from vaf.core.session import get_user_projects_root
@@ -185,7 +243,8 @@ def maybe_request_confirmation(
             pass
 
         from vaf.core import vocab
-        question = vocab.pick("speaker_confirm_question", _lang(username),
+        q_key = "speaker_confirm_claim" if kind == "claim" else "speaker_confirm_question"
+        question = vocab.pick(q_key, _lang(username),
                               score=score_result.get("score", "?"))
         rec = {
             "id": confirm_id,
@@ -196,6 +255,7 @@ def maybe_request_confirmation(
             "session_id": session_id or "",
             "created_at": time.time(),
             "channel": "web",
+            "kind": kind,
         }
 
         # Channel routing: main messenger first (resolved at send time by

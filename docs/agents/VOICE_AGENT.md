@@ -80,9 +80,11 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
 3. **Speaker label**: `speaker_id.score_wav` against the owner profile and
    all named third-party profiles; the transcript gets a `[Name]: ` prefix.
    With an enrolled profile the check is AUTHORITATIVE for delegation
-   (`_speaker_ok`, see invariants). An "unsure" score queues a confirmation
-   question (`speaker_confirm.maybe_request_confirmation`) without
-   interrupting the call.
+   (`_speaker_ok`, see invariants). A non-owner turn may queue a confirmation
+   question (`speaker_confirm.maybe_request_confirmation`) without interrupting
+   the call: promptly if the speaker CLAIMS to be the owner (a spoofing check),
+   or, restrained, on a plain "unsure" score (adaptive reclaim). See the
+   confirmation flow in [../web-ui/SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md).
    The heard utterance is also appended to the durable rolling transcript
    (`voice_context.record`, session/scope-scoped, bounded, fail-open) that the
    reflex policy reads - it outlives the 16-entry call ring and is cleared at
@@ -304,8 +306,8 @@ in live use.
 
 ## Speaker identification and confirmation
 
-The voice DB (owner profile + named third parties), the "unsure" confirmation
-flow (messenger question with audio attachment, web card fallback, "no,
+The voice DB (owner profile + named third parties), the speaker-confirmation
+flow (claim/unsure paths; messenger question with audio attachment, web card fallback, "no,
 that's Peter" naming) and its hard rules live in
 [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md) (section "Speaker
 identification and the confirmation flow"). Core modules:

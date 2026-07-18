@@ -56,6 +56,9 @@ _KIND_HINTS = {
                         "listening, e.g. 'can you hear me', 'are you there'"),
     "addressee_clarify": ("very short things a voice assistant says to ask whether it was the one being "
                           "addressed, e.g. 'do you mean me?', 'were you talking to me?', 'me?'"),
+    "owner_claim": ("short first-person ways a person states their own name, e.g. 'I am {name}', "
+                    "'this is {name}', 'my name is {name}'. ALWAYS include a claim word around the "
+                    "placeholder (like 'I am' / 'this is'); NEVER output the bare {name} alone"),
 }
 
 

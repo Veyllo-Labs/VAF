@@ -188,6 +188,65 @@ def test_messenger_channel_preferred(monkeypatch):
     assert not emitted  # no web card when the messenger delivered
 
 
+# ---------------------------------------------------------------------------
+# Variante B: identity-claim (spoofing) path + restrained unsure path
+# ---------------------------------------------------------------------------
+
+def _ask(monkeypatch, score_result, transcript="", owner_name="", scope="scope-a"):
+    """Drive maybe_request_confirmation with an explicit label/transcript/owner_name
+    (web-card lane). Returns (rec, emitted_question)."""
+    import vaf.core.messaging_connections as mc
+    monkeypatch.setattr(mc, "send_to_main_messenger",
+                        lambda *a, **k: (False, None))       # force web card
+    cap = {}
+    monkeypatch.setattr(sc, "_emit_web_card", lambda rec, q: cap.update(q=q))
+    rec = sc.maybe_request_confirmation(scope, "admin", b"\x00" * 400, score_result,
+                                        session_id="s1", transcript=transcript,
+                                        owner_name=owner_name)
+    return rec, cap.get("q", "")
+
+
+def test_claims_to_be_owner_detector():
+    assert sc.claims_to_be_owner("ich bin Mert", "Mert") is True
+    assert sc.claims_to_be_owner("[anderer_Sprecher]: das ist Mert", "Mert") is True
+    assert sc.claims_to_be_owner("this is Mert speaking", "Mert") is True
+    assert sc.claims_to_be_owner("ich bin nicht Mert", "Mert") is False   # negation, no match
+    assert sc.claims_to_be_owner("wie ist das wetter", "Mert") is False
+    assert sc.claims_to_be_owner("ich bin Mert", "Ich") is False          # placeholder name
+
+
+def test_claim_by_non_owner_fires_spoofing_question(monkeypatch):
+    """A non-owner voice (label 'other', NOT unsure) that CLAIMS to be the owner
+    triggers a confirmation with the spoofing question - so the real owner decides."""
+    rec, q = _ask(monkeypatch, {"label": "other", "score": 0.12},
+                  transcript="ja hallo, ich bin Mert", owner_name="Mert")
+    assert rec is not None and rec["kind"] == "claim"
+    assert "als du ausgegeben" in q.lower()        # the claim-specific question
+
+
+def test_non_owner_without_claim_does_not_fire(monkeypatch):
+    """A non-owner voice with no identity claim and not 'unsure' -> no question. This
+    is what removes the every-unsure nagging: plain other-speaker talk is left alone."""
+    rec, _ = _ask(monkeypatch, {"label": "other", "score": 0.12},
+                  transcript="schoenes wetter heute", owner_name="Mert")
+    assert rec is None
+
+
+def test_verified_owner_is_never_asked_even_with_claim(monkeypatch):
+    rec, _ = _ask(monkeypatch, {"label": "self", "score": 0.9},
+                  transcript="ich bin Mert", owner_name="Mert")
+    assert rec is None
+
+
+def test_unsure_without_claim_still_fires_plain_question(monkeypatch):
+    """The restrained unsure path survives (adaptive reclaim): a borderline own voice
+    with no claim still asks, but with the plain 'was that you?' question."""
+    rec, q = _ask(monkeypatch, {"label": "unsure", "score": 0.57},
+                  transcript="mach mal das licht an", owner_name="Mert")
+    assert rec is not None and rec["kind"] == "unsure"
+    assert "als du ausgegeben" not in q.lower()    # NOT the spoofing question
+
+
 def test_channel_reply_consumption(monkeypatch):
     rec, _, _ = _request(monkeypatch)
     # Unrelated message: NOT consumed

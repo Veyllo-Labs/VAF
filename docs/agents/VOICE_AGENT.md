@@ -89,6 +89,17 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    (`voice_context.record`, session/scope-scoped, bounded, fail-open) that the
    reflex policy reads - it outlives the 16-entry call ring and is cleared at
    call end. See [VOICE_REFLEX.md](VOICE_REFLEX.md).
+3a. **Pending-answer resolution** (`voice_policy.answer_verdict`, no LLM): if the agent
+   asked a question on the previous turn, a short-lived call-scoped `pending_q` was armed
+   (`voice_agent.is_question`). This turn resolves it: the owner's reply (`speaker_ok`, so
+   also the fail-open owner when no profile is enrolled) becomes the ANSWER (the prior
+   question is injected into `voice_reply`'s owner-gated
+   `_ANSWER_BLOCK`, so a terse "yes" / "at three" is understood as the answer); a "say that
+   again" (`voice_agent.is_unclear_reply`) RE-ASKS the same question once (the
+   `reask_pending` vocab line, a `reask: true` reply); anything else CONTINUES as a normal
+   turn. Bounded by a TTL + turn budget so a stale question never hijacks a later utterance;
+   it authorizes nothing (a non-owner "answer" stays tool-locked, and the owner's question
+   is never replayed to a guest). See [VOICE_REFLEX.md](VOICE_REFLEX.md).
 3b. **Addressee clarification** (`voice_agent.wants_addressee_clarification`,
    no LLM): an address-check cue ("can you hear me", "are you there", "kannst du
    mich hoeren"; the lexicon is per-language) from a
@@ -111,7 +122,9 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    a structural digest of the OPEN CHAT (built ownership-gated at call
    start via `build_chat_digest`; the prompt tells the model to DELEGATE a
    lookup for details beyond the digest instead of guessing) + last call
-   turns as history. The model may append
+   turns as history (plus the agent's own prior question when step 3a resolved
+   this turn as its answer). After the reply is spoken, a `pending_q` is armed
+   if the reply itself is a question (owner-only). The model may append
    `<delegate>task</delegate>` (parsed out, never spoken) or answer with
    exactly `<silent/>` (silence protocol: no TTS, keep listening). Spoken
    replies are capped at a sentence boundary (`_cap_spoken`).
@@ -120,8 +133,8 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    normal turn.
 7. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
    `reply`, `audio`, `delegated`, `silent`, and the flags `greeting`/`chime_in`/
-   `clarify` for the call-opening greeting, a proactive chime-in and an addressee
-   check - a silent reply has no audio and
+   `clarify`/`reask` for the call-opening greeting, a proactive chime-in, an addressee
+   check and a re-ask of the agent's own question - a silent reply has no audio and
    the frontend simply keeps listening).
 
 Every turn writes one forensic log line (`voice_call turn: active=... label=...

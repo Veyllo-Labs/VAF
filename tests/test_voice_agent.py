@@ -846,3 +846,53 @@ def test_piper_voice_map_is_class_level_ssot():
     sm = SpeechManager.__new__(SpeechManager)  # no heavy init
     assert sm._voice_model_name("tr") == "tr_TR-dfki-medium"
     assert sm._voice_model_name("xx") is None
+
+
+# --- In-call pending-answer feature (docs/agents/VOICE_REFLEX.md) ------------
+
+def test_is_question_detects_multi_script():
+    assert va.is_question("Soll ich dich erinnern?")
+    assert va.is_question("Was moechtest du?")
+    assert va.is_question("[VAF]: Wirklich?")          # label prefix stripped
+    assert va.is_question('Do you want that? "')       # trailing quote tolerated
+    assert va.is_question("そうですか？")                 # fullwidth CJK mark
+    assert va.is_question("هل تريد ذلك؟")               # arabic mark
+    assert not va.is_question("Alles klar, mache ich.")
+    assert not va.is_question("Okay.")
+    assert not va.is_question("")
+
+
+def test_is_unclear_reply_only_short_repeat_requests():
+    assert va.is_unclear_reply("Was?")
+    assert va.is_unclear_reply("Wie bitte?")
+    assert va.is_unclear_reply("What?")
+    assert va.is_unclear_reply("Sorry?")
+    assert va.is_unclear_reply("Nochmal?")
+    assert va.is_unclear_reply("[unsicher]: hä?")      # label prefix stripped
+    # A real answer that merely STARTS with a cue word is not a repeat request.
+    assert not va.is_unclear_reply("Was das Wetter angeht, ja bitte")
+    assert not va.is_unclear_reply("Morgen um drei")
+    assert not va.is_unclear_reply("")
+
+
+def test_pending_question_reaches_owner_prompt(monkeypatch):
+    """The agent's own prior question is injected so a brief reply is understood
+    as its answer - but only for the verified owner (speaker_ok)."""
+    _cfg(monkeypatch)
+    q = "Soll ich dich um 15 Uhr an den Zahnarzt erinnern?"
+    va.voice_reply("Ja bitte", scope_id="s", lang="de",
+                   speaker_ok=True, pending_question=q)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert q in system
+    assert "ANSWER" in system  # the answer-block guidance is present
+
+
+def test_pending_question_withheld_from_guest(monkeypatch):
+    """A guest never has the owner's (possibly private) question replayed to
+    them - the answer block is gated on speaker_ok like chat/memory."""
+    _cfg(monkeypatch)
+    q = "Soll ich dich um 15 Uhr an den Zahnarzt erinnern?"
+    va.voice_reply("Ja bitte", scope_id="s", lang="de",
+                   speaker_ok=False, pending_question=q)
+    system = _FakeBackend.last_messages[0]["content"]
+    assert q not in system

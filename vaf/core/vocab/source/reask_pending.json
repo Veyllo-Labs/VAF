@@ -1,0 +1,16 @@
+{
+  "en": [
+    "Sorry, I asked: {question}",
+    "Let me repeat: {question}",
+    "No worries - {question}",
+    "One more time: {question}",
+    "Sure - {question}"
+  ],
+  "de": [
+    "Klar, ich hatte gefragt: {question}",
+    "Nochmal: {question}",
+    "Kein Problem - {question}",
+    "Ich wiederhole: {question}",
+    "Also nochmal: {question}"
+  ]
+}

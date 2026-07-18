@@ -1,0 +1,247 @@
+{
+  "ar": [
+    "عذرًا، سألت: {question}",
+    "دعني أكرر: {question}",
+    "لا تقلق - {question}",
+    "مرة أخرى: {question}",
+    "بالتأكيد - {question}"
+  ],
+  "bg": [
+    "Извинете, попитах: {question}",
+    "Нека повторя: {question}",
+    "Няма проблем - {question}",
+    "Още веднъж: {question}",
+    "Разбира се - {question}"
+  ],
+  "bn": [
+    "দুঃখিত, আমি জিজ্ঞাসা করেছিলাম: {question}",
+    "আবার বলছি: {question}",
+    "কোনো সমস্যা নেই - {question}",
+    "আরেকবার বলছি: {question}",
+    "ঠিক আছে - {question}"
+  ],
+  "cs": [
+    "Promiňte, ptal jsem se: {question}",
+    "Zopakuji: {question}",
+    "Bez obav - {question}",
+    "Ještě jednou: {question}",
+    "Jasně - {question}"
+  ],
+  "da": [
+    "Undskyld, jeg spurgte: {question}",
+    "Lad mig gentage: {question}",
+    "Bare rolig - {question}",
+    "En gang til: {question}",
+    "Selvfølgelig - {question}"
+  ],
+  "de": [
+    "Klar, ich hatte gefragt: {question}",
+    "Nochmal: {question}",
+    "Kein Problem - {question}",
+    "Ich wiederhole: {question}",
+    "Also nochmal: {question}"
+  ],
+  "el": [
+    "Συγγνώμη, ρώτησα: {question}",
+    "Ας το επαναλάβω: {question}",
+    "Μην ανησυχείς - {question}",
+    "Μια φορά ακόμα: {question}",
+    "Βεβαίως - {question}"
+  ],
+  "en": [
+    "Sorry, I asked: {question}",
+    "Let me repeat: {question}",
+    "No worries - {question}",
+    "One more time: {question}",
+    "Sure - {question}"
+  ],
+  "es": [
+    "Perdona, pregunté: {question}",
+    "Déjame repetir: {question}",
+    "No te preocupes - {question}",
+    "Una vez más: {question}",
+    "Claro - {question}"
+  ],
+  "fa": [
+    "ببخشید، پرسیدم: {question}",
+    "اجازه بده تکرار کنم: {question}",
+    "مشکلی نیست - {question}",
+    "یک بار دیگه: {question}",
+    "حتماً - {question}"
+  ],
+  "fi": [
+    "Anteeksi, kysyin: {question}",
+    "Toistan: {question}",
+    "Ei hätää - {question}",
+    "Vielä kerran: {question}",
+    "Toki - {question}"
+  ],
+  "fr": [
+    "Désolé, j'ai demandé : {question}",
+    "Je répète : {question}",
+    "Pas de souci - {question}",
+    "Encore une fois : {question}",
+    "Bien sûr - {question}"
+  ],
+  "he": [
+    "סליחה, שאלתי: {question}",
+    "תן לי לחזור על זה: {question}",
+    "אין בעיה - {question}",
+    "עוד פעם אחת: {question}",
+    "בטח - {question}"
+  ],
+  "hi": [
+    "माफ करें, मैंने पूछा था: {question}",
+    "दोहराता हूँ: {question}",
+    "कोई बात नहीं - {question}",
+    "एक बार फिर: {question}",
+    "ठीक है - {question}"
+  ],
+  "hr": [
+    "Oprosti, pitao sam: {question}",
+    "Ponovit ću: {question}",
+    "Bez brige - {question}",
+    "Još jednom: {question}",
+    "Naravno - {question}"
+  ],
+  "hu": [
+    "Bocsánat, azt kérdeztem: {question}",
+    "Hadd ismételjem meg: {question}",
+    "Semmi gond - {question}",
+    "Még egyszer: {question}",
+    "Persze - {question}"
+  ],
+  "id": [
+    "Maaf, saya bertanya: {question}",
+    "Biar saya ulangi: {question}",
+    "Tidak apa-apa - {question}",
+    "Sekali lagi: {question}",
+    "Tentu - {question}"
+  ],
+  "it": [
+    "Scusa, ho chiesto: {question}",
+    "Ripeto: {question}",
+    "Nessun problema - {question}",
+    "Ancora una volta: {question}",
+    "Certo - {question}"
+  ],
+  "ja": [
+    "すみません、質問しました: {question}",
+    "もう一度言いますね: {question}",
+    "大丈夫です - {question}",
+    "もう一度: {question}",
+    "もちろん - {question}"
+  ],
+  "ko": [
+    "죄송해요, 제가 물어본 건: {question}",
+    "다시 말씀드릴게요: {question}",
+    "괜찮아요 - {question}",
+    "한 번 더: {question}",
+    "알겠어요 - {question}"
+  ],
+  "ms": [
+    "Maaf, saya tanya: {question}",
+    "Biar saya ulang: {question}",
+    "Tak mengapa - {question}",
+    "Sekali lagi: {question}",
+    "Baik - {question}"
+  ],
+  "nl": [
+    "Sorry, ik vroeg: {question}",
+    "Laat me het herhalen: {question}",
+    "Geen probleem - {question}",
+    "Nog een keer: {question}",
+    "Zeker - {question}"
+  ],
+  "no": [
+    "Beklager, jeg spurte: {question}",
+    "La meg gjenta: {question}",
+    "Ikke noe problem - {question}",
+    "En gang til: {question}",
+    "Selvfølgelig - {question}"
+  ],
+  "pl": [
+    "Przepraszam, zapytałem: {question}",
+    "Pozwól, że powtórzę: {question}",
+    "Nie ma problemu - {question}",
+    "Jeszcze raz: {question}",
+    "Oczywiście - {question}"
+  ],
+  "pt": [
+    "Desculpe, eu perguntei: {question}",
+    "Deixe-me repetir: {question}",
+    "Sem problemas - {question}",
+    "Mais uma vez: {question}",
+    "Claro - {question}"
+  ],
+  "ro": [
+    "Scuze, am întrebat: {question}",
+    "Lasă-mă să repet: {question}",
+    "Nicio problemă - {question}",
+    "Încă o dată: {question}",
+    "Sigur - {question}"
+  ],
+  "ru": [
+    "Извините, я спросил: {question}",
+    "Повторю: {question}",
+    "Не переживайте - {question}",
+    "Еще раз: {question}",
+    "Конечно - {question}"
+  ],
+  "sk": [
+    "Prepáčte, pýtal som sa: {question}",
+    "Nechajte ma zopakovať: {question}",
+    "Žiadny problém - {question}",
+    "Ešte raz: {question}",
+    "Samozrejme - {question}"
+  ],
+  "sr": [
+    "Izvini, pitao sam: {question}",
+    "Da ponovim: {question}",
+    "Nema problema - {question}",
+    "Još jednom: {question}",
+    "Naravno - {question}"
+  ],
+  "sv": [
+    "Ursäkta, jag frågade: {question}",
+    "Låt mig upprepa: {question}",
+    "Ingen fara - {question}",
+    "En gång till: {question}",
+    "Självklart - {question}"
+  ],
+  "th": [
+    "ขอโทษนะ ฉันถามว่า: {question}",
+    "ขอพูดอีกครั้ง: {question}",
+    "ไม่เป็นไรนะ - {question}",
+    "อีกครั้งหนึ่ง: {question}",
+    "ได้เลย - {question}"
+  ],
+  "tr": [
+    "Üzgünüm, şunu sormuştum: {question}",
+    "Tekrar edeyim: {question}",
+    "Sorun değil - {question}",
+    "Bir kez daha: {question}",
+    "Tabii ki - {question}"
+  ],
+  "uk": [
+    "Вибачте, я запитав: {question}",
+    "Дозвольте повторити: {question}",
+    "Без проблем - {question}",
+    "Ще раз: {question}",
+    "Звісно - {question}"
+  ],
+  "vi": [
+    "Xin lỗi, tôi đã hỏi: {question}",
+    "Để tôi nhắc lại: {question}",
+    "Không sao - {question}",
+    "Thêm lần nữa: {question}",
+    "Được thôi - {question}"
+  ],
+  "zh": [
+    "不好意思，我问的是：{question}",
+    "我再说一遍：{question}",
+    "没关系 - {question}",
+    "再说一次：{question}",
+    "好的 - {question}"
+  ]
+}

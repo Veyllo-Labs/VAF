@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **In a voice call, the agent now understands your answer to its own question.** When it
+  asks you something, your next reply is treated as the answer even if it is brief ("yes",
+  "at three"), instead of a stray remark. If you ask it to repeat, it re-asks the same
+  question in your language rather than guessing. A reply from someone other than you is
+  never taken as your answer and still cannot trigger any action.
+
 ### Changed
 - **The agent stops asking "was that you?" on every unrecognized voice.** The speaker
   confirmation now fires in two more targeted cases: promptly when a voice it does not

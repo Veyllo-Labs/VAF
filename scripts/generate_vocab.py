@@ -59,6 +59,10 @@ _KIND_HINTS = {
     "owner_claim": ("short first-person ways a person states their own name, e.g. 'I am {name}', "
                     "'this is {name}', 'my name is {name}'. ALWAYS include a claim word around the "
                     "placeholder (like 'I am' / 'this is'); NEVER output the bare {name} alone"),
+    "reask_pending": ("short spoken lead-ins an assistant says when it RE-ASKS its own question "
+                      "because the user did not catch it, e.g. 'Sorry, I asked: {question}', "
+                      "'Let me repeat: {question}'. ALWAYS keep the {question} placeholder and wrap "
+                      "a short natural lead-in around it; NEVER output the bare {question} alone"),
 }
 
 

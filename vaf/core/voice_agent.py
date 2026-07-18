@@ -85,7 +85,7 @@ Rules for this call:
 - Rule of thumb: EVERY request that needs a tool, live data or an action goes to the main agent with the marker. Small talk, opinions and things you already know (including the current time above) are answered directly, without the marker.
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
 - Only claim a task is running if this prompt explicitly says the main agent is currently working. Otherwise nothing is running: results you already announced are done, and new work needs a new <delegate>.
-{wake_block}{busy_block}{guest_block}
+{wake_block}{busy_block}{answer_block}{guest_block}
 {chat_block}
 {memory_block}"""
 
@@ -95,6 +95,14 @@ Your personality (stay in character, expressed briefly in speech):
 
 _WAKE_BLOCK = """
 IMPORTANT - the current utterance calls you BY NAME: it is addressed to you. Answer it; do not reply with the silence marker. If it is garbled, briefly ask the speaker to repeat. The speaker-label rules above stay fully in force (an unverified speaker still gets no delegations, changes or private information)."""
+
+# Injected on the turn right AFTER the agent itself asked the user a question, so
+# the model treats a brief reply ("yes", "at three") as the answer instead of a
+# stray utterance. Owner-only by construction: the caller passes it gated on
+# speaker_ok, so a question that may hold the owner's private context is never
+# replayed to a guest (a guest reply is handled as an ordinary guest turn).
+_ANSWER_BLOCK = """
+IMPORTANT - you JUST asked your user: "{question}". Treat the current utterance as their ANSWER to that question, even if it is brief or does not repeat the context - respond to it as the answer and continue naturally, and do not ask again what they just told you. If it is clearly NOT an answer but a new topic, simply handle the new topic."""
 
 _CHAT_BLOCK = """
 CURRENT CHAT (summary of the conversation open on screen, oldest first - the user may refer to it as "here" or "our chat"):
@@ -203,6 +211,54 @@ def addressed_by_name(text: str, agent_name: str, threshold: float = 0.59) -> bo
         if SequenceMatcher(None, tok, name).ratio() >= threshold:
             return True
     return False
+
+
+# Question marks across scripts (spoken TTS text carries no markdown, so the final
+# meaningful character is a reliable, no-LLM signal that a reply is a question):
+# ASCII, fullwidth CJK, Arabic, Armenian. Greek ';' (U+037E) is intentionally left
+# out - it collides with a normal semicolon and would false-fire.
+_QUESTION_MARKS = "?？؟՞"
+
+
+def is_question(text: str) -> bool:
+    """True if the agent's OWN spoken reply is a question - the Tier-1 (no-LLM)
+    signal that arms the in-call 'awaiting the answer' state. Strips the speaker
+    label and trailing quotes/brackets, then checks the final character against a
+    small multi-script question-mark set. Only ever false-NEGATIVE (a missed
+    question just means the feature does not arm), never a false authorization."""
+    core = _LABEL_PREFIX_RE.sub("", str(text or "")).strip().rstrip("\"')]}»”’ ")
+    if not core:
+        return False
+    return core[-1] in _QUESTION_MARKS
+
+
+# A short "I did not catch that / say that again" reply is a request to REPEAT,
+# not an answer to the agent's question - the agent should re-ask instead of
+# treating this as the answer. Compact multilingual cue set (like _ADDRESS_RE);
+# anchored so it only matches a SHORT utterance that IS the cue ("was?", "wie
+# bitte?"), never a real answer that merely starts with one ("was das Wetter
+# angeht, ja"). Fail-open to False.
+_UNCLEAR_REPLY_RE = re.compile(
+    r"^\W*(?:"
+    r"was|wie\s*bitte|wie|h[aä]+h?|nochmal|wiederhol\w*|nicht\s+verstanden|"        # de
+    r"what|huh+|come\s+again|say\s+(?:that\s+)?again|pardon|sorry|"                 # en
+    r"didn'?t\s+(?:catch|hear|get)\s+(?:that|you)?|"                                # en
+    r"quoi|comment|r[ée]p[èe]te|"                                                    # fr
+    r"qu[ée]|c[óo]mo|repite|"                                                        # es
+    r"cosa|come|ripeti|"                                                             # it
+    r"что|как|повтори"  # ru
+    r")\b\W*\??$", re.I)
+
+
+def is_unclear_reply(text: str) -> bool:
+    """True if a reply is a short 'say that again / I did not catch that' request
+    rather than an answer, so the agent should re-ask its own question. Strips the
+    speaker label; only SHORT utterances qualify (a long sentence starting with a
+    cue word is a real answer). Fail-open to False."""
+    core = _LABEL_PREFIX_RE.sub("", str(text or "")).strip()
+    if not core or len(core) > 40:
+        return False
+    return bool(_UNCLEAR_REPLY_RE.search(core))
 
 
 # The reflex verdict (see docs/agents/VOICE_REFLEX.md): the policy layer maps every
@@ -574,11 +630,17 @@ def voice_reply(
     chat_context: str = "",
     username: str = "",
     addressed: bool = False,
+    pending_question: str = "",
     agent_name: str = "",
     persona: str = "",
 ) -> Optional[Dict]:
     """One first-layer turn. Returns {'reply': spoken_text, 'delegate': task|None}
     or None on any failure (no provider, API error) - the caller degrades.
+
+    pending_question: the agent's OWN question from the previous turn, when the
+    reflex layer judged this utterance to be its answer. Injects a block telling
+    the model to treat this reply as the answer. Owner-only: it is gated on
+    speaker_ok here too, so an owner-private question is never shown to a guest.
 
     main_busy: the main agent is still working on a delegated task. The model
     is told not to delegate AND any marker it emits anyway is dropped in code
@@ -608,6 +670,10 @@ def voice_reply(
             now=_now_line(username, lang),
             silent=_SILENT_MARKER,
             wake_block=_WAKE_BLOCK if addressed else "",
+            # Owner-only (gated on speaker_ok, like chat/memory): never replay a
+            # possibly owner-private question to a guest.
+            answer_block=(_ANSWER_BLOCK.format(question=pending_question.strip()[:200])
+                          if (pending_question.strip() and speaker_ok) else ""),
             # busy_block names the owner's in-flight delegated task verbatim, which is
             # owner-private - gate it on speaker_ok too (a guest never delegates, so
             # suppressing the running-task notice for a guest loses nothing).

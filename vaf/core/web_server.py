@@ -6490,13 +6490,83 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception:
                             pass
 
+                        # 2b-answer. In-call pending-answer resolution (VOICE_REFLEX.md):
+                        # if the agent JUST asked a question, this utterance is probably its
+                        # answer. A local, no-LLM verdict decides: owner reply -> ANSWER (the
+                        # Q&A link is injected into voice_reply below); a "say that again" ->
+                        # REASK the same question (capped); anything else -> CONTINUE as a
+                        # normal turn. Authorizes nothing: a non-owner stays tool-locked by
+                        # speaker_ok below.
+                        _answer_ctx = ""
+                        _pq = _call.get("pending_q")
+                        if _pq:
+                            from vaf.core import voice_policy as _vpolA
+                            try:
+                                _av = _vpolA.answer_verdict(
+                                    _pq.get("text", ""), _text, _label,
+                                    speaker_ok=_speaker_ok,
+                                    asked_ago_s=time.monotonic() - float(_pq.get("asked_at") or 0.0),
+                                    reask_count=int(_pq.get("reask_count") or 0))
+                            except Exception:
+                                _av = {"verdict": _vpolA.CONTINUE, "reason": "error"}
+                            _averdict = _av.get("verdict")
+                            if _averdict == _vpolA.ANSWER:
+                                _answer_ctx = _pq.get("text", "")
+                                _call.pop("pending_q", None)
+                                log("WebServer",
+                                    f"voice_call: pending-answer ANSWER q={_answer_ctx[:60]!r}")
+                            elif _averdict == _vpolA.REASK:
+                                # Owner asked us to repeat: re-ask the SAME question (spoken),
+                                # keep the pending state with a fresh window, keep listening.
+                                _reask = ""
+                                try:
+                                    from vaf.core import vocab as _vocabR
+                                    _reask = _vocabR.pick("reask_pending", _turn_lang,
+                                                          scope=_call["scope"],
+                                                          question=_pq.get("text", "")[:160])
+                                except Exception:
+                                    _reask = ""
+                                if not _reask:
+                                    _reask = _pq.get("text", "")
+                                _reask_audio = None
+                                try:
+                                    from vaf.core.speech import SpeechManager as _SMr
+                                    _ra = await asyncio.wait_for(
+                                        loop.run_in_executor(
+                                            None, lambda: _SMr.get_instance().synthesize_audio(
+                                                _reask, _turn_lang, force_engine="docker")),
+                                        timeout=30.0)
+                                    if _ra:
+                                        _reask_audio = _b64v.b64encode(_ra).decode("utf-8")
+                                except Exception:
+                                    _reask_audio = None
+                                _pq["reask_count"] = int(_pq.get("reask_count") or 0) + 1
+                                _pq["asked_at"] = time.monotonic()
+                                _pq["turns_left"] = _vpolA.PENDING_Q_TURNS
+                                _call["pending_q"] = _pq
+                                _call["history"].append({"role": "user", "content": _text[:200]})
+                                _call["history"].append({"role": "assistant", "content": _reask})
+                                _call["history"] = _call["history"][-16:]
+                                log("WebServer",
+                                    f"voice_call: pending-answer REASK text={_text[:50]!r}")
+                                await websocket.send_json({
+                                    "type": "voice_call_reply", "user_text": _text,
+                                    "speaker_label": _label, "reply": _reask,
+                                    "audio": _reask_audio, "delegated": None, "reask": True,
+                                })
+                                continue
+                            else:  # CONTINUE - not the answer; drop when stale or budget spent
+                                _pq["turns_left"] = int(_pq.get("turns_left") or 0) - 1
+                                if _av.get("reason") == "expired" or _pq["turns_left"] <= 0:
+                                    _call.pop("pending_q", None)
+
                         # 2c. Addressee ambiguity (tier 1, no LLM): an address-check
                         # cue ("kannst du mich hoeren", "bist du da") from a NON-owner
                         # speaker who did not name the agent - ask "did you mean me?"
                         # instead of answering or silently ignoring. Authorizes
                         # nothing (anti-spoofing unchanged); it is a spoken question.
                         try:
-                            if _va.wants_addressee_clarification(
+                            if not _answer_ctx and _va.wants_addressee_clarification(
                                     _text, _label, _call.get("agent_name", "")):
                                 _clar = _va.addressee_clarify_line(_turn_lang, _call["scope"])
                                 _clar_audio = None
@@ -6528,8 +6598,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # other speakers and garbled non-owner input never
                         # reach the LLM - the text still enters the call
                         # history as room context (the labels exist for this).
-                        _engage, _gate_reason = _va.should_engage(
-                            _text, _label, agent_name=_call.get("agent_name", ""))
+                        if _answer_ctx:
+                            # Already resolved as the answer to the agent's own question
+                            # -> always engage; the Q&A link is injected into voice_reply.
+                            _engage, _gate_reason = True, "answer"
+                        else:
+                            _engage, _gate_reason = _va.should_engage(
+                                _text, _label, agent_name=_call.get("agent_name", ""))
                         if not _engage:
                             # Reflex chime-in: side talk from another speaker normally
                             # stores + stays silent, but the LOCAL policy may find it
@@ -6644,9 +6719,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 speaker_ok=_speaker_ok,
                                 chat_context=_call.get("chat_context", ""),
                                 username=_uname,
-                                addressed=(_gate_reason == "wake_word"
+                                addressed=(bool(_answer_ctx)
+                                           or _gate_reason == "wake_word"
                                            or _va.addressed_by_name(
                                                _text, _call.get("agent_name", ""))),
+                                pending_question=_answer_ctx,
                                 agent_name=_call.get("agent_name", ""),
                                 persona=_call.get("agent_soul", ""),
                             ),
@@ -6714,6 +6791,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _call["history"].append({"role": "user", "content": _text})
                         _call["history"].append({"role": "assistant", "content": _res["reply"]})
                         _call["history"] = _call["history"][-16:]
+
+                        # Arm the in-call pending-question state: if this reply is itself a
+                        # question, the NEXT utterance is probably its answer (resolved at
+                        # 2b-answer next turn). Owner-only (speaker_ok): a guest's words are
+                        # never taken as the answer to an owner-directed question, and the
+                        # question (which may hold owner-private context) is never replayed
+                        # to a guest. A non-question reply clears any stale pending question.
+                        try:
+                            if _speaker_ok and _res.get("reply") and _va.is_question(_res["reply"]):
+                                from vaf.core import voice_policy as _vpolB
+                                _call["pending_q"] = {
+                                    "text": _res["reply"], "asked_at": time.monotonic(),
+                                    "turns_left": _vpolB.PENDING_Q_TURNS, "reask_count": 0,
+                                }
+                            else:
+                                _call.pop("pending_q", None)
+                        except Exception:
+                            _call.pop("pending_q", None)
 
                         await websocket.send_json({
                             "type": "voice_call_reply",

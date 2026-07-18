@@ -144,3 +144,45 @@ def test_similar_to_any_dedups_recent_chime_ins(monkeypatch):
     assert vp.similar_to_any("das meeting ist um 3 uhr", recent) is True   # near-duplicate
     assert vp.similar_to_any("willst du kaffee", recent) is False          # unrelated
     assert vp.similar_to_any("anything", []) is False                      # nothing to dedup against
+
+
+# --- In-call pending-answer resolution (answer_verdict) ----------------------
+
+def test_answer_verdict_owner_reply_is_answer():
+    v = vp.answer_verdict("Soll ich erinnern?", "Ja, gerne", "self", speaker_ok=True)
+    assert v["verdict"] == vp.ANSWER
+
+
+def test_answer_verdict_fail_open_owner_no_profile_is_answer():
+    """Default config: no enrolled voice profile -> label None but speaker_ok True
+    ('everyone is the owner'). The gate is speaker_ok (symmetric with the arm gate),
+    so the feature MUST resolve here, not only after enrollment."""
+    v = vp.answer_verdict("Soll ich erinnern?", "Ja", None, speaker_ok=True)
+    assert v["verdict"] == vp.ANSWER
+
+
+def test_answer_verdict_owner_unclear_is_reask_then_answer_at_cap():
+    # First "say that again" from the owner -> re-ask...
+    v1 = vp.answer_verdict("Soll ich erinnern?", "Wie bitte?", "self",
+                           speaker_ok=True, reask_count=0)
+    assert v1["verdict"] == vp.REASK
+    # ...but capped: once MAX_REASK re-asks were spent, stop re-asking.
+    v2 = vp.answer_verdict("Soll ich erinnern?", "Wie bitte?", "self",
+                           speaker_ok=True, reask_count=vp.MAX_REASK)
+    assert v2["verdict"] == vp.ANSWER
+
+
+def test_answer_verdict_non_owner_continues():
+    # A non-owner (speaker_ok False, e.g. an enrolled call scoring other/named/unsure)
+    # is never taken as the owner's answer (Step A); it falls through to normal
+    # side-talk, still tool-locked. The label alone must not decide it.
+    for lbl in ("other", "named", "unsure"):
+        v = vp.answer_verdict("Soll ich erinnern?", "Ja klar", lbl, speaker_ok=False)
+        assert v["verdict"] == vp.CONTINUE
+
+
+def test_answer_verdict_expired_continues():
+    v = vp.answer_verdict("Soll ich erinnern?", "Ja, gerne", "self", speaker_ok=True,
+                          asked_ago_s=vp.PENDING_Q_TTL_S + 5)
+    assert v["verdict"] == vp.CONTINUE
+    assert v["reason"] == "expired"

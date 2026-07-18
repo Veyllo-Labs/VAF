@@ -237,6 +237,57 @@ def similar_to_any(text: str, recent_texts: Optional[Sequence[str]],
     return False
 
 
+# --- In-call pending-answer resolution (docs/agents/VOICE_REFLEX.md) ---------
+# When the agent ITSELF asked the user a question, the next utterance is probably
+# the answer. This local (no-LLM) verdict decides whether to treat it AS the answer,
+# ask again, or let it fall through as an ordinary turn. It NEVER authorizes work:
+# a non-owner "answer" stays tool-locked (the caller keeps its speaker_ok gate).
+ANSWER = "answer"       # treat this utterance as the answer to the open question
+REASK = "reask"         # the reply was a "say that again" - re-ask the question
+CONTINUE = "continue"   # not the answer - handle as a normal turn
+
+PENDING_Q_TTL_S = 45.0  # a spoken answer follows within seconds; bound stale hijacking
+PENDING_Q_TURNS = 2     # honor an open question for at most this many following turns
+MAX_REASK = 1           # re-ask an unclear answer at most this many times, then continue
+
+
+def answer_verdict(question: str, utterance: str, label: Optional[str], *,
+                   speaker_ok: bool = True, asked_ago_s: float = 0.0,
+                   reask_count: int = 0) -> dict:
+    """Given the agent has an OPEN question, decide what this utterance is.
+    Returns {'verdict': ANSWER|REASK|CONTINUE, 'reason': str}.
+
+    Step A (adjacency, no embeddings): the owner's reply is the answer (ANSWER),
+    unless it is a short 'say that again' (REASK, capped by MAX_REASK). A non-owner
+    utterance falls through as normal side-talk (CONTINUE); the relevance-gated guest
+    spoken answer + scene awareness are Step B. An expired question (older than
+    PENDING_Q_TTL_S) also falls through so a stale question never hijacks a later
+    unrelated utterance.
+
+    The owner gate is `speaker_ok`, SYMMETRIC with the arm and inject gates (which
+    both key on speaker_ok), NOT label=='self'. With an enrolled profile speaker_ok is
+    exactly (label=='self'); with NO enrolled profile the documented fail-open makes
+    everyone the owner (speaker_ok True, label None) - the same owner model the rest of
+    the voice pipeline uses (should_engage, wants_addressee_clarification, voice_reply).
+    Keying on label=='self' instead would silently disable the feature for every
+    unenrolled user. A non-owner (other/named/unsure -> speaker_ok False) never resolves
+    an answer, so anti-spoofing is unchanged. `label` is accepted for the Step B
+    scene/relevance layer."""
+    try:
+        if asked_ago_s is not None and asked_ago_s > PENDING_Q_TTL_S:
+            return {"verdict": CONTINUE, "reason": "expired"}
+        if speaker_ok:
+            if reask_count < MAX_REASK and voice_agent.is_unclear_reply(utterance):
+                return {"verdict": REASK, "reason": "unclear"}
+            return {"verdict": ANSWER, "reason": "owner_reply"}
+        # A non-owner spoke while an owner-directed question was open. Left as normal
+        # side-talk in Step A; a relevant guest answer becomes spoken (never acting)
+        # in Step B once embedding relevance + scene are wired in.
+        return {"verdict": CONTINUE, "reason": "non_owner"}
+    except Exception:
+        return {"verdict": CONTINUE, "reason": "error"}
+
+
 def classify(text: str, label: Optional[str], agent_name: str = "", *,
              topics: Optional[Sequence[str]] = None, activity: float = 0.5) -> dict:
     """The reflex decision. Returns a dict with the three-way `verdict`, the Tier-1

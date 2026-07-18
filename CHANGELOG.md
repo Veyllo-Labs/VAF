@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a15] - 2026-07-18
+
 ### Added
 - **Voice call, the reflex features speak your language**: the agent's "did you mean me?"
   clarification and the cue words behind it now ship in about 35 languages (generated

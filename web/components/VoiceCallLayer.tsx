@@ -82,6 +82,9 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
     const playbackTeardownRef = useRef<() => void>(() => { /* noop */ });
     const eyePulseRef = useRef<HTMLSpanElement | null>(null);
     const pendingTts = useRef<((b64: string | null) => void) | null>(null);
+    // Dedup for server-delivered speech: the same result can arrive via
+    // message_complete AND agent_message_append; never speak it twice in a row.
+    const lastSpokenRef = useRef<{ text: string; at: number }>({ text: '', at: 0 });
     const mutedRef = useRef(false);
     mutedRef.current = store.muted;
     const graceUntilRef = useRef(0);
@@ -427,6 +430,52 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
         rafId = requestAnimationFrame(tick);
     }, [ws, sessionId, later]);
 
+    // Speak a server-delivered assistant message DURING a call: the delegated
+    // result the user waited for, a fired timer, a reminder, an automation result -
+    // anything the main agent surfaces on this session. Sanitized, deduped (the same
+    // text can arrive via both message_complete and agent_message_append), and played
+    // through the hold/TTS machinery so the agent never transcribes its own voice.
+    const speakServerText = useCallback((raw: string) => {
+        if (!ws) return;
+        const clean = String(raw || '');
+        if (!clean.trim() || clean.startsWith('[ASYNC_ACK]')) return;
+        const text = sanitizeForSpeech(clean).slice(0, 1200);
+        const spoken = text || t('resultReady');
+        const now = performance.now();
+        if (spoken === lastSpokenRef.current.text && now - lastSpokenRef.current.at < 8000) return;
+        lastSpokenRef.current = { text: spoken, at: now };
+        holdLoopRef.current = true;
+        const rec = recorderRef.current;
+        if (rec && rec.state === 'recording') {
+            discardNextRef.current = true;
+            try { rec.stop(); } catch { /* noop */ }
+        }
+        const resume = () => { holdLoopRef.current = false; later(listenLoop, 300); };
+        let retried = false;
+        pendingTts.current = (b64) => {
+            if (b64) {
+                pendingTts.current = null;
+                holdLoopRef.current = true;
+                const rec2 = recorderRef.current;
+                if (rec2 && rec2.state === 'recording') {
+                    discardNextRef.current = true;
+                    try { rec2.stop(); } catch { /* noop */ }
+                }
+                try { agentAudioRef.current?.pause(); } catch { /* noop */ }
+                playAgentAudio(b64, resume);
+            } else if (!retried) {
+                retried = true;
+                try { ws.send(JSON.stringify({ type: 'voice_call_speak', text: t('resultReady') })); }
+                catch { pendingTts.current = null; resume(); }
+            } else {
+                pendingTts.current = null;
+                resume();
+            }
+        };
+        try { ws.send(JSON.stringify({ type: 'voice_call_speak', text: spoken })); }
+        catch { pendingTts.current = null; resume(); }
+    }, [ws, t, later, listenLoop, playAgentAudio]);
+
     // WS replies for the call
     useEffect(() => {
         if (!active || !ws) return;
@@ -509,66 +558,34 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             else if (data.type === 'speaker_enroll_tts') {
                 pendingTts.current?.(data.audio || null);
             }
-            else if (data.type === 'message_complete' && useVoiceCallStore.getState().mainTask) {
-                // The delegated main-agent task finished. Anchor: the SAME
-                // event that plays the completion chime in page.tsx. Hardened
-                // after a silent live failure:
-                // - only THIS session's completion counts (another session's
-                //   task/automation must neither clear mainTask nor be spoken),
-                // - [ASYNC_ACK] is not the result (the drain delivers it later),
-                // - empty content must not swallow the pending task,
-                // - think blocks are never spoken,
-                // - the mic is held while the result plays (the agent must not
-                //   transcribe its own voice as a user turn),
-                // - a TTS failure gets a short spoken notice instead of silence.
-                if (data.sessionId && callSessionRef.current
-                    && data.sessionId !== callSessionRef.current) return;
-                const raw = String(data.content || '');
-                if (!raw.trim() || raw.startsWith('[ASYNC_ACK]')) return;
-                const text = sanitizeForSpeech(raw).slice(0, 1200);
-                // Sentinel-only content (the model parroted a context block):
-                // it IS this session's completion - announce briefly, never
-                // read markup aloud, never swallow silently.
-                const spoken = text || t('resultReady');
-                useVoiceCallStore.getState().set({ mainTask: '' });
-                holdLoopRef.current = true;
-                const rec = recorderRef.current;
-                if (rec && rec.state === 'recording') {
-                    discardNextRef.current = true;
-                    try { rec.stop(); } catch { /* noop */ }
-                }
-                const resume = () => { holdLoopRef.current = false; later(listenLoop, 300); };
-                let retried = false;
-                pendingTts.current = (b64) => {
-                    if (b64) {
-                        pendingTts.current = null;
-                        // The loop may have resumed listening while TTS was
-                        // synthesizing - stop and discard before speaking.
-                        holdLoopRef.current = true;
-                        const rec2 = recorderRef.current;
-                        if (rec2 && rec2.state === 'recording') {
-                            discardNextRef.current = true;
-                            try { rec2.stop(); } catch { /* noop */ }
-                        }
-                        try { agentAudioRef.current?.pause(); } catch { /* noop */ }
-                        playAgentAudio(b64, resume);
-                    } else if (!retried) {
-                        retried = true;
-                        try { ws.send(JSON.stringify({ type: 'voice_call_speak', text: t('resultReady') })); }
-                        catch { pendingTts.current = null; resume(); }
-                    } else {
-                        pendingTts.current = null;
-                        resume();
-                    }
-                };
-                try { ws.send(JSON.stringify({ type: 'voice_call_speak', text: spoken })); }
-                catch { pendingTts.current = null; resume(); }
+            else if (data.type === 'message_complete') {
+                // ANY main-agent turn completion for THIS call's session is spoken:
+                // the delegated result the user waited for AND anything that finishes
+                // later while the call is open (a fired timer, a reminder, a background
+                // task). The old gate required a pending delegation (mainTask), so a
+                // timer that fired after its "timer set" ack had cleared mainTask was
+                // silently dropped. Strictly scoped to the call's origin session so
+                // another session's completion is never spoken; [ASYNC_ACK]/empty/think
+                // are filtered in speakServerText; the pending-task belt is cleared
+                // when its result arrives.
+                if (!callSessionRef.current || String(data.sessionId || '') !== callSessionRef.current) return;
+                if (useVoiceCallStore.getState().mainTask) useVoiceCallStore.getState().set({ mainTask: '' });
+                speakServerText(String(data.content || ''));
+            }
+            else if (data.type === 'agent_message_append' && data.role !== 'user') {
+                // Proactive / automation / reminder messages appended to the session
+                // (no live turn to attach to) are spoken too, so the agent reacts to
+                // everything the main agent surfaces during a call. User-side bubbles
+                // (e.g. a timer's own trigger note) are skipped; deduped against the
+                // completion path so a result arriving via both is spoken once.
+                if (!callSessionRef.current || String(data.sessionId || '') !== callSessionRef.current) return;
+                speakServerText(String(data.content || ''));
             }
         };
         ws.addEventListener('message', handler);
         return () => ws.removeEventListener('message', handler);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [active, ws, listenLoop, playAgentAudio]);
+    }, [active, ws, listenLoop, playAgentAudio, speakServerText]);
 
     // Call start / teardown
     useEffect(() => {

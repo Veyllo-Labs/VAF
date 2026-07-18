@@ -6568,11 +6568,12 @@ function VAFDashboardContent() {
                                 </div>
 
                                 {/* Stop button left of message box — show when chat is loading, a workflow is running, or a sub-agent is active.
-                                    During a live call the SLOT stays reserved even without a button:
-                                    otherwise the call bar jumps 44px wider/narrower whenever the
-                                    stop button appears (live report: bar "too long" until stop shows). */}
+                                    Suppressed entirely during a live call: the composer IS the full-width
+                                    call bar (its own mute/hangup controls), so reserving a 44px stop slot
+                                    would make it narrower than the standard input with an empty gap on the
+                                    left; hanging up ends everything, so no separate stop is needed here. */}
                                 <div className={cn(chatWidthClass, "mx-auto flex items-center")}>
-                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing || (voiceCallActive && !voiceCallClosing)) && (
+                                    {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && !voiceCallActive && (
                                         <div className="w-9 mr-2 shrink-0 flex items-center justify-center">
                                         {(isGenerating || isWorkflowRunning || isSubAgentRunning || isStoppingGeneration || stopPulsing || isIndexing) && (
                                             <div className="relative flex items-center justify-center">

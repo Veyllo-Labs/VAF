@@ -19,6 +19,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The fallback now runs whenever the first start attempt dies and an alternative exists,
   non-debug logging captures fatal errors again, and the retry scans the full log. So an
   empty or low-verbosity log can no longer silently disable it.
+- **The one-time "what's new" alpha notice no longer reappears on every Settings close.**
+  Closing Settings refreshed your time format and name, but also reset the seen-version
+  gate, which re-showed the one-time notice each time you left Settings. It now refreshes
+  those without touching the gate. (A deeper per-user workspace persistence quirk can
+  still surface it once per app start; that root cause is tracked separately.)
 
 ## [0.1.0a15] - 2026-07-18
 

@@ -1043,7 +1043,13 @@ function VAFDashboardContent() {
     // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
     const openedFromOAuthRef = useRef(false);
 
-    const fetchUserTimeFormat = useCallback(() => {
+    const fetchUserTimeFormat = useCallback((opts?: { syncAnnouncement?: boolean }) => {
+        // syncAnnouncement drives lastSeenVersion, which gates the one-time Open-Alpha /
+        // "what's new" modal. Only sync it on the INITIAL load. On settings-close we must
+        // NOT reset it: the persona GET can return a stale/null last_seen_announcement_version
+        // (the per-user workspace round-trip does not reliably reflect the just-acked value),
+        // and resetting it re-fired the one-time modal EVERY time the user left Settings.
+        const syncAnnouncement = opts?.syncAnnouncement !== false;
         fetch(getApiBase() + '/api/user/persona')
             .then(res => res.ok ? res.json() : null)
             .then(data => {
@@ -1052,7 +1058,9 @@ function VAFDashboardContent() {
                 setUserTimeFormat(tf === '12h' ? '12h' : '24h');
                 const name = data?.user_identity?.name || data?.identity?.name || null;
                 setUserName(name || null);
-                setLastSeenVersion(data?.user_identity?.last_seen_announcement_version ?? null);
+                if (syncAnnouncement) {
+                    setLastSeenVersion(data?.user_identity?.last_seen_announcement_version ?? null);
+                }
                 setPersonaLoaded(true);
             })
             .catch(() => setUserTimeFormat('24h'));
@@ -1071,7 +1079,10 @@ function VAFDashboardContent() {
     const handleSettingsClose = useCallback(() => {
         setSettingsInitialTab(null);
         setIsSettingsOpen(false);
-        fetchUserTimeFormat(); // Refresh time format in case user changed it in Interface settings
+        // Refresh time format / name in case the user changed them in Interface settings,
+        // but do NOT re-sync the announcement gate — that re-fired the one-time modal on
+        // every Settings close (see fetchUserTimeFormat).
+        fetchUserTimeFormat({ syncAnnouncement: false });
         if (openedFromOAuthRef.current) {
             openedFromOAuthRef.current = false;
             router.replace('/', { scroll: false });

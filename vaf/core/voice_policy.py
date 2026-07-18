@@ -250,42 +250,91 @@ PENDING_Q_TTL_S = 45.0  # a spoken answer follows within seconds; bound stale hi
 PENDING_Q_TURNS = 2     # honor an open question for at most this many following turns
 MAX_REASK = 1           # re-ask an unclear answer at most this many times, then continue
 
+# Answer-relevance (Step B): embedding cosine of the reply to the open question.
+# Consulted ONLY for longer utterances (a terse reply carries almost no embedding
+# signal - its cosine to the question is low even when it IS the answer, so adjacency
+# is trusted for those, see voice_agent.is_short_reply) and for a guest's on-topic
+# remark. The bar scales with the activity dial and the scene, mirroring the chime
+# band. PROVISIONAL: calibrate against a live call, exactly like the chime band was
+# (its earlier mock-tuned values never fired live).
+_ANSWER_REL_QUIET = 0.34    # calm dial -> stricter (only clearly on-topic passes)
+_ANSWER_REL_ACTIVE = 0.24   # active dial -> more lenient
+_ANSWER_REL_MULTI_BIAS = 0.04  # a busier room raises the bar a touch (more side-talk)
+
+
+def answer_relevance(question: str, utterance: str) -> float:
+    """Embedding cosine of an utterance to the open question, in [0,1]. The speaker
+    label is stripped first so the prefix does not skew it. 0.0 when either side is
+    empty or embeddings are unavailable (fail-open to 'not relevant')."""
+    q = str(question or "").strip()
+    u = voice_agent.strip_speaker_label(utterance)
+    if not q or not u:
+        return 0.0
+    qv = _embed_one(q)
+    uv = _embed_one(u)
+    if not qv or not uv:
+        return 0.0
+    return _cosine(qv, uv)
+
+
+def _answer_rel_bar(scene: str, activity: float) -> float:
+    """The activity- and scene-scaled relevance bar an utterance must clear to count
+    as an on-topic answer (calm dial = stricter; a busy room = stricter still)."""
+    a = 0.0 if activity is None else max(0.0, min(1.0, float(activity)))
+    bar = _ANSWER_REL_QUIET + (_ANSWER_REL_ACTIVE - _ANSWER_REL_QUIET) * a
+    if scene == "multi":
+        bar += _ANSWER_REL_MULTI_BIAS
+    return bar
+
 
 def answer_verdict(question: str, utterance: str, label: Optional[str], *,
                    speaker_ok: bool = True, asked_ago_s: float = 0.0,
-                   reask_count: int = 0) -> dict:
+                   reask_count: int = 0, recent_labels: Optional[Sequence[str]] = None,
+                   activity: float = 0.5) -> dict:
     """Given the agent has an OPEN question, decide what this utterance is.
-    Returns {'verdict': ANSWER|REASK|CONTINUE, 'reason': str}.
+    Returns {'verdict': ANSWER|REASK|CONTINUE, 'reason': str, 'guest': bool}
+    (guest=True marks a guest's on-topic ANSWER, whose spoken reply never acts and
+    leaves the owner's question open).
 
-    Step A (adjacency, no embeddings): the owner's reply is the answer (ANSWER),
-    unless it is a short 'say that again' (REASK, capped by MAX_REASK). A non-owner
-    utterance falls through as normal side-talk (CONTINUE); the relevance-gated guest
-    spoken answer + scene awareness are Step B. An expired question (older than
-    PENDING_Q_TTL_S) also falls through so a stale question never hijacks a later
-    unrelated utterance.
+    The owner gate is `speaker_ok`, SYMMETRIC with the arm and inject gates (never
+    label=='self'): with an enrolled profile speaker_ok == (label=='self'); with NO
+    profile the documented fail-open makes everyone the owner (speaker_ok True, label
+    None), the same owner model should_engage / wants_addressee_clarification /
+    voice_reply use. A non-owner (other/named/unsure -> speaker_ok False) never gets the
+    owner's Q&A link and never acts (unchanged); Step B only lets a guest's clearly
+    ON-TOPIC remark earn a spoken reply instead of silent side-talk.
 
-    The owner gate is `speaker_ok`, SYMMETRIC with the arm and inject gates (which
-    both key on speaker_ok), NOT label=='self'. With an enrolled profile speaker_ok is
-    exactly (label=='self'); with NO enrolled profile the documented fail-open makes
-    everyone the owner (speaker_ok True, label None) - the same owner model the rest of
-    the voice pipeline uses (should_engage, wants_addressee_clarification, voice_reply).
-    Keying on label=='self' instead would silently disable the feature for every
-    unenrolled user. A non-owner (other/named/unsure -> speaker_ok False) never resolves
-    an answer, so anti-spoofing is unchanged. `label` is accepted for the Step B
-    scene/relevance layer."""
+    Signals (all local, no LLM):
+    - OWNER: a terse reply (is_short_reply) or a 1:1 scene -> the answer by adjacency
+      (embedding cosine is near-useless for a terse reply). In a multi-person scene a
+      LONGER owner utterance must be on-topic (answer_relevance >= the scene/activity
+      bar), else it is likely side-talk to the other person and the Q&A link is NOT
+      forced (CONTINUE). A "say that again" re-asks once (REASK, capped).
+    - GUEST: no owner Q&A link ever; an on-topic remark (relevance >= bar) earns a
+      spoken (never acting) reply (ANSWER, guest=True), else normal side-talk
+      (CONTINUE). A guest who addresses the agent by name is already handled by the
+      normal wake-word gate downstream, so this only adds the un-named on-topic case.
+    - An expired question (older than PENDING_Q_TTL_S) falls through (CONTINUE) so a
+      stale question never hijacks a later unrelated utterance."""
     try:
         if asked_ago_s is not None and asked_ago_s > PENDING_Q_TTL_S:
-            return {"verdict": CONTINUE, "reason": "expired"}
+            return {"verdict": CONTINUE, "reason": "expired", "guest": False}
+        scene = derive_scene(label, recent_labels)
         if speaker_ok:
             if reask_count < MAX_REASK and voice_agent.is_unclear_reply(utterance):
-                return {"verdict": REASK, "reason": "unclear"}
-            return {"verdict": ANSWER, "reason": "owner_reply"}
-        # A non-owner spoke while an owner-directed question was open. Left as normal
-        # side-talk in Step A; a relevant guest answer becomes spoken (never acting)
-        # in Step B once embedding relevance + scene are wired in.
-        return {"verdict": CONTINUE, "reason": "non_owner"}
+                return {"verdict": REASK, "reason": "unclear", "guest": False}
+            if scene == "one_to_one" or voice_agent.is_short_reply(utterance):
+                return {"verdict": ANSWER, "reason": "owner_reply", "guest": False}
+            if answer_relevance(question, utterance) >= _answer_rel_bar(scene, activity):
+                return {"verdict": ANSWER, "reason": "owner_on_topic", "guest": False}
+            return {"verdict": CONTINUE, "reason": "owner_side_talk", "guest": False}
+        # Guest (speaker_ok False): tool-locked, no owner Q&A link. Only a clearly
+        # on-topic remark earns a spoken (never acting) reply.
+        if answer_relevance(question, utterance) >= _answer_rel_bar(scene, activity):
+            return {"verdict": ANSWER, "reason": "guest_on_topic", "guest": True}
+        return {"verdict": CONTINUE, "reason": "non_owner", "guest": False}
     except Exception:
-        return {"verdict": CONTINUE, "reason": "error"}
+        return {"verdict": CONTINUE, "reason": "error", "guest": False}
 
 
 def classify(text: str, label: Optional[str], agent_name: str = "", *,

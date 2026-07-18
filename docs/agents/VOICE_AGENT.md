@@ -94,12 +94,15 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    (`voice_agent.is_question`). This turn resolves it: the owner's reply (`speaker_ok`, so
    also the fail-open owner when no profile is enrolled) becomes the ANSWER (the prior
    question is injected into `voice_reply`'s owner-gated
-   `_ANSWER_BLOCK`, so a terse "yes" / "at three" is understood as the answer); a "say that
-   again" (`voice_agent.is_unclear_reply`) RE-ASKS the same question once (the
-   `reask_pending` vocab line, a `reask: true` reply); anything else CONTINUES as a normal
-   turn. Bounded by a TTL + turn budget so a stale question never hijacks a later utterance;
-   it authorizes nothing (a non-owner "answer" stays tool-locked, and the owner's question
-   is never replayed to a guest). See [VOICE_REFLEX.md](VOICE_REFLEX.md).
+   `_ANSWER_BLOCK`, so a terse "yes" / "at three" is understood as the answer - in a
+   multi-person scene a LONGER owner utterance must be on-topic (`answer_relevance`), else it
+   reads as side-talk); a "say that again" (`voice_agent.is_unclear_reply`) RE-ASKS the same
+   question once (the `reask_pending` vocab line, a `reask: true` reply); a guest's clearly
+   on-topic remark earns a spoken, never-acting reply while the owner's question stays open;
+   anything else CONTINUES as a normal turn. Bounded by a TTL + turn budget so a stale
+   question never hijacks a later utterance; it authorizes nothing (a non-owner "answer"
+   stays tool-locked, and the owner's question is never replayed to a guest). See
+   [VOICE_REFLEX.md](VOICE_REFLEX.md).
 3b. **Addressee clarification** (`voice_agent.wants_addressee_clarification`,
    no LLM): an address-check cue ("can you hear me", "are you there", "kannst du
    mich hoeren"; the lexicon is per-language) from a

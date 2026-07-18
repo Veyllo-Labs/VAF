@@ -6494,27 +6494,58 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # if the agent JUST asked a question, this utterance is probably its
                         # answer. A local, no-LLM verdict decides: owner reply -> ANSWER (the
                         # Q&A link is injected into voice_reply below); a "say that again" ->
-                        # REASK the same question (capped); anything else -> CONTINUE as a
-                        # normal turn. Authorizes nothing: a non-owner stays tool-locked by
-                        # speaker_ok below.
-                        _answer_ctx = ""
+                        # REASK the same question (capped); a guest's ON-TOPIC remark -> a
+                        # spoken (never acting) reply while the owner's question stays open;
+                        # anything else -> CONTINUE as a normal turn. Authorizes nothing: a
+                        # non-owner stays tool-locked by speaker_ok below.
+                        _answer_ctx = ""      # the owner's question to inject (owner ANSWER only)
+                        _force_reply = False  # bypass the side-talk gate: this IS a reply
                         _pq = _call.get("pending_q")
                         if _pq:
                             from vaf.core import voice_policy as _vpolA
+                            # Scene + relevance inputs (Step B). Best-effort; a hiccup
+                            # degrades to a 1:1/no-topic decision, never breaks the turn.
+                            _recent_labels_a, _activity_a = [], 0.5
                             try:
-                                _av = _vpolA.answer_verdict(
-                                    _pq.get("text", ""), _text, _label,
-                                    speaker_ok=_speaker_ok,
-                                    asked_ago_s=time.monotonic() - float(_pq.get("asked_at") or 0.0),
-                                    reask_count=int(_pq.get("reask_count") or 0))
+                                from vaf.core import voice_context as _vctxA
+                                from vaf.core.config import Config as _CfgB
+                                _recent_labels_a = [e[1] for e in
+                                                    _vctxA.recent(_call["scope"], _session, n=8)]
+                                _activity_a = _CfgB.get("voice_awareness_activity", 0.5)
                             except Exception:
-                                _av = {"verdict": _vpolA.CONTINUE, "reason": "error"}
+                                pass
+                            try:
+                                # answer_verdict may embed (relevance) -> offload like
+                                # chime_decision, never block the realtime event loop.
+                                _av = await loop.run_in_executor(
+                                    None, lambda: _vpolA.answer_verdict(
+                                        _pq.get("text", ""), _text, _label,
+                                        speaker_ok=_speaker_ok,
+                                        asked_ago_s=time.monotonic() - float(_pq.get("asked_at") or 0.0),
+                                        reask_count=int(_pq.get("reask_count") or 0),
+                                        recent_labels=_recent_labels_a, activity=_activity_a))
+                            except Exception:
+                                _av = {"verdict": _vpolA.CONTINUE, "reason": "error", "guest": False}
                             _averdict = _av.get("verdict")
                             if _averdict == _vpolA.ANSWER:
-                                _answer_ctx = _pq.get("text", "")
-                                _call.pop("pending_q", None)
-                                log("WebServer",
-                                    f"voice_call: pending-answer ANSWER q={_answer_ctx[:60]!r}")
+                                _force_reply = True
+                                if _av.get("guest"):
+                                    # Guest on-topic remark earns a spoken reply below
+                                    # (speaker_ok False keeps it tool-locked AND withholds
+                                    # the owner's question - no _answer_ctx). The OWNER's
+                                    # question stays open (unanswered) within its budget.
+                                    _pq["turns_left"] = int(_pq.get("turns_left") or 0) - 1
+                                    if _pq["turns_left"] <= 0:
+                                        _call.pop("pending_q", None)
+                                    else:
+                                        _call["pending_q"] = _pq
+                                    log("WebServer",
+                                        f"voice_call: pending-answer GUEST on-topic text={_text[:50]!r}")
+                                else:
+                                    _answer_ctx = _pq.get("text", "")
+                                    _call.pop("pending_q", None)
+                                    log("WebServer",
+                                        f"voice_call: pending-answer ANSWER q={_answer_ctx[:60]!r}")
                             elif _averdict == _vpolA.REASK:
                                 # Owner asked us to repeat: re-ask the SAME question (spoken),
                                 # keep the pending state with a fresh window, keep listening.
@@ -6566,7 +6597,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # instead of answering or silently ignoring. Authorizes
                         # nothing (anti-spoofing unchanged); it is a spoken question.
                         try:
-                            if not _answer_ctx and _va.wants_addressee_clarification(
+                            if not _force_reply and _va.wants_addressee_clarification(
                                     _text, _label, _call.get("agent_name", "")):
                                 _clar = _va.addressee_clarify_line(_turn_lang, _call["scope"])
                                 _clar_audio = None
@@ -6598,9 +6629,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # other speakers and garbled non-owner input never
                         # reach the LLM - the text still enters the call
                         # history as room context (the labels exist for this).
-                        if _answer_ctx:
+                        if _force_reply:
                             # Already resolved as the answer to the agent's own question
-                            # -> always engage; the Q&A link is injected into voice_reply.
+                            # (owner) or a guest's on-topic remark -> always engage. The
+                            # owner Q&A link (_answer_ctx) is injected into voice_reply; a
+                            # guest gets a normal, tool-locked spoken reply (no link).
                             _engage, _gate_reason = True, "answer"
                         else:
                             _engage, _gate_reason = _va.should_engage(
@@ -6719,7 +6752,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 speaker_ok=_speaker_ok,
                                 chat_context=_call.get("chat_context", ""),
                                 username=_uname,
-                                addressed=(bool(_answer_ctx)
+                                addressed=(bool(_force_reply)
                                            or _gate_reason == "wake_word"
                                            or _va.addressed_by_name(
                                                _text, _call.get("agent_name", ""))),
@@ -6798,17 +6831,21 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # never taken as the answer to an owner-directed question, and the
                         # question (which may hold owner-private context) is never replayed
                         # to a guest. A non-question reply clears any stale pending question.
-                        try:
-                            if _speaker_ok and _res.get("reply") and _va.is_question(_res["reply"]):
-                                from vaf.core import voice_policy as _vpolB
-                                _call["pending_q"] = {
-                                    "text": _res["reply"], "asked_at": time.monotonic(),
-                                    "turns_left": _vpolB.PENDING_Q_TURNS, "reask_count": 0,
-                                }
-                            else:
+                        # BUT skip this on a guest on-topic reply (_force_reply and not
+                        # speaker_ok): 2b-answer already KEPT the owner's question open there
+                        # (the owner has not answered), and this owner-only arm would clear it.
+                        if not (_force_reply and not _speaker_ok):
+                            try:
+                                if _speaker_ok and _res.get("reply") and _va.is_question(_res["reply"]):
+                                    from vaf.core import voice_policy as _vpolB
+                                    _call["pending_q"] = {
+                                        "text": _res["reply"], "asked_at": time.monotonic(),
+                                        "turns_left": _vpolB.PENDING_Q_TURNS, "reask_count": 0,
+                                    }
+                                else:
+                                    _call.pop("pending_q", None)
+                            except Exception:
                                 _call.pop("pending_q", None)
-                        except Exception:
-                            _call.pop("pending_q", None)
 
                         await websocket.send_json({
                             "type": "voice_call_reply",

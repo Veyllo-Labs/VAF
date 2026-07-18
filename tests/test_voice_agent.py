@@ -896,3 +896,24 @@ def test_pending_question_withheld_from_guest(monkeypatch):
                    speaker_ok=False, pending_question=q)
     system = _FakeBackend.last_messages[0]["content"]
     assert q not in system
+
+
+def test_is_short_reply():
+    assert va.is_short_reply("ja")
+    assert va.is_short_reply("um drei")
+    assert va.is_short_reply("[anderer_Sprecher]: ja klar")   # label stripped first
+    assert va.is_short_reply("ja mach das um drei")           # 5 words == cap
+    assert not va.is_short_reply("und wie war eigentlich dein ganzer tag gestern")
+    assert not va.is_short_reply("")
+    # Space-less scripts: whitespace word-count alone would call a whole CJK/Thai
+    # sentence "short" (1 token) - the dense-char cap catches that.
+    assert va.is_short_reply("好的三点")                       # terse CJK
+    assert not va.is_short_reply(
+        "你能不能把桌上那本书递给我然后我们一起去外面吃个饭好不好啊")  # long CJK side-talk
+
+
+def test_strip_speaker_label():
+    assert va.strip_speaker_label("[anderer_Sprecher]: hallo") == "hallo"
+    assert va.strip_speaker_label("[Mert]: was geht") == "was geht"
+    assert va.strip_speaker_label("kein prefix") == "kein prefix"
+    assert va.strip_speaker_label("") == ""

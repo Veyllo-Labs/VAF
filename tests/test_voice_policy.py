@@ -172,13 +172,60 @@ def test_answer_verdict_owner_unclear_is_reask_then_answer_at_cap():
     assert v2["verdict"] == vp.ANSWER
 
 
-def test_answer_verdict_non_owner_continues():
-    # A non-owner (speaker_ok False, e.g. an enrolled call scoring other/named/unsure)
-    # is never taken as the owner's answer (Step A); it falls through to normal
-    # side-talk, still tool-locked. The label alone must not decide it.
+def _vecs(monkeypatch, mapping):
+    """Inject deterministic embeddings into voice_policy so relevance is exact."""
+    monkeypatch.setattr(vp, "_embed_one", lambda t: mapping.get(str(t).strip().lower()))
+
+
+def test_answer_verdict_owner_multi_terse_is_answer_by_adjacency():
+    # Multi-person scene, but a TERSE owner reply is the answer by adjacency (a short
+    # reply carries no relevance signal, so embeddings are not even consulted).
+    v = vp.answer_verdict("Soll ich dich erinnern?", "ja", "self", speaker_ok=True,
+                          recent_labels=["other"])
+    assert v["verdict"] == vp.ANSWER and v["reason"] == "owner_reply"
+
+
+def test_answer_verdict_owner_multi_long_offtopic_is_side_talk(monkeypatch):
+    # Multi-person + a LONGER owner utterance off-topic to the question -> likely
+    # side-talk to the other person; do NOT force the Q&A link.
+    _vecs(monkeypatch, {"soll ich dich erinnern?": [1.0, 0.0],
+                        "und wie war dein tag gestern eigentlich so": [0.0, 1.0]})
+    v = vp.answer_verdict("Soll ich dich erinnern?",
+                          "und wie war dein Tag gestern eigentlich so", "self",
+                          speaker_ok=True, recent_labels=["other"])
+    assert v["verdict"] == vp.CONTINUE and v["reason"] == "owner_side_talk"
+
+
+def test_answer_verdict_owner_multi_long_ontopic_is_answer(monkeypatch):
+    _vecs(monkeypatch, {"soll ich dich um drei erinnern?": [1.0, 0.0],
+                        "ja bitte erinnere mich um drei an den termin": [1.0, 0.0]})
+    v = vp.answer_verdict("Soll ich dich um drei erinnern?",
+                          "ja bitte erinnere mich um drei an den Termin", "self",
+                          speaker_ok=True, recent_labels=["other"])
+    assert v["verdict"] == vp.ANSWER and v["reason"] == "owner_on_topic"
+
+
+def test_answer_verdict_guest_on_topic_is_spoken_never_owner(monkeypatch):
+    # A guest's ON-TOPIC remark earns a spoken (guest) reply; guest=True tells the
+    # caller to keep the owner's question open and never inject it / never act.
+    _vecs(monkeypatch, {"soll ich dich um drei erinnern?": [1.0, 0.0],
+                        "er hat den termin um drei doch abgesagt": [1.0, 0.0]})
+    v = vp.answer_verdict("Soll ich dich um drei erinnern?",
+                          "[anderer_Sprecher]: er hat den Termin um drei doch abgesagt",
+                          "other", speaker_ok=False, recent_labels=["other"])
+    assert v["verdict"] == vp.ANSWER and v["guest"] is True
+
+
+def test_answer_verdict_guest_off_topic_continues(monkeypatch):
+    # A non-owner utterance unrelated to the question stays normal side-talk,
+    # tool-locked - the label alone must not make it the answer.
+    _vecs(monkeypatch, {"soll ich dich um drei erinnern?": [1.0, 0.0],
+                        "ich geh mal eben raus eine rauchen": [0.0, 1.0]})
     for lbl in ("other", "named", "unsure"):
-        v = vp.answer_verdict("Soll ich erinnern?", "Ja klar", lbl, speaker_ok=False)
-        assert v["verdict"] == vp.CONTINUE
+        v = vp.answer_verdict("Soll ich dich um drei erinnern?",
+                              "[anderer_Sprecher]: ich geh mal eben raus eine rauchen",
+                              lbl, speaker_ok=False, recent_labels=["other"])
+        assert v["verdict"] == vp.CONTINUE and v.get("guest") is False
 
 
 def test_answer_verdict_expired_continues():

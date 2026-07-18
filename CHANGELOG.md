@@ -14,9 +14,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 - **In a voice call, the agent now understands your answer to its own question.** When it
   asks you something, your next reply is treated as the answer even if it is brief ("yes",
-  "at three"), instead of a stray remark. If you ask it to repeat, it re-asks the same
-  question in your language rather than guessing. A reply from someone other than you is
-  never taken as your answer and still cannot trigger any action.
+  "at three"), instead of a stray remark; if you ask it to repeat, it re-asks the same
+  question in your language. It is aware of the room: one-on-one it takes your reply
+  directly; with other people around, a brief reply still counts, but a longer one is only
+  treated as your answer when it is on-topic, so it does not mistake side-talk for an
+  answer. Someone else can get a brief spoken reply when they say something clearly
+  on-topic, but their words are never taken as your answer and can never trigger an action.
 
 ### Changed
 - **The agent stops asking "was that you?" on every unrecognized voice.** The speaker

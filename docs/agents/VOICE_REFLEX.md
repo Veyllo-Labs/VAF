@@ -68,7 +68,7 @@ line) and never fires for the verified owner (`self`) nor for an unlabeled call 
 enrolled profile -> everyone is the owner, so there is no ambiguity). It authorizes
 nothing - anti-spoofing is unchanged; it is only a spoken question.
 
-**Answering the agent's own question (in-call pending answer, Step A implemented).**
+**Answering the agent's own question (in-call pending answer, implemented).**
 When the agent itself asks the user a question, the NEXT utterance is probably its answer,
 but the verdict classifies every utterance independently, so a brief reply ("yes", "at
 three") is never linked to the question. Linking it back takes care: a bystander's words
@@ -77,23 +77,30 @@ The turn handler therefore arms a short-lived, call-scoped `pending_q` when
 a reply is itself a question (`voice_agent.is_question`, a no-LLM multi-script "?" check),
 and resolves it at the top of the NEXT turn via `voice_policy.answer_verdict`:
 
-- `answer` - the owner replied (`speaker_ok`: the verified `self`, or - with no enrolled
-  profile - the fail-open owner, the same model the rest of the pipeline uses): the agent's
-  own question is injected into `voice_reply` (the owner-gated `_ANSWER_BLOCK`) so a terse
-  reply is understood as the answer, and the pending state clears.
+- `answer` (owner) - the owner replied (`speaker_ok`: the verified `self`, or - with no
+  enrolled profile - the fail-open owner, the same model the rest of the pipeline uses). A
+  terse reply or a 1:1 scene is the answer by adjacency (a short reply carries almost no
+  embedding signal); in a multi-person scene a LONGER owner utterance must be on-topic
+  (`answer_relevance` >= the scene/activity-scaled bar), else it reads as side-talk to the
+  other person and the link is not forced. On an answer the agent's own question is injected
+  into `voice_reply` (the owner-gated `_ANSWER_BLOCK`) and the pending state clears.
 - `reask` - the owner asked to repeat ("wie bitte?", `voice_agent.is_unclear_reply`): the
   agent re-asks the SAME question once (the `reask_pending` vocab line, ~35 languages),
   capped by `MAX_REASK`, then continues.
-- `continue` - anything else (a non-owner utterance, or a reply after the window): falls
-  through as a normal turn. The pending state is bounded by a short TTL (`PENDING_Q_TTL_S`)
-  and a turn budget (`PENDING_Q_TURNS`) so a stale question never hijacks a later unrelated
-  utterance.
+- `answer` (guest) - a guest's clearly ON-TOPIC remark (relevance >= the bar) earns a spoken
+  reply that NEVER acts and never receives the owner's question (`speaker_ok` False withholds
+  the `_ANSWER_BLOCK` and drops any delegate); the owner's question stays OPEN, since they
+  have not answered. A guest who addresses the agent by name is already handled by the normal
+  wake-word gate, so this only adds the un-named on-topic case.
+- `continue` - anything else (an off-topic reply, or a reply after the window): falls through
+  as a normal turn. The pending state is bounded by a short TTL (`PENDING_Q_TTL_S`) and a turn
+  budget (`PENDING_Q_TURNS`) so a stale question never hijacks a later unrelated utterance.
 
 This authorizes nothing: a non-owner "answer" stays tool-locked by `speaker_ok`, and the
 owner's (possibly private) question is never replayed to a guest (the answer block is gated
-on `speaker_ok` like the chat/memory blocks). Step B adds the awareness layer: embedding
-relevance of the reply to the question, scene-scaled confidence, and a spoken (never acting)
-reply to a guest's on-topic answer.
+on `speaker_ok` like the chat/memory blocks). The scene comes from `derive_scene` and the
+relevance bar from the one `voice_awareness_activity` dial; the relevance thresholds are
+provisional and want live calibration, exactly like the chime band.
 
 `interesting` = ( rule / keyword / embedding match ) AND ( embedding-matches the
 owner's configured topic list, `voice_awareness_topics` ). No free guessing, no

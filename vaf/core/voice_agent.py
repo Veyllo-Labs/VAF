@@ -162,6 +162,13 @@ def _addresses_agent(text: str) -> bool:
     return bool(_ADDRESS_RE.search(text or ""))
 
 
+def strip_speaker_label(text: str) -> str:
+    """Remove a leading '[label]: ' speaker prefix from a transcript line (e.g.
+    '[anderer_Sprecher]: ...'), so downstream text logic (embedding relevance,
+    word counts) sees the spoken words only. Fail-open to '' for empty input."""
+    return _LABEL_PREFIX_RE.sub("", str(text or "")).strip()
+
+
 def looks_garbled(text: str) -> bool:
     """Conservative STT-noise heuristic - flags only CLEAR junk.
 
@@ -259,6 +266,30 @@ def is_unclear_reply(text: str) -> bool:
     if not core or len(core) > 40:
         return False
     return bool(_UNCLEAR_REPLY_RE.search(core))
+
+
+# Space-less scripts (CJK, Japanese kana, Thai, Lao, Khmer, Myanmar) write a whole
+# sentence with no spaces, so whitespace word-counting collapses a long sentence to a
+# single "word". Count those characters individually so a long CJK/Thai utterance is
+# not mistaken for terse. Korean and Arabic DO use spaces, so they are not listed.
+_DENSE_SCRIPT_RE = re.compile(
+    r"[぀-ヿ㐀-䶿一-鿿豈-﫿"   # JP kana, CJK ext-A, CJK, compat
+    r"฀-໿ក-៿က-႟]")                # Thai, Lao, Khmer, Myanmar
+
+
+def is_short_reply(text: str, max_words: int = 5, max_dense_chars: int = 12) -> bool:
+    """True if (after stripping the speaker label) the utterance is a terse reply -
+    at most `max_words` whitespace words AND at most `max_dense_chars` space-less-script
+    characters ("ja", "um drei", "好的三点"). Word-counting alone would judge a whole
+    space-less CJK/Thai sentence 'short', so those characters are counted too. A terse
+    answer carries almost no embedding signal (its cosine to the question is low even when
+    it IS the answer), so the pending-answer layer trusts adjacency for these and only
+    relevance-gates LONGER utterances. Fail-open to False (treat as not-short)."""
+    core = _LABEL_PREFIX_RE.sub("", str(text or "")).strip()
+    if not core:
+        return False
+    dense = len(_DENSE_SCRIPT_RE.findall(core))
+    return len(core.split()) <= max_words and dense <= max_dense_chars
 
 
 # The reflex verdict (see docs/agents/VOICE_REFLEX.md): the policy layer maps every

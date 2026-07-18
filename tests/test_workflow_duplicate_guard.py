@@ -317,7 +317,14 @@ def test_stop_all_during_run_leaves_no_phantom_result(wf_tool, ipc):
     t = threading.Thread(target=_run_first, daemon=True)
     t.start()
     try:
-        assert _wait_for(lambda: ipc.has_live_task("workflow:research", SESSION))
+        # Wait for the task to be genuinely ACTIVE, not merely has_live_task:
+        # the latter is also True during the young-PENDING window (create_task
+        # done, mark_task_running not yet), where get_active_tasks - which the
+        # stop-all handler below iterates, exactly like the WS handler in prod -
+        # is still empty. On slower file I/O (Windows CI) that window is wide
+        # enough to catch, so the fail_task loop would run over nothing and no
+        # phantom would be produced. Waiting on active_tasks is deterministic.
+        assert _wait_for(lambda: ipc.get_active_tasks(session_id=SESSION))
         # Simulate the WS stop-all handler: fail every active task of the session.
         for task in ipc.get_active_tasks(session_id=SESSION):
             ipc.fail_task(task.task_id, "[USER_CANCELLED] Stopped by user.")

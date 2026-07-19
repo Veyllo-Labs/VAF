@@ -3868,6 +3868,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         Config.save(merged)  # Config.save centrally applies the Veyllo-key -> default-STT seed
                         provider_changed = existing.get("provider") != merged.get("provider")
 
+                        # Prefetch the dedicated voice GGUF when the user (admin) picks the
+                        # local voice lane, so the recommended Gemma default is fetched at
+                        # selection instead of only lazily at the first call. Download-only
+                        # (no server swap - the live server may hold the MAIN model here);
+                        # the helper no-ops when the file is already present. Non-admin saves
+                        # cannot change voice_agent_* keys, so voice_changed stays False.
+                        try:
+                            voice_local = merged.get("voice_agent_provider") == "local"
+                            voice_changed = (
+                                existing.get("voice_agent_provider") != merged.get("voice_agent_provider")
+                                or existing.get("voice_agent_model") != merged.get("voice_agent_model")
+                            )
+                            if voice_local and voice_changed:
+                                from vaf.core import voice_model as _vvm
+                                _vvm.ensure_voice_model_downloaded_async()
+                        except Exception as e:
+                            log("WebServer", f"Voice model prefetch failed: {e}")
+
                         try:
                             if "tray_autostart" in merged:
                                 from vaf.core.platform import Platform

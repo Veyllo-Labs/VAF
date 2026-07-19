@@ -22,6 +22,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   on-topic, but their words are never taken as your answer and can never trigger an action.
 
 ### Changed
+- **Choosing a dedicated local voice model is now a dropdown, not a text field.** In
+  Settings, the live-call voice model is picked from your already-downloaded models (the
+  same list as the main model) instead of typing a Hugging Face reference by hand. The
+  recommended default (Gemma 4 E4B) is always offered and is fetched automatically when
+  you select it; downloading any other model stays in the AI & Model settings. A model
+  reference saved by an earlier version keeps working.
 - **The agent stops asking "was that you?" on every unrecognized voice.** The speaker
   confirmation now fires in two more targeted cases: promptly when a voice it does not
   recognize CLAIMS to be you ("I'm NAME") - a spoofing check that asks you to confirm -

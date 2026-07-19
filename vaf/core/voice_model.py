@@ -30,6 +30,9 @@ DEFAULT_VOICE_MODEL = "bartowski/google_gemma-4-E4B-it-GGUF/google_gemma-4-E4B-i
 _ENSURE_THREAD_LOCK = threading.Lock()
 _ensure_running = False
 
+_DOWNLOAD_THREAD_LOCK = threading.Lock()
+_download_running = False
+
 
 def voice_model_ref() -> str:
     """The configured dedicated voice model ref (config, else the default)."""
@@ -78,6 +81,43 @@ def ensure_voice_model(reason: str = "voice call") -> bool:
     # when the MAIN provider is an API (then the llama server serves ONLY
     # the call and no swap-back ever happens).
     return ensure_local_model(path, reason=reason, skip_provider_gate=True)
+
+
+def ensure_voice_model_downloaded_async() -> None:
+    """Non-blocking: fetch the dedicated voice GGUF to disk if it isn't there
+    yet, WITHOUT swapping the running server (used when the user picks the
+    voice model in Settings, so the recommended Gemma default is fetched at
+    selection instead of only lazily at the first call). The WebUI download
+    banner comes for free from the shared download entry point
+    (`ensure_model_available` -> `_download` broadcasts progress). No-op when
+    the file is already present; at most one download runs at a time.
+
+    This is deliberately download-only: at save time the live server may hold
+    the MAIN model and no call is in progress, so it must NOT swap - that is
+    what `ensure_voice_model` (call time) does."""
+    global _download_running
+    # Fast path: already on disk -> no thread, no download, and never a swap.
+    try:
+        if voice_model_path(download=False):
+            return
+    except Exception:
+        pass
+    with _DOWNLOAD_THREAD_LOCK:
+        if _download_running:
+            return
+        _download_running = True
+
+    def _work():
+        global _download_running
+        try:
+            voice_model_path(download=True)  # download only; no ensure_local_model swap
+        except Exception as e:
+            _log.warning("voice_model: async voice-model download failed: %s", e)
+        finally:
+            with _DOWNLOAD_THREAD_LOCK:
+                _download_running = False
+
+    threading.Thread(target=_work, name="voice-model-download", daemon=True).start()
 
 
 def ensure_voice_model_async(on_ready=None) -> None:

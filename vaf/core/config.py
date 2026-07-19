@@ -146,8 +146,10 @@ class Config:
         # voice itself can never trigger this. Kill switch, default on.
         "speaker_id_adaptive_enabled": True,
         "voice_agent_provider": "",
-        # For "local": model ref "owner/repo/file.gguf" (empty = recommended default,
-        # see voice_model.py). For an API provider: model name (empty = provider default).
+        # For "local": a downloaded model filename from models/, picked in
+        # Settings > Voice (empty = the recommended default, see voice_model.py;
+        # fetched on selection). A full HF ref "owner/repo/file.gguf" is still
+        # accepted (back-compat). For an API provider: model name (empty = provider default).
         "voice_agent_model": "",
         # Image downscaling before send: full-res photos make providers 500 and waste tokens.
         # Only images whose longest edge exceeds max_edge are shrunk (small images untouched).

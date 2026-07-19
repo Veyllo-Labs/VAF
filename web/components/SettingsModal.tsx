@@ -2907,11 +2907,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 />
                                                 {(localConfig.voice_agent_provider || '') === 'local' && (
                                                     <>
-                                                        <Input
-                                                            label={tVoice('agentLlmGguf')}
+                                                        {/* Pick from already-downloaded GGUFs (same availableModels source
+                                                            as the main "Modelldatei" dropdown). Downloading beliebiger Refs
+                                                            lives only under AI & Model; the empty "" option = the recommended
+                                                            Gemma default, which is fetched on save (see voice_model +
+                                                            web_server save_config trigger). A previously-saved HF ref stays
+                                                            selectable via Select's "(Current)" fallback. */}
+                                                        <Select
+                                                            label={tVoice('agentLlmLocalFile')}
                                                             value={localConfig.voice_agent_model || ''}
                                                             onChange={(v: string) => handleChange('voice_agent_model', v)}
-                                                            placeholder="bartowski/google_gemma-4-E4B-it-GGUF/google_gemma-4-E4B-it-Q4_K_M.gguf"
+                                                            options={[
+                                                                { value: '', label: tVoice('agentLlmLocalDefault') },
+                                                                ...(availableModels ?? []).map((m: string) => ({ value: m, label: m })),
+                                                            ]}
                                                         />
                                                         <p className="text-xs text-gray-400">{tVoice('agentLlmLocalHint')}</p>
                                                     </>

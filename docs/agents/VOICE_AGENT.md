@@ -364,7 +364,13 @@ not the user's.
 `speaker_id_confirmation_enabled` (see
 [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)). The voice lane's own keys are
 `voice_agent_provider` and `voice_agent_model` (admin-only, empty = follow
-the main provider; see Requirements above); TTS/STT follow the speech stack.
+the main provider; see Requirements above). For a dedicated local lane,
+`voice_agent_model` is picked from the already-downloaded GGUFs in Settings >
+Voice (empty = the recommended Gemma default, fetched on selection - the
+save handler kicks a download-only prefetch via
+`voice_model.ensure_voice_model_downloaded_async`; a full HF ref is still
+accepted). Free-form model downloads live under AI & Model, not the voice
+pane. TTS/STT follow the speech stack.
 Reflex awareness (user-writable, see [VOICE_REFLEX.md](VOICE_REFLEX.md)):
 `voice_awareness_activity` (the one quiet..active chime-in dial) and
 `voice_awareness_topics` (the owner's interest topics that ground a chime-in).

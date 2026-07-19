@@ -63,6 +63,18 @@ _KIND_HINTS = {
                       "because the user did not catch it, e.g. 'Sorry, I asked: {question}', "
                       "'Let me repeat: {question}'. ALWAYS keep the {question} placeholder and wrap "
                       "a short natural lead-in around it; NEVER output the bare {question} alone"),
+    "engage_guest_cmd": ("short IMPERATIVE commands the OWNER says to their assistant on a call to make it "
+                         "also answer the OTHER person in the room, e.g. 'answer her', 'reply to them', "
+                         "'talk to the other person', 'answer my mother'. Second person TO the assistant, "
+                         "about a THIRD person - never 'answer me'. Every phrase must be a DISTINCTIVE "
+                         "multi-word phrase (it is substring-matched), never a single common word that "
+                         "would false-fire on ordinary speech"),
+    "speaker_recheck_confirm": ("short SPOKEN lines a voice assistant says when a person answered 'yes' to "
+                                "'did you mean me?' but the assistant could not recognize the voice as its "
+                                "owner: it asks them to confirm their identity on a card already shown on "
+                                "their screen or messenger, e.g. 'I could not quite recognize your voice - "
+                                "please confirm on your screen that it is you'. Natural spoken tone, one "
+                                "short sentence, read aloud by TTS"),
 }
 
 

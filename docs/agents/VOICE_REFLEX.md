@@ -12,7 +12,13 @@ Status: phased build. Phase 0 (foundation), Phase 1 (guest privacy), Phase 2
 clarification) and the first half of Phase 3 (barge-in: interrupt the speaking agent,
 8a stop-and-listen, with browser AEC) are implemented; the rest of Phase 3
 (thinking-window barge-in, streaming TTS, cooperative cancel, 8b smart-resume) follows.
-A visual reflex schema with the latency budget accompanies this doc.
+Also implemented on top of these: in-call pending-answer, owner-toggled GUEST ENGAGEMENT
+(the dynamic scene block, a deterministic engage command, and a tightened arm gate),
+OWNER RECOVERY when the voice is mislabeled ("did you mean me?" plus a never-silent answer
+and screen/messenger confirmation), a multilingual reply prompt (the model is never pinned
+to one language), a silent-drop backstop on addressed owner turns, and the SHARED
+GROUP-CONVERSATION context that lets the model follow a multi-person, multi-language
+dynamic. A visual reflex schema with the latency budget accompanies this doc.
 
 ## Why
 
@@ -197,6 +203,134 @@ owner/known-named/unknown, which is what anti-spoofing needs), so it is DEFERRED
 than shipped as a half-tuned heuristic that would mislabel people. A real profile is
 still created only on explicit owner confirmation via the existing lane
 (`vaf/core/speaker_confirm.py`).
+
+**Owner-toggled guest engagement (implemented).** By default a guest who does not
+address the agent is side-talk: the agent overhears and stays silent (`store_only`),
+which is the right behavior when the owner is simply talking to someone else. The gap
+was the opposite case - the owner WANTS the agent to take part ("answer her", "talk to
+my mother, she is asking you something") - for which there was no path: the guest kept
+being classified as side-talk and the agent never engaged. The fix is a per-call,
+owner-only toggle, default OFF so the working side-talk detection is unchanged:
+
+- **Arm.** On an owner turn the dynamic scene block (below) tells the model to emit
+  `<talk_to_guest/>` when the owner asks it to include the other person. The marker is
+  parsed out of the reply (never spoken), honored ONLY for a verified owner turn
+  (`speaker_ok`, enforced in both `_postprocess_reply` and the web-server handler), and
+  sets `_call['engage_guests']` with a sliding TTL (`voice_policy.GUEST_ENGAGE_TTL_S`,
+  300 s, refreshed on every active turn).
+- **Engage.** While the toggle is live, `classify_utterance(..., engage_guests=True)`
+  turns a guest turn that would be `side_talk` into `respond_now` (reason
+  `engage_guest`) - the guest gets a spoken reply. Garbled guest noise is still never
+  engaged, and the owner path is untouched.
+- **Still tool-locked.** An engaged guest turn runs with `speaker_ok=False` exactly like
+  any guest reply: no delegation, no owner-private context, no call history. Engagement
+  only lets the agent SPEAK to the guest; it never lets a guest act or read the owner's
+  world. Anti-spoofing is unchanged.
+- **Disarm.** The owner ends it with `<end_guest/>` (offered by the scene block while the
+  mode is on), the sliding TTL lapses, or the call ends. A guest can never arm or disarm
+  the mode (the markers are speaker_ok-gated).
+
+The toggle is profile-gated like the rest of guest handling: without an enrolled voice
+profile everyone is the owner, so there is no guest to engage (documented fail-open).
+Targeting a SPECIFIC guest ("answer HER, not him") needs the per-speaker voice-print
+cluster that is deferred above; v1 engages any non-owner in the room.
+
+**Dynamic scene block (`voice_agent._scene_block`, implemented).** The reflex layer
+already knows the situation (scene from `voice_policy.derive_scene`, the speaker label,
+the conversation language, the engage toggle); it feeds a small English situation block
+into the `voice_reply` system prompt so the content model behaves appropriately instead
+of following hard-coded rules. It is EMPTY for a one-to-one call (the common case,
+prompt unchanged) and only appears when a guest is present (multi-party). It states that
+the call is multi-party, names the current language, and - depending on whose turn it is
+and whether the toggle is on - either primes `<talk_to_guest/>`/`<end_guest/>` (owner
+turn) or tells an engaged-guest turn to reply directly, in the GUEST'S OWN language, and
+never with the silence marker. (The base prompt is multilingual by design - the first
+layer replies in the language it is addressed in or the one the owner asks for, and is
+told never to claim it cannot speak a language; a hard-coded single-language instruction
+had made the model refuse other languages even though it is fluent in them.)
+It carries NO owner-private data (only the presence of a guest and the behavior), so
+unlike the chat/memory blocks it is safe to show on a guest turn. The web server builds
+the `{multi, engage_guests}` scene dict from the current label plus the recent transcript
+labels and passes it as `voice_reply(scene=...)`.
+
+**Shared group-conversation context (`_GROUP_BLOCK`, implemented).** The single biggest
+"it doesn't understand the dynamic" gap was that a guest turn is deliberately
+context-starved (history/chat/memory all withheld for owner privacy), so the model saw
+ONE context-free line and stalled or went silent. While guest engagement is active, the
+model is instead given the SHARED, spoken-aloud room transcript - multilingual, in order,
+each line labelled with who spoke (`[self]`/`[<name>]`/`[agent]`) - so it can follow the
+back-and-forth and reply to the latest line in context. This is NOT owner-private: it is
+what everyone present heard, and the web server scopes it to talk AFTER engagement started
+(`engage_guests["since_wall"]`, filtered via `voice_context.recent(since=...)`), so the
+owner's earlier private 1:1 never appears - the boundary is enforced at the build site, not
+in `voice_reply`. The agent's own spoken replies are recorded into the transcript (label
+`agent`) so the back-and-forth is complete. This block is what turns guest engagement from
+a string of context-free single replies into a coherent multi-person conversation.
+
+**Reliable arming (deterministic command + a tightened gate, implemented).** The marker
+path depends on the (weak, local) model emitting `<talk_to_guest/>`; live, the model
+sometimes chose silence on the owner's command turn and never armed. Two hardenings make
+arming reliable AND strictly harder to abuse:
+
+- **Deterministic engage command.** `voice_agent.engage_command_match` is a Tier-1 (no
+  LLM) substring scan over a new vocab key `engage_guest_cmd` (per-language phrasings of
+  "answer her / talk to the other person"). When an owner turn matches, the mode arms
+  directly, independent of what the model emits. Owner-gated (see next), so a guest can
+  never trigger it.
+- **Arm gate = `speaker_ok AND confident != 'borderline'`.** Arming (marker OR command)
+  is tightened from plain `speaker_ok` to a REAL verified self: a bridged-borderline
+  sticky turn may still SPEAK as the owner, but a short/ambiguous clip right after the
+  owner can no longer turn the mode on. With no profile enrolled (`confident is None`,
+  fail-open owner) arming still works. This makes arming strictly harder, never easier -
+  it never widens what a non-owner can do.
+
+**Owner recovery when the voice is mislabeled (implemented).** The single biggest live
+blocker was not the engagement logic but SPEAKER-ID: in a multi-person call every
+reliable-length guest turn clears the owner's in-call sticky bridge
+(`web_server` sets `last_self_ts=None` on a confident `other`), so the owner's own short
+command can demote to `unsure` and is then treated as a non-owner - an explicit "answer
+her" was silently dropped. Weakening the sticky is NOT the fix: an adversarial trace
+confirmed that preserving it would bridge a guest's SHORT follow-up clip to the owner
+(speaker_ok True), a real spoofing hole. Instead the agent RECOVERS the owner without
+ever acting on an unverified turn:
+
+- **Ask (`voice_agent.wants_speaker_recheck` + 2c-recheck).** An ambiguous turn (label
+  `unsure`, a profile IS enrolled but the voice did not verify) that is nonetheless
+  DIRECTED at the agent (second-person address, wake word, or an engage command) triggers
+  a spoken "did you mean me?" (`addressee_clarify` vocab, in the turn language). Per-call
+  cooldown so it never nags. It authorizes nothing - it is a question.
+- **Fresh sample + out-of-band confirm.** The owner's answer is a new voice sample. The
+  restrained screen/messenger confirmation already fires from the speaker block
+  (`speaker_confirm.maybe_request_confirmation`), and an authenticated "yes" adaptively
+  sharpens the owner profile (`speaker_id.add_owner_sample`) so the mislabel gets rarer
+  over time - attacking the root cause, not just the symptom.
+- **Recover (2a-recover).** The reply to "did you mean me?" is ALWAYS reacted to - the
+  agent never stays silent on the answer to its own question (a live gap: a mislabeled
+  "yes, I mean you" was dropped as side-talk). If the reply verifies as a REAL confident
+  self, the owner is recovered and the pending check dropped; guest engagement arms ONLY
+  from an engage command spoken on THIS verified-self turn ("yes, answer her"), never from
+  the earlier asked-about text (that text came from an UNVERIFIED, possibly guest speaker,
+  so honoring its stored command would let guest content arm the mode via an unrelated
+  owner turn - a confused-deputy gap the adversarial review caught). If the reply is
+  affirmative ("yes") but the voice STILL did not verify, the agent speaks a short "I could
+  not place your voice, please confirm on your screen or messenger" (`speaker_recheck_confirm`
+  vocab) and leans on the confirmation card already queued in the speaker block - an
+  authenticated yes learns the voice, so the mislabel gets rarer. A clear "no" or an expired
+  window just drops the pending check. A guest answering never scores confident self, so it
+  can never recover the owner; the voice alone still grants nothing.
+
+The guarantee stays intact: acting/arming still requires a real self score OR an
+authenticated-channel confirmation; the voice itself never modifies the profile (learning
+is confirmation-gated, see [../web-ui/SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md)).
+
+**No silent-drop of an addressed owner turn (implemented).** On a turn explicitly directed
+at the owner's agent (wake word, or a resolved answer to the agent's own question) the
+prompt forbids the silence marker, but the weak local model sometimes emitted a bare
+`<silent/>` anyway and the owner's turn was dropped. `_postprocess_reply(addressed=...)`
+now overrides a bare `<silent/>` to a spoken "say that again" nudge when `addressed AND
+speaker_ok` - so the owner is never silently ignored. Guests and non-addressed owner
+side-talk keep the silence protocol untouched (the override is scoped to the verified
+owner on an addressed turn).
 
 ## Reflex/policy module (local, non-llama)
 

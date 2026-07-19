@@ -250,6 +250,14 @@ PENDING_Q_TTL_S = 45.0  # a spoken answer follows within seconds; bound stale hi
 PENDING_Q_TURNS = 2     # honor an open question for at most this many following turns
 MAX_REASK = 1           # re-ask an unclear answer at most this many times, then continue
 
+# Owner-toggled guest engagement (see docs/agents/VOICE_REFLEX.md): once the owner
+# asks the agent to also answer the other person, guest turns are engaged for this
+# long (sliding window, refreshed on every active turn), then the mode lapses back
+# to the default side-talk behavior. A generous window so an ongoing exchange does
+# not time out mid-conversation; the owner can end it sooner with <end_guest/>, and
+# the call ending clears it outright.
+GUEST_ENGAGE_TTL_S = 300.0
+
 # Answer-relevance (Step B): embedding cosine of the reply to the open question.
 # Consulted ONLY for longer utterances (a terse reply carries almost no embedding
 # signal - its cosine to the question is low even when it IS the answer, so adjacency

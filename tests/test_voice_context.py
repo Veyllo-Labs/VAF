@@ -51,6 +51,24 @@ def test_retention_by_age():
     assert [e[3] for e in got] == ["neu"]
 
 
+def test_since_scopes_to_post_engagement_talk():
+    """`since` returns only entries at/after a wall-clock ts - used to give an engaged
+    guest ONLY the group talk after engagement, never the owner's earlier private 1:1."""
+    _fresh()
+    import time
+    now = time.time()
+    vc.record("s", "x", "private 1:1", label="self", ts=now - 300)   # pre-engagement
+    vc.record("s", "x", "hallo zusammen", label="self", ts=now - 30)  # post-engagement
+    vc.record("s", "x", "merhaba", label="other", ts=now - 20)
+    vc.record("s", "x", "hos geldiniz", label="agent", ts=now - 10)
+    since = now - 60
+    got = [e[3] for e in vc.recent("s", "x", n=12, since=since)]
+    assert got == ["hallo zusammen", "merhaba", "hos geldiniz"]
+    assert "private 1:1" not in vc.digest("s", "x", since=since)
+    # no `since` still returns everything (unchanged default)
+    assert len(vc.recent("s", "x", n=12)) == 4
+
+
 def test_max_entries_cap():
     _fresh()
     for i in range(vc._MAX_ENTRIES + 25):

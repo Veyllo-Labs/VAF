@@ -1,0 +1,177 @@
+{
+  "ar": [
+    "آسف، لم أتمكّن من التعرّف على صوتك تماماً الآن، فضلاً أكّد على شاشتك أو في التطبيق أنه أنت لأتذكّر صوتك بشكل أفضل.",
+    "عذراً، لم أميّز صوتك جيداً، من فضلك أكّد على الشاشة أنه أنت كي أحفظ صوتك.",
+    "المعذرة، لم أتعرّف على صوتك بوضوح، رجاءً أكّد أنه أنت لأتذكّرك أفضل."
+  ],
+  "bg": [
+    "Извинявай, не успях съвсем да разпозная гласа ти сега, моля потвърди на екрана или в месинджъра, че си ти, за да запомня гласа ти по-добре.",
+    "Съжалявам, не разпознах добре гласа ти, потвърди на екрана, че си ти, за да го запомня.",
+    "Извинявай, гласът ти не ми беше съвсем ясен, моля потвърди, че си ти, за да те запомня."
+  ],
+  "bn": [
+    "দুঃখিত, আপনার কণ্ঠটা এইমাত্র ঠিকভাবে চিনতে পারলাম না, দয়া করে স্ক্রিনে বা মেসেঞ্জারে নিশ্চিত করুন যে এটা আপনিই, যাতে আমি আপনার কণ্ঠ আরও ভালোভাবে মনে রাখতে পারি।",
+    "মাফ করবেন, আপনার গলা ঠিক চিনতে পারিনি, স্ক্রিনে একটু নিশ্চিত করুন যে এটা আপনি, তাহলে আপনার কণ্ঠ মনে রাখব।",
+    "দুঃখিত, কণ্ঠটা স্পষ্ট চিনতে পারলাম না, দয়া করে নিশ্চিত করুন এটা আপনিই।"
+  ],
+  "cs": [
+    "Promiň, tvůj hlas jsem teď úplně nepoznal, potvrď prosím na obrazovce nebo v messengeru, že jsi to ty, ať si tvůj hlas líp zapamatuju.",
+    "Omlouvám se, nepoznal jsem dobře tvůj hlas, potvrď prosím, že jsi to ty, ať si tě zapamatuju.",
+    "Pardon, tvůj hlas mi teď nebyl úplně jasný, potvrď to prosím na obrazovce, ať si tě líp zapamatuju."
+  ],
+  "da": [
+    "Undskyld, jeg kunne ikke helt genkende din stemme lige nu, bekræft venligst på din skærm eller i beskederne, at det er dig, så jeg husker din stemme bedre.",
+    "Beklager, jeg genkendte ikke rigtig din stemme, bekræft lige at det er dig, så jeg husker din stemme.",
+    "Undskyld, din stemme var ikke helt tydelig, bekræft venligst på skærmen at det er dig."
+  ],
+  "de": [
+    "Entschuldige, ich konnte deine Stimme gerade nicht ganz erkennen, bestätige bitte auf deinem Bildschirm oder im Messenger, dass du es bist, damit ich mir deine Stimme besser merken kann.",
+    "Tut mir leid, ich habe deine Stimme nicht sicher erkannt, bestätige bitte kurz, dass du es bist, dann merke ich mir deine Stimme.",
+    "Verzeih, deine Stimme war gerade nicht ganz klar, bestätige bitte auf dem Bildschirm, dass du es bist."
+  ],
+  "el": [
+    "Συγγνώμη, δεν κατάφερα να αναγνωρίσω καλά τη φωνή σου τώρα, επιβεβαίωσε στην οθόνη ή στο μήνυμα ότι είσαι εσύ, για να θυμάμαι καλύτερα τη φωνή σου.",
+    "Λυπάμαι, δεν αναγνώρισα καθαρά τη φωνή σου, επιβεβαίωσε ότι είσαι εσύ για να τη θυμάμαι.",
+    "Συγγνώμη, η φωνή σου δεν ήταν αρκετά καθαρή, επιβεβαίωσε στην οθόνη ότι είσαι εσύ."
+  ],
+  "en": [
+    "Sorry, I couldn't quite recognize your voice just now, please confirm on your screen or messenger that it's you, so I remember your voice better.",
+    "My apologies, I didn't quite catch your voice, just confirm on the card that it's you and I'll learn your voice.",
+    "Sorry about that, your voice wasn't clear enough, please confirm it's you on your screen so I remember you better."
+  ],
+  "es": [
+    "Perdona, no logré reconocer bien tu voz ahora mismo, confirma en tu pantalla o en el mensajero que eres tú, para recordar mejor tu voz.",
+    "Lo siento, no reconocí bien tu voz, confirma que eres tú para que aprenda tu voz.",
+    "Disculpa, tu voz no me quedó del todo clara, confirma en la pantalla que eres tú."
+  ],
+  "fa": [
+    "ببخشید، الان نتوانستم صدایت را کاملاً تشخیص بدهم، لطفاً روی صفحه یا در پیام‌رسان تأیید کن که خودت هستی تا صدایت را بهتر به خاطر بسپارم.",
+    "معذرت می‌خواهم، صدایت را خوب نشناختم، لطفاً تأیید کن که خودت هستی تا صدایت را یاد بگیرم.",
+    "ببخشید، صدایت واضح نبود، روی صفحه تأیید کن که خودت هستی تا بهتر یادم بماند."
+  ],
+  "fi": [
+    "Anteeksi, en ihan tunnistanut ääntäsi äsken, vahvista näytöltä tai viestisovelluksesta että se olet sinä, niin muistan äänesi paremmin.",
+    "Pahoittelen, en tunnistanut ääntäsi kunnolla, vahvista että se olet sinä, niin opin äänesi.",
+    "Sori, äänesi ei ihan erottunut, vahvista näytöltä että se olet sinä."
+  ],
+  "fr": [
+    "Désolé, je n'ai pas bien reconnu ta voix à l'instant, confirme sur ton écran ou dans la messagerie que c'est bien toi, pour que je retienne mieux ta voix.",
+    "Pardon, je n'ai pas bien saisi ta voix, confirme juste que c'est toi et je retiendrai ta voix.",
+    "Excuse-moi, ta voix n'était pas très claire, confirme à l'écran que c'est bien toi."
+  ],
+  "he": [
+    "סליחה, לא הצלחתי לזהות היטב את הקול שלך עכשיו, אנא אשר במסך או בהודעות שזה אתה, כדי שאזכור את הקול שלך טוב יותר.",
+    "מצטער, לא זיהיתי היטב את הקול שלך, אשר בבקשה שזה אתה כדי שאלמד את הקול שלך.",
+    "סליחה, הקול שלך לא היה ברור מספיק, אשר במסך שזה אתה."
+  ],
+  "hi": [
+    "माफ़ कीजिए, मैं अभी आपकी आवाज़ ठीक से पहचान नहीं पाया, कृपया अपनी स्क्रीन या मैसेंजर पर पुष्टि कर दीजिए कि यह आप ही हैं, ताकि मैं आपकी आवाज़ बेहतर याद रख सकूँ।",
+    "क्षमा करें, आपकी आवाज़ साफ़ नहीं पहचान पाया, कृपया पुष्टि करें कि यह आप हैं, तो मैं आपकी आवाज़ सीख लूँगा।",
+    "माफ़ कीजिए, आवाज़ ठीक से समझ नहीं आई, स्क्रीन पर पुष्टि कर दीजिए कि यह आप ही हैं।"
+  ],
+  "hr": [
+    "Oprosti, nisam baš prepoznao tvoj glas maloprije, molim te potvrdi na ekranu ili u poruci da si to ti, da bolje zapamtim tvoj glas.",
+    "Žao mi je, nisam dobro prepoznao tvoj glas, potvrdi da si to ti pa ću zapamtiti tvoj glas.",
+    "Oprosti, glas ti nije bio dovoljno jasan, potvrdi na ekranu da si to ti."
+  ],
+  "hu": [
+    "Elnézést, most nem egészen ismertem fel a hangodat, kérlek erősítsd meg a képernyőn vagy az üzenetben, hogy te vagy az, hogy jobban megjegyezzem a hangodat.",
+    "Bocsánat, nem ismertem fel jól a hangodat, erősítsd meg, hogy te vagy az, és megtanulom a hangodat.",
+    "Elnézést, a hangod nem volt elég tiszta, erősítsd meg a képernyőn, hogy te vagy az."
+  ],
+  "id": [
+    "Maaf, aku tadi kurang bisa mengenali suaramu, tolong konfirmasi di layar atau pesanmu bahwa ini kamu, supaya aku lebih ingat suaramu.",
+    "Maaf, suaramu belum kukenali dengan jelas, konfirmasi saja bahwa ini kamu, biar aku belajar suaramu.",
+    "Maaf ya, suaramu kurang jelas tadi, tolong konfirmasi di layar bahwa ini memang kamu."
+  ],
+  "it": [
+    "Scusa, non sono riuscito a riconoscere bene la tua voce adesso, conferma sullo schermo o nel messenger che sei tu, così ricordo meglio la tua voce.",
+    "Mi dispiace, non ho riconosciuto bene la tua voce, conferma che sei tu così imparo la tua voce.",
+    "Scusa, la tua voce non era del tutto chiara, conferma sullo schermo che sei proprio tu."
+  ],
+  "ja": [
+    "すみません、今の声がうまく聞き取れませんでした。画面かメッセンジャーでご本人だと確認していただけますか。声をもっとよく覚えられます。",
+    "ごめんなさい、今のお声がはっきり認識できませんでした。表示された確認でご本人だと教えてください。次からもっとよく覚えます。",
+    "申し訳ありません、今の声がよく分かりませんでした。画面かメッセージでご本人確認をお願いします。声をしっかり覚えたいので。"
+  ],
+  "ko": [
+    "죄송해요, 방금 목소리를 잘 알아듣지 못했어요. 화면이나 메신저에서 본인이 맞는지 확인해 주시면 목소리를 더 잘 기억할게요.",
+    "미안해요, 방금 목소리가 잘 인식되지 않았어요. 화면이나 메신저에 뜬 확인으로 본인이 맞다고 알려 주세요. 그러면 목소리를 더 잘 기억해요.",
+    "죄송합니다, 지금 목소리를 정확히 못 알아들었어요. 확인 카드에서 본인 확인만 해 주시면 목소리를 더 잘 익힐 수 있어요."
+  ],
+  "ms": [
+    "Maaf, saya kurang kenal suara awak tadi - sila sahkan pada skrin atau dalam mesej bahawa ini memang awak, supaya saya lebih ingat suara awak.",
+    "Minta maaf, saya tak pasti dengan suara tadi. Tolong sahkan di skrin atau mesej yang ini betul awak, biar saya ingat suara awak dengan lebih baik.",
+    "Maaf ya, saya tak dapat cam suara awak tadi. Sahkan sahaja pada pengesahan yang muncul supaya saya boleh belajar suara awak."
+  ],
+  "nl": [
+    "Sorry, ik herkende je stem net niet helemaal - bevestig even op je scherm of in je berichten dat jij het bent, dan onthoud ik je stem beter.",
+    "Excuus, ik kon je stem daarnet niet goed herkennen. Bevestig even op het scherm of in de messenger dat jij het bent, zodat ik je stem beter leer kennen.",
+    "Sorry, je stem kwam er net niet helemaal door. Wil je even bevestigen dat jij het bent, dan onthoud ik je stem beter."
+  ],
+  "no": [
+    "Beklager, jeg kjente ikke helt igjen stemmen din nå - bekreft gjerne på skjermen eller i meldingen at det er deg, så husker jeg stemmen din bedre.",
+    "Unnskyld, jeg klarte ikke helt å gjenkjenne stemmen din. Kan du bekrefte på skjermen eller i meldingen at det er deg, så lærer jeg stemmen din bedre?",
+    "Beklager, stemmen din var litt vanskelig å kjenne igjen nå. Bekreft gjerne at det er deg, så husker jeg stemmen din bedre."
+  ],
+  "pl": [
+    "Przepraszam, nie do końca rozpoznałem twój głos przed chwilą - potwierdź proszę na ekranie lub w wiadomości, że to ty, żebym lepiej zapamiętał twój głos.",
+    "Wybacz, nie rozpoznałem dobrze twojego głosu. Potwierdź na ekranie albo w komunikatorze, że to ty, a lepiej zapamiętam twój głos.",
+    "Przepraszam, twój głos nie do końca do mnie dotarł. Potwierdź proszę, że to ty, żebym mógł go lepiej zapamiętać."
+  ],
+  "pt": [
+    "Desculpe, não reconheci bem a sua voz agora há pouco - confirme na tela ou no mensageiro que é você, para eu guardar melhor a sua voz.",
+    "Perdão, não consegui reconhecer direito a sua voz. Confirme na tela ou nas mensagens que é você, assim eu memorizo melhor a sua voz.",
+    "Desculpe, a sua voz não ficou muito clara agora. É só confirmar que é você para eu aprender melhor a sua voz."
+  ],
+  "ro": [
+    "Scuze, nu ți-am recunoscut prea bine vocea adineauri - te rog confirmă pe ecran sau în mesaje că ești tu, ca să-ți rețin mai bine vocea.",
+    "Îmi pare rău, nu am reușit să-ți recunosc bine vocea. Confirmă pe ecran sau în mesagerie că ești tu, ca să-ți învăț mai bine vocea.",
+    "Scuze, vocea ta nu s-a auzit prea clar acum. Confirmă te rog că ești tu, ca să-ți rețin mai bine vocea."
+  ],
+  "ru": [
+    "Извините, я не совсем узнал ваш голос - подтвердите, пожалуйста, на экране или в мессенджере, что это вы, чтобы я лучше запомнил ваш голос.",
+    "Простите, я не очень хорошо распознал ваш голос сейчас. Подтвердите на экране или в сообщениях, что это вы, и я лучше запомню ваш голос.",
+    "Извините, ваш голос сейчас прозвучал не очень чётко. Подтвердите, что это вы, чтобы я запомнил ваш голос получше."
+  ],
+  "sk": [
+    "Prepáč, teraz som celkom nespoznal tvoj hlas - potvrď prosím na obrazovke alebo v správach, že si to ty, aby som si tvoj hlas lepšie zapamätal.",
+    "Ospravedlňujem sa, tvoj hlas som teraz dobre nerozpoznal. Potvrď na obrazovke alebo v správe, že si to ty, nech si tvoj hlas lepšie zapamätám.",
+    "Prepáč, tvoj hlas teraz nebol celkom jasný. Potvrď prosím, že si to ty, aby som si ho lepšie zapamätal."
+  ],
+  "sr": [
+    "Извините, нисам баш препознао ваш глас малопре - потврдите на екрану или у поруци да сте то ви, да бих боље запамтио ваш глас.",
+    "Извините, нисам добро препознао ваш глас. Потврдите на екрану или у поруци да сте то ви, па ћу боље запамтити ваш глас.",
+    "Извините, ваш глас сада није био сасвим јасан. Потврдите да сте то ви, да бих боље упамтио ваш глас."
+  ],
+  "sv": [
+    "Ursäkta, jag kände inte riktigt igen din röst nyss - bekräfta gärna på skärmen eller i meddelandet att det är du, så minns jag din röst bättre.",
+    "Förlåt, jag kunde inte riktigt känna igen din röst. Bekräfta på skärmen eller i meddelandet att det är du, så lär jag mig din röst bättre.",
+    "Ursäkta, din röst var lite svår att känna igen nyss. Bekräfta gärna att det är du, så minns jag din röst bättre."
+  ],
+  "th": [
+    "ขอโทษนะคะ เมื่อกี้ฉันจำเสียงของคุณไม่ค่อยได้ ช่วยยืนยันบนหน้าจอหรือในแชทว่าเป็นคุณจริง ๆ เพื่อให้ฉันจำเสียงของคุณได้ดีขึ้นนะคะ",
+    "ขอโทษค่ะ ฉันจำเสียงของคุณเมื่อครู่ไม่ค่อยชัด รบกวนยืนยันบนหน้าจอหรือในข้อความว่าเป็นคุณ ฉันจะได้จำเสียงคุณได้ดีขึ้น",
+    "ขอโทษนะ เสียงของคุณเมื่อกี้ไม่ค่อยชัดเจน ช่วยยืนยันหน่อยว่าเป็นคุณ เพื่อให้ฉันเรียนรู้เสียงของคุณได้ดีขึ้น"
+  ],
+  "tr": [
+    "Kusura bakmayın, sesinizi az önce tam tanıyamadım - ekranınızda ya da mesajda sizin olduğunuzu onaylarsanız sesinizi daha iyi hatırlarım.",
+    "Özür dilerim, sesinizi şimdi pek iyi tanıyamadım. Ekranda ya da mesajda bunun siz olduğunuzu onaylayın ki sesinizi daha iyi öğreneyim.",
+    "Pardon, sesiniz şimdi pek net gelmedi. Sizin olduğunuzu onaylarsanız sesinizi daha iyi hatırlayabilirim."
+  ],
+  "uk": [
+    "Вибачте, я не зовсім упізнав ваш голос щойно - підтвердьте, будь ласка, на екрані або в месенджері, що це ви, щоб я краще запам'ятав ваш голос.",
+    "Перепрошую, я не дуже добре розпізнав ваш голос. Підтвердьте на екрані або в повідомленні, що це ви, і я краще запам'ятаю ваш голос.",
+    "Вибачте, ваш голос зараз прозвучав не дуже чітко. Підтвердьте, що це ви, щоб я краще запам'ятав ваш голос."
+  ],
+  "vi": [
+    "Xin lỗi, tôi chưa nhận ra rõ giọng của bạn vừa nãy - bạn hãy xác nhận trên màn hình hoặc trong tin nhắn rằng đúng là bạn, để tôi nhớ giọng bạn tốt hơn nhé.",
+    "Cho tôi xin lỗi, tôi chưa nhận diện được giọng của bạn lúc nãy. Bạn xác nhận trên màn hình hoặc trong tin nhắn là bạn nhé, để tôi ghi nhớ giọng bạn rõ hơn.",
+    "Xin lỗi nhé, giọng của bạn vừa rồi hơi khó nhận ra. Bạn xác nhận giúp là đúng bạn để tôi học giọng bạn tốt hơn."
+  ],
+  "zh": [
+    "不好意思，我刚才没太听清您的声音 - 请在屏幕上或消息里确认一下是您本人，这样我能更好地记住您的声音。",
+    "抱歉，我刚才没能准确认出您的声音。请在屏幕或消息里确认是您，我就能把您的声音记得更清楚。",
+    "不好意思，您的声音刚才不太清晰。麻烦您确认一下是本人，好让我更好地记住您的声音。"
+  ]
+}

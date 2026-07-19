@@ -81,8 +81,13 @@ def record(scope: Optional[str], session: Optional[str], text: str, *,
         pass
 
 
-def recent(scope: Optional[str], session: Optional[str], n: int = 12) -> List[Entry]:
-    """The last `n` still-fresh entries (oldest first), pruning expired ones."""
+def recent(scope: Optional[str], session: Optional[str], n: int = 12,
+           since: Optional[float] = None) -> List[Entry]:
+    """The last `n` still-fresh entries (oldest first), pruning expired ones. When
+    `since` is given (a wall-clock ts, same clock as `record`), only entries at or
+    after it are returned - used to scope a group-conversation context to what was
+    said AFTER guest engagement started (so an engaged guest never sees the owner's
+    earlier, pre-engagement private talk)."""
     try:
         key = _key(scope, session)
         now = time.time()
@@ -100,19 +105,24 @@ def recent(scope: Optional[str], session: Optional[str], n: int = 12) -> List[En
             if not buf or k == 0:
                 # k == 0 means "no entries", NOT the whole buffer ([-0:] == [:]).
                 return []
-            return list(buf)[-k:]
+            entries = list(buf)
+            if since is not None:
+                entries = [e for e in entries if e[0] >= float(since)]
+            return entries[-k:]
     except Exception:
         return []
 
 
 def digest(scope: Optional[str], session: Optional[str], n: int = 12,
-           per_item: int = 160, total_cap: int = 1200) -> str:
+           per_item: int = 160, total_cap: int = 1200,
+           since: Optional[float] = None) -> str:
     """Bounded, prompt-ready text of the recent transcript (speaker-labelled),
-    for the policy layer or a chime-in prompt. Empty on any problem."""
+    for the policy layer or a chime-in prompt. Empty on any problem. `since` scopes
+    the window to entries at or after a wall-clock ts (see `recent`)."""
     try:
         lines: List[str] = []
         used = 0
-        for _ts, label, _verdict, text in recent(scope, session, n):
+        for _ts, label, _verdict, text in recent(scope, session, n, since=since):
             who = f"[{label}] " if label else ""
             line = (who + text)[:per_item]
             if used + len(line) + 1 > total_cap:

@@ -6493,6 +6493,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _label = None
                         _display = "Ich"
                         _speaker_ok = True
+                        _confident = None   # 'self' | 'other' | 'borderline' | None (no profile)
                         try:
                             from vaf.core import speaker_id as _vsid
                             if _vsid.is_enabled():
@@ -6520,9 +6521,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     _res = _vsid.resolve_label(_score, sticky_self=_sticky)
                                     _label = _res.get("label")
                                     _speaker_ok = bool(_res.get("speaker_ok"))
-                                    if _res.get("confident") == "self":
+                                    _confident = _res.get("confident")
+                                    if _confident == "self":
                                         _call["last_self_ts"] = _now_s
-                                    elif _res.get("confident") == "other":
+                                    elif _confident == "other":
                                         _call["last_self_ts"] = None
                                     if _label:
                                         _text = _vsid.label_prefix(_res, _display) + _text
@@ -6553,9 +6555,94 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _session = _call.get("session") or str(_conn_key)
                         try:
                             from vaf.core import voice_context as _vctx
-                            _vctx.record(_call["scope"], _session, _text, label=_label)
+                            # Store the spoken words WITHOUT the "[label]: " prefix - the
+                            # speaker label is kept separately, so the transcript digest
+                            # renders one clean "[label] text" (not a double "[self] [Mert]:
+                            # text") and no display name is embedded in the guest-facing
+                            # group context.
+                            _vctx.record(_call["scope"], _session,
+                                         _va.strip_speaker_label(_text), label=_label)
                         except Exception:
                             pass
+
+                        # 2a-recover. Speaker recovery (VOICE_REFLEX.md): if we just asked
+                        # "did you mean me?" (2c-recheck) and THIS turn re-verifies as the
+                        # owner with a REAL confident self (not a bridged borderline), the
+                        # owner is recovered - drop the pending check and let this turn continue
+                        # as a normal owner turn. Guest engagement arms ONLY from an engage
+                        # command spoken on THIS verified-self turn (not the earlier, unverified
+                        # asked-about text): the recheck turn is by construction a non-owner
+                        # (speaker_ok False) and may be a guest, so honoring its stored command
+                        # would let guest content arm the mode via an unrelated owner turn
+                        # (confused deputy). Requiring the command on the current authenticated
+                        # turn keeps the invariant "a guest can never arm engagement". A guest
+                        # answering never scores confident self, so it can never recover the
+                        # owner. The pending check expires on its own.
+                        _recheck = _call.get("pending_speaker_check")
+                        if _recheck:
+                            if _confident == "self":
+                                try:
+                                    if _va.engage_command_match(_text):
+                                        from vaf.core import voice_policy as _vpolR
+                                        _call["engage_guests"] = {
+                                            "expires_at": time.monotonic() + _vpolR.GUEST_ENGAGE_TTL_S,
+                                            "since_wall": (_call.get("engage_guests") or {}).get(
+                                                "since_wall") or time.time()}
+                                        log("WebServer",
+                                            "voice_call: guest-engagement ON (owner recovered)")
+                                except Exception:
+                                    pass
+                                _call.pop("pending_speaker_check", None)
+                                log("WebServer", "voice_call: speaker recovered as owner")
+                            else:
+                                # The answer to "did you mean me?" arrived but did NOT verify
+                                # as the owner (voice still not placed). NEVER leave it silent
+                                # (the live gap: an affirmative reply was dropped as side-talk):
+                                # an affirmative "yes" means the speaker IS addressing us, so
+                                # speak a short "I could not place your voice, confirm on
+                                # screen/messenger" and lean on the confirmation card already
+                                # queued in the speaker block (an authenticated yes learns the
+                                # voice). The voice alone still grants nothing. A clear "no" or an
+                                # expired window just drops the pending check.
+                                _yn = None
+                                try:
+                                    from vaf.core import speaker_confirm as _vscR
+                                    _p = _vscR.parse_reply(_va.strip_speaker_label(_text))
+                                    _yn = _p[0] if _p else None
+                                except Exception:
+                                    _yn = None
+                                _expired = (time.monotonic()
+                                            - float(_recheck.get("asked_at") or 0.0) > 30.0)
+                                if _yn == "yes":
+                                    _cl = _va.speaker_recheck_confirm_line(
+                                        _turn_lang, _call["scope"])
+                                    _cl_audio = None
+                                    try:
+                                        from vaf.core.speech import SpeechManager as _SMrx
+                                        _cla = await asyncio.wait_for(
+                                            loop.run_in_executor(
+                                                None, lambda: _SMrx.get_instance().synthesize_audio(
+                                                    _cl, _turn_lang, force_engine="docker")),
+                                            timeout=30.0)
+                                        if _cla:
+                                            _cl_audio = _b64v.b64encode(_cla).decode("utf-8")
+                                    except Exception:
+                                        _cl_audio = None
+                                    _call.pop("pending_speaker_check", None)
+                                    _call["history"].append({"role": "user", "content": _text[:200]})
+                                    _call["history"].append({"role": "assistant", "content": _cl})
+                                    _call["history"] = _call["history"][-16:]
+                                    log("WebServer",
+                                        "voice_call: speaker recheck answered yes but unverified"
+                                        " -> asked to confirm")
+                                    await websocket.send_json({
+                                        "type": "voice_call_reply", "user_text": _text,
+                                        "speaker_label": _label, "reply": _cl,
+                                        "audio": _cl_audio, "delegated": None, "clarify": True,
+                                    })
+                                    continue
+                                elif _yn == "no" or _expired:
+                                    _call.pop("pending_speaker_check", None)
 
                         # 2b-answer. In-call pending-answer resolution (VOICE_REFLEX.md):
                         # if the agent JUST asked a question, this utterance is probably its
@@ -6692,6 +6779,61 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception as _clar_e:
                             log("WebServer", f"voice_call clarify failed: {_clar_e}")
 
+                        # 2c-recheck. Speaker recovery (VOICE_REFLEX.md): an AMBIGUOUS turn
+                        # (label 'unsure', profile enrolled but not verified) that is clearly
+                        # DIRECTED at the agent is probably the owner mislabeled in a noisy
+                        # multi-person call. Ask "did you mean me?" in the turn language: the
+                        # answer is a fresh voice sample that can re-verify the owner next turn
+                        # (2a-recover), and the out-of-band confirmation to screen/messenger
+                        # already fired in the speaker block (maybe_request_confirmation, which
+                        # learns the owner's voice on an authenticated yes). Per-call cooldown
+                        # so it never nags. Authorizes NOTHING - it is a spoken question.
+                        try:
+                            if (not _force_reply and not _speaker_ok
+                                    and _call.get("pending_speaker_check") is None
+                                    and time.monotonic() >= _call.get("recheck_cooldown_until", 0.0)
+                                    and _va.wants_speaker_recheck(
+                                        _text, _label, _call.get("agent_name", ""))):
+                                _rc = _va.addressee_clarify_line(_turn_lang, _call["scope"])
+                                _rc_audio = None
+                                try:
+                                    from vaf.core.speech import SpeechManager as _SMrc
+                                    _rca = await asyncio.wait_for(
+                                        loop.run_in_executor(
+                                            None, lambda: _SMrc.get_instance().synthesize_audio(
+                                                _rc, _turn_lang, force_engine="docker")),
+                                        timeout=30.0)
+                                    if _rca:
+                                        _rc_audio = _b64v.b64encode(_rca).decode("utf-8")
+                                except Exception:
+                                    _rc_audio = None
+                                _call["pending_speaker_check"] = {
+                                    "text": _text, "asked_at": time.monotonic()}
+                                _call["recheck_cooldown_until"] = time.monotonic() + 60.0
+                                _call["history"].append({"role": "user", "content": _text[:200]})
+                                _call["history"].append({"role": "assistant", "content": _rc})
+                                _call["history"] = _call["history"][-16:]
+                                log("WebServer",
+                                    f"voice_call: speaker recheck (did you mean me?) text={_text[:60]!r}")
+                                await websocket.send_json({
+                                    "type": "voice_call_reply", "user_text": _text,
+                                    "speaker_label": _label, "reply": _rc,
+                                    "audio": _rc_audio, "delegated": None, "clarify": True,
+                                })
+                                continue
+                        except Exception as _rc_e:
+                            log("WebServer", f"voice_call recheck failed: {_rc_e}")
+
+                        # Owner-toggled guest engagement (VOICE_REFLEX.md): while
+                        # active, a guest turn that would be side_talk is engaged
+                        # instead (spoken reply, still tool-locked via speaker_ok).
+                        # Sliding TTL; an expired toggle is cleared here. Set/ended/
+                        # refreshed from the reply markers after voice_reply below.
+                        _eg = _call.get("engage_guests")
+                        _eg_on = bool(_eg and time.monotonic() <= _eg.get("expires_at", 0.0))
+                        if _eg and not _eg_on:
+                            _call.pop("engage_guests", None)
+
                         # 2d. Addressee gate (tier 1, no LLM): side talk from
                         # other speakers and garbled non-owner input never
                         # reach the LLM - the text still enters the call
@@ -6704,7 +6846,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _engage, _gate_reason = True, "answer"
                         else:
                             _engage, _gate_reason = _va.should_engage(
-                                _text, _label, agent_name=_call.get("agent_name", ""))
+                                _text, _label, agent_name=_call.get("agent_name", ""),
+                                engage_guests=_eg_on)
                         if not _engage:
                             # Reflex chime-in: side talk from another speaker normally
                             # stores + stays silent, but the LOCAL policy may find it
@@ -6812,6 +6955,39 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _busy = bool(cmd.get("main_busy"))
                         _pending = (cmd.get("pending_task") or "")[:300]
                         _uname = manager.get_connection_username(websocket) or ""
+                        # Scene awareness for the reply prompt: multi-party (a guest is
+                        # present, from the current label + recent transcript labels) and
+                        # whether the owner has toggled guest engagement on. Drives the
+                        # dynamic scene block; a 1:1 call leaves the prompt unchanged.
+                        try:
+                            from vaf.core import voice_policy as _vpolS
+                            _scene_labels = [e[1] for e in
+                                             _vctx.recent(_call["scope"], _session, n=8)]
+                            _multi = (_vpolS.derive_scene(_label, _scene_labels) == "multi"
+                                      or _gate_reason == "engage_guest" or _eg_on)
+                        except Exception:
+                            _multi = (_gate_reason == "engage_guest" or _eg_on)
+                        _scene = {"multi": bool(_multi), "engage_guests": _eg_on}
+                        # Group-conversation context (VOICE_REFLEX.md): while guest engagement
+                        # is active, the model gets the SHARED, spoken-aloud room transcript so
+                        # it can follow the multi-person, multi-language dynamic instead of
+                        # seeing one context-free line and stalling. Scoped to talk AFTER
+                        # engagement started (since_wall) so the owner's earlier private 1:1 is
+                        # never shown - everything after was heard by everyone present, so it is
+                        # safe even on a guest turn.
+                        _group_ctx = ""
+                        if _eg_on:
+                            try:
+                                _since = (_call.get("engage_guests") or {}).get("since_wall")
+                                # Fail-CLOSED on a missing boundary: without since_wall,
+                                # digest(since=None) would return the WHOLE transcript,
+                                # including the owner's pre-engagement private 1:1. Only build
+                                # the group context when the post-engagement boundary is known.
+                                if _since is not None:
+                                    _group_ctx = _vctx.digest(_call["scope"], _session, n=12,
+                                                              since=_since)
+                            except Exception:
+                                _group_ctx = ""
                         _res = await loop.run_in_executor(
                             None,
                             lambda: _va.voice_reply(
@@ -6828,6 +7004,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 pending_question=_answer_ctx,
                                 agent_name=_call.get("agent_name", ""),
                                 persona=_call.get("agent_soul", ""),
+                                scene=_scene,
+                                group_context=_group_ctx,
                             ),
                         )
                         if _res is None:
@@ -6901,19 +7079,28 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _call["history"].append({"role": "user", "content": _text})
                         _call["history"].append({"role": "assistant", "content": _res["reply"]})
                         _call["history"] = _call["history"][-16:]
+                        # Record the agent's own spoken reply into the rolling transcript
+                        # (label 'agent') so the shared group-conversation context shows the
+                        # full back-and-forth, not just the human turns. Best-effort.
+                        try:
+                            if _res.get("reply"):
+                                _vctx.record(_call["scope"], _session, _res["reply"],
+                                             label="agent", verdict="reply")
+                        except Exception:
+                            pass
 
                         # Arm the in-call pending-question state: if this reply is itself a
                         # question, the NEXT utterance is probably its answer (resolved at
-                        # 2b-answer next turn). Owner-only (speaker_ok): a guest's words are
-                        # never taken as the answer to an owner-directed question, and the
-                        # question (which may hold owner-private context) is never replayed
-                        # to a guest. A non-question reply clears any stale pending question.
-                        # BUT skip this on a guest on-topic reply (_force_reply and not
-                        # speaker_ok): 2b-answer already KEPT the owner's question open there
-                        # (the owner has not answered), and this owner-only arm would clear it.
-                        if not (_force_reply and not _speaker_ok):
+                        # 2b-answer next turn). Owner-only: a NON-owner turn must never touch
+                        # the owner's pending_q - a guest's words are never taken as the answer
+                        # to an owner-directed question, the question (which may hold owner-
+                        # private context) is never replayed to a guest, AND an engaged/on-topic
+                        # guest reply must not clear a question the owner has not answered yet
+                        # (2b-answer keeps it open). So gate the whole block on speaker_ok; a
+                        # non-question OWNER reply still clears any stale pending question.
+                        if _speaker_ok:
                             try:
-                                if _speaker_ok and _res.get("reply") and _va.is_question(_res["reply"]):
+                                if _res.get("reply") and _va.is_question(_res["reply"]):
                                     from vaf.core import voice_policy as _vpolB
                                     _call["pending_q"] = {
                                         "text": _res["reply"], "asked_at": time.monotonic(),
@@ -6923,6 +7110,41 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     _call.pop("pending_q", None)
                             except Exception:
                                 _call.pop("pending_q", None)
+
+                        # Owner-toggled guest engagement: set/end/refresh from the reply
+                        # markers OR a deterministic engage command. ONLY a VERIFIED-self
+                        # owner turn may toggle it - a guest can never enroll the agent into
+                        # talking to strangers. The arm gate is tightened from speaker_ok to
+                        # (speaker_ok AND confident != 'borderline'): a bridged-borderline
+                        # sticky turn can SPEAK as the owner but must not ARM engagement, so a
+                        # short/ambiguous clip right after the owner can never turn the mode
+                        # on. confident is None with no profile enrolled (fail-open owner) -
+                        # that still arms. A deterministic command (engage_command_match) arms
+                        # even when the weak local model never emits the <talk_to_guest/>
+                        # marker (live: the model chose silence and never armed). Any active
+                        # turn slides the TTL so an ongoing exchange does not lapse.
+                        try:
+                            from vaf.core import voice_policy as _vpolG
+                            _arm_ok = _speaker_ok and _confident != "borderline"
+                            _cmd_arm = _arm_ok and _va.engage_command_match(_text)
+                            if _arm_ok and _res.get("end_guest"):
+                                _call.pop("engage_guests", None)
+                                log("WebServer", "voice_call: guest-engagement ended by owner")
+                            elif _arm_ok and (_res.get("engage_guest") or _cmd_arm):
+                                _call["engage_guests"] = {
+                                    "expires_at": time.monotonic() + _vpolG.GUEST_ENGAGE_TTL_S,
+                                    # since_wall scopes the group-conversation context to talk
+                                    # AFTER engagement (privacy); preserved across a re-arm.
+                                    "since_wall": (_call.get("engage_guests") or {}).get(
+                                        "since_wall") or time.time()}
+                                log("WebServer",
+                                    "voice_call: guest-engagement ON (owner request%s)"
+                                    % (", command" if _cmd_arm else ""))
+                            elif _call.get("engage_guests"):
+                                _call["engage_guests"]["expires_at"] = (
+                                    time.monotonic() + _vpolG.GUEST_ENGAGE_TTL_S)
+                        except Exception:
+                            pass
 
                         await websocket.send_json({
                             "type": "voice_call_reply",

@@ -127,6 +127,8 @@ table below spells out the nudge and voice-reflex keys.
 | `owner_claim` | Speaker-confirm spoofing detector: templates matched against a transcript to spot a non-owner claiming to BE the owner (`speaker_confirm.claims_to_be_owner`) | `{name}` (owner name) |
 | `speaker_confirm_claim` | Speaker-confirm question when a non-owner claims to be the owner (`speaker_confirm.maybe_request_confirmation`, claim path) | `{score}` |
 | `reask_pending` | Voice reflex in-call re-ask line: spoken when the agent re-asks its OWN question because the owner asked to repeat it (the pending-answer path in `web_server`, `voice_policy.answer_verdict`); ~35 langs | `{question}` |
+| `engage_guest_cmd` | Voice reflex deterministic engage command: owner-to-agent imperatives ("answer her", "talk to the other person") matched as full lists to arm guest engagement without the LLM marker (`voice_agent.engage_command_match`); ~35 langs | none (phrase lists) |
+| `speaker_recheck_confirm` | Voice reflex spoken line when a "did you mean me?" reply is affirmative but the voice did not verify: asks the owner to confirm on the screen/messenger card (`voice_agent.speaker_recheck_confirm_line`); ~35 langs | none |
 
 ## Related documentation
 

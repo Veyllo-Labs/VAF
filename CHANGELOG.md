@@ -12,6 +12,38 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- **The agent recovers when a call misreads your voice, instead of ignoring you.** In a
+  room with other people, the voice check can briefly lose track of who is the owner (a
+  guest speaking resets the in-call "this is the owner" bridge), and your own short command
+  could be treated as a stranger's and silently dropped. Now, when a voice it cannot place
+  is clearly talking TO the agent, it asks "did you mean me?" in the language being spoken;
+  if your reply confirms your voice, it picks straight back up (and carries out what you
+  asked). It never just goes quiet on your answer: if you say yes but it still cannot place
+  your voice, it says so and asks you to confirm on screen or via your messenger so it can
+  learn your voice and misread you less often. It never acts on an unconfirmed voice,
+  and your voice profile is only ever updated from a confirmation you make yourself. The
+  agent also no longer goes silent on a turn that was clearly addressed to it, and you can
+  arm "talk to the other person" with a plain spoken command even when the local model is
+  being unreliable.
+- **In a voice call you can now ask the agent to talk to the other person with you.** By
+  default the agent overhears the people around you and stays quiet, which is right when
+  you are just talking to someone else. When you actually want it to take part - "answer
+  her", "talk to my mother, she is asking you something" - it now does: it starts replying
+  to the guest directly IN THEIR OWN LANGUAGE (even if your call started in another), and
+  greets them. While it is talking with the guest it now follows the actual back-and-forth
+  in the room - it is given the shared, spoken-aloud conversation (everyone's turns, in
+  order, in whatever languages are spoken) so it can hold a real multi-person conversation
+  instead of replying to each line in isolation; the guest still never sees your private
+  information, only what was said out loud after you brought them in. It stays in that mode
+  until you tell it you are done ("thanks, that's all"), the conversation goes quiet for a
+  while, or the call ends.
+- **The voice agent no longer refuses to speak a language it actually knows.** On a call it
+  now replies in the language it is being spoken to, or the language you ask it to use,
+  instead of being pinned to one language by its instructions - so asking it to talk to
+  someone in another language works, rather than getting "I'm not fluent in that." Throughout, the guest can only be spoken to - the agent never shares your
+  private information and never runs an action on a guest's request. On a call with more
+  than one person the agent is also given the situation (who is present and the language
+  being spoken) so it responds more naturally.
 - **In a voice call, the agent now understands your answer to its own question.** When it
   asks you something, your next reply is treated as the answer even if it is brief ("yes",
   "at three"), instead of a stray remark; if you ask it to repeat, it re-asks the same

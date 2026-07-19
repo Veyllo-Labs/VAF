@@ -94,7 +94,19 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    The heard utterance is also appended to the durable rolling transcript
    (`voice_context.record`, session/scope-scoped, bounded, fail-open) that the
    reflex policy reads - it outlives the 16-entry call ring and is cleared at
-   call end. See [VOICE_REFLEX.md](VOICE_REFLEX.md).
+   call end. See [VOICE_REFLEX.md](VOICE_REFLEX.md). SPEAKER RECOVERY: an ambiguous
+   turn (`unsure`) that is DIRECTED at the agent (`voice_agent.wants_speaker_recheck`
+   - a second-person address, wake word, or engage command) is probably the owner
+   mislabeled in a noisy multi-person call; the agent asks "did you mean me?" (a
+   per-call, cooldown-bounded spoken question, `pending_speaker_check` on the call
+   record) and never leaves that question's answer silent: if the NEXT turn verifies
+   as a real confident self it RECOVERS the owner (any engage command on THAT verified
+   turn arms engagement - never the earlier unverified text); if the answer is an
+   affirmative "yes" that still does not verify, the agent speaks a "confirm on your
+   screen/messenger" line (`speaker_recheck_confirm`) and leans on the queued
+   confirmation card. It authorizes nothing - recovery needs a real self score; the
+   profile is learned only over the authenticated confirmation channel. See
+   [VOICE_REFLEX.md](VOICE_REFLEX.md).
 3a. **Pending-answer resolution** (`voice_policy.answer_verdict`, no LLM): if the agent
    asked a question on the previous turn, a short-lived call-scoped `pending_q` was armed
    (`voice_agent.is_question`). This turn resolves it: the owner's reply (`speaker_ok`, so
@@ -117,7 +129,12 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    for the verified owner or an unlabeled call. Authorizes nothing.
 4. **Addressee gate + reflex chime-in** (`voice_agent.should_engage`, no LLM):
    side talk from other/named speakers and garbled non-owner STT noise do not reach
-   the direct-reply LLM. Genuine side talk (`side_talk`) is offered to the reflex
+   the direct-reply LLM. EXCEPTION - owner-toggled guest engagement: when the owner has
+   asked the agent to also answer the other person (`_call['engage_guests']`, a sliding
+   TTL toggle set from an owner turn's `<talk_to_guest/>` marker),
+   `should_engage(..., engage_guests=True)` turns a guest's side-talk turn into an
+   engaged spoken reply (`respond_now`, reason `engage_guest`) - still tool-locked via
+   `speaker_ok=False`. Genuine side talk (`side_talk`) is otherwise offered to the reflex
    policy (`voice_policy.chime_decision`): if it is GROUNDED in the owner's
    `voice_awareness_topics` and the scene mode + activity dial permit, the agent
    briefly CHIMES IN with a grounded, non-acting remark (`voice_agent.chime_in_reply`,
@@ -125,18 +142,32 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    with `chime_in: true`. Never while the main agent is busy, never on garbled noise,
    and never unless the owner configured topics (empty topics = no chime-in). Otherwise
    the text enters the call history as room context and the reply is `silent`
-   (invariant 8).
+   (invariant 8). See guest engagement in [VOICE_REFLEX.md](VOICE_REFLEX.md).
 5. **First-layer reply**: `voice_agent.voice_reply()` - one
    `chat_completion` with `tools=None`, system prompt + RAG memory block +
    a structural digest of the OPEN CHAT (built ownership-gated at call
    start via `build_chat_digest`; the prompt tells the model to DELEGATE a
    lookup for details beyond the digest instead of guessing) + last call
    turns as history (plus the agent's own prior question when step 3a resolved
-   this turn as its answer). After the reply is spoken, a `pending_q` is armed
-   if the reply itself is a question (owner-only). The model may append
+   this turn as its answer) + a dynamic SCENE block on a multi-party call
+   (`_scene_block`: names the situation and language, primes the guest-engagement
+   markers on an owner turn, or tells an engaged-guest turn to reply directly;
+   empty and absent on a 1:1, carries no owner-private data) + a GROUP block while
+   guest engagement is active (`_GROUP_BLOCK`: the shared, spoken-aloud room
+   transcript scoped to after engagement started, so even a context-starved guest
+   turn can follow the multi-person, multi-language dynamic - see
+   [VOICE_REFLEX.md](VOICE_REFLEX.md)). After the reply is spoken, a `pending_q` is
+   armed if the reply itself is a question (owner-only). The model may append
    `<delegate>task</delegate>` (parsed out, never spoken) or answer with
-   exactly `<silent/>` (silence protocol: no TTS, keep listening). Spoken
-   replies are capped at a sentence boundary (`_cap_spoken`).
+   exactly `<silent/>` (silence protocol: no TTS, keep listening) - EXCEPT on a turn
+   directed at the owner's agent (`addressed AND speaker_ok`), where the prompt forbids
+   silence, so a bare `<silent/>` is overridden to a "say that again" nudge instead of
+   dropping the owner's turn. On an owner turn the model may also emit
+   `<talk_to_guest/>`/`<end_guest/>` to arm/disarm guest engagement (parsed out; the arm
+   is gated on a REAL verified self - `speaker_ok AND confident != 'borderline'` - so a
+   bridged-borderline turn cannot arm); a deterministic `engage_guest_cmd` command arms
+   the same way when the model omits the marker. Spoken replies are capped at a sentence
+   boundary (`_cap_spoken`).
 6. **Delegation**: the task text goes into the TaskQueue for the CALLING
    session (`origin_channel: "voice_call"`); the main agent runs it as a
    normal turn.

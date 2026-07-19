@@ -65,11 +65,17 @@ _MAX_SPOKEN_CHARS = 400          # hard brevity cap: the token budget exists for
                                   # monologues (live incident: 2342 chars on
                                   # garbled STT input)
 _DELEGATE_RE = re.compile(r"<delegate>(.*?)</delegate>", re.S | re.I)
+# Owner-toggled guest engagement (see docs/agents/VOICE_REFLEX.md). On an OWNER
+# turn the scene block tells the model to emit <talk_to_guest/> when the owner
+# asks it to also answer the other person, and <end_guest/> to stop. Both markers
+# are parsed out (never spoken) and only honored for a verified owner turn.
+_TALK_GUEST_RE = re.compile(r"<talk_to_guest\s*/?>", re.I)
+_END_GUEST_RE = re.compile(r"<end_guest\s*/?>", re.I)
 
 _SYSTEM_PROMPT = """You are {agent_name}, a personal assistant, currently on a LIVE VOICE CALL with your user (like a phone call). Your replies are spoken aloud via text-to-speech.{persona_block}
 
 Rules for this call:
-- Answer in the user's language: {lang}.
+- You are fluent in MANY languages. Reply in {lang} by default, but when a person speaks to you in another language, or your user asks you to speak or use one, reply naturally in THAT language instead. NEVER say you cannot speak, are not fluent in, or cannot hold a conversation in a language - you can; just speak it.
 - Current date and time for the user: {now}. Answer time and date questions directly from this - it is live and correct.
 - Keep replies SHORT and conversational: one to three spoken sentences. No markdown, no lists, no code, no URLs, no emojis.
 - If the transcript looks garbled or nonsensical (speech recognition noise), say briefly that you did not catch that and ask the user to repeat - never guess at a meaning or lecture about the garbled text.
@@ -85,7 +91,7 @@ Rules for this call:
 - Rule of thumb: EVERY request that needs a tool, live data or an action goes to the main agent with the marker. Small talk, opinions and things you already know (including the current time above) are answered directly, without the marker.
 - If you tell the user you will do, retry, check or extend something, that SAME reply must carry the <delegate> marker. Never promise an action without the marker - a promise without it does nothing.
 - Only claim a task is running if this prompt explicitly says the main agent is currently working. Otherwise nothing is running: results you already announced are done, and new work needs a new <delegate>.
-{wake_block}{busy_block}{answer_block}{guest_block}
+{wake_block}{busy_block}{answer_block}{guest_block}{scene_block}{group_block}
 {chat_block}
 {memory_block}"""
 
@@ -109,6 +115,17 @@ CURRENT CHAT (summary of the conversation open on screen, oldest first - the use
 {digest}
 If the user asks for details from this chat that are not covered above, do not guess - delegate a lookup, the main agent can read the full conversation."""
 
+# The shared, spoken group conversation (multilingual, in order) while guest engagement
+# is active. Everyone in the room heard these lines, so it is NOT owner-private and is
+# shown even on a guest turn (unlike chat/memory). The caller scopes it to talk AFTER
+# engagement started, so the owner's earlier private 1:1 never appears. It is the missing
+# CONTEXT that lets the model follow a multi-person, multi-language dynamic instead of
+# seeing one context-free utterance and stalling.
+_GROUP_BLOCK = """
+CONVERSATION IN THE ROOM (everyone present hears this; oldest first, each line marked with who spoke - your user, a guest, or you):
+{transcript}
+Follow this back-and-forth: answer the LATEST line in that context, and always in the language of the person you are replying to."""
+
 _BUSY_BLOCK = """
 IMPORTANT - the main agent is CURRENTLY WORKING on a delegated task: "{task}".
 Do NOT delegate anything right now (no <delegate> marker under any circumstances).
@@ -123,7 +140,7 @@ IMPORTANT - the current speaker is NOT your verified user {user_name}, but a gue
 # policy already judged it interesting/grounded. This prompt is silence-biased -
 # the model may still decline. A chime-in is a spoken remark ONLY: no tools, no
 # delegation (any stray marker is stripped in _postprocess_chime).
-_CHIME_SYSTEM = """You are {agent_name}, quietly present on a LIVE VOICE CALL. The microphone is always open and you just OVERHEARD the line below - it was NOT addressed to you, but it touches on something your user cares about. Like an attentive, friendly person in the room, you MAY add one brief remark. Answer in the user's language: {lang}.
+_CHIME_SYSTEM = """You are {agent_name}, quietly present on a LIVE VOICE CALL. The microphone is always open and you just OVERHEARD the line below - it was NOT addressed to you, but it touches on something your user cares about. Like an attentive, friendly person in the room, you MAY add one brief remark. Reply in {lang} by default, but if the overheard line is in another language, use THAT language - you are fluent in many and never say you cannot speak one.
 
 Give exactly ONE short, natural spoken sentence: a light relevant comment, a bit of context you are genuinely sure of, or a warm reaction - the way someone nearby would casually chime in. No preamble like "I could not help but overhear".
 
@@ -299,7 +316,8 @@ def is_short_reply(text: str, max_words: int = 5, max_dense_chars: int = 12) -> 
 ENGAGE_VERDICTS = ("respond_now", "store_only", "ignore")
 
 
-def classify_utterance(text: str, label: Optional[str], agent_name: str = ""):
+def classify_utterance(text: str, label: Optional[str], agent_name: str = "",
+                       *, engage_guests: bool = False):
     """Tier-1 reflex verdict, BEFORE any LLM call. Returns (verdict, reason) where
     verdict is one of ENGAGE_VERDICTS. NO LLM - pure rules (the fast policy tier).
 
@@ -307,7 +325,10 @@ def classify_utterance(text: str, label: Optional[str], agent_name: str = ""):
     - Wake word (the agent is called by name) -> respond_now, even for other/unsure
       speakers and garbled STT (authorization still stays voice-verified elsewhere).
     - Another (or a named) speaker who does not address the agent is side talk ->
-      store_only: no LLM, no TTS, but kept as room context.
+      store_only: no LLM, no TTS, but kept as room context. WHEN the owner has
+      toggled guest engagement on (``engage_guests``), the same guest turn is
+      engaged instead (respond_now, reason 'engage_guest') - it still authorizes
+      nothing: the reply runs with speaker_ok=False downstream (tool-locked).
     - Garbled STT noise from anyone but the verified owner -> store_only (kept as
       context, never spoken to).
     - The owner always reaches the LLM (respond_now); the silence protocol in the
@@ -319,18 +340,22 @@ def classify_utterance(text: str, label: Optional[str], agent_name: str = ""):
     if agent_name and addressed_by_name(core, agent_name):
         return "respond_now", "wake_word"
     if label in ("other", "named") and not _addresses_agent(core):
+        if engage_guests and not looks_garbled(core):
+            return "respond_now", "engage_guest"
         return "store_only", "side_talk"
     if label != "self" and looks_garbled(core):
         return "store_only", "garbled"
     return "respond_now", "ok"
 
 
-def should_engage(text: str, label: Optional[str], agent_name: str = ""):
+def should_engage(text: str, label: Optional[str], agent_name: str = "",
+                  *, engage_guests: bool = False):
     """Backward-compatible boolean view of ``classify_utterance``: returns
     ``(engage, reason)`` where engage is True only for the ``respond_now`` verdict.
     Existing callers keep their exact behavior; new code should read the 3-way
     verdict from ``classify_utterance`` directly."""
-    verdict, reason = classify_utterance(text, label, agent_name)
+    verdict, reason = classify_utterance(text, label, agent_name,
+                                         engage_guests=engage_guests)
     return verdict == "respond_now", reason
 
 
@@ -348,6 +373,50 @@ def _addressee_check_match(core: str) -> bool:
             for phrase in vocab.phrasings("addressee_check", _lang):
                 phrase = (phrase or "").strip().lower()
                 if phrase and phrase in low:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+# Negation guard for the engage command: a matched phrase inside a NEGATED sentence
+# ("ich antworte ihr nicht", "don't answer her") must not arm. Word-bounded so it never
+# matches inside a word; covers the primary call languages (Latin + Cyrillic forms).
+# Fail-CLOSED: an uncovered-language negation just falls through to the (benign) arm, and
+# a false suppression only means the owner re-issues the command - never a wrong arm.
+_ENGAGE_NEG_RE = re.compile(
+    r"\b(nicht|nie|kein\w*|nein"                       # de
+    r"|not|never|no|don'?t|doesn'?t|won'?t|can'?t"     # en
+    r"|pas|jamais|non|mai"                             # fr / it
+    r"|niet|nooit|geen"                                # nl
+    r"|ikke|aldri|inte|aldrig"                         # da / no / sv
+    r"|nunca|n[ãa]o"                                   # es / pt
+    r"|nie|nikdy"                                       # pl / cs / sk (bare 'ne' omitted: too common cross-lang)
+    r"|de[gğ]il|yok|asla"                              # tr
+    r"|не|нет|никогда|нікого"                          # ru / uk
+    r")\b|n't\b",
+    re.I | re.U,
+)
+
+
+def engage_command_match(text: str) -> bool:
+    """True if the utterance is an explicit OWNER command to also answer the other
+    person in the room ('antworte ihr', 'answer her', 'talk to the other person'),
+    from the `engage_guest_cmd` lexicon. Deterministic Tier-1 substring match (no
+    LLM): arms guest engagement even when the weak local model does not emit the
+    <talk_to_guest/> marker (live: the model chose silence and never armed). The
+    caller keeps the owner gate (only a verified-self owner turn may arm), so a guest
+    can never trigger it. A negated sentence ('antworte ihr NICHT') never arms
+    (fail-closed). Strips the speaker label; fail-open to False."""
+    try:
+        core = _LABEL_PREFIX_RE.sub("", str(text or "")).strip().lower()
+        if not core or _ENGAGE_NEG_RE.search(core):
+            return False
+        from vaf.core import vocab
+        for _lang in vocab.available_languages("engage_guest_cmd"):
+            for phrase in vocab.phrasings("engage_guest_cmd", _lang):
+                phrase = (phrase or "").strip().lower()
+                if phrase and phrase in core:
                     return True
     except Exception:
         pass
@@ -387,6 +456,55 @@ def addressee_clarify_line(lang: str = "de", scope_id: str = "") -> str:
     except Exception:
         pass
     return "Meinst du mich?" if str(lang).startswith("de") else "Do you mean me?"
+
+
+def speaker_recheck_confirm_line(lang: str = "de", scope_id: str = "") -> str:
+    """Spoken line for when a reply to 'did you mean me?' is affirmative but the voice
+    STILL did not verify as the owner: ask the owner to confirm on the screen/messenger
+    card (already queued by speaker_confirm) so the profile can learn the voice. This is
+    what turns 'the agent ignored my yes' into a helpful, anti-spoofing-safe response -
+    the voice alone cannot grant owner status, but the agent never stays silent on the
+    answer to its own question. From the `speaker_recheck_confirm` vocab; built-in de/en
+    fallback so a missing key never leaves the agent mute."""
+    try:
+        from vaf.core import vocab
+        line = vocab.pick("speaker_recheck_confirm", lang, scope=scope_id)
+        if line:
+            return line
+    except Exception:
+        pass
+    return ("Ich konnte deine Stimme gerade nicht sicher erkennen. Bestaetige bitte kurz "
+            "auf dem Bildschirm oder im Messenger, dass du es bist."
+            if str(lang).startswith("de")
+            else "I could not quite recognize your voice just now. Please confirm on your "
+                 "screen or messenger that it is you.")
+
+
+def wants_speaker_recheck(text: str, label: Optional[str],
+                          agent_name: str = "") -> bool:
+    """True when an AMBIGUOUS-identity turn (label 'unsure' or a missing/too-short score,
+    i.e. a profile IS enrolled but the voice did not clearly verify) is nonetheless
+    DIRECTED at the agent - a second-person address, the wake word, or an explicit engage
+    command. In a noisy multi-person call a guest turn clears the owner's in-call sticky
+    bridge, so the owner's own short command can demote to 'unsure' (live: an explicit
+    'answer her' was mislabeled and silently dropped). Instead of treating the owner as a
+    stranger, the agent asks 'did you mean me?' in the turn language; the reply is a fresh
+    voice sample that can re-verify the owner next turn (see the speaker-recovery loop in
+    docs/agents/VOICE_REFLEX.md). A CLEAR guest ('other'/'named') is NOT ambiguous, so it
+    never fires here. Authorizes NOTHING - recovery still needs a real self score, and the
+    profile is only ever learned over the authenticated confirmation channel. Fail-open to
+    False."""
+    try:
+        if label not in ("unsure", None):
+            return False
+        core = _LABEL_PREFIX_RE.sub("", text or "").strip()
+        if not core:
+            return False
+        return bool(_addresses_agent(core)
+                    or (agent_name and addressed_by_name(core, agent_name))
+                    or engage_command_match(core))
+    except Exception:
+        return False
 
 
 def build_chat_digest(messages, max_items: int = 8, per_item: int = 220,
@@ -648,6 +766,55 @@ def _memory_block(user_text: str, scope_id: str) -> str:
     return ""
 
 
+def _scene_block(scene: Optional[Dict], *, lang: str, user_name: str,
+                 speaker_ok: bool, silent: str) -> str:
+    """Dynamic situation block (see docs/agents/VOICE_REFLEX.md): tells the model
+    it is in a multi-party call and, when the owner has toggled guest engagement
+    on, to also reply to the guest. Empty for a one-to-one call (scene None / not
+    multi), so the common case is unchanged.
+
+    Owner-private facts are NEVER placed here - only the presence of a guest, the
+    conversation language and the behavior - so the block is safe to show on a
+    guest turn (speaker_ok False), unlike the chat/memory blocks. The
+    <talk_to_guest/>/<end_guest/> instructions are given ONLY on an owner turn: a
+    guest can never enroll the agent into talking to strangers (also gated on
+    speaker_ok in _postprocess_reply and in the caller)."""
+    if not scene or not scene.get("multi"):
+        return ""
+    engaged = bool(scene.get("engage_guests"))
+    lines = [
+        f"\nSITUATION: This is not a one-to-one call. Your user {user_name} (your "
+        f"owner) is together with at least one other person (a guest) in the room, "
+        f"and the conversation right now is in {lang}."]
+    if speaker_ok:
+        if engaged:
+            lines.append(
+                "Your owner asked you to also take part with the guest, so that is "
+                "active now. Keep helping your owner as usual. When the guest talk is "
+                "over, put <end_guest/> on its own line to stop involving the guest.")
+        else:
+            lines.append(
+                "You are answering your owner right now. If your owner asks you to "
+                "talk to, answer or include the other person, put <talk_to_guest/> "
+                "on its own line and add a short, friendly greeting to the guest IN "
+                "THE GUEST'S OWN LANGUAGE (or the language your owner named) - from "
+                "then on you also reply to the guest directly.")
+    else:
+        if engaged:
+            lines.append(
+                "Your owner asked you to talk with the guest, and the current speaker "
+                "IS that guest. Reply to them directly, briefly and warmly, IN THE SAME "
+                "LANGUAGE THEY are speaking - match the guest's language whatever it is, "
+                f"do not force {lang} on them and never tell them you cannot speak their "
+                f"language. Do NOT reply with {silent}. You still cannot share "
+                f"{user_name}'s private information or do any real work on the guest's "
+                "behalf.")
+        else:
+            lines.append(
+                f"The current speaker is a guest, not your owner {user_name}.")
+    return "\n".join(lines)
+
+
 def voice_reply(
     user_text: str,
     *,
@@ -664,9 +831,17 @@ def voice_reply(
     pending_question: str = "",
     agent_name: str = "",
     persona: str = "",
+    scene: Optional[Dict] = None,
+    group_context: str = "",
 ) -> Optional[Dict]:
-    """One first-layer turn. Returns {'reply': spoken_text, 'delegate': task|None}
-    or None on any failure (no provider, API error) - the caller degrades.
+    """One first-layer turn. Returns {'reply': spoken_text, 'delegate': task|None,
+    'engage_guest': bool, 'end_guest': bool} or None on any failure (no provider,
+    API error) - the caller degrades.
+
+    scene: {'multi': bool, 'engage_guests': bool} awareness for the dynamic scene
+    block - a guest is present, and whether the owner has toggled engagement on.
+    None/1:1 leaves the prompt unchanged. Owner-toggle markers in the reply are
+    surfaced as engage_guest/end_guest, gated on speaker_ok (owner turns only).
 
     pending_question: the agent's OWN question from the previous turn, when the
     reflex layer judged this utterance to be its answer. Injects a block telling
@@ -715,6 +890,16 @@ def voice_reply(
             # the chat digest and memory RAG are the owner's, so they are withheld
             # rather than relying on the model to not leak what it can see.
             guest_block=_GUEST_BLOCK.format(user_name=user_name) if not speaker_ok else "",
+            # Scene awareness (multi-party + owner-toggled guest engagement). Carries
+            # no owner-private data, so it is shown on guest turns too; empty for a 1:1.
+            scene_block=_scene_block(scene, lang=lang, user_name=user_name,
+                                     speaker_ok=speaker_ok, silent=_SILENT_MARKER),
+            # Group conversation (multilingual, in order). NOT owner-private: it is the
+            # spoken-aloud room talk the caller already scoped to AFTER engagement, so it
+            # is shown even on a guest turn - the context that lets the model follow the
+            # multi-person dynamic instead of stalling on one context-free line.
+            group_block=(_GROUP_BLOCK.format(transcript=group_context[:1400])
+                         if group_context.strip() else ""),
             chat_block=(_CHAT_BLOCK.format(digest=chat_context[:1400])
                         if (chat_context.strip() and speaker_ok) else ""),
             memory_block=(_memory_block(user_text, scope_id) if speaker_ok else ""),
@@ -739,7 +924,7 @@ def voice_reply(
         if raw is None:
             return None
         return _postprocess_reply(raw, lang=lang, main_busy=main_busy,
-                                  speaker_ok=speaker_ok)
+                                  speaker_ok=speaker_ok, addressed=addressed)
     except Exception as e:
         _log.warning("voice_agent: voice_reply failed: %s", e)
         return None
@@ -843,10 +1028,17 @@ def _looks_like_meta_leak(text: str, lang: str) -> bool:
 
 
 def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
-                       speaker_ok: bool) -> Dict:
+                       speaker_ok: bool, addressed: bool = False) -> Dict:
     """Shared reply post-processing for BOTH backends (API stream and local
     non-streaming): reasoning strip, silence protocol, delegate parsing, the
-    CoT-leak guards, busy/speaker gates, ack fallback and the spoken cap."""
+    CoT-leak guards, busy/speaker gates, ack fallback and the spoken cap.
+
+    addressed: the turn was explicitly directed at the agent (wake word, a resolved
+    answer to its own question, or a named address). On such an OWNER turn (speaker_ok)
+    the prompt tells the model NOT to be silent, so a bare <silent/> is the weak local
+    model disobeying (live: an owner turn it was told to answer came back silent) - it is
+    overridden to a spoken 'say that again' nudge instead of dropping the turn. Guests and
+    non-addressed owner side-talk keep the silence protocol untouched."""
     try:
         if not text.strip():
             # The model burned the whole budget on reasoning: give the user a
@@ -870,6 +1062,15 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             # no delegation - the caller just keeps listening.
             remainder = text.replace(_SILENT_MARKER, "")
             if not remainder.strip():
+                if addressed and speaker_ok:
+                    # The turn WAS directed at the owner's agent (wake word / a resolved
+                    # answer to its own question): the prompt forbids silence here, so a
+                    # bare marker is the weak local model disobeying. Nudge to repeat
+                    # instead of silently dropping the owner's turn (live incident T3).
+                    _log.info("voice_agent: overriding silence on an addressed owner turn")
+                    from vaf.core import vocab
+                    return {"reply": vocab.pick("voice_tangled", lang), "delegate": None,
+                            "engage_guest": False, "end_guest": False}
                 _log.info("voice_agent: model chose silence")
                 return {"reply": "", "delegate": None, "silent": True}
             text = remainder
@@ -878,6 +1079,15 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
         if m:
             delegate = m.group(1).strip() or None
             text = _DELEGATE_RE.sub("", text).strip()
+        # Owner-toggled guest engagement markers. Honored ONLY for a verified owner
+        # turn (speaker_ok) - a guest can never turn the mode on or off - but the
+        # markers are stripped from the spoken text regardless, so a stray one is
+        # never read aloud. end wins over talk if the model emits both.
+        engage_guest = bool(_TALK_GUEST_RE.search(text)) and speaker_ok
+        end_guest = bool(_END_GUEST_RE.search(text)) and speaker_ok
+        if end_guest:
+            engage_guest = False
+        text = _END_GUEST_RE.sub("", _TALK_GUEST_RE.sub("", text)).strip()
         if _looks_like_meta_leak(text.strip(), lang):
             # Plain-content CoT leak (live incidents: 'We need to parse the
             # user's utterance...', German 'Wir haben einen Sprecher mit dem
@@ -908,11 +1118,19 @@ def _postprocess_reply(text: str, *, lang: str, main_busy: bool,
             from vaf.core import vocab
             if delegate:
                 text = vocab.pick("voice_delegate_ack", lang)
+            elif engage_guest or end_guest:
+                # The reply was ONLY a guest-engage marker (the model skipped the
+                # greeting the scene block asked for). The toggle still takes effect
+                # via the flags; stay silent rather than speak the misleading "say
+                # again" nudge - the next (guest) turn is where the reply lands.
+                _log.info("voice_agent: marker-only guest-engage reply, no spoken text")
+                text = ""
             else:
                 _log.info("voice_agent: empty reply without delegate, tangled fallback")
                 text = vocab.pick("voice_tangled", lang)
         text = _cap_spoken(text.strip())
-        return {"reply": text, "delegate": delegate}
+        return {"reply": text, "delegate": delegate,
+                "engage_guest": engage_guest, "end_guest": end_guest}
     except Exception as e:
         _log.warning("voice_agent: reply post-processing failed: %s", e)
         from vaf.core import vocab

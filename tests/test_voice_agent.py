@@ -96,7 +96,8 @@ def test_local_with_server_serves_the_call(monkeypatch):
     monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
     assert va.available() is True
     res = va.voice_reply("Machst du das?", scope_id="s", lang="de")
-    assert res == {"reply": "Klar, mache ich!", "delegate": None}
+    assert res == {"reply": "Klar, mache ich!", "delegate": None,
+                   "engage_guest": False, "end_guest": False}
     assert va.is_exclusive() is True
 
 
@@ -172,7 +173,8 @@ def test_plain_answer(monkeypatch):
     _cfg(monkeypatch)
     _FakeBackend.script = ["Morgen wird es ", "sonnig bei 25 Grad."]
     res = va.voice_reply("Wie wird das Wetter?", scope_id="s", lang="de")
-    assert res == {"reply": "Morgen wird es sonnig bei 25 Grad.", "delegate": None}
+    assert res == {"reply": "Morgen wird es sonnig bei 25 Grad.", "delegate": None,
+                   "engage_guest": False, "end_guest": False}
 
 
 def test_delegate_marker_parsed_and_not_spoken(monkeypatch):
@@ -575,6 +577,198 @@ def test_classify_utterance_wake_word_overrides():
     assert va.should_engage("[anderer_Sprecher]: Jarvis, wie spaet ist es?", "other", "Jarvis")[0] is True
 
 
+def test_classify_utterance_engage_guests(monkeypatch):
+    """Owner-toggled guest engagement (docs/agents/VOICE_REFLEX.md): while active,
+    a guest turn that is side_talk by default becomes respond_now/engage_guest.
+    The DEFAULT (engage_guests=False) behavior is byte-identical - only an explicit
+    owner toggle changes it, and it never touches the owner or garbled noise."""
+    guest = "[anderer_Sprecher]: Buguen hava durumu nasil?"
+    # Default: still side_talk (working detection unchanged).
+    assert va.classify_utterance(guest, "other") == ("store_only", "side_talk")
+    # Engaged: the same guest turn is answered (still tool-locked downstream).
+    assert va.classify_utterance(guest, "other", engage_guests=True) == (
+        "respond_now", "engage_guest")
+    assert va.should_engage(guest, "other", engage_guests=True)[0] is True
+    assert va.classify_utterance("[Peter]: Der Zug faehrt um acht", "named",
+                                 engage_guests=True) == ("respond_now", "engage_guest")
+    # A guest who already addresses the agent is unchanged (engages either way).
+    assert va.classify_utterance("[anderer_Sprecher]: Warum ist deine Stimme anders?",
+                                 "other", engage_guests=True) == ("respond_now", "ok")
+    # Garbled guest noise is never engaged, even in the mode (no reply to junk).
+    assert va.classify_utterance("[anderer_Sprecher]: 4x8. Wan2 4x8. WeiTai", "other",
+                                 engage_guests=True) == ("store_only", "side_talk")
+    # The owner and unlabeled speech are untouched by the toggle.
+    assert va.classify_utterance("[Mert]: Wie wird das Wetter?", "self",
+                                 engage_guests=True) == ("respond_now", "ok")
+    assert va.classify_utterance("Wie wird das Wetter?", None,
+                                 engage_guests=True) == ("respond_now", "ok")
+
+
+def test_scene_block_branches():
+    """The dynamic scene block: empty for a 1:1, primes <talk_to_guest/> only on an
+    owner turn, tells an engaged-guest turn to reply (never silent), and carries no
+    owner-private data (safe on a guest turn)."""
+    sb = va._scene_block
+    # 1:1 or no scene -> empty (common case unchanged).
+    assert sb(None, lang="de", user_name="Mert", speaker_ok=True, silent="<silent/>") == ""
+    assert sb({"multi": False}, lang="de", user_name="Mert", speaker_ok=True,
+              silent="<silent/>") == ""
+    # Multi + owner turn, engage OFF -> the marker instruction is offered.
+    owner_off = sb({"multi": True, "engage_guests": False}, lang="tr",
+                   user_name="Mert", speaker_ok=True, silent="<silent/>")
+    assert "<talk_to_guest/>" in owner_off and "<end_guest/>" not in owner_off
+    assert "tr" in owner_off
+    # Multi + owner turn, engage ON -> the end marker is offered instead.
+    owner_on = sb({"multi": True, "engage_guests": True}, lang="tr",
+                  user_name="Mert", speaker_ok=True, silent="<silent/>")
+    assert "<end_guest/>" in owner_on and "<talk_to_guest/>" not in owner_on
+    # Multi + GUEST turn, engaged -> reply directly, never the silence marker, and
+    # NO toggle instruction (a guest can never arm/disarm the mode).
+    guest_on = sb({"multi": True, "engage_guests": True}, lang="tr",
+                  user_name="Mert", speaker_ok=False, silent="<silent/>")
+    assert "<silent/>" in guest_on and "talk_to_guest" not in guest_on
+    assert "end_guest" not in guest_on
+    # No owner-private facts anywhere in the block (safe to show a guest).
+    for blk in (owner_off, owner_on, guest_on):
+        assert "MEMORY" not in blk and "schedule" not in blk.lower()
+
+
+def test_guest_engage_markers_owner_gated(monkeypatch):
+    """The reply's <talk_to_guest/>/<end_guest/> markers surface as engage_guest/
+    end_guest and are stripped from the spoken text - but ONLY for a verified owner
+    turn (speaker_ok). A guest can never toggle the mode."""
+    _cfg(monkeypatch)
+    scene = {"multi": True, "engage_guests": False}
+    # Owner turn: marker honored + stripped from speech.
+    _FakeBackend.script = ["Klar, ich rede mit ihr. <talk_to_guest/>"]
+    res = va.voice_reply("Antworte ihr bitte", scope_id="s", lang="de",
+                         speaker_ok=True, scene=scene)
+    assert res["engage_guest"] is True and res["end_guest"] is False
+    assert "talk_to_guest" not in res["reply"] and res["reply"].startswith("Klar")
+    # End marker on an owner turn.
+    _FakeBackend.script = ["Okay, das reicht. <end_guest/>"]
+    res = va.voice_reply("Danke, das war's", scope_id="s", lang="de",
+                         speaker_ok=True, scene={"multi": True, "engage_guests": True})
+    assert res["end_guest"] is True and res["engage_guest"] is False
+    assert "end_guest" not in res["reply"]
+    # Guest turn (speaker_ok False): the same marker is IGNORED (not honored) but
+    # still stripped from the spoken text - a stranger cannot arm the agent.
+    _FakeBackend.script = ["Merhaba! <talk_to_guest/>"]
+    res = va.voice_reply("[anderer_Sprecher]: Merhaba", scope_id="s", lang="tr",
+                         speaker_ok=False, scene={"multi": True, "engage_guests": True})
+    assert res["engage_guest"] is False
+    assert "talk_to_guest" not in res["reply"]
+    # Marker-only owner reply (model skipped the greeting): the toggle still arms,
+    # but the spoken text stays empty instead of the misleading "say again" nudge.
+    from vaf.core import vocab as _vocab
+    _FakeBackend.script = ["<talk_to_guest/>"]
+    res = va.voice_reply("Antworte ihr", scope_id="s", lang="de",
+                         speaker_ok=True, scene=scene)
+    assert res["engage_guest"] is True
+    assert res["reply"] == ""
+    assert res["reply"] not in _vocab.phrasings("voice_tangled", "de")
+
+
+def test_scene_block_reaches_the_prompt(monkeypatch):
+    """The scene awareness dict reaches the system prompt on a multi-party turn and
+    is absent on a 1:1 (default prompt unchanged)."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Hallo!"]
+    va.voice_reply("Antworte ihr", scope_id="s", lang="de", speaker_ok=True,
+                   scene={"multi": True, "engage_guests": False})
+    assert "SITUATION" in _FakeBackend.last_messages[0]["content"]
+    _FakeBackend.script = ["Hallo!"]
+    va.voice_reply("Hi", scope_id="s", lang="de", speaker_ok=True, scene=None)
+    assert "SITUATION" not in _FakeBackend.last_messages[0]["content"]
+
+
+def test_group_context_reaches_a_guest_turn(monkeypatch):
+    """The shared group conversation is injected even on a GUEST turn (speaker_ok False):
+    it is spoken-aloud room talk, not owner-private, and is the context that lets the model
+    follow the multi-person dynamic. Absent when there is no group context (1:1 unchanged)."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["Merhaba!"]
+    va.voice_reply("merhaba", scope_id="s", lang="tr", speaker_ok=False,
+                   scene={"multi": True, "engage_guests": True},
+                   group_context="[self] antworte ihr\n[other] merhaba")
+    sysp = _FakeBackend.last_messages[0]["content"]
+    assert "CONVERSATION IN THE ROOM" in sysp
+    assert "[other] merhaba" in sysp  # the actual transcript is present
+    _FakeBackend.script = ["Hi!"]
+    va.voice_reply("hi", scope_id="s", speaker_ok=True)  # no group context
+    assert "CONVERSATION IN THE ROOM" not in _FakeBackend.last_messages[0]["content"]
+
+
+def test_engage_command_match():
+    """B: a deterministic owner-to-agent engage command arms without the LLM marker,
+    and never false-fires on ordinary requests (substring lexicon, distinctive phrases)."""
+    for cmd in ("[Mert]: antworte ihr", "[Mert]: du sollst ihr antworten",
+                "[Mert]: kannst du ihr antworten", "[Mert]: ona cevap ver",
+                "answer them please", "reply to her"):
+        assert va.engage_command_match(cmd) is True, cmd
+    for plain in ("[Mert]: was steht in meinem kalender", "wie wird das wetter morgen",
+                  "ja das passt schon", "erzähl mir einen witz"):
+        assert va.engage_command_match(plain) is False, plain
+    # Negation guard (fail-closed): a NEGATED command never arms.
+    for neg in ("[Mert]: ich antworte ihr nicht", "don't answer her",
+                "no, do not talk to the guest"):
+        assert va.engage_command_match(neg) is False, neg
+    # ...but an unrelated common word that only looks like a negation must not
+    # suppress a real command (Turkish 'ne' = 'what', not a negation).
+    assert va.engage_command_match("[Mert]: ona cevap ver ne olur") is True
+
+
+def test_wants_speaker_recheck():
+    """A: an AMBIGUOUS (unsure) turn DIRECTED at the agent asks 'did you mean me?'; a
+    clear guest or the verified owner never does, and undirected unsure side-talk does not."""
+    # unsure + directed (2nd person / command / wake word) -> recover
+    assert va.wants_speaker_recheck("[unsicher]: kannst du ihr antworten", "unsure", "VAF") is True
+    assert va.wants_speaker_recheck("[unsicher]: du sollst ihr antworten", "unsure", "VAF") is True
+    assert va.wants_speaker_recheck("[unsicher]: VAF, hörst du mich", "unsure", "VAF") is True
+    # unsure but NOT directed (pure side-talk) -> no recheck (no nagging)
+    assert va.wants_speaker_recheck("[unsicher]: und dann sind wir essen gegangen", "unsure", "VAF") is False
+    # a CLEAR guest is not ambiguous -> never recheck
+    assert va.wants_speaker_recheck("[anderer_Sprecher]: kannst du mir helfen", "other", "VAF") is False
+    assert va.wants_speaker_recheck("[Peter]: du da", "named", "VAF") is False
+    # the verified owner is never rechecked
+    assert va.wants_speaker_recheck("[Mert]: du sollst ihr antworten", "self", "VAF") is False
+
+
+def test_speaker_recheck_confirm_line():
+    """A: the spoken 'confirm your voice' line (for an affirmative-but-unverified reply to
+    'did you mean me?') is never empty and mentions the confirmation, in any language."""
+    de = va.speaker_recheck_confirm_line("de", scope_id="s")
+    en = va.speaker_recheck_confirm_line("en", scope_id="s")
+    assert de and isinstance(de, str) and len(de) > 10
+    assert en and isinstance(en, str) and len(en) > 10
+    # an unknown language still yields a non-empty spoken line (fallback)
+    assert va.speaker_recheck_confirm_line("xx", scope_id="s")
+
+
+def test_silence_override_on_addressed_owner_turn(monkeypatch):
+    """D: on an addressed OWNER turn the prompt forbids silence, so a bare <silent/> is
+    overridden to a spoken nudge (never a silent drop). Guests and non-addressed owner
+    side-talk keep the silence protocol."""
+    _cfg(monkeypatch)
+    from vaf.core import vocab
+    # addressed owner turn -> override to the tangled nudge, NOT silent
+    _FakeBackend.script = ["<silent/>"]
+    res = va.voice_reply("Ja, um drei", scope_id="s", lang="de",
+                         speaker_ok=True, addressed=True)
+    assert not res.get("silent")
+    assert res["reply"] in vocab.phrasings("voice_tangled", "de")
+    # non-addressed owner side-talk -> silence protocol intact
+    _FakeBackend.script = ["<silent/>"]
+    res = va.voice_reply("[Mert]: Schatz, Fenster zu?", scope_id="s", lang="de",
+                         speaker_ok=True, addressed=False)
+    assert res == {"reply": "", "delegate": None, "silent": True}
+    # a guest (speaker_ok False), even if addressed by name -> silence stays
+    _FakeBackend.script = ["<silent/>"]
+    res = va.voice_reply("[anderer_Sprecher]: bla", scope_id="s", lang="de",
+                         speaker_ok=False, addressed=True)
+    assert res == {"reply": "", "delegate": None, "silent": True}
+
+
 def test_looks_garbled_heuristic():
     assert va.looks_garbled("4x8. Wan2 4x8. WeiTai") is True
     assert va.looks_garbled("la la la la la") is True          # heavy repetition
@@ -758,7 +952,8 @@ def test_dedicated_local_voice_model_swaps_and_serves(monkeypatch):
     assert va.dedicated_local_model() == "owner/repo/gemma-test.gguf"
     assert va.is_exclusive() is True
     res = va.voice_reply("Hi", scope_id="s", lang="de")
-    assert res == {"reply": "Klar!", "delegate": None}
+    assert res == {"reply": "Klar!", "delegate": None,
+                   "engage_guest": False, "end_guest": False}
     assert calls["ensure"] == 1
 
 
@@ -781,7 +976,8 @@ def test_api_voice_override_rides_that_provider(monkeypatch):
     assert va.dedicated_local_model() is None
     _FakeBackend.script = ["Na klar!"]
     res = va.voice_reply("Hi", scope_id="s", lang="de")
-    assert res == {"reply": "Na klar!", "delegate": None}
+    assert res == {"reply": "Na klar!", "delegate": None,
+                   "engage_guest": False, "end_guest": False}
 
 
 def test_api_voice_override_without_key_is_unavailable(monkeypatch):
@@ -825,11 +1021,13 @@ def test_persona_name_and_soul_reach_the_prompt(monkeypatch):
     """The voice agent speaks AS the configured persona, not as generic VAF."""
     _cfg(monkeypatch)
     va.voice_reply("Hi", scope_id="s", agent_name="Jarvis",
-                   persona="Witzig, direkt, liebt kurze Antworten." + "x" * 600)
+                   persona="Witzig, direkt, liebt kurze Antworten." + "x" * 5000)
     system = _FakeBackend.last_messages[0]["content"]
     assert system.startswith("You are Jarvis,")
     assert "Witzig, direkt" in system
-    assert len(system) < 4000  # soul is hard-capped, never budget-eating
+    # Soul is hard-capped at 500 chars: a 5000-char soul must NOT blow up the
+    # prompt (without the cap this would be ~9000 chars).
+    assert len(system) < 4500
     # Defaults stay VAF without a persona block.
     va.voice_reply("Hi", scope_id="s")
     system = _FakeBackend.last_messages[0]["content"]

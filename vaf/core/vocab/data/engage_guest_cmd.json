@@ -1,0 +1,341 @@
+{
+  "ar": [
+    "رد عليها",
+    "رد عليه",
+    "رد عليهم",
+    "تكلم معها",
+    "تكلم معه",
+    "تكلم مع الشخص الآخر",
+    "تحدث مع الضيف",
+    "يمكنك الرد عليها"
+  ],
+  "bg": [
+    "отговори ѝ",
+    "отговори му",
+    "отговори им",
+    "говори с нея",
+    "говори с него",
+    "отговори на другия човек",
+    "говори с госта",
+    "може да ѝ отговориш"
+  ],
+  "bn": [
+    "তাকে উত্তর দাও",
+    "ওকে উত্তর দাও",
+    "তাদের উত্তর দাও",
+    "তার সাথে কথা বলো",
+    "ওর সাথে কথা বলো",
+    "অন্য জনকে উত্তর দাও",
+    "অতিথির সাথে কথা বলো",
+    "তুমি ওকে উত্তর দিতে পারো"
+  ],
+  "cs": [
+    "odpověz jí",
+    "odpověz mu",
+    "odpověz jim",
+    "mluv s ní",
+    "mluv s ním",
+    "odpověz té druhé osobě",
+    "promluv s hostem",
+    "klidně jí odpověz"
+  ],
+  "da": [
+    "svar hende",
+    "svar ham",
+    "svar dem",
+    "tal med hende",
+    "tal med ham",
+    "svar den anden person",
+    "tal med gæsten",
+    "du kan godt svare hende"
+  ],
+  "de": [
+    "antworte ihr",
+    "antworte ihm",
+    "antworte ihnen",
+    "antworte der anderen person",
+    "rede mit ihr",
+    "sprich mit dem gast",
+    "du kannst ihr antworten",
+    "geh ruhig auf sie ein",
+    "sollst ihr antworten",
+    "kannst du ihr antworten"
+  ],
+  "el": [
+    "απάντησέ της",
+    "απάντησέ του",
+    "απάντησέ τους",
+    "μίλα της",
+    "μίλα του",
+    "μίλα με τον καλεσμένο",
+    "απάντησε στο άλλο άτομο",
+    "μπορείς να της απαντήσεις"
+  ],
+  "en": [
+    "answer them",
+    "reply to her",
+    "reply to them",
+    "talk to the other person",
+    "talk to the guest",
+    "you can answer her",
+    "go ahead and reply to them"
+  ],
+  "es": [
+    "contéstale a ella",
+    "respóndele a él",
+    "respóndeles a ellos",
+    "háblale a ella",
+    "habla con la otra persona",
+    "háblale al invitado",
+    "puedes hablar con ella",
+    "puedes contestarle a él"
+  ],
+  "fa": [
+    "جوابش را بده",
+    "به او جواب بده",
+    "به او پاسخ بده",
+    "با او صحبت کن",
+    "با او حرف بزن",
+    "با مهمان صحبت کن",
+    "با نفر دیگر صحبت کن",
+    "به آنها جواب بده"
+  ],
+  "fi": [
+    "vastaa hänelle",
+    "vastaa heille",
+    "puhu hänelle",
+    "puhu heille",
+    "puhu toiselle henkilölle",
+    "puhu vieraalle",
+    "voit vastata hänelle",
+    "voit puhua hänen kanssaan"
+  ],
+  "fr": [
+    "réponds-lui",
+    "réponds-leur",
+    "parle-lui",
+    "parle avec elle",
+    "parle avec lui",
+    "parle avec notre invité",
+    "tu peux lui répondre",
+    "tu peux lui parler"
+  ],
+  "he": [
+    "תענה לה",
+    "תעני לה",
+    "תענה לו",
+    "תענה להם",
+    "תדבר איתה",
+    "תדבר איתו",
+    "תדבר עם האורח",
+    "תדבר עם האדם השני"
+  ],
+  "hi": [
+    "उसे जवाब दो",
+    "उसको जवाब दो",
+    "उन्हें जवाब दो",
+    "उससे बात करो",
+    "उनसे बात करो",
+    "मेहमान से बात करो",
+    "दूसरे व्यक्ति से बात करो",
+    "आप उससे बात कर सकते हैं"
+  ],
+  "hr": [
+    "odgovori joj",
+    "odgovori mu",
+    "odgovori im",
+    "razgovaraj s njom",
+    "slobodno joj odgovori",
+    "možeš razgovarati s njom",
+    "odgovori drugoj osobi",
+    "odgovori i gostu"
+  ],
+  "hu": [
+    "válaszolj neki",
+    "válaszolj nekik",
+    "beszélj vele",
+    "válaszolj a másiknak",
+    "beszélj a másikkal",
+    "nyugodtan válaszolj neki",
+    "válaszolhatsz neki",
+    "válaszolj a vendégnek"
+  ],
+  "id": [
+    "jawab mereka",
+    "bicara sama dia",
+    "ngobrol sama dia",
+    "jawab saja dia",
+    "kamu boleh jawab dia",
+    "jawab orang satunya",
+    "jawab tamunya"
+  ],
+  "it": [
+    "rispondi a lei",
+    "rispondi a lui",
+    "rispondi a loro",
+    "rispondile pure",
+    "puoi parlare con lei",
+    "rispondi a quella persona",
+    "rispondi al nostro ospite"
+  ],
+  "ja": [
+    "彼女に答えて",
+    "彼に答えて",
+    "彼らに答えて",
+    "相手に答えて",
+    "彼女と話して",
+    "彼女に答えてあげて",
+    "彼女に答えていいよ",
+    "お客さんに答えて"
+  ],
+  "ko": [
+    "그 사람한테 대답해줘",
+    "저분한테 대답해줘",
+    "그녀한테 대답해줘",
+    "그 사람이랑 얘기해",
+    "상대방한테 대답해줘",
+    "저 사람한테 대답해도 돼",
+    "다른 사람한테 대답해줘",
+    "손님한테 대답해줘"
+  ],
+  "ms": [
+    "jawab mereka",
+    "cakap dengan dia",
+    "borak dengan dia",
+    "jawablah dia",
+    "awak boleh jawab dia",
+    "jawab orang tu",
+    "jawab tetamu tu"
+  ],
+  "nl": [
+    "antwoord haar",
+    "antwoord hem",
+    "geef ze antwoord",
+    "praat met haar",
+    "praat met de andere persoon",
+    "praat met de gast",
+    "je mag met haar praten"
+  ],
+  "no": [
+    "svar henne",
+    "svar ham",
+    "svar dem",
+    "snakk med henne",
+    "snakk med den andre personen",
+    "snakk med gjesten",
+    "du kan snakke med henne"
+  ],
+  "pl": [
+    "odpowiedz jej",
+    "odpowiedz mu",
+    "odpowiedz im",
+    "porozmawiaj z nią",
+    "porozmawiaj z drugą osobą",
+    "porozmawiaj z gościem",
+    "możesz z nią porozmawiać"
+  ],
+  "pt": [
+    "responda a ela",
+    "responda a ele",
+    "responda a eles",
+    "fale com ela",
+    "fale com a outra pessoa",
+    "fale com o convidado",
+    "pode falar com ela"
+  ],
+  "ro": [
+    "răspunde-i ei",
+    "răspunde-i lui",
+    "răspunde-le lor",
+    "vorbește cu ea",
+    "vorbește cu cealaltă persoană",
+    "vorbește cu invitatul",
+    "poți vorbi cu ea"
+  ],
+  "ru": [
+    "ответь ей",
+    "ответь ему",
+    "ответь им",
+    "поговори с ней",
+    "поговори с другим человеком",
+    "поговори с гостем",
+    "можешь ответить ей"
+  ],
+  "sk": [
+    "odpovedz jej",
+    "odpovedz mu",
+    "odpovedz im",
+    "porozprávaj sa s ňou",
+    "porozprávaj sa s druhou osobou",
+    "porozprávaj sa s hosťom",
+    "môžeš sa s ňou porozprávať"
+  ],
+  "sr": [
+    "odgovori joj",
+    "odgovori mu",
+    "odgovori im",
+    "možeš da joj odgovoriš",
+    "pričaj sa njom",
+    "razgovaraj s njim",
+    "pričaj sa drugom osobom",
+    "razgovaraj sa gostom"
+  ],
+  "sv": [
+    "svara henne",
+    "svara honom",
+    "svara dem",
+    "du kan svara henne",
+    "prata med henne",
+    "prata med honom",
+    "prata med den andra",
+    "svara gästen"
+  ],
+  "th": [
+    "ตอบเขาไปเลย",
+    "ตอบพวกเขาด้วย",
+    "คุยกับเขาได้เลย",
+    "คุยกับคนนั้นด้วย",
+    "คุยกับอีกคนได้เลย",
+    "คุยกับแขกได้เลย",
+    "ช่วยตอบเขาหน่อย"
+  ],
+  "tr": [
+    "ona cevap ver",
+    "ona yanıt ver",
+    "onlara cevap ver",
+    "onunla konuşabilirsin",
+    "diğer kişiyle konuş",
+    "misafirle de konuş",
+    "hadi ona cevap ver"
+  ],
+  "uk": [
+    "відповідай їй",
+    "відповідай йому",
+    "відповідай їм",
+    "можеш їй відповісти",
+    "поговори з нею",
+    "поговори з ним",
+    "поговори з іншою людиною",
+    "поговори з гостем"
+  ],
+  "vi": [
+    "trả lời cô ấy",
+    "trả lời anh ấy",
+    "trả lời họ",
+    "bạn có thể trả lời cô ấy",
+    "nói chuyện với cô ấy",
+    "nói chuyện với anh ấy",
+    "nói chuyện với người kia",
+    "trả lời khách đi"
+  ],
+  "zh": [
+    "回答她吧",
+    "回答他吧",
+    "回答他们",
+    "你可以回答她",
+    "跟她说吧",
+    "跟他说吧",
+    "跟对方说",
+    "回答客人"
+  ]
+}

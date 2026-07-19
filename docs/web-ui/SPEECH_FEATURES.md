@@ -338,6 +338,14 @@ per user with a 1 h expiry:
   with the plain `speaker_confirm_question`, but restrained (long cooldown) so it does
   not ask on every unsure turn - this exists mainly for the adaptive-training reclaim.
 
+On a LIVE CALL this out-of-band confirmation is paired with an in-call recovery: an
+ambiguous (`unsure`) turn that is directed at the agent triggers a spoken "did you mean
+me?" and, if the next turn verifies as a real self, recovers the owner immediately, while
+the confirmation above still runs to adaptively learn the voice over the authenticated
+channel. The two paths together fix the owner-mislabel that blocks owner-only voice
+features in noisy multi-person calls (see the speaker-recovery loop in
+[../agents/VOICE_REFLEX.md](../agents/VOICE_REFLEX.md)).
+
 A plain non-owner utterance with no claim and no "unsure" score is left alone (no
 question). Delivery: main messenger first (question text + the audio segment as
 attachment via `send_to_main_messenger`), else a web-chat card (audio player +

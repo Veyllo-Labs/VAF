@@ -95,6 +95,17 @@ def _lang_cache_forget(cache_key: Optional[str]) -> None:
         _LANG_CACHE.pop(cache_key, None)
 
 
+def _has_cached_lang(cache_key: Optional[str]) -> bool:
+    """True if this speaker already has a cached detected language. Lets a caller's
+    `default_language` seed fill ONLY the cold-cache gap (the first turn) without
+    overriding the periodic hint-free re-detect, which also returns None from
+    `_lang_hint_for` but keeps a cache entry."""
+    if not cache_key:
+        return False
+    with _LANG_CACHE_LOCK:
+        return cache_key in _LANG_CACHE
+
+
 def _stt_base_url() -> str:
     return (Config.get("speech_stt_docker_url") or "http://localhost:5003").strip().rstrip("/")
 
@@ -114,6 +125,7 @@ def transcribe(
     filename: str = "voice.ogg",
     cache_key: Optional[str] = None,
     language: Optional[str] = None,
+    default_language: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Transcribe an audio file or raw bytes via the cloud lane or Docker Whisper.
 
@@ -125,8 +137,11 @@ def transcribe(
     hint: the cloud provider is told the language detected on a previous turn for a
     more precise call, and the cache is refreshed from each result (with a periodic
     hint-free re-detect so a language switch is caught). `language` forces an
-    explicit hint for this call, overriding the cache. Both are optional and only
-    affect the cloud lane; the Docker lane always auto-detects.
+    explicit hint for this call, overriding the cache. `default_language` is a soft
+    seed used ONLY when the cache is cold (the first turn for this speaker) - e.g.
+    the caller's user-profile language - so the very first clip is not left to a wild
+    auto-detect while still letting the re-detect catch a genuine later switch. All
+    optional and only affect the cloud lane; the Docker lane always auto-detects.
     """
     try:
         if isinstance(audio, (str, Path)):
@@ -140,6 +155,13 @@ def transcribe(
         # Explicit `language` (incl. "multi") passes through untruncated; otherwise the
         # per-speaker cached language is used. speech_api normalizes/validates it.
         hint = (language or "").strip().lower() or _lang_hint_for(cache_key)
+        if not hint and default_language and not _has_cached_lang(cache_key):
+            # Cold cache: seed with the KNOWN language (the caller's user-profile /
+            # call language) so the cloud STT is not left to auto-detect a short first
+            # clip - Veyllo/Deepgram mis-detects a brief German clip as French. Once a
+            # turn caches a detected language the periodic re-detect takes over, so a
+            # genuine mid-call switch is still caught; the seed only fills the first-turn gap.
+            hint = (default_language or "").strip().lower()
         used_hint = bool(hint) and hint != "multi"  # "multi" is auto-detect, not a pin
 
         # Cloud provider lane first (speech_stt_provider); returns (None, None)

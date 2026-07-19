@@ -245,8 +245,14 @@ trait of the speaker, not global state. Providers like Veyllo/Deepgram treat
 `language` as a hard selection, so to catch a mid-conversation language switch the
 client sends hint-free (re-detects) every few turns and always refreshes the cache
 from the actually-detected language, bounding staleness. The Docker lane always
-auto-detects. Messaging voice notes (Telegram/WhatsApp) currently transcribe without
-a cache_key (auto-detect); wiring a per-sender key there is a follow-up.
+auto-detects. The web voice CALL passes both the speaker's scope as `cache_key` and the
+user's PROFILE language (identity `preferred_language`) as a `default_language` seed, so
+the very first (often short) clip is pinned to the known language instead of auto-detecting
+a wrong one (a brief German clip misheard as French); the cache + periodic re-detect then
+still catch a genuine mid-call switch. The seed fills only the cold-cache first turn - it
+never overrides a detected language or the re-detect. Messaging voice notes
+(Telegram/WhatsApp) currently transcribe without a cache_key (auto-detect); wiring a
+per-sender key there is a follow-up.
 
 The hint is **language-agnostic** - it is whatever the provider itself detected on a
 prior turn, so it works across every language a provider supports, not a hardcoded

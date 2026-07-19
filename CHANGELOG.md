@@ -30,6 +30,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **Your spoken language is no longer mis-detected at the start of a voice call.** The call
+  now tells the speech-to-text service the language from your profile up front, so a short
+  first sentence in German is not transcribed as French (or another language) - which had
+  the agent constantly asking you to repeat. It still notices if you genuinely switch
+  languages mid-call.
 - **The agent stops mistaking you for a stranger mid-call on short replies.** In a voice
   call, once it has clearly recognized your voice, a brief or noisy follow-up ("ja", "at
   three") no longer flips you to an unknown speaker and locks you out of acting - your

@@ -140,6 +140,37 @@ def test_transcribe_never_raises(monkeypatch):
     assert sc.transcribe(b"OggS....") == (None, None)
 
 
+def test_transcribe_default_language_seeds_only_cold_cache(monkeypatch):
+    """A cold-cache first turn seeds the cloud STT with default_language (the user's
+    profile language) so a short first clip is not auto-detected as the wrong language;
+    once a language is cached the seed no longer overrides it, and an explicit language
+    always wins."""
+    _cfg(monkeypatch, {})
+    import vaf.core.speech_api as sa
+    seen = []
+
+    def fake_cloud(payload, *, mime, filename, language):
+        seen.append(language)
+        return ("hallo", "de")  # the provider detected German
+
+    monkeypatch.setattr(sa, "select_stt_backend", lambda: ("veyllo", "m"))
+    monkeypatch.setattr(sa, "transcribe", fake_cloud)
+    sc._LANG_CACHE.clear()
+
+    # cold cache -> seed with default_language
+    sc.transcribe(b"OggS", cache_key="u1", default_language="de")
+    assert seen[-1] == "de"
+    # the cache now holds 'de' -> a different seed must NOT override it
+    sc.transcribe(b"OggS", cache_key="u1", default_language="fr")
+    assert seen[-1] == "de"
+    # an explicit language always wins over both the seed and the cache
+    sc.transcribe(b"OggS", cache_key="u1", language="en", default_language="de")
+    assert seen[-1] == "en"
+    # no cache_key and no default -> auto-detect (no hint sent)
+    sc.transcribe(b"OggS")
+    assert not seen[-1]
+
+
 def test_synthesize_wav(monkeypatch):
     _cfg(monkeypatch, {"speech_tts_docker_url": "http://tts:5002"})
     calls = []

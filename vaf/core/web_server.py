@@ -6407,10 +6407,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
                             continue
 
-                        # 1. STT (provider lane first inside speech_client)
+                        # 1. STT (provider lane first inside speech_client). Seed the
+                        # cloud provider (Veyllo/Deepgram treats `language` as a HARD
+                        # selection) with the user's PROFILE language so a short first
+                        # clip is not auto-detected as the wrong language (German misheard
+                        # as French). cache_key engages the per-speaker language cache +
+                        # periodic re-detect, so a genuine mid-call switch is still caught;
+                        # default_language only fills the cold-cache first turn.
+                        # _call["lang"] = identity preferred_language (voice_call_start).
                         from vaf.core import speech_client as _vsc
                         _text, _stt_lang = await loop.run_in_executor(
-                            None, lambda: _vsc.transcribe(_wav, mime="audio/wav", filename="call.wav"))
+                            None, lambda: _vsc.transcribe(
+                                _wav, mime="audio/wav", filename="call.wav",
+                                cache_key=_call.get("scope"), default_language=_call.get("lang")))
                         if not _text:
                             await websocket.send_json({"type": "voice_call_error", "error": "no_speech"})
                             continue

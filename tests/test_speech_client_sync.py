@@ -301,3 +301,26 @@ def test_hinted_cloud_failure_forgets_the_hint(monkeypatch):
     monkeypatch.setattr(sc, "_post_stt", lambda *a, **kw: None)
     sc.transcribe(b"audio", cache_key="spk")
     assert sc._lang_hint_for("spk") is None                 # hint forgotten, not stuck
+
+
+def test_tts_lang_for_follows_reply_language(monkeypatch):
+    """The call TTS speaks a model reply in ITS OWN language when the lane can voice
+    it (Docker voice installed / cloud multilingual), else falls back to the call
+    language - never a mid-call voice download."""
+    from vaf.core import web_server as ws
+
+    class _SM:
+        def __init__(self, speaks):
+            self._s = set(speaks)
+
+        def call_lane_speaks(self, lang):
+            return lang in self._s
+
+    monkeypatch.setattr(ws, "_detect_language_simple",
+                        lambda t: {"turkce": "tr", "deutsch": "de"}.get(t, "en"))
+    has_tr = _SM({"de", "en", "tr"})   # a Turkish voice is available
+    no_tr = _SM({"de", "en"})          # no Turkish voice on the lane
+    assert ws._tts_lang_for("turkce", "de", has_tr) == "tr"   # follow the reply language
+    assert ws._tts_lang_for("turkce", "de", no_tr) == "de"    # unavailable -> stay on the call
+    assert ws._tts_lang_for("deutsch", "de", has_tr) == "de"  # same language -> no change
+    assert ws._tts_lang_for("", "de", has_tr) == "de"         # empty -> base language

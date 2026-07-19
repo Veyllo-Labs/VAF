@@ -36,6 +36,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **A voice-call reply in another language is now spoken by that language's voice.** When the
+  agent answers in a different language than you spoke (e.g. Turkish in a German conversation),
+  it uses a matching voice for that language instead of speaking it with your usual voice -
+  whenever a voice for that language is available (a downloaded local voice, or any cloud voice
+  provider). Otherwise it stays on your call voice.
 - **Your spoken language is no longer mis-detected at the start of a voice call.** The call
   now tells the speech-to-text service the language from your profile up front, so a short
   first sentence in German is not transcribed as French (or another language) - which had

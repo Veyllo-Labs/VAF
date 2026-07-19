@@ -1068,6 +1068,28 @@ def _detect_language_simple(text: str) -> str:
         return "de"
     return "en"
 
+
+def _tts_lang_for(text: str, base_lang: str, sm) -> str:
+    """Pick the TTS language for an LLM-GENERATED spoken reply. If the reply text's
+    detected language differs from the call/base language AND the speech lane can
+    actually speak it (`SpeechManager.call_lane_speaks`: a Docker voice is installed,
+    or a cloud TTS provider is multilingual), follow the reply's language - so a
+    Turkish answer is spoken by a Turkish voice, not the German one; the Docker lane
+    switches voice by the `language` it is sent, the API lane gets the language. Falls
+    back to base_lang on an unclear detection or an unavailable voice (never a mid-call
+    download). For model-written text only; vocab lines are already in base_lang."""
+    try:
+        if not (text or "").strip():
+            return base_lang  # nothing to speak -> never switch away from the call language
+        rl = _detect_language_simple(text)
+        base = (base_lang or "")[:2].lower()
+        if rl and rl != base and sm.call_lane_speaks(rl):
+            return rl
+    except Exception:
+        pass
+    return base_lang
+
+
 def _build_artifact_payload(session, session_id: str = None):
     if not session:
         return None
@@ -6737,10 +6759,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                             _chime_audio = None
                                             try:
                                                 from vaf.core.speech import SpeechManager as _SMi
+                                                _chime_sm = _SMi.get_instance()
+                                                _chime_lang = _tts_lang_for(_remark, _turn_lang, _chime_sm)
                                                 _ia = await asyncio.wait_for(
                                                     loop.run_in_executor(
-                                                        None, lambda: _SMi.get_instance().synthesize_audio(
-                                                            _remark, _turn_lang, force_engine="docker")),
+                                                        None, lambda: _chime_sm.synthesize_audio(
+                                                            _remark, _chime_lang, force_engine="docker")),
                                                     timeout=60.0)
                                                 if _ia:
                                                     _chime_audio = _b64v.b64encode(_ia).decode("utf-8")
@@ -6853,11 +6877,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         try:
                             from vaf.core.speech import SpeechManager
                             _sm = SpeechManager.get_instance()
+                            # Speak the reply in ITS OWN language, not the input language:
+                            # a model reply in another language (e.g. Turkish from a German
+                            # turn) is voiced by that language's voice when the lane can
+                            # speak it, else stays on the call language.
+                            _tts_lang = _tts_lang_for(_res["reply"], _turn_lang, _sm)
+                            if _tts_lang != _turn_lang:
+                                log("WebServer",
+                                    f"voice_call: TTS follows reply language {_turn_lang}->{_tts_lang}")
                             _audio_out = await asyncio.wait_for(
                                 loop.run_in_executor(
                                     None,
                                     lambda: _sm.synthesize_audio(
-                                        _res["reply"], _turn_lang, force_engine="docker"),
+                                        _res["reply"], _tts_lang, force_engine="docker"),
                                 ),
                                 timeout=130.0,
                             )

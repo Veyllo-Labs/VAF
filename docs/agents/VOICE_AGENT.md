@@ -140,11 +140,19 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
 6. **Delegation**: the task text goes into the TaskQueue for the CALLING
    session (`origin_channel: "voice_call"`); the main agent runs it as a
    normal turn.
-7. **TTS** and the `voice_call_reply` payload (`user_text`, `speaker_label`,
-   `reply`, `audio`, `delegated`, `silent`, and the flags `greeting`/`chime_in`/
-   `clarify`/`reask` for the call-opening greeting, a proactive chime-in, an addressee
-   check and a re-ask of the agent's own question - a silent reply has no audio and
-   the frontend simply keeps listening).
+7. **TTS** and the `voice_call_reply` payload. Model-written spoken text is voiced in
+   ITS OWN language, not the input language: `_tts_lang_for` detects the reply text's
+   language (`_detect_language_simple`, langid) and, when it differs from the call
+   language AND the lane can speak it (`call_lane_speaks`), follows it - so a Turkish
+   answer to a German turn is voiced by a Turkish voice (the Docker lane switches voice
+   by the `language` it is sent, a cloud lane gets the language), else it stays on the
+   call language (never a mid-call voice download). This applies to the model reply and
+   the chime-in; vocab lines (greeting/reask/clarify) are already in the call language,
+   and the delegated-result announcement (`voice_call_speak`) detects its own language.
+   The payload carries `user_text`, `speaker_label`, `reply`, `audio`, `delegated`,
+   `silent`, and the flags `greeting`/`chime_in`/`clarify`/`reask` for the call-opening
+   greeting, a proactive chime-in, an addressee check and a re-ask of the agent's own
+   question - a silent reply has no audio and the frontend simply keeps listening.
 
 Every turn writes one forensic log line (`voice_call turn: active=... label=...
 speaker_ok=... text=... -> reply_len=... delegate=...`).

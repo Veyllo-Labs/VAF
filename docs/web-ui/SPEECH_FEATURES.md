@@ -89,7 +89,11 @@ The `vaf-tts` container (`docker/tts-multilang`) supports multiple languages wit
 
 **Parameters:**
 - `text` (required): Text to synthesize
-- `language` (optional): ISO 639-1 code (`de`, `en`, `fr`). Default: `de`
+- `language` (optional): ISO 639-1 code (`de`, `en`, `fr`). Default: `de`. The multi-language
+  container **selects the voice from this code**, so callers control the spoken voice by the
+  language they send. A live call voices a model reply in ITS OWN detected language when the
+  lane can speak it (`web_server._tts_lang_for` + `SpeechManager.call_lane_speaks`; see
+  [VOICE_AGENT.md](../agents/VOICE_AGENT.md) step 7), else it stays on the call language.
 - `format` (optional): Output format (`wav` or `ogg`). Default: `wav`
 
 **Response:** Binary audio data (WAV or OGG/Opus)

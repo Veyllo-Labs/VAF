@@ -11,12 +11,16 @@ import { useThemeStore } from '@/lib/themeStore';
 // Veyllo design tokens (the app's Tailwind lacks these exact ones, so inline like NotificationsModal).
 // This whole modal is styled through this JS palette, which the Tailwind dark-palette swap cannot
 // see — so it carries its own dark variant, selected via the theme store. C_LIGHT keeps the
-// original values byte-for-byte (light mode stays pixel-identical); C_DARK maps onto the brand
-// dark tokens (panel #0f131c, control #161c29, text #e6e9ef, dim #8b93a7, borders #1e2533/#2a3344).
+// original values byte-for-byte (light mode stays pixel-identical); C_DARK maps onto the
+// neutral brand dark tokens (surface #202020, control #262626, text #ececec, dim #8a8a8a,
+// border #2f2f2f). The full-screen blur scrim is themed too (`scrim`): neutral black in dark
+// mode instead of the light navy, which otherwise tinted the dark backdrop blue.
 const C_LIGHT = {
   surface: '#ffffff', fg: '#111827', muted: '#5b6472', faint: '#9aa3b2',
   line: '#e7e9ee', surface3: '#f1f4f8', ink: '#2a3142', accent: '#1d4ed8',
   accentSoft: 'rgba(29,78,216,.08)',
+  // full-screen blur scrim behind the modal (kept navy in light so light stays pixel-identical)
+  scrim: 'rgba(16,24,40,.40)',
   // ink glyph details drawn ON the ink shape (exclamation mark / orb interior)
   inkContrast: '#ffffff',
   // soft radial halo behind the icon
@@ -31,6 +35,8 @@ const C_DARK: typeof C_LIGHT = {
   surface: '#202020', fg: '#ececec', muted: '#8a8a8a', faint: '#6b6b6b',
   line: '#2f2f2f', surface3: '#262626', ink: '#ececec', accent: '#3b82f6',
   accentSoft: 'rgba(59,130,246,.16)',
+  // neutral black scrim so the dark backdrop does not read blue (the light navy tinted it)
+  scrim: 'rgba(0,0,0,.55)',
   inkContrast: '#202020',
   halo: 'rgba(236,236,236,.08)',
   titleGradient: 'linear-gradient(180deg,#ececec 30%,#b0b0b0)',
@@ -89,7 +95,7 @@ export default function AnnouncementModal({
       style={{
         position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
         alignItems: 'center', justifyContent: 'center', padding: 22,
-        background: 'rgba(16,24,40,.40)', backdropFilter: 'blur(4px)',
+        background: C.scrim, backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
       }}
     >

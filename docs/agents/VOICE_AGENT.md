@@ -78,7 +78,11 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
    identity `preferred_language`, else the `default_language` config (the
    user's default voice language), else the UI locale.
 3. **Speaker label**: `speaker_id.score_wav` against the owner profile and
-   all named third-party profiles; the transcript gets a `[Name]: ` prefix.
+   all named third-party profiles; the transcript gets a `[Name]: ` prefix. The
+   embedding extractor is PRE-WARMED in the background at `voice_call_start`
+   (`speaker_id.prewarm`, only when a profile exists) - otherwise it lazy-loads on
+   the first `score_wav` and the owner scores as `unsure`/guest for the whole
+   cold-load window (formal replies, a needless recheck, side-talk silence).
    With an enrolled profile the check is AUTHORITATIVE for delegation
    (`_speaker_ok`, see invariants). The raw score runs through
    `speaker_id.resolve_label` for IN-CALL HYSTERESIS + length-awareness (per-call

@@ -171,6 +171,20 @@ def _get_extractor():
         return _extractor
 
 
+def prewarm() -> bool:
+    """Eagerly load the embedding extractor (it is otherwise lazy on the first
+    score_wav). Called at voice-call start so the FIRST turns are scored correctly:
+    during the ~seconds cold load the owner scores as 'unsure' and is treated as a
+    guest - formal replies, a needless 'did you mean me?', side-talk silence - until
+    the extractor is warm (live solo call: the owner was mislabeled for the whole
+    cold-load window while the extractor loaded lazily). Best-effort, never raises;
+    returns True when the extractor is ready."""
+    try:
+        return _get_extractor() is not None
+    except Exception:
+        return False
+
+
 def unload() -> None:
     """Free the model (mirrors unload_whisper_model)."""
     global _extractor

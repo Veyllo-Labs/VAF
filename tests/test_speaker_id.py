@@ -376,3 +376,20 @@ def test_enroll_start_prewarms_the_engine(monkeypatch):
     sid.enroll_start("scope-a", "de")
     assert fired.wait(timeout=3.0)
     sid.enroll_abort("scope-a")
+
+
+def test_prewarm_is_failsafe_and_loads_the_extractor(monkeypatch):
+    """prewarm() eagerly loads the extractor for the FIRST voice turn; it never raises
+    and returns a bool even when the engine is unavailable (so a call start never breaks
+    on it), and delegates to the extractor singleton."""
+    # Engine unavailable -> False, no raise.
+    monkeypatch.setattr(sid, "_get_extractor", lambda: None)
+    assert sid.prewarm() is False
+    # Extractor present -> True.
+    monkeypatch.setattr(sid, "_get_extractor", lambda: object())
+    assert sid.prewarm() is True
+    # A raising extractor is swallowed (best-effort at call start).
+    def _boom():
+        raise RuntimeError("onnx blew up")
+    monkeypatch.setattr(sid, "_get_extractor", _boom)
+    assert sid.prewarm() is False

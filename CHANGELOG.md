@@ -68,6 +68,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **The voice agent recognizes you from the first words of a call.** The voice-recognition
+  model is now warmed up the moment a call opens, instead of loading lazily on the first
+  thing you say. During that cold load you were briefly treated as an unknown speaker -
+  formal replies, a needless "did you mean me?", and it staying quiet on side-talk - until
+  the model finished loading; now you are placed correctly from the start.
 - **The agent no longer reads its own thinking out loud in a voice call.** When the local
   model announcing a delegated result leaked its internal reasoning into the text (for
   example while it was stuck), the voice could read that `<think>` reasoning aloud. It is

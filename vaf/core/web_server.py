@@ -6243,6 +6243,20 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                    # ring of recent chime-ins for dedup.
                                                    "session": (cmd.get("sessionId") or str(_conn_key)),
                                                    "chime_recent": []}
+                        # Pre-warm the speaker-ID extractor in the background: it lazy-loads
+                        # on the first score_wav (~seconds), and during that window the owner
+                        # scores as 'unsure' and is treated as a guest (formal replies, a
+                        # needless 'did you mean me?', side-talk silence) - live solo call:
+                        # the owner was mislabeled for the whole cold-load window. Loading it
+                        # now means the very first turn is scored correctly. Best-effort, off
+                        # the event loop, only when a profile exists to score against.
+                        try:
+                            from vaf.core import speaker_id as _sid_warm
+                            if _sid_warm.is_enabled() and _sid_warm.load_profile(_scope) is not None:
+                                asyncio.get_running_loop().run_in_executor(
+                                    None, _sid_warm.prewarm)
+                        except Exception:
+                            pass
                         def _any_live_subagents() -> bool:
                             """A live sub-agent (any session) holds the ONE
                             local model - no model swap may run then (a swap

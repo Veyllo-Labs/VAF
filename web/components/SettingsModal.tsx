@@ -2925,19 +2925,51 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <p className="text-xs text-gray-400">{tVoice('agentLlmLocalHint')}</p>
                                                     </>
                                                 )}
-                                                {!!(localConfig.voice_agent_provider || '') && localConfig.voice_agent_provider !== 'local' && (
-                                                    <>
-                                                        <Input
-                                                            label={tVoice('agentLlmApiModel')}
-                                                            value={localConfig.voice_agent_model || ''}
-                                                            onChange={(v: string) => handleChange('voice_agent_model', v)}
-                                                            placeholder={tVoice('agentLlmApiModelHint')}
-                                                        />
-                                                        {!localConfig[`api_key_${localConfig.voice_agent_provider}`] && (
-                                                            <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
-                                                        )}
-                                                    </>
-                                                )}
+                                                {!!(localConfig.voice_agent_provider || '') && localConfig.voice_agent_provider !== 'local' && (() => {
+                                                    // API model: dropdown of the provider's models (live /v1/models via the
+                                                    // refresh button, else the static fallback list), same source/pattern as
+                                                    // the main-agent per-provider selector. "" = provider default; a name
+                                                    // saved by an earlier version stays via Select's "(Current)" fallback.
+                                                    const vProv = localConfig.voice_agent_provider as string;
+                                                    const vp = PROVIDERS.find(pr => pr.id === vProv);
+                                                    const fetched = apiModels[vProv];
+                                                    const list = fetched && fetched.length > 0 ? fetched : (vp?.staticModels || []);
+                                                    const hasKey = !!localConfig[`api_key_${vProv}`];
+                                                    const seen = new Set<string>();
+                                                    return (
+                                                        <>
+                                                            <div className="flex gap-2 items-end">
+                                                                <div className="flex-1">
+                                                                    <Select
+                                                                        label={tVoice('agentLlmApiModel')}
+                                                                        value={localConfig.voice_agent_model || ''}
+                                                                        onChange={(v: string) => handleChange('voice_agent_model', v)}
+                                                                        options={[
+                                                                            { value: '', label: tVoice('agentLlmApiModelDefault') },
+                                                                            ...list
+                                                                                .filter(m => { if (!m || seen.has(m)) return false; seen.add(m); return true; })
+                                                                                .map(m => ({ value: m, label: m })),
+                                                                        ]}
+                                                                    />
+                                                                </div>
+                                                                <button
+                                                                    onClick={() => handleFetchModels(vProv)}
+                                                                    className={cn(
+                                                                        "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                                                                        fetchingProvider === vProv && "animate-pulse"
+                                                                    )}
+                                                                    title={tAi('fetchModels')}
+                                                                    disabled={!hasKey}
+                                                                >
+                                                                    <RefreshCw size={18} className={cn(fetchingProvider === vProv && "animate-spin")} />
+                                                                </button>
+                                                            </div>
+                                                            {!hasKey && (
+                                                                <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
+                                                            )}
+                                                        </>
+                                                    );
+                                                })()}
                                                 <p className="text-xs text-gray-500">{tVoice('agentLlmDesc')}</p>
                                             </div>
                                             <p className="text-xs text-gray-500">{tVoice('providerDesc')}</p>

@@ -366,6 +366,7 @@
       "agentLlmLocalHint": "Wähle eine heruntergeladene Modelldatei; der empfohlene Gemma 4 E4B wird bei Auswahl automatisch geladen (ca. 5,4 GB). Der eine lokale Server wechselt das Modell: Voice-Modell während des Calls, Main-Modell während eine delegierte Aufgabe läuft - nie zwei gleichzeitig.",
       "agentLlmApiModel": "API-Modell",
       "agentLlmApiModelHint": "Leer = Standardmodell des Anbieters",
+      "agentLlmApiModelDefault": "Standardmodell des Anbieters",
       "agentLlmKeyHint": "Dieser Anbieter benötigt einen API-Schlüssel. Hinterlege ihn unter Allgemein > API-Schlüssel.",
       "agentLlmDesc": "Das Sprachmodell der ersten Ebene im Live-Call. \"Wie Main-Agent\" teilt sich das Modell mit dem Main-Agent; ein eigenes Modell oder ein API-Anbieter macht den Call unabhängiger und oft natürlicher.",
       "elevenKeyHint": "ElevenLabs benötigt einen API-Schlüssel. Hinterlege ihn unter Allgemein > API-Schlüssel.",

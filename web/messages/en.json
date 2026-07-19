@@ -366,6 +366,7 @@
       "agentLlmLocalHint": "Pick a downloaded model file; the recommended Gemma 4 E4B is fetched automatically when selected (about 5.4 GB). The one local server swaps models: the voice model during the call, the main model while a delegated task runs - never both at once.",
       "agentLlmApiModel": "API model",
       "agentLlmApiModelHint": "Empty = provider default model",
+      "agentLlmApiModelDefault": "Provider default model",
       "agentLlmKeyHint": "This provider needs an API key. Add it under General > API keys.",
       "agentLlmDesc": "The language model of the live call's first layer. \"Same as main agent\" shares the model with the main agent; a dedicated model or an API provider makes the call more independent and often more natural.",
       "elevenKeyHint": "ElevenLabs requires an API key. Set it under General > API Keys.",

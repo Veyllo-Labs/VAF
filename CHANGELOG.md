@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a16] - 2026-07-19
+
 ### Added
 - **The agent recovers when a call misreads your voice, instead of ignoring you.** In a
   room with other people, the voice check can briefly lose track of who is the owner (a

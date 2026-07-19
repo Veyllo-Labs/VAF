@@ -41,13 +41,16 @@ _MAX_HISTORY_TURNS = 16          # history ENTRIES (user+assistant pairs -> 8
                                  # (live report). Matches the 16-entry store
                                  # cap in web_server.
 _SILENT_MARKER = "<silent/>"     # model-facing: "this was not addressed to me"
-# deepseek-v4 sometimes emits its chain-of-thought as PLAIN content (no
-# <think> sentinels, so the stream filter cannot catch it) - in English,
-# opening with parser-style meta phrases. On a non-English call such an
-# opener is that leak, never a real answer.
+# deepseek-v4 (and weak local models like Gemma) sometimes emit their chain-of-thought
+# as PLAIN content (no <think> sentinels, so the stream filter cannot catch it) - in
+# English, opening with parser-style meta phrases. On a non-English call such an opener
+# is that leak, never a real answer. A leading connective (but/so/and/well/okay/...) is
+# swallowed first: a live leak "But we need to check: The user might be" slipped through
+# because the ^-anchored opener saw "But" and did not match.
 _META_REASONING_RE = re.compile(
-    r"^(we need to|let me |let's |the user('s)?\b|okay, the user|i need to |"
-    r"i should |first, |parsing |so the user)", re.I)
+    r"^(?:but |so |and |well[,.]?\s*|okay[,.]?\s*|hmm[,.]?\s*|actually[,.]?\s*)*"
+    r"(we need to|we should|we have to|we must |let me |let's |the user('s)?\b|"
+    r"okay, the user|i need to |i should |first, |parsing |so the user)", re.I)
 # Language-independent leak fingerprint: a real spoken answer never mentions
 # the labeling machinery (live incident: 'Wir haben einen Sprecher mit dem
 # Label "[unsicher]". Der Nutzer ist Mert, ...' was read aloud).
@@ -1176,10 +1179,19 @@ def _cap_spoken(text: str) -> str:
     return capped
 
 
+# Chain-of-thought tag variants different models use (deepseek/Qwen <think>, others
+# <thinking>/<reasoning>/<scratchpad>/...). ANYTHING inside such a tag is a thought and
+# must never be spoken. Matched case-insensitively, with a word boundary so <think> does
+# not also strip an unrelated <thinker>, and [^>]* so attributes (<think foo="1">) are
+# tolerated.
+_REASONING_TAG = (r"think|thinking|thought|thoughts|reasoning|reason|"
+                  r"redacted_reasoning|scratchpad|reflection|analysis")
+
+
 def _strip_reasoning(text: str) -> str:
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I)
-    text = re.sub(r"<redacted_reasoning>.*?</redacted_reasoning>", "", text, flags=re.S | re.I)
-    # Truncated stream: an UNCLOSED think-block swallows everything after it -
-    # spoken thoughts are worse than a short answer, so drop to the end.
-    text = re.sub(r"<think>.*$", "", text, flags=re.S | re.I)
+    # Closed reasoning block of ANY variant (the close tag must match the open via \1).
+    text = re.sub(rf"<({_REASONING_TAG})\b[^>]*>.*?</\1\s*>", "", text, flags=re.S | re.I)
+    # Truncated stream: an UNCLOSED reasoning block swallows everything after it -
+    # spoken thoughts are worse than a short answer, so drop from the opener to the end.
+    text = re.sub(rf"<({_REASONING_TAG})\b[^>]*>.*$", "", text, flags=re.S | re.I)
     return text.strip()

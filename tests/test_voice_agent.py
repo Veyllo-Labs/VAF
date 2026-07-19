@@ -802,6 +802,39 @@ def test_plain_cot_leak_dropped_to_fallback(monkeypatch):
     assert "parse" not in res["reply"]
 
 
+def test_reasoning_tags_all_variants_stripped():
+    """Anything inside a chain-of-thought tag is NEVER spoken - not only <think> but the
+    variants other models use (<thinking>/<reasoning>/<scratchpad>/...), closed or
+    truncated-unclosed, with attributes tolerated; an unrelated word like 'Denker' or a
+    real answer is left intact."""
+    s = va._strip_reasoning
+    assert s("<think>plan</think>Antwort") == "Antwort"
+    assert s("<thinking>plan</thinking>Antwort") == "Antwort"
+    assert s("<reasoning>step</reasoning>Klar") == "Klar"
+    assert s("<scratchpad>x</scratchpad>Los") == "Los"
+    assert s('<think foo="1">y</think>Text') == "Text"
+    assert s("<thinking>never closed and cut off") == ""      # unclosed -> all dropped
+    assert s("Der Denker kam vorbei.") == "Der Denker kam vorbei."  # not a tag
+    assert s("Ganz normale Antwort.") == "Ganz normale Antwort."
+
+
+def test_cot_leak_with_leading_connective_dropped(monkeypatch):
+    """Live incident 18:58: a CoT leak 'But we need to check: The user might be' was
+    SPOKEN because the leak opener was preceded by 'But' and the ^-anchored regex missed
+    it. A leading connective is now swallowed, so the reasoning is dropped to the nudge."""
+    _cfg(monkeypatch)
+    _FakeBackend.script = ["But we need to check: The user might be asking for a fact"]
+    res = va.voice_reply("Erzaehl mir mal ein Fakt", scope_id="s", lang="de")
+    assert "we need to check" not in res["reply"].lower()
+    assert "the user" not in res["reply"].lower()
+    from vaf.core import vocab
+    assert res["reply"] in vocab.phrasings("voice_tangled", "de")
+    # A legit answer that merely starts with "But" is NOT dropped.
+    _FakeBackend.script = ["Butter kaufen wir morgen frueh."]
+    res = va.voice_reply("Was kaufen wir?", scope_id="s", lang="de")
+    assert res["reply"] == "Butter kaufen wir morgen frueh."
+
+
 def test_plain_cot_with_trailing_answer_salvages_answer(monkeypatch):
     _cfg(monkeypatch)
     _FakeBackend.script = [

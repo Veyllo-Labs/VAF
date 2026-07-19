@@ -68,6 +68,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **The voice agent no longer speaks a stray fragment of its own reasoning.** Two cases are
+  now covered: a model's thinking wrapped in a tag is always removed before anything is
+  spoken - not only `<think>` but the variants other models use (`<thinking>`,
+  `<reasoning>`, `<scratchpad>`, and more), whether the tag is closed or the stream was cut
+  off mid-thought; and when a weak model leaks its thinking as PLAIN text (no tag) starting
+  with a connective like "But we need to check: the user might be...", the filter now looks
+  past a leading "but/so/and/well/okay" and drops the fragment to a short "say that again"
+  instead of reading it aloud.
 - **The voice agent recognizes you from the first words of a call.** The voice-recognition
   model is now warmed up the moment a call opens, instead of loading lazily on the first
   thing you say. During that cold load you were briefly treated as an unknown speaker -

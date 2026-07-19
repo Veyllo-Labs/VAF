@@ -56,6 +56,37 @@ def test_classify_three_tiers():
     assert sid.classify(0.22) == "other"
 
 
+def test_resolve_label_hysteresis_and_length_awareness():
+    """In-call owner hysteresis + length-awareness (threshold 0.60, band 0.05:
+    floor 0.55, so a clear other is score < 0.47)."""
+    def S(**k):
+        return {"score": 0.5, "net_seconds": 2.5, **k}
+    # a confident self verifies (refreshes the sticky window)
+    r = sid.resolve_label(S(label="self", score=0.7), sticky_self=False)
+    assert (r["label"], r["speaker_ok"], r["confident"]) == ("self", True, "self")
+    # a named third party flips + breaks sticky (anti-spoofing on a real other)
+    r = sid.resolve_label(S(label="named", name="Bob", score=0.7), sticky_self=True)
+    assert (r["label"], r["speaker_ok"], r["confident"]) == ("named", False, "other")
+    # a reliable-length clear other (well below the band) flips even while sticky
+    r = sid.resolve_label(S(label="other", score=0.30, net_seconds=2.5), sticky_self=True)
+    assert (r["label"], r["speaker_ok"], r["confident"]) == ("other", False, "other")
+    # a MARGINAL other while sticky stays the owner; without sticky it does not
+    assert sid.resolve_label(S(label="other", score=0.50), sticky_self=True)["speaker_ok"] is True
+    assert sid.resolve_label(S(label="other", score=0.50), sticky_self=False)["speaker_ok"] is False
+    # length-awareness: a SHORT (<1.5s) low score is NOT a clear other -> sticky holds
+    r = sid.resolve_label(S(label="other", score=0.30, net_seconds=1.1), sticky_self=True)
+    assert (r["label"], r["speaker_ok"], r["confident"]) == ("self", True, "borderline")
+    # unsure while sticky -> owner; a missing score (too-short) while sticky -> owner
+    assert sid.resolve_label(S(label="unsure", score=0.57), sticky_self=True)["speaker_ok"] is True
+    assert sid.resolve_label(None, sticky_self=True)["speaker_ok"] is True
+    # a missing score with NO sticky stays a non-owner with no label (unchanged)
+    r = sid.resolve_label(None, sticky_self=False)
+    assert (r["label"], r["speaker_ok"]) == (None, False)
+    # a short self still verifies (short clips score lower, so clearing the bar is strong)
+    r = sid.resolve_label(S(label="self", score=0.62, net_seconds=1.1), sticky_self=False)
+    assert (r["label"], r["speaker_ok"], r["confident"]) == ("self", True, "self")
+
+
 def test_label_prefix():
     assert sid.label_prefix({"label": "self"}, "Mert") == "[Mert]: "
     assert sid.label_prefix({"label": "other"}) == "[anderer_Sprecher]: "

@@ -6453,29 +6453,47 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     _display = (_prof.get("meta") or {}).get("display_name", "Ich")
                                     _score = await loop.run_in_executor(
                                         None, lambda: _vsid.score_wav(_wav, _call["scope"]))
-                                    if _score:
-                                        _label = _score.get("label")
-                                        _text = _vsid.label_prefix(_score, _display) + _text
-                                        _speaker_ok = _label == "self"
-                                        if not _speaker_ok:
-                                            # Non-owner turn: let speaker_confirm decide
-                                            # whether to queue ONE confirmation
-                                            # (messenger/web) without interrupting the
-                                            # call - a spoofing check when this speaker
-                                            # CLAIMS to be the owner (transcript), or a
-                                            # restrained adaptive reclaim on a plain
-                                            # unsure. The transcript + owner name drive
-                                            # that decision.
-                                            try:
-                                                from vaf.core import speaker_confirm as _vsc
-                                                _vuname = manager.get_connection_username(websocket) or "admin"
-                                                await loop.run_in_executor(
-                                                    None, lambda: _vsc.maybe_request_confirmation(
-                                                        _call["scope"], _vuname, _wav, _score,
-                                                        session_id=cmd.get("sessionId") or "",
-                                                        transcript=_text, owner_name=_display))
-                                            except Exception:
-                                                pass
+                                    # In-call owner hysteresis + length-awareness
+                                    # (speaker_id.resolve_label): a confident self
+                                    # verifies and makes following borderline/short/
+                                    # missing scores count as the owner for
+                                    # STICKY_WINDOW_S; a clear stranger (reliable-length
+                                    # "other" well below the band, or a named match)
+                                    # flips immediately. Owner-approved bridged action
+                                    # gate: a short reply right after a confident self
+                                    # may still act. Runs even when score_wav returned
+                                    # None (too-short clip) so a quick clip does not
+                                    # demote a just-verified owner.
+                                    _now_s = time.monotonic()
+                                    _last_self = _call.get("last_self_ts")
+                                    _sticky = (_last_self is not None
+                                               and (_now_s - _last_self) <= _vsid.STICKY_WINDOW_S)
+                                    _res = _vsid.resolve_label(_score, sticky_self=_sticky)
+                                    _label = _res.get("label")
+                                    _speaker_ok = bool(_res.get("speaker_ok"))
+                                    if _res.get("confident") == "self":
+                                        _call["last_self_ts"] = _now_s
+                                    elif _res.get("confident") == "other":
+                                        _call["last_self_ts"] = None
+                                    if _label:
+                                        _text = _vsid.label_prefix(_res, _display) + _text
+                                    if not _speaker_ok:
+                                        # Non-owner turn: let speaker_confirm decide
+                                        # whether to queue ONE confirmation (messenger/
+                                        # web) without interrupting the call - a spoofing
+                                        # check when this speaker CLAIMS to be the owner
+                                        # (transcript), or a restrained adaptive reclaim
+                                        # on a plain unsure.
+                                        try:
+                                            from vaf.core import speaker_confirm as _vsc
+                                            _vuname = manager.get_connection_username(websocket) or "admin"
+                                            await loop.run_in_executor(
+                                                None, lambda: _vsc.maybe_request_confirmation(
+                                                    _call["scope"], _vuname, _wav, _score,
+                                                    session_id=cmd.get("sessionId") or "",
+                                                    transcript=_text, owner_name=_display))
+                                        except Exception:
+                                            pass
                         except Exception:
                             pass
 

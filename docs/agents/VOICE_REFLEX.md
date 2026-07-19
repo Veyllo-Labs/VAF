@@ -162,10 +162,13 @@ Guests may talk to the agent and get answers to factual questions, but:
 - the agent NEVER reveals the owner's private context/memory to a guest, and
 - the agent NEVER runs a tool-call or delegation for a guest.
 
-Identity comes from the voice: only a voice-verified owner (`label == self`) may create
-work. The fail-closed gate `_speaker_ok` (`web_server.py`) and the delegate
-drop when `not speaker_ok` (`voice_agent.py`) stay exactly as they are. A guest's
-turn may reach the LLM with `speaker_ok=False` (it can speak, it cannot act).
+Identity comes from the voice: only a voice-verified owner may create work. `_speaker_ok`
+is derived by `speaker_id.resolve_label` with in-call hysteresis - a confident `self`
+verifies and bridges following borderline/short scores for a bounded window, while a CLEAR
+stranger (reliable-length `other` well below the band, or a named match) flips immediately
+(see [VOICE_AGENT.md](VOICE_AGENT.md) invariant 1) - and the delegate drop when `not
+speaker_ok` (`voice_agent.py`) is unchanged. A clear guest's turn reaches the LLM with
+`speaker_ok=False` (it can speak, it cannot act).
 
 **Guest privacy (Phase 1, implemented).** A guest who addresses the agent already gets a
 spoken reply, but `voice_reply` used to build that reply with the owner's chat digest
@@ -247,8 +250,12 @@ The reflex system is broadly multilingual, with a few layers that are language-s
   `voice_agent.is_exclusive`). The policy layer is non-llama (rules/embeddings/onnx),
   CPU only. A model swap is a full reload (kills the prompt cache) and is never used for
   a per-utterance decision.
-- **Anti-spoofing is absolute.** Only `label == self` may create work; `_speaker_ok` is
-  fail-closed. Guests speak, never act.
+- **Anti-spoofing.** Only a VOICE-VERIFIED owner may create work; `_speaker_ok` is
+  fail-closed. Verification is STICKY within a call (a confident `self` bridges following
+  borderline/short scores for a bounded window - an owner-approved usability trade-off; a
+  clearly different voice, a reliable-length `other` well below the band or a named match,
+  always flips). See [VOICE_AGENT.md](VOICE_AGENT.md) invariant 1. A clear guest speaks,
+  never acts.
 - **User isolation.** The rolling transcript buffer, guest state and awareness state key
   on session/scope, never process-global.
 - **Reasoning never reaches TTS**; a local reasoning model answers, it does not think

@@ -319,6 +319,60 @@ def classify(score: float) -> str:
     return "other"
 
 
+# In-call owner hysteresis + length-awareness (docs/agents/VOICE_AGENT.md speaker
+# section). A whole-clip score is unreliable on SHORT utterances (the eres2net
+# embedding of ~1-1.5s scores noisily), so the owner's own quick replies often dip
+# into the "other" range and flip them to a guest mid-conversation. resolve_label
+# smooths that WITHOUT lowering the impostor bar: once the owner is confidently
+# verified in a call, borderline/short/missing scores keep them the owner for a
+# bounded window; a CLEAR stranger (a reliable-length "other" well below the band,
+# or a named third-party match) always flips immediately and breaks the sticky.
+STICKY_WINDOW_S = 90.0       # a confident self keeps borderline clips "self" this long
+_MIN_RELIABLE_SECONDS = 1.5  # below this net speech, a whole-clip "other" is low-confidence
+_STICKY_FLIP_MARGIN = 0.08   # a reliable "other" must fall this far below (t-b) to flip a
+                             # verified owner (a guest scores well below; the owner's short
+                             # dips sit just under the band). PROVISIONAL - live-calibrate.
+
+
+def resolve_label(score_result: Optional[Dict], *, sticky_self: bool) -> Dict:
+    """Apply in-call owner hysteresis + length-awareness to a raw score_wav result.
+
+    Returns a label_prefix-compatible dict plus `speaker_ok` and `confident`
+    ('self' | 'other' | 'borderline'): the caller updates its per-call sticky state
+    from `confident` (self -> refresh, other -> clear, borderline -> coast).
+
+    - a clear `self` verifies (speaker_ok True, confident 'self');
+    - a `named` match, or a reliable-length `other` more than _STICKY_FLIP_MARGIN
+      below the band floor, is a CLEAR stranger: speaker_ok False, confident 'other'
+      (breaks the sticky) - anti-spoofing on a real other is unchanged;
+    - anything in between (`unsure`, a marginal or short/low-confidence `other`, or a
+      missing/too-short score) is the OWNER only when `sticky_self` is set (a recent
+      confident self this call), else a non-owner as before. A short `self` still
+      verifies - short clips score LOWER, so clearing the bar on one is if anything
+      stronger evidence."""
+    t = _threshold()
+    floor = t - _band()
+    if not score_result:  # no score: too-short clip / scoring failed - evidence-less
+        if sticky_self:
+            return {"label": "self", "speaker_ok": True, "confident": "borderline"}
+        return {"label": None, "speaker_ok": False, "confident": "borderline"}
+    label = score_result.get("label")
+    score = score_result.get("score")
+    net = score_result.get("net_seconds") or 0.0
+    if label == "self":
+        return {**score_result, "label": "self", "speaker_ok": True, "confident": "self"}
+    if label == "named":
+        return {**score_result, "label": "named", "speaker_ok": False, "confident": "other"}
+    clear_other = (label == "other" and net >= _MIN_RELIABLE_SECONDS
+                   and score is not None and score < floor - _STICKY_FLIP_MARGIN)
+    if clear_other:
+        return {**score_result, "label": "other", "speaker_ok": False, "confident": "other"}
+    # borderline: unsure, or a marginal / short / low-confidence "other"
+    if sticky_self:
+        return {**score_result, "label": "self", "speaker_ok": True, "confident": "borderline"}
+    return {**score_result, "label": label, "speaker_ok": False, "confident": "borderline"}
+
+
 # ---------------------------------------------------------------------------
 # Profile store (per user_scope_id; explicit enrollment only)
 # ---------------------------------------------------------------------------

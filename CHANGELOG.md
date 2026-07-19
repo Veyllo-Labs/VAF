@@ -30,6 +30,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **The agent stops mistaking you for a stranger mid-call on short replies.** In a voice
+  call, once it has clearly recognized your voice, a brief or noisy follow-up ("ja", "at
+  three") no longer flips you to an unknown speaker and locks you out of acting - your
+  recognition stays "sticky" for a while after it verifies you. A clearly different voice
+  still switches immediately, so it does not weaken the guard against someone else acting
+  as you.
 - **The local voice model now starts on Apple Silicon Macs.** The recommended local
   German voice model (Gemma) could fail to start on macOS/Metal with only "Server failed
   to start" and an empty log. A fallback for the quantized cache existed but never fired:

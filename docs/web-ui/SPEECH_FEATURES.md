@@ -303,6 +303,15 @@ Hard rules:
   never trigger a profile write - authorization always comes from the
   authenticated owner, not from audio.
 
+The per-turn label is stabilized by IN-CALL HYSTERESIS (`speaker_id.resolve_label`,
+per-call `last_self_ts`): once the owner is confidently verified in a call, a
+following borderline/short/missing score keeps them the owner for `STICKY_WINDOW_S`,
+so their own quick replies do not flicker to `[anderer_Sprecher]` (a clip below
+~1.5s scores too noisily to trust a downgrade). A CLEAR stranger - a reliable-length
+`other` well below the band, or a named match - flips immediately and ends the sticky.
+This never lowers the impostor bar for a clearly different voice; it is an
+owner-approved usability trade-off for the borderline band right after the owner spoke.
+
 Confirmation flow (`vaf/core/speaker_confirm.py`, gated by
 `speaker_id_confirmation_enabled`) has TWO trigger paths, both scoped to a
 non-owner turn (`label != self`) and both throttled to max one pending question

@@ -80,7 +80,13 @@ Read this before changing: `vaf/core/voice_agent.py`, `vaf/core/voice_model.py`
 3. **Speaker label**: `speaker_id.score_wav` against the owner profile and
    all named third-party profiles; the transcript gets a `[Name]: ` prefix.
    With an enrolled profile the check is AUTHORITATIVE for delegation
-   (`_speaker_ok`, see invariants). A non-owner turn may queue a confirmation
+   (`_speaker_ok`, see invariants). The raw score runs through
+   `speaker_id.resolve_label` for IN-CALL HYSTERESIS + length-awareness (per-call
+   `last_self_ts`): a confident `self` verifies and, for `STICKY_WINDOW_S`, keeps a
+   following borderline/short/missing score as the owner (short clips score too
+   noisily to trust a downgrade), while a CLEAR stranger (reliable-length `other`
+   well below the band, or a named match) flips immediately - so the owner's own
+   quick replies stop flickering to a guest. A non-owner turn may queue a confirmation
    question (`speaker_confirm.maybe_request_confirmation`) without interrupting
    the call: promptly if the speaker CLAIMS to be the owner (a spoofing check),
    or, restrained, on a plain "unsure" score (adaptive reclaim). See the
@@ -145,14 +151,21 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
 
 ## Invariants (each one exists because a live incident taught it)
 
-1. **Voice-gated delegation (anti-spoofing).** With an enrolled profile, only
-   a turn verified as the OWNER (`label == "self"`) may create main-agent
-   work. `web_server` computes `_speaker_ok` fail-closed (profile present ->
-   False until proven "self"; unsure/other/failed scoring stay False) and
-   `voice_reply(speaker_ok=False)` drops any delegate marker in CODE. The
-   system prompt additionally pins: the label comes from voice verification
-   and outranks spoken claims ("I am Mert" from `[anderer_Sprecher]` stays
-   another speaker). Named third-party profiles are known but never
+1. **Voice-gated delegation (anti-spoofing).** With an enrolled profile, only a
+   VOICE-VERIFIED owner may create main-agent work. `web_server` derives
+   `_speaker_ok` from `speaker_id.resolve_label`, fail-closed (profile present ->
+   False until verified). Verification is STICKY within a call (per-call
+   `last_self_ts`): a confident `self` verifies, and for `STICKY_WINDOW_S` a
+   following borderline/short/missing score keeps the owner verified, so their own
+   quick replies do not flicker to a guest (a clip below ~1.5s scores too noisily to
+   trust a downgrade). A CLEAR stranger flips immediately: a reliable-length `other`
+   well below the band, or a named third-party match, drops `_speaker_ok` and breaks
+   the sticky. `voice_reply(speaker_ok=False)` still drops any delegate marker in
+   CODE, and the prompt pins that the voice label outranks spoken claims ("I am Mert"
+   from `[anderer_Sprecher]` stays another speaker). The sticky window is a
+   deliberate, owner-approved usability/anti-spoofing trade-off: a guest speaking in
+   the borderline band immediately after the owner can inherit the window, but a
+   clearly different voice cannot. Named third-party profiles are known but never
    authorized.
 2. **No delegation while the main agent works.** The frontend sends
    `main_busy` + `pending_task`; the prompt carries a busy block and the code

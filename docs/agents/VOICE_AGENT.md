@@ -184,7 +184,11 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    `<think>` sentinel chunks; the streaming walker drops them (handles open
    and close in one chunk), `_strip_reasoning` also removes UNCLOSED blocks
    (truncation), the token budget leaves room to finish thinking, and an
-   all-reasoning reply degrades to a short spoken fallback.
+   all-reasoning reply degrades to a short spoken fallback. The delegated-result
+   announcement (`voice_call_speak`) applies the same `_strip_reasoning` before it
+   speaks or stores the main agent's text, so a stuck or thinking-leaking local
+   main model never has its `<think>` reasoning read aloud (an all-reasoning
+   result becomes empty and simply produces no audio).
 4. **Small talk stays out of the chat.** Only delegations appear in the chat;
    the conversation itself lives in audio. A delegation renders as its own
    thing, not as a typed user message: a red-ringed bubble with a soft static

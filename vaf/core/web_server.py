@@ -6984,6 +6984,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # reacts to it. Falls back to captions-only (audio=null).
                         _text = (cmd.get("text") or "").strip()
                         if type == "voice_call_speak" and _text:
+                            # Strip any reasoning the main model leaked into the result
+                            # content (<think>...</think>, or an UNCLOSED block on a stuck/
+                            # truncated stream): reasoning must NEVER reach TTS (VOICE_AGENT.md
+                            # invariant 3) and must not pollute the call history either. This
+                            # also guards the stuck-local-model case where the streamed
+                            # content is thinking-only.
+                            try:
+                                from vaf.core.voice_agent import _strip_reasoning as _srx
+                                _text = _srx(_text)
+                            except Exception:
+                                pass
                             # A delegated result is being announced: the voice
                             # agent's own call history must know it, or on the
                             # next turn it still believes the task is running

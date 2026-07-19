@@ -36,6 +36,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   question. The claim detection is multilingual.
 
 ### Fixed
+- **The agent no longer reads its own thinking out loud in a voice call.** When the local
+  model announcing a delegated result leaked its internal reasoning into the text (for
+  example while it was stuck), the voice could read that `<think>` reasoning aloud. It is
+  now stripped before anything is spoken or stored, so you only ever hear the actual answer.
 - **A voice-call reply in another language is now spoken by that language's voice.** When the
   agent answers in a different language than you spoke (e.g. Turkish in a German conversation),
   it uses a matching voice for that language instead of speaking it with your usual voice -

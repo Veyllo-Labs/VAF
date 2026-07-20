@@ -401,6 +401,53 @@ def test_resume_module_spawns_no_threads():
     assert "Thread(" not in src
 
 
+def test_run_state_says_running_only_for_a_live_task_of_this_session(ipc):
+    """The Workflow Runtime panel is driven by fire-and-forget events, so when the socket dies
+    mid-run the panel sits on its last received state forever. This is the query that lets it
+    ask instead of guess (live incident 2026-07-20)."""
+    sid = ipc.create_task("workflow:research_and_document", "run", session_id="sess-a")
+    ipc.mark_task_running(sid)
+
+    assert ipc.workflow_run_state_for_session("sess-a") == "running"
+    assert ipc.workflow_run_state_for_session("sess-a", "research_and_document") == "running"
+    # Rule 4.4: another session must never be told about this run.
+    assert ipc.workflow_run_state_for_session("sess-b") == "ended"
+    # A DIFFERENT workflow in the same session is a different run: two can be live at once,
+    # so an id-less answer could keep a dead panel alive or tear a live one down.
+    assert ipc.workflow_run_state_for_session("sess-a", "some_other_wf") == "ended"
+
+
+def test_run_state_reports_paused_and_falls_back_to_closable(ipc):
+    ipc.pause_workflow(_record("wf-a", "sess-a"))
+    assert ipc.workflow_run_state_for_session("sess-a") == "paused"
+    # No session at all: never scan globally, and never leave a panel unclosable.
+    assert ipc.workflow_run_state_for_session("") == "ended"
+    assert ipc.workflow_run_state_for_session(None) == "ended"
+
+
+def test_run_state_ignores_non_workflow_tasks(ipc):
+    """A plain sub-agent is not a workflow run; reporting it as one would keep the panel
+    alive for something it is not showing."""
+    tid = ipc.create_task("document_agent", "write", session_id="sess-a")
+    ipc.mark_task_running(tid)
+    assert ipc.workflow_run_state_for_session("sess-a") == "ended"
+
+
+def test_the_panel_never_invents_an_outcome():
+    """The neutral verdict must stay neutral all the way into the UI: 'ended' means the run
+    is over, NOT that it succeeded or failed. Turning it into either is exactly the class of
+    bug this whole change set is about."""
+    store = (_REPO / "web/components/workflows/stores/workflowStore.ts").read_bytes().decode("utf-8")
+    assert "'ended'" in store
+    # The allDone rule must not be able to rewrite the neutral state into a green one.
+    assert "const isTerminal = wfStatus === 'completed' || wfStatus === 'failed' || wfStatus === 'ended';" in store
+    assert "if (!isTerminal) {" in store
+    # 'paused' must stay resurrectable, or a resumed run could never advance the panel.
+    reconcile = store[store.index("reconcileWorkflow: (verdict)"):]
+    assert "wf.status === 'completed' || wf.status === 'failed' || wf.status === 'ended'" in reconcile
+    assert "'paused'" in reconcile
+
+
 def test_workflow_result_carries_the_awaited_agent():
     r = WorkflowResult(
         success=False, outputs={}, final_output=None, steps=[], total_duration=0.0,

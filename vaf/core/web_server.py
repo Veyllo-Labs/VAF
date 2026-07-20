@@ -5005,6 +5005,41 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "error": str(e)
                         })
 
+                elif type == "get_workflow_run_state":
+                    # "Is the run my panel is showing actually still going?"
+                    #
+                    # Workflow panel events are fire and forget (no queue, no replay, no
+                    # sequence numbers), so a socket that dies mid-run leaves the panel stuck
+                    # on the last state it received, with no way for the client to detect the
+                    # gap (live incident 2026-07-20). This is how it asks instead of guessing.
+                    #
+                    # Scoped to the session the CLIENT names, verified against the connection's
+                    # own subscription (Rule 4.4): a fresh connection is auto-subscribed to the
+                    # newest session, so answering from the connection alone would report about
+                    # a different run than the one on screen.
+                    _rs_req = str(data.get("sessionId") or "").strip()
+                    _rs_conn = str(manager.get_session_for_connection(websocket) or "").strip()
+                    _rs_session = _rs_req or _rs_conn
+                    _rs_wf = str(data.get("workflowId") or "").strip()
+                    _rs_template = str(data.get("templateId") or "").strip()
+                    try:
+                        if _rs_req and _rs_conn and _rs_req != _rs_conn:
+                            # Never answer about a session this connection is not on.
+                            _rs_state = "unknown"
+                        else:
+                            from vaf.core.subagent_ipc import get_ipc as _rs_get_ipc
+                            _rs_state = _rs_get_ipc().workflow_run_state_for_session(
+                                _rs_session, _rs_template
+                            )
+                    except Exception:
+                        _rs_state = "unknown"
+                    await websocket.send_json({
+                        "type": "workflow_run_state",
+                        "workflowId": _rs_wf,
+                        "sessionId": _rs_session,
+                        "state": _rs_state,   # running | paused | ended | unknown
+                    })
+
                 elif type == "create_workflow":
                     from vaf.core.config import get_local_admin_scope_id
                     _wf_scope       = manager.get_connection_user(websocket)

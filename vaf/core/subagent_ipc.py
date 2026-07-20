@@ -622,6 +622,59 @@ class SubAgentIPC:
             return False
         return False
 
+    def workflow_run_state_for_session(self, session_id: str, template_id: str = "") -> str:
+        """Is a workflow run still going for this session? -> "running" | "paused" | "ended".
+
+        The Web UI's Workflow Runtime panel is driven by fire-and-forget events: no queue, no
+        replay, no sequence numbers. If the browser socket dies mid-run, every later event is
+        broadcast to zero subscribers and the panel sits on the last state it happened to
+        receive - forever (live incident 2026-07-20: "step 1 running, 50 percent", long after
+        the run had finished). The client cannot even detect the gap, so it has to be able to
+        ASK.
+
+        template_id narrows the answer to one run. "One live workflow per session" is NOT an
+        invariant: the duplicate guard keys on agent_type = "workflow:<id>", so two different
+        workflows can be live in one session, and an id-less answer could keep a dead panel
+        alive or tear a live one down.
+
+        Returns "ended" for an unknown session rather than "running": a panel that cannot be
+        confirmed alive must become closable, never stuck. It is a NEUTRAL verdict - the
+        caller must not turn it into success or failure, because this method does not know
+        the outcome, only that nothing is running any more.
+        """
+        if not session_id:
+            return "ended"
+        try:
+            wanted = f"workflow:{template_id}" if template_id else ""
+
+            def _matches(agent_type: str) -> bool:
+                if not str(agent_type or "").startswith("workflow:"):
+                    return False
+                return (agent_type == wanted) if wanted else True
+
+            if any(_matches(getattr(t, "agent_type", ""))
+                   for t in self.get_active_tasks(session_id=session_id)):
+                return "running"
+
+            now = datetime.now().timestamp()
+            for t in self.get_pending_tasks(session_id=session_id):
+                if not _matches(getattr(t, "agent_type", "")):
+                    continue
+                try:
+                    age = now - datetime.fromisoformat(t.created_at).timestamp()
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= age <= 120:      # spawn in flight, same grace as has_live_task
+                    return "running"
+
+            for wf in self.get_paused_workflows_for_session(session_id):
+                if not template_id or wf.template_id == template_id:
+                    return "paused"
+        except Exception:
+            # Fail towards "closable": a panel the user cannot get rid of is the bug.
+            return "ended"
+        return "ended"
+
     def claim_task_slot(self, task_id: str, agent_type: str, session_id: str,
                         pending_grace_s: int = 120) -> bool:
         """

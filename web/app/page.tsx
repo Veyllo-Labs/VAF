@@ -2075,6 +2075,44 @@ function VAFDashboardContent() {
     const isWorkflowRunningRef = useRef(isWorkflowRunning);
     useEffect(() => { isWorkflowRunningRef.current = isWorkflowRunning; }, [isWorkflowRunning]);
 
+    // Ask the backend whether the run this panel shows is actually still going.
+    // Workflow panel events are fire and forget (no queue, no replay, no sequence numbers),
+    // so a socket that dies mid-run leaves the panel frozen on its last received state and
+    // the client cannot even detect the gap (live incident 2026-07-20).
+    const requestWorkflowRunState = useCallback(() => {
+        const sock = wsSocketRef.current;
+        const wf = useWorkflowStore.getState().workflow;
+        if (!sock || sock.readyState !== WebSocket.OPEN) return;
+        if (!wf || wf.status !== 'running') return;
+        try {
+            sock.send(JSON.stringify({
+                type: 'get_workflow_run_state',
+                workflowId: wf.id,
+                sessionId: currentSessionIdRef.current || undefined,
+            }));
+        } catch { /* the socket died again; the next trigger retries */ }
+    }, []);
+    const requestWorkflowRunStateRef = useRef(requestWorkflowRunState);
+    useEffect(() => { requestWorkflowRunStateRef.current = requestWorkflowRunState; }, [requestWorkflowRunState]);
+
+    // Triggers. A timer alone is not enough: browsers freeze timers in hidden tabs (and
+    // Safari suspends them outright), so "I came back to the tab" would never fire. The
+    // visibility and focus events are the ones that match what the user actually does.
+    useEffect(() => {
+        const onWake = () => requestWorkflowRunState();
+        const onVisible = () => { if (document.visibilityState === 'visible') onWake(); };
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('focus', onWake);
+        // Also on mount: a tab reload rehydrates the panel from sessionStorage, and a panel
+        // restored as "running" may be describing a run that finished long ago.
+        const t = setTimeout(onWake, 1500);
+        return () => {
+            document.removeEventListener('visibilitychange', onVisible);
+            window.removeEventListener('focus', onWake);
+            clearTimeout(t);
+        };
+    }, [requestWorkflowRunState]);
+
     // TTS State
     const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
     const [loadingMessageId, setLoadingMessageId] = useState<number | null>(null);
@@ -2423,6 +2461,12 @@ function VAFDashboardContent() {
             socket.send(JSON.stringify({ type: 'get_skills' }));    // Fetch skills (second routing tier)
             socket.send(JSON.stringify({ type: 'get_tools' }));     // Fetch tools for reference
             socket.send(JSON.stringify({ type: 'speaker_profile_get' })); // Voice profile (call button offers enrollment without one)
+            // Reconnect: a panel still showing "running" may be describing a run that ended
+            // while we were disconnected - every event in that window went to nobody.
+            // Deferred so the connection has been subscribed to a session first; asking in
+            // this handler would be answered for the auto-subscribed newest session, not the
+            // one the panel belongs to.
+            setTimeout(() => { requestWorkflowRunStateRef.current?.(); }, 1200);
         };
         socket.onmessage = (event) => {
             try {
@@ -3156,6 +3200,21 @@ function VAFDashboardContent() {
                     if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
                     const line = typeof data.line === 'string' ? data.line : '';
                     appendWorkflowLine(line);
+                }
+                else if (data.type === 'workflow_run_state') {
+                    // The backend's answer to "is the run my panel shows still going?".
+                    // Workflow panel events are fire and forget, so a socket that dies mid-run
+                    // leaves the panel on its last received state with no way to notice the
+                    // gap (live incident 2026-07-20: frozen at "step 1 running, 50%").
+                    // 'ended' is NEUTRAL on purpose: the run is over, but this answer does not
+                    // know how it turned out, so the panel must not invent success or failure.
+                    if (data.sessionId && currentSessionId && data.sessionId !== currentSessionId) return;
+                    const wfNow = useWorkflowStore.getState().workflow;
+                    if (!wfNow) return;
+                    if (data.workflowId && wfNow.id && data.workflowId !== wfNow.id) return;
+                    if (data.state === 'running' || data.state === 'paused' || data.state === 'ended') {
+                        useWorkflowStore.getState().reconcileWorkflow(data.state);
+                    }
                 }
                 else if (data.type === 'document_ready') {
                     // Read the session from the ref, not the closure: onmessage is bound once

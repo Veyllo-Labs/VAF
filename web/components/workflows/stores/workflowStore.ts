@@ -22,7 +22,10 @@ export interface VAFWorkflow {
   name: string;
   steps: VAFStep[];
   currentStepId: string | null;
-  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  // 'ended' is a NEUTRAL terminal state: the run is over but this panel never learned
+  // how it turned out (its events were lost while the socket was down). It must never be
+  // guessed into 'completed' or 'failed' - the real outcome is in the chat message.
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'ended';
 }
 
 interface WorkflowState {
@@ -40,6 +43,7 @@ interface WorkflowState {
   openWorkflow: () => void;
   closeWorkflow: () => void;
   clearWorkflow: () => void;
+  reconcileWorkflow: (verdict: 'running' | 'paused' | 'ended') => void;
 }
 
 export const useWorkflowStore = create<WorkflowState>()(
@@ -97,13 +101,21 @@ export const useWorkflowStore = create<WorkflowState>()(
         : node
     );
 
-    // Update workflow status
+    // Update workflow status.
+    // A workflow that has already reached a TERMINAL state must not be resurrected by a late
+    // frame: after a reconnect the backend's verdict is the truth, and a stale event still in
+    // flight would otherwise flip a finished panel back to "running" forever.
+    // 'paused' is deliberately NOT terminal - the CLI resume path advances it.
     let wfStatus = workflow.status;
-    if (status === 'running') wfStatus = 'running';
-    if (status === 'failed') wfStatus = 'failed';
-    // Check completion if this step succeeded
-    const allDone = newSteps.every(s => s.status === 'success' || s.status === 'skipped');
-    if (allDone) wfStatus = 'completed';
+    const isTerminal = wfStatus === 'completed' || wfStatus === 'failed' || wfStatus === 'ended';
+    if (!isTerminal) {
+      if (status === 'running') wfStatus = 'running';
+      if (status === 'failed') wfStatus = 'failed';
+      // Check completion if this step succeeded. Guarded by isTerminal above, so it can never
+      // rewrite the neutral 'ended' into a manufactured success.
+      const allDone = newSteps.every(s => s.status === 'success' || s.status === 'skipped');
+      if (allDone) wfStatus = 'completed';
+    }
 
     set({
       workflow: { ...workflow, steps: newSteps, status: wfStatus },
@@ -127,6 +139,21 @@ export const useWorkflowStore = create<WorkflowState>()(
       return { consoleLines: capped };
     });
   },
+
+  // The backend's answer to "is this run actually still going?". Used after a reconnect or
+  // when the tab becomes visible again, because workflow events are fire and forget: if the
+  // socket dies mid-run, every later event is delivered to nobody and the panel sits on the
+  // last state it happened to receive (live incident 2026-07-20: "step 1 running, 50%").
+  reconcileWorkflow: (verdict) => set(state => {
+    const wf = state.workflow;
+    if (!wf) return {};
+    if (wf.status === 'completed' || wf.status === 'failed' || wf.status === 'ended') return {};
+    if (verdict === 'running') return {};                       // nothing to correct
+    if (verdict === 'paused') return { workflow: { ...wf, status: 'paused' } };
+    // 'ended': the run is over. Do NOT invent an outcome - leave the steps as they are and
+    // mark the panel neutrally, so it can be closed and the chat message carries the result.
+    return { workflow: { ...wf, status: 'ended' } };
+  }),
 
   openWorkflow: () => set({ isOpen: true }),
   closeWorkflow: () => set({ isOpen: false }), // Keep data

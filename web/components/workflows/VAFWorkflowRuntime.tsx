@@ -36,9 +36,13 @@ const VAFWorkflowRuntime = () => {
     setEdges(initialEdges);
   }, [initialNodes, initialEdges, setNodes, setEdges]);
 
-  // Auto-close on completion
+  // Auto-close on completion. 'ended' is included: the run is over but this panel never
+  // learned how it turned out (its events were lost while the socket was down), so leaving it
+  // open would keep showing a half-finished run forever - the actual result is in the chat.
+  // 'paused' is deliberately NOT auto-closed: that run is still alive and will advance.
   useEffect(() => {
-    if (workflow?.status === 'completed' || workflow?.status === 'failed') {
+    const st = workflow?.status;
+    if (st === 'completed' || st === 'failed' || st === 'ended') {
       const timer = setTimeout(() => {
         closeWorkflow();
       }, 2500); // Auto-close after 2.5s
@@ -80,6 +84,18 @@ const VAFWorkflowRuntime = () => {
                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
              </span>
           )}
+          {/* Always closable by hand. Auto-close only fires on a terminal state, and a panel
+              that never learns it is finished used to be unclosable - on mobile it is full
+              screen, so a stuck panel locked the entire UI. */}
+          <button
+            type="button"
+            onClick={closeWorkflow}
+            aria-label="Close workflow panel"
+            title="Close"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            <X size={16} />
+          </button>
         </div>
       </div>
 
@@ -140,11 +156,17 @@ const VAFWorkflowRuntime = () => {
         <div className="flex items-center gap-2">
           <div className={cn("w-2 h-2 rounded-full",
             workflow?.status === 'running' ? "bg-indigo-500 animate-pulse" :
+            workflow?.status === 'paused' ? "bg-amber-500 animate-pulse" :
             workflow?.status === 'completed' ? "bg-green-500" :
-            workflow?.status === 'failed' ? "bg-red-500" : "bg-gray-300"
+            workflow?.status === 'failed' ? "bg-red-500" :
+            // 'ended' is neutral, not green and not red: the run is over but this panel does
+            // not know its outcome, and guessing one would be the very defect being fixed.
+            workflow?.status === 'ended' ? "bg-gray-400" : "bg-gray-300"
           )} />
           <span className="font-medium">
-            {workflow?.status?.toUpperCase() || 'IDLE'}
+            {workflow?.status === 'ended' ? 'FINISHED - SEE CHAT'
+              : workflow?.status === 'paused' ? 'WAITING FOR HELPER'
+              : (workflow?.status?.toUpperCase() || 'IDLE')}
           </span>
         </div>
         <span className="font-mono text-gray-400">{nodes.length} STEPS</span>

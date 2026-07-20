@@ -27,6 +27,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **The workflow panel no longer gets stuck showing a run that has long finished.** If the
+  connection to the browser dropped while a workflow was running, everything that happened
+  afterwards was lost, and the panel kept showing the last thing it had seen, with no way to
+  close it. It now asks the app what the real state is when the connection returns, when you
+  come back to the tab, and after a reload. If the run is over, the panel says so plainly and
+  closes instead of inventing a result. It also has a close button now, which matters on
+  phones where the panel covers the whole screen.
 - **Terminal windows opened for background work now close again on Linux.** A window opened
   for a sub-agent or a workflow announced that it was closing and then stayed on a shell
   prompt forever, because a shell was started on top of the finished task. Windows now close

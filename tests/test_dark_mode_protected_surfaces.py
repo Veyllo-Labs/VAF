@@ -28,7 +28,8 @@ _PAPER_CLASS = "vaf-doc-paper"
 
 
 def _css() -> str:
-    return _CSS.read_bytes().decode("utf-8")
+    # CRLF-normalised: git can check this out with CRLF on the Windows CI runner.
+    return _CSS.read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 def test_the_protected_surface_shares_the_light_declaration():
@@ -59,7 +60,8 @@ def test_the_dark_override_cannot_outrank_the_protected_surface():
 
 def test_the_docx_page_actually_uses_it():
     """The rule is worthless if the paper does not carry the class."""
-    src = (_REPO / "web/components/NativeDocxEditor.tsx").read_bytes().decode("utf-8")
+    src = (_REPO / "web/components/NativeDocxEditor.tsx").read_bytes().decode(
+        "utf-8").replace("\r\n", "\n")
     page_lines = [ln for ln in src.splitlines() if "pdf-page" in ln and "className" in ln]
     assert page_lines, "could not find the page element in NativeDocxEditor"
     for ln in page_lines:

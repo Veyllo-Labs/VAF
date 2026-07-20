@@ -41,7 +41,10 @@ _EVENT_TYPES = {
 
 
 def _source(rel: str) -> str:
-    return (_REPO / rel).read_bytes().decode("utf-8")
+    # Normalise line endings: git can check these files out with CRLF on the Windows CI
+    # runner, and a pattern like ")\n" then finds nothing because a \r sits in between.
+    # That is a real CI failure, not a hypothetical (2026-07-20).
+    return (_REPO / rel).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 def _payload_keys(rel: str) -> set:

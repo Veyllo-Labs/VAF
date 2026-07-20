@@ -52,7 +52,10 @@ _KNOWN_CONSUMERS = {
 def _source(rel: str) -> str:
     # read_bytes().decode("utf-8"): 77 first-party files are not cp1252-decodable, so a bare
     # read_text() passes on Linux and fails on the Windows CI runner only (house rule).
-    return (_REPO / rel).read_bytes().decode("utf-8")
+    # Normalise line endings: git can check these files out with CRLF on the Windows CI
+    # runner, and a pattern like ")\n" then finds nothing because a \r sits in between.
+    # That is a real CI failure, not a hypothetical (2026-07-20).
+    return (_REPO / rel).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 def test_paused_message_does_not_read_as_an_error():

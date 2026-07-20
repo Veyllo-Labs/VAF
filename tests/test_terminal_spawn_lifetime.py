@@ -34,8 +34,10 @@ _REPO = Path(__file__).resolve().parents[1]
 
 def _source(rel: str) -> str:
     # read_bytes().decode("utf-8"): vaf/core/platform.py is not cp1252-decodable, so a bare
-    # read_text() would pass on Linux and fail on the Windows CI runner only.
-    return (_REPO / rel).read_bytes().decode("utf-8")
+    # read_text() would pass on Linux and fail on the Windows CI runner only. The CRLF
+    # normalisation is the second half of the same trap: git can check the file out with
+    # CRLF there, and a pattern like ")\n" then matches nothing.
+    return (_REPO / rel).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 def _command_strings(rel: str):

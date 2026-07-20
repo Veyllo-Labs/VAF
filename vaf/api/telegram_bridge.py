@@ -215,8 +215,11 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
     """
     try:
         # 1. Get file path from Telegram
+        # to_thread: requests is blocking, and this coroutine runs on the bridge's own
+        # event loop - a direct call would stall every other Telegram message until the
+        # transfer finishes (up to the timeouts below).
         file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
-        resp = requests.get(file_url, timeout=10)
+        resp = await asyncio.to_thread(requests.get, file_url, timeout=10)
         if not resp.ok:
             logger.warning(f"Failed to get file info: {resp.status_code}")
             return None, None
@@ -228,7 +231,7 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
 
         # 2. Download the voice file (usually .oga format - Opus in Ogg container)
         download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-        audio_resp = requests.get(download_url, timeout=30)
+        audio_resp = await asyncio.to_thread(requests.get, download_url, timeout=30)
         if not audio_resp.ok:
             logger.warning(f"Failed to download voice file: {audio_resp.status_code}")
             return None, None
@@ -304,7 +307,8 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
 
         try:
             with open(ogg_path, "rb") as f:
-                resp = requests.post(
+                resp = await asyncio.to_thread(
+                    requests.post,
                     send_url,
                     data={"chat_id": chat_id},
                     files={"voice": ("response.ogg", f, "audio/ogg")},
@@ -336,7 +340,7 @@ async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = ""
     """
     try:
         file_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
-        resp = requests.get(file_url, timeout=10)
+        resp = await asyncio.to_thread(requests.get, file_url, timeout=10)
         if not resp.ok:
             logger.warning("getFile failed: %s", resp.status_code)
             return None
@@ -345,7 +349,7 @@ async def _download_telegram_file(bot_token: str, file_id: str, suffix: str = ""
         if not tg_path:
             return None
         download_url = f"https://api.telegram.org/file/bot{bot_token}/{tg_path}"
-        dl_resp = requests.get(download_url, timeout=60)
+        dl_resp = await asyncio.to_thread(requests.get, download_url, timeout=60)
         if not dl_resp.ok:
             logger.warning("File download failed: %s", dl_resp.status_code)
             return None
@@ -377,7 +381,8 @@ async def _send_audio_as_document(bot_token: str, chat_id: str, audio_path: str)
     try:
         send_url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
         with open(audio_path, "rb") as audio_file:
-            resp = requests.post(
+            resp = await asyncio.to_thread(
+                requests.post,
                 send_url,
                 data={"chat_id": chat_id},
                 files={"document": ("response.wav", audio_file, "audio/wav")},

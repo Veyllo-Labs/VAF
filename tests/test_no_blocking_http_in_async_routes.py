@@ -26,16 +26,13 @@ _ROOTS = ("vaf/api", "vaf/core")
 _BLOCKING_MODULES = {"httpx", "requests"}
 _BLOCKING_ATTRS = {"get", "post", "put", "patch", "delete", "head", "request"}
 
-# Modules whose async code runs on its OWN event loop in its OWN thread, NOT on the shared
-# uvicorn loop this guard protects. Blocking there cannot freeze the web UI, the WebSocket
-# or other users - it only delays that bridge's own message handling, which is a real but
-# much smaller problem and a separate piece of work.
-#   - telegram_bridge: `_run_bot()` runs a python-telegram-bot Application inside
-#     `_bridge_thread` (daemon), and some paths even spin a throwaway
-#     `asyncio.new_event_loop()`. Six blocking file up/downloads live there (getFile,
-#     file download, sendVoice/sendDocument multipart). KNOWN FOLLOW-UP, deliberately not
-#     silently swept: converting multipart uploads to an async client deserves its own change.
-_OWN_EVENT_LOOP = {"vaf/api/telegram_bridge.py"}
+# Modules whose async code runs on its OWN event loop in its OWN thread rather than the
+# shared uvicorn loop would belong here: blocking there cannot freeze the web UI or the
+# WebSocket, only that component's own message handling. Kept empty on purpose - the one
+# candidate (telegram_bridge, a python-telegram-bot Application in a daemon thread) had its
+# six blocking file up/downloads converted too, so the guard now covers every module.
+# Add an entry ONLY with a written reason; an exclusion must never be a quiet workaround.
+_OWN_EVENT_LOOP: set[str] = set()
 
 
 def _is_blocking_call(node: ast.AST) -> bool:

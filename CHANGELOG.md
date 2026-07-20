@@ -27,6 +27,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **Telegram stays responsive while a voice message or file is transferred.** Sending or
+  receiving audio, voice notes and documents held up the Telegram connection for as long as
+  the transfer took, so other messages in the same chat had to wait behind it. Transfers now
+  run out of the way of the message loop.
 
 ## [0.1.0a16] - 2026-07-19
 

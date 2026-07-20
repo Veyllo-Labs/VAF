@@ -1167,7 +1167,10 @@ export default function NativeDocxEditor({
             return (
               <div
                 key={`${section.id}-page-${pageIndexInSection}`}
-                className="pdf-page relative flex flex-col bg-white rounded-sm shadow-sm"
+                // vaf-doc-paper: this sheet stays LIGHT on a dark page. It is a rendering of
+                // real paper, and Print/PDF export exactly what is shown here (see the
+                // PROTECTED SURFACES note in globals.css).
+                className="pdf-page vaf-doc-paper relative flex flex-col bg-white rounded-sm shadow-sm"
                 style={{
                   paddingTop: `${layout.marginTopMm}mm`,
                   paddingRight: `${layout.marginRightMm}mm`,

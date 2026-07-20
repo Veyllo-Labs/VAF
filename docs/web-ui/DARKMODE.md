@@ -129,6 +129,17 @@ own body square stays the neutral avatar body (`#2d2d2d`).
 These deliberately keep their light appearance:
 
 - Rendered document paper, markdown/preview iframes and exports (Word/Acrobat model).
+  Preview iframes are protected for free (the swap does not cross an iframe boundary), but a
+  paper rendered as ordinary DOM is not. That one carries **`vaf-doc-paper`**, which is
+  attached to the SAME declaration in `globals.css` that defines the light ramp
+  (`:root, .dark .vaf-doc-paper { ... }`), so the whole subtree folds back to light and can
+  never drift from the light theme, because it IS the light theme.
+  `.dark .vaf-doc-paper` (0,2,0) outranks the `.dark` block (0,1,0), so source order does not
+  matter; keeping it scoped under `.dark` is what preserves that.
+  Do NOT try to protect such a surface by overriding individual utilities: the swap folds
+  text and surfaces in OPPOSITE directions, so restoring only the background leaves the text
+  folded light on white, i.e. unreadable. Pinned by
+  `tests/test_dark_mode_protected_surfaces.py`.
 - Monaco editor (uses its own `vs-dark` theme).
 - User-content iframes and screenshots.
 - Modal scrims (`bg-black/NN`).

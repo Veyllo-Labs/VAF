@@ -47,8 +47,19 @@
    (page #0a0c12, panel #0f131c, control #161c29, border #1e2533/#2a3344,
    text #e6e9ef/#8b93a7). Bare RGB triplets so <alpha-value> keeps working
    for every bg-white/80-style utility.
+
+   PROTECTED SURFACES. A few surfaces must stay LIGHT even on a dark page, because they
+   are a rendering of a real-world artefact rather than app chrome: the document paper is
+   a sheet of paper, and the user prints and exports exactly what is shown. Adding
+   `.vaf-doc-paper` to the SAME declaration that defines the light ramp is what makes that
+   work: the whole subtree folds back to the light palette, and it can never drift from
+   the light theme, because it IS the light theme. Specificity does the rest -
+   `.dark .vaf-doc-paper` (0,2,0) outranks the `.dark` block below (0,1,0).
+   Do NOT try this by overriding individual utilities: the swap folds text and surfaces in
+   OPPOSITE directions, so restoring only the background leaves the text unreadable.
    ═══════════════════════════════════════════════════════════════════════════ */
-:root {
+:root,
+.dark .vaf-doc-paper {
   /* SURFACE ramp (backgroundColor + gradient stops) */
   --sfc-white: 255 255 255;
   --chat-fog: 255 255 255; /* sidebar chat-list fog fade endpoint (matches sidebar bg) */

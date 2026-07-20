@@ -546,13 +546,18 @@ async def verify_account(request: Request, account_id: str, _user: Dict[str, Any
             _save_email_config(ec, _username, user_scope_id=_user_scope_id)
         return {"ok": ok, "error": err if not ok else None, "hint": hint if not ok else None}
     if provider == "gmail":
-        ok = _verify_oauth_gmail(account_id, cred_username, user_scope_id=_user_scope_id)
+        # to_thread: the helper does a BLOCKING requests.get; calling it directly from this
+        # async handler stalls the whole uvicorn event loop (every request AND /ws).
+        ok = await asyncio.to_thread(
+            _verify_oauth_gmail, account_id, cred_username, user_scope_id=_user_scope_id)
         if ok:
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
             _save_email_config(ec, _username, user_scope_id=_user_scope_id)
         return {"ok": ok, "error": None if ok else "Gmail token invalid or expired", "hint": None}
     if provider == "microsoft":
-        ok = _verify_oauth_microsoft(account_id, cred_username, user_scope_id=_user_scope_id)
+        # to_thread: blocking requests.get inside, see the gmail branch above.
+        ok = await asyncio.to_thread(
+            _verify_oauth_microsoft, account_id, cred_username, user_scope_id=_user_scope_id)
         if ok:
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
             _save_email_config(ec, _username, user_scope_id=_user_scope_id)

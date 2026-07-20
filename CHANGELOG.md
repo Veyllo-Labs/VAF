@@ -11,6 +11,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The app no longer runs its window on native Wayland, which could crash it on Linux.**
+  VAF has always meant to run its window through XWayland (native Wayland conflicts with the
+  browser engine and, with the GPU shared in-process, could freeze and then kill the app).
+  That safeguard silently never applied on KDE and GNOME Wayland desktops, because those
+  sessions set the display server themselves and VAF only filled in a value when none was
+  set. It now sets it deliberately. If your system has no XWayland, VAF leaves your session
+  alone instead of starting with no display at all, and `VAF_ALLOW_WAYLAND=1` keeps native
+  Wayland if it works well for you. The choice is written to the startup log.
+- **A slow or unreachable speech provider can no longer freeze the whole app.** The
+  ElevenLabs voice/model catalog was fetched in a way that blocked the server's event loop,
+  so opening Voice settings with a slow, unreachable or exhausted account could stall every
+  request and the live connection for everyone until it timed out. It is now fetched without
+  blocking, a failure is remembered briefly instead of being retried on every redraw, and two
+  simultaneous requests share one lookup. The same blocking pattern was fixed in the email
+  account verification and the Telegram dashboard.
+
 ## [0.1.0a16] - 2026-07-19
 
 ### Added

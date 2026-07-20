@@ -276,6 +276,12 @@ an admin-only backend proxy (`GET /api/voice/elevenlabs/models` and
 `/api/voice/elevenlabs/voices` in `vaf/api/voice_routes.py`): the stored API
 key never reaches the browser, responses are cached for 5 minutes per key,
 and restricted ElevenLabs keys need the `voices_read`/`models_read` scopes.
+The vendor call is async (`httpx.AsyncClient`) on purpose - a synchronous one
+blocked the whole uvicorn event loop, i.e. every request AND the `/ws`
+WebSocket for every user, for as long as the vendor took to answer. A FAILURE
+is cached too (briefly): the Settings tab refetches whenever the provider or
+key changes, so an exhausted or rejected key would otherwise re-hit the vendor
+on every redraw. Concurrent lookups for the same catalog share one request.
 When the fetch is unavailable the UI falls back to hardcoded model options
 and a plain voice-ID input. OpenAI lists are hardcoded by necessity: OpenAI
 has no API that enumerates TTS voices or tags audio models. ElevenLabs STT

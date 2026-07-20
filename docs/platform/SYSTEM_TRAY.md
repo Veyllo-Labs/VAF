@@ -115,6 +115,12 @@ VAF sets the following environment variables automatically on startup:
 - `QT_QPA_PLATFORM=xcb` — forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
 - `WEBKIT_DISABLE_DMABUF_RENDERER=1` — avoids GBM buffer errors under XWayland
 
+The first two are set together by `force_x11()` in `vaf/core/display_platform.py` and
+**override** a Wayland session's own `QT_QPA_PLATFORM` (KDE/GNOME export it, so the earlier
+`setdefault` never applied). They are skipped when XWayland is missing (no `DISPLAY`) or
+when `VAF_ALLOW_WAYLAND=1` is set; the choice is logged as `display platform: ...`.
+See [LINUX.md](LINUX.md).
+
 **GPU acceleration** is on (Chromium-based Qt WebEngine). The exact
 `QTWEBENGINE_CHROMIUM_FLAGS` live in `vaf/core/desktop_window.py` and are tuned to
 avoid the in-process-GPU memory leak: vsync deliberately stays **on**

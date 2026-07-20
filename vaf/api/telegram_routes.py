@@ -293,7 +293,9 @@ async def get_telegram_dashboard(request: Request):
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict):
         telegram_config = {}
-    bot_username = _get_bot_username()
+    # to_thread: _get_bot_username does a BLOCKING requests.get to the Telegram API;
+    # calling it directly from this async handler stalls the whole uvicorn event loop.
+    bot_username = await asyncio.to_thread(_get_bot_username)
     bot_link = f"https://t.me/{bot_username}" if bot_username else None
     admin_whitelist_raw = list(telegram_config.get("whitelist") or [])
     relay_whitelist = list(telegram_config.get("relay_whitelist") or [])

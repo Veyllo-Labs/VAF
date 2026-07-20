@@ -30,8 +30,28 @@ def _client():
     return TestClient(app)
 
 
+class _FakeAsyncClient:
+    """Stands in for httpx.AsyncClient: the catalog proxy must never block the event loop,
+    so it talks to the vendor through an async client context manager."""
+
+    def __init__(self, calls, responses):
+        self._calls = calls
+        self._responses = responses
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, headers=None, params=None, **kw):
+        self._calls.append((url, dict(params or {})))
+        return self._responses[min(len(self._calls), len(self._responses)) - 1]
+
+
 def _patch(monkeypatch, *, role="admin", api_key="el-key", responses=None):
     vr._cache.clear()
+    vr._locks.clear()  # locks are per event loop; TestClient gives each request a fresh one
     monkeypatch.setattr(
         vr, "get_current_user_or_local_admin",
         lambda request: {"username": "u", "role": role, "user_scope_id": "s"},
@@ -42,10 +62,10 @@ def _patch(monkeypatch, *, role="admin", api_key="el-key", responses=None):
     )
     calls = []
     if responses is not None:
-        def fake_get(url, headers=None, params=None, timeout=None, **kw):
-            calls.append((url, dict(params or {})))
-            return responses[min(len(calls), len(responses)) - 1]
-        monkeypatch.setattr(vr.httpx, "get", fake_get)
+        monkeypatch.setattr(
+            vr.httpx, "AsyncClient",
+            lambda *a, **kw: _FakeAsyncClient(calls, responses),
+        )
     return calls
 
 
@@ -116,3 +136,40 @@ def test_vendor_403_maps_to_400_with_scope_hint(monkeypatch):
 def test_vendor_5xx_maps_to_502(monkeypatch):
     _patch(monkeypatch, responses=[_Resp(500, {"detail": {"code": "internal"}})])
     assert _client().get("/api/voice/elevenlabs/models").status_code == 502
+
+
+def test_endpoints_and_vendor_call_are_async():
+    """Contract pin: a SYNCHRONOUS httpx call here blocked the whole uvicorn event loop
+    (every HTTP request AND the /ws WebSocket, for every user) for as long as the vendor
+    took. The route handlers and the vendor helper must stay coroutines."""
+    import inspect
+    assert inspect.iscoroutinefunction(vr.elevenlabs_models)
+    assert inspect.iscoroutinefunction(vr.elevenlabs_voices)
+    assert inspect.iscoroutinefunction(vr._elevenlabs_get)
+
+
+def test_failure_is_remembered_so_a_dead_key_stops_hammering(monkeypatch):
+    """A rejected key (an exhausted quota answers 401) must be negative-cached: the Settings
+    tab refetches on every provider/key change, and without this each render re-hit the
+    vendor. The error is still reported to the caller, just not re-fetched."""
+    calls = _patch(monkeypatch, responses=[_Resp(401, {"detail": {"code": "quota_exceeded"}})])
+    c = _client()
+    first = c.get("/api/voice/elevenlabs/models")
+    second = c.get("/api/voice/elevenlabs/models")
+    assert first.status_code == 400 and second.status_code == 400
+    assert "rejected" in second.json()["detail"].lower()   # same error, still surfaced
+    assert len(calls) == 1                                  # second one never hit the vendor
+
+
+def test_negative_cache_expires_sooner_than_a_successful_one():
+    """A transient outage must not be remembered as long as a real catalog."""
+    assert vr._NEG_CACHE_TTL < vr._CACHE_TTL
+
+
+def test_models_and_voices_are_cached_independently(monkeypatch):
+    """Distinct catalogs use distinct cache keys, so one failing must not poison the other."""
+    calls = _patch(monkeypatch, responses=[_Resp(200, []), _Resp(200, {"voices": []})])
+    c = _client()
+    assert c.get("/api/voice/elevenlabs/models").status_code == 200
+    assert c.get("/api/voice/elevenlabs/voices").status_code == 200
+    assert len(calls) == 2  # both fetched; neither served the other's cache entry

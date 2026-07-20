@@ -122,12 +122,13 @@ def init(url: str, title: str = "VAF", width: int | None = None, height: int | N
             width = width or 1920
             height = height or 1080
     if sys.platform == "linux":
-        # Force X11/XWayland for both GTK and Qt — native Wayland causes protocol errors.
-        # GDK_BACKEND: affects GTK (pystray/AppIndicator)
-        # QT_QPA_PLATFORM: affects Qt (pywebview/Qt WebEngine) — must match GDK to avoid
-        #   GLX vs EGL conflict that causes QWebEngineProfile to qFatal() on startup.
-        os.environ.setdefault("GDK_BACKEND", "x11")
-        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+        # Point BOTH toolkits at X11/XWayland - native Wayland causes GTK protocol errors and
+        # an EGL/GLX conflict that makes QWebEngineProfile qFatal(); GDK_BACKEND and
+        # QT_QPA_PLATFORM must MATCH. Shared with vaf/tray.py (which normally runs first, at
+        # process start) so the two copies cannot drift; this call is the fallback for a
+        # window opened without the tray entry point. VAF_ALLOW_WAYLAND=1 opts out.
+        from vaf.core.display_platform import force_x11 as _force_x11
+        _log.info("[DesktopWindow] display platform: %s", _force_x11())
         # Ensure system typelib path is visible to the venv's PyGObject
         _typelib = "/usr/lib64/girepository-1.0:/usr/lib/girepository-1.0"
         existing = os.environ.get("GI_TYPELIB_PATH", "")

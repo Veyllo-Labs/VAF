@@ -21,11 +21,17 @@ import sys
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Hide GPU from PyTorch
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 
-# Linux: force X11/XWayland for both GTK and Qt toolkits.
-# Native Wayland causes protocol errors (GTK) and EGL/GLX conflicts (Qt WebEngine).
+# Linux: point BOTH toolkits at X11/XWayland. Native Wayland causes GTK protocol errors and
+# an EGL/GLX conflict in Qt WebEngine - and with the GPU in-process it can deadlock the
+# Chromium compositor against the Qt scene graph (SIGABRT, live incident 2026-07-20).
+# force_x11 OVERRIDES a session-exported QT_QPA_PLATFORM=wayland; the previous
+# os.environ.setdefault() silently failed to, because KDE/GNOME Wayland sessions export it.
+# VAF_ALLOW_WAYLAND=1 opts out. Runs here, before any heavy import and long before Qt loads.
+_DISPLAY_PLATFORM_STATUS = ""
 if sys.platform == "linux":
-    os.environ.setdefault("GDK_BACKEND", "x11")       # GTK (pystray/AppIndicator)
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")   # Qt (pywebview/Qt WebEngine)
+    # stdlib-only module, and vaf/core/__init__.py is empty - no import cascade here.
+    from vaf.core.display_platform import force_x11 as _force_x11
+    _DISPLAY_PLATFORM_STATUS = _force_x11()
     # Disable DMA-buf renderer — causes GBM buffer errors under XWayland with many GPU drivers.
     # Compositing stays enabled so CSS animations and custom cursors render correctly.
     os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
@@ -93,6 +99,11 @@ from vaf.core.backend import ServerManager
 from vaf.core.tray_context import TrayContext
 import uvicorn
 from vaf.startup_logger import log, clear_log
+
+# Report the Linux display-server decision taken at the top of this module (before any Qt
+# import). Logged here because _tray_startup_log needs get_dated_log_path, imported above.
+if _DISPLAY_PLATFORM_STATUS:
+    _tray_startup_log(f"display platform: {_DISPLAY_PLATFORM_STATUS}")
 try:
     from PIL import Image, ImageDraw
 except ImportError:

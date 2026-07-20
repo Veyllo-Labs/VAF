@@ -55,10 +55,30 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
 ## Platform-specific behavior & fixes
 
 - **Qt window forced onto X11/XWayland.** Both `vaf/tray.py` and
-  `vaf/core/desktop_window.py` set `GDK_BACKEND=x11` (GTK/pystray) and
-  `QT_QPA_PLATFORM=xcb` (Qt WebEngine) — native Wayland causes GTK protocol
-  errors and an EGL/GLX conflict that makes `QWebEngineProfile` `qFatal()` on
-  startup.
+  `vaf/core/desktop_window.py` call `vaf/core/display_platform.py` `force_x11()`,
+  which sets `GDK_BACKEND=x11` (GTK/pystray) and `QT_QPA_PLATFORM=xcb` (Qt
+  WebEngine) — always as a PAIR, since a mismatch is itself a GLX/EGL conflict.
+  Native Wayland causes GTK protocol errors and an EGL/GLX conflict that makes
+  `QWebEngineProfile` `qFatal()` on startup; with the GPU in-process it can also
+  deadlock Chromium's compositor against the Qt scene graph (SIGABRT, incident
+  2026-07-20).
+  - It **overrides** a value the session exported. This is deliberate: KDE and
+    GNOME Wayland sessions export `QT_QPA_PLATFORM=wayland`, and the earlier
+    `os.environ.setdefault()` therefore did nothing on exactly the systems the
+    guard protects.
+  - It stands down when **XWayland is not actually reachable** — no `DISPLAY`, or a
+    `DISPLAY` whose local X socket (`/tmp/.X11-unix/X<n>`) does not exist (a stale
+    value, a partially imported service environment). Qt's xcb plugin `qFatal()`s on
+    a failed X connection, so forcing it there would turn a session that at least
+    started into one with no window at all.
+  - An **explicit non-Wayland** `QT_QPA_PLATFORM`/`GDK_BACKEND` (`offscreen`,
+    `minimal`, `eglfs`, `vnc`, `broadway`) is always honored: a headless or CI run
+    opted out deliberately, and a session-type hint must not beat an explicit request.
+  - Wayland is detected from `QT_QPA_PLATFORM`/`GDK_BACKEND`, `XDG_SESSION_TYPE` or
+    `WAYLAND_DISPLAY` (the last one covers compositors started by hand from a TTY).
+  - Opt out with **`VAF_ALLOW_WAYLAND=1`** to keep the session's display server
+    (native Wayland is fine on some GPUs). The decision is written to the tray
+    startup log as `display platform: ...`.
 - **`WEBKIT_DISABLE_DMABUF_RENDERER=1`.** Set on Linux to avoid GBM buffer errors
   under XWayland with many GPU drivers, while keeping compositing on.
 - **`GI_TYPELIB_PATH` injected.** The system typelib path
@@ -89,9 +109,11 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
 
 ## Known limitations / gotchas
 
-- **Wayland is not used directly.** VAF always runs the Qt window and tray through
-  XWayland (`QT_QPA_PLATFORM=xcb`); a native-Wayland session works, but VAF forces
-  the X11 path for stability.
+- **Wayland is not used directly.** VAF runs the Qt window and tray through
+  XWayland (`QT_QPA_PLATFORM=xcb`) for stability, overriding a Wayland session's own
+  setting. Two exceptions: with `VAF_ALLOW_WAYLAND=1` the session's choice is kept,
+  and on a Wayland session **without XWayland** (no `DISPLAY`) VAF leaves the
+  display server alone rather than forcing a platform with no X server behind it.
 - **Tray icon depends on typelibs.** Without the AppIndicator + WebKitGTK
   GObject-introspection typelibs (or if `PyGObject` failed to build), the tray
   icon may be missing. The app window and Web UI still work; open the UI from the

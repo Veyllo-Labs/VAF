@@ -27,6 +27,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **A finished workflow is no longer labelled FAILED when it succeeded.** Workflows that run
+  in their own process reported their outcome to the app, but the outcome itself was dropped
+  on the way to the browser, so the panel fell back to showing a failure. Every step showed a
+  green tick, the document was written, the chat said it worked, and the panel still said
+  FAILED. The result now arrives intact, and so does the live output those runs stream.
 - **The workflow panel no longer gets stuck showing a run that has long finished.** If the
   connection to the browser dropped while a workflow was running, everything that happened
   afterwards was lost, and the panel kept showing the last thing it had seen, with no way to

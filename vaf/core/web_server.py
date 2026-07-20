@@ -1114,9 +1114,25 @@ def _build_artifact_payload(session, session_id: str = None):
 async def root():
     return {"status": "VAF Backend Online", "version": __version__}
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class WorkflowUpdate(BaseModel):
+    """Everything a SUBPROCESS sends to /api/workflow/update, on its way to the browser.
+
+    This model is a bottleneck the whole subprocess lane passes through, and an undeclared
+    field is dropped here without a trace. That is the CLAUDE.md Rule-2 field-forwarding trap
+    (it has already cost `diffs` and `activity` in page.tsx), and it bit again on 2026-07-20:
+    `success` was never declared, so every `workflow_done` from the separate workflow runner
+    arrived at the browser without it. The panel reads `data.success ? 'completed' : 'failed'`,
+    so a run whose steps were all green and whose document was written showed FAILED.
+
+    Two defences, deliberately both:
+      - every field a producer sends is DECLARED below, so the payload is documented and typed;
+      - extra="allow" keeps an undeclared field from ever being silently dropped again.
+    tests/test_workflow_update_payload.py cross-checks the producers against this model.
+    """
+    model_config = ConfigDict(extra="allow")
+
     type: str
     sessionId: Optional[str] = None
     workflowId: Optional[str] = None
@@ -1126,6 +1142,11 @@ class WorkflowUpdate(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     result: Optional[str] = None
+    # workflow_done
+    success: Optional[bool] = None
+    error: Optional[str] = None
+    # workflow_output_stream
+    line: Optional[str] = None
     # document_ready payload (from notify_document_created)
     filePath: Optional[str] = None
     title: Optional[str] = None

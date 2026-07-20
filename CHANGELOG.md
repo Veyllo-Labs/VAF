@@ -27,6 +27,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **The local model is no longer unloaded while it is still working.** When a longer task was
+  running and you had not typed for a while, the app counted you as away and freed the model
+  mid-task. The work then stalled behind failing retries and looked like a freeze, and two
+  competing attempts to load the model again could collide. The app now keeps the model
+  loaded whenever something is actually running, whether that is your message, a background
+  helper or a live call. Loading is also serialized, so two parts of the app can no longer
+  fight over it, a model that is merely still loading is waited for instead of killed, and
+  stopped model processes are cleaned up instead of lingering.
 - **A finished workflow is no longer labelled FAILED when it succeeded.** Workflows that run
   in their own process reported their outcome to the app, but the outcome itself was dropped
   on the way to the browser, so the panel fell back to showing a failure. Every step showed a

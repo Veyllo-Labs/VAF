@@ -13,7 +13,7 @@ VAF includes a persistent background service managed by a system tray applicatio
     - **Yellow / Idle**: Server is standing by, model is unloaded (saves RAM).
     - **Blue / Persistent**: Model is pinned in RAM (Persistent Mode).
 - **Window Minimize to Tray**: Closing the window hides it — the app stays running in the system tray. Click "Open VAF" to bring the window back.
-- **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources.
+- **Dynamic Resource Management**: Automatically unloads the LLM from RAM after 15 seconds (default) of inactivity to free up system resources. **Never while work is in flight**: the idle check also asks whether the machine is currently busy on the user's behalf (a chat turn running or queued, a sub-agent working, an open voice call), and that term is independent of user activity. Its other inputs describe the USER, not the machine - "is a browser attached" and "has the user typed lately" - and on 2026-07-20 a long tool call was unloaded out from under itself because the user had simply been quiet for a while. The probe fails towards KEEPING the model: a needlessly warm model costs VRAM until the next check, a wrong unload destroys work in progress.
 - **WebUI-Aware Idle**: The local model unloads after 15 seconds with no active WebUI WebSocket connections (unless persistence is enabled).
 - **Instant Wake-on-Demand**: The server wakes up instantly when you run a CLI command (`vaf run`) or open the Web UI.
 - **Graceful Shutdown**: Checks for active CLI sessions before quitting to prevent data loss.

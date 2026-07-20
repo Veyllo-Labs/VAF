@@ -1028,6 +1028,59 @@ def get_icon_path(status):
         
     return str(filename)
 
+def _work_in_flight():
+    """Is the machine doing something on the user's behalf right now?
+
+    Returns (busy, reason). The idle watchdog uses this to decide whether the local model may
+    be unloaded, and it is the signal that was missing entirely: the watchdog only knew "is a
+    browser attached" and "has the user typed lately", both of which describe the USER. On
+    2026-07-20 a tool call was in flight while the user had been quiet for a while, the model
+    was unloaded underneath it, and the retry storm that followed is what looked like the app
+    hanging.
+
+    Three sources, all cheap and already maintained elsewhere:
+      - the task queue: a chat turn being processed, or one waiting to be
+      - the sub-agent IPC registry: a coder/research/document/workflow child at work
+      - an open live voice call
+
+    FAILS TOWARDS KEEPING THE MODEL. If a probe raises we cannot know, and the damage of
+    guessing wrong differs by orders of magnitude: a needlessly warm model costs VRAM until
+    the next check, while a wrong unload destroys work in progress. The reason is logged, so
+    a permanently failing probe is visible instead of silently pinning the model forever.
+    """
+    try:
+        from vaf.core.task_queue import TaskQueue
+        tq = TaskQueue()
+        if tq.is_busy():
+            return True, "Task running"
+        if tq.get_queue_size() > 0:
+            return True, "Task queued"
+    except Exception as e:
+        log("Tray", f"work-in-flight probe (queue) failed, keeping model loaded: {e}")
+        return True, "Busy probe failed"
+
+    try:
+        from vaf.core.subagent_ipc import get_ipc
+        if get_ipc().get_active_tasks():
+            return True, "Sub-agent running"
+    except Exception as e:
+        log("Tray", f"work-in-flight probe (sub-agents) failed, keeping model loaded: {e}")
+        return True, "Busy probe failed"
+
+    try:
+        # A live call holds the model even when nothing is queued: the next utterance must
+        # not wait for a reload. Read the registry the call handler maintains; importing
+        # web_server here is free, the tray already serves it.
+        from vaf.core.web_server import _VOICE_CALLS
+        if _VOICE_CALLS:
+            return True, "Voice call"
+    except Exception:
+        # No call registry in this build: not an error, just nothing to report.
+        pass
+
+    return False, ""
+
+
 def check_activity_loop(update_icon_callback):
     """Monitor activity and manage model state."""
     last_loaded = None
@@ -1112,6 +1165,26 @@ def check_activity_loop(update_icon_callback):
         except Exception:
             thinking_defer = False
 
+        # Is actual WORK running right now? This is the one thing the idle watchdog never
+        # asked. Its signals were "is a browser attached" (is_active) and "has the user typed
+        # lately" (really_away) - both are about the USER, not about the machine. On
+        # 2026-07-20 a long tool call was in flight while the user had not typed for a while,
+        # so really_away won, the model was unloaded mid-run, and the request storm that
+        # followed is what the user saw as the app being stuck.
+        # Work is the opposite of idle: while it runs, nothing may pull the model out.
+        work_busy, work_reason = _work_in_flight()
+
+        # Collect any llama-server child a previous stop gave up waiting for. Unreaped killed
+        # children linger as zombies for the life of this long-running process (two were left
+        # behind by the 2026-07-20 incident); poll() is non-blocking, so this is free.
+        try:
+            from vaf.core.backend import reap_abandoned_children
+            _reaped = reap_abandoned_children()
+            if _reaped:
+                log("Tray", f"Reaped {_reaped} abandoned llama-server child process(es)")
+        except Exception:
+            pass
+
         # Check provider type - any non-local provider is an API/cloud provider and needs no local model.
         # Kept provider-agnostic on purpose: a hardcoded allowlist used to omit newer providers (e.g.
         # `veyllo`), which made the tray load a phantom local model while in API mode.
@@ -1167,10 +1240,14 @@ def check_activity_loop(update_icon_callback):
             # while the app is actively used — UNLESS the user is REALLY away (no message for
             # model_unload_idle_minutes), in which case "active" (e.g. WebUI just sitting open) no longer
             # keeps it warm.
-            keep_warm = thinking_defer or ((not really_away) and (is_active or telegram_grace))
+            # work_busy is unconditional on purpose: it is NOT gated on really_away, because
+            # "the user has not typed for a while" says nothing about whether the machine is
+            # busy on their behalf.
+            keep_warm = thinking_defer or work_busy or ((not really_away) and (is_active or telegram_grace))
             if keep_warm:
                 if not is_loaded and not is_cloud_provider:
-                    reason = "Thinking" if (thinking_defer and not (is_active or telegram_grace)) else "Activity"
+                    reason = ("Thinking" if (thinking_defer and not (is_active or telegram_grace))
+                              else (work_reason or "Activity") if work_busy else "Activity")
                     print(f"{reason} detected. Loading model...")
                     log("Tray", f"{reason} detected. Loading model...")
                     start_model_async(reason)

@@ -88,7 +88,47 @@ def _loaded_model_matches(model_path: str, port: int = 8080) -> bool:
         return True
 
 
-_ENSURE_LOCAL_LOCK = threading.Lock()
+# THE serialization point for "who owns the one llama server right now".
+#
+# Reentrant on purpose: ensure_local_model() takes it and then calls start_server(), which
+# takes it again on the same thread. A plain Lock would self-deadlock there.
+#
+# It is acquired INSIDE start_server rather than by rerouting callers through
+# ensure_local_model, because four call sites pass n_ctx / n_gpu_layers / port and
+# ensure_local_model accepts none of them - rerouting would silently drop the VRAM-aware
+# layer count and the context size. Guarding the entry point instead means every path
+# serializes without a single caller changing (tray activity load, tray retry, agent
+# swap-back, voice lane), which is what the 2026-07-20 incident needed: two starts raced,
+# and the loser died with "couldn't bind" while the winner was still coming up.
+_ENSURE_LOCAL_LOCK = threading.RLock()
+
+# Children we gave up waiting for. On POSIX a killed child that is never wait()ed stays in
+# the process table as a ZOMBIE for the lifetime of the parent, and the tray is long-lived:
+# the 2026-07-20 incident left two of them behind. stop_server abandons a child after ~1s of
+# terminate/kill, which is the right call for responsiveness but leaves the reaping undone,
+# so the handle is parked here and collected later. Popen.poll() is the reaping call.
+_ABANDONED_CHILDREN: list = []
+
+
+def reap_abandoned_children() -> int:
+    """Collect any child we stopped waiting for. Returns how many were reaped.
+
+    Cheap and safe to call often: poll() is non-blocking, and a child that has not exited yet
+    simply stays on the list. No-op on Windows, which has no zombie concept.
+    """
+    reaped = 0
+    with _ENSURE_LOCAL_LOCK:
+        still_running = []
+        for proc in _ABANDONED_CHILDREN:
+            try:
+                if proc.poll() is None:
+                    still_running.append(proc)   # not dead yet, look again next time
+                else:
+                    reaped += 1                  # poll() just reaped it
+            except Exception:
+                reaped += 1                      # unusable handle: drop it either way
+        _ABANDONED_CHILDREN[:] = still_running
+    return reaped
 
 
 def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bool = False) -> bool:
@@ -746,6 +786,28 @@ class ServerManager:
 
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
                      skip_provider_gate=False):
+        """Serialized wrapper. The real work is in _start_server_locked below.
+
+        Every path that brings up the ONE llama server goes through here, so holding
+        _ENSURE_LOCAL_LOCK for the whole start is what makes a second start WAIT instead of
+        racing. On 2026-07-20 two starts fired ~1 second apart (a locked swap-back and an
+        unlocked tray activity load); the loser died with "couldn't bind" and the user saw a
+        stuck app. The lock is reentrant, so ensure_local_model -> start_server on one thread
+        is fine.
+
+        The wrapper keeps every parameter: rerouting the callers through ensure_local_model
+        would have dropped n_ctx and n_gpu_layers, including the -1 = AUTO layer count that
+        exists so llama.cpp fits the model to available VRAM instead of aborting.
+        """
+        with _ENSURE_LOCAL_LOCK:
+            reap_abandoned_children()   # collect anything a previous stop gave up on
+            return self._start_server_locked(
+                model_path, n_gpu_layers=n_gpu_layers, n_ctx=n_ctx, port=port,
+                skip_provider_gate=skip_provider_gate,
+            )
+
+    def _start_server_locked(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
+                             skip_provider_gate=False):
         """
         Start llama-server only if provider is 'local' and auto-start is enabled.
 
@@ -830,6 +892,29 @@ class ServerManager:
                             self.process = None  # Wir verwalten diesen Prozess nicht direkt
                             UI.event("Server", f"Reusing existing server on :{port}...", style="dim")
                             return True
+                        if response.status_code == 503:
+                            # LOADING, not broken. llama-server answers 503 while it maps a
+                            # multi-GB GGUF, which on a cold cache takes minutes. Falling
+                            # through here would kill a server that is making progress and
+                            # start another one - the shape of the 2026-07-20 incident. Wait
+                            # for the same budget the main path uses; only give up afterwards.
+                            UI.event("Server", f"Server on :{port} is still loading, waiting...",
+                                     style="dim")
+                            _wait_start = time.time()
+                            while time.time() - _wait_start < _server_ready_budget():
+                                try:
+                                    _r = requests.get(f"http://127.0.0.1:{port}/health", timeout=1)
+                                    if _r.status_code == 200:
+                                        if _loaded_model_matches(model_path, port):
+                                            self.process = None
+                                            UI.event("Server",
+                                                     f"Reusing existing server on :{port}...",
+                                                     style="dim")
+                                            return True
+                                        break   # ready, but the wrong model -> restart below
+                                except Exception:
+                                    pass
+                                time.sleep(0.5)
                     except:
                         # Server läuft, aber antwortet nicht - kill und neu starten
                         pass
@@ -1330,8 +1415,12 @@ class ServerManager:
                 try:
                     self.process.wait(timeout=0.5)
                 except:
-                    pass
-            
+                    # Giving up on the wait is right (the caller must not block on a wedged
+                    # child), but dropping the handle here leaks a ZOMBIE: on POSIX a killed
+                    # child stays in the process table until its parent reaps it, and the
+                    # tray runs for days. Park it for reap_abandoned_children instead.
+                    _ABANDONED_CHILDREN.append(self.process)
+
             self.process = None
         if os.path.exists(self.pid_file) and force_external:
             # ALSO check the pid file (no elif): after a model SWAP the live

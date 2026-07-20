@@ -107,6 +107,34 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
   mode instead installs a systemd **user** service (`systemctl --user enable vaf`)
   with `loginctl enable-linger` so it starts at boot without a login session.
 
+### Sub-agent terminal windows
+
+In CLI mode a sub-agent or workflow gets its own terminal window. The emulator is probed in
+order (`gnome-terminal`, `xterm`, `konsole`, `x-terminal-emulator`) and the command runs
+under `bash -c` with **no shell tail after it**.
+
+The child, not the shell, decides what happens to the window (`vaf/cli/autoclose.py`):
+a successful run shows a short countdown and closes it, a failed run and `--no-auto-close`
+hold it open until you press Enter, and a piped WebUI child exits immediately because there
+is no window to hold. The child is Python, so all three platforms behave the same. This
+replaced an appended `; exec bash`, which re-execed an interactive shell over the finished
+child so the window could never close: the countdown printed "Terminal closing." and the
+window stayed on a prompt (live incident 2026-07-20). Emulator hold flags were not used
+instead, because support varies between them and versions, and `x-terminal-emulator` is a
+Debian alternatives symlink to an unknown emulator.
+
+Per-spawn values (`VAF_SESSION_ID`, `VAF_TASK_ID`, `VAF_AGENT_TYPE`) are embedded into the
+command as an `env K=V ...` prefix rather than passed via `Popen(env=...)`, because
+`gnome-terminal` is a thin D-Bus client of a long-lived `gnome-terminal-server` and whether
+the client's environment reaches the new shell is version dependent.
+
+Whether a spawn opens a window at all is decided per spawn: an explicit `VAF_SPAWN_MODE` in
+the spawn's own environment wins, otherwise `VAF_WEBUI_ACTIVE`. That flag means "this process
+serves a web UI" and is set once when the server starts. It used to be set on WebSocket
+connect and cleared when the last browser disconnected, so a transient socket drop silently
+changed spawn behaviour process-wide and a host terminal window appeared for a sub-agent that
+had been launched from the browser.
+
 ## Known limitations / gotchas
 
 - **Wayland is not used directly.** VAF runs the Qt window and tray through

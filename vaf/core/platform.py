@@ -567,7 +567,17 @@ class Platform:
 
         try:
 
-            webui_active = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
+            # Piped (WebUI panel) or a real terminal window? An explicit per-spawn value
+            # wins over the process environment, so a caller that KNOWS where its run
+            # came from can say so instead of depending on ambient state.
+            _mode = (_ee.get("VAF_SPAWN_MODE") or "").strip().lower()
+            if _mode in ("piped", "terminal"):
+                webui_active = (_mode == "piped")
+            else:
+                webui_active = (
+                    (_ee.get("VAF_WEBUI_ACTIVE") or os.environ.get("VAF_WEBUI_ACTIVE", ""))
+                    .strip().lower() in ("1", "true", "yes")
+                )
             if webui_active:
                 # Copy current environment and ensure all VAF_ vars are passed; per-spawn
                 # overrides (session/task/agent) go into the CHILD env only, never the parent's.
@@ -577,6 +587,12 @@ class Platform:
                 # stdout is piped (not a real terminal), so Rich Live TUI would
                 # flood the pipe buffer (4 KB on Windows) and deadlock the process.
                 env["VAF_NONINTERACTIVE"] = "1"
+
+                # Say it explicitly rather than relying on os.environ.copy() having
+                # picked it up: a GRANDCHILD spawn must make the same piped choice,
+                # and the child's auto-close must know it has no window to hold.
+                env["VAF_WEBUI_ACTIVE"] = "1"
+                env["VAF_SPAWN_MODE"] = "piped"
 
                 # Mark the child as a sub-agent FROM PROCESS BIRTH (cmd/subagent.py also sets
                 # this, but only at runtime — AFTER the heavy imports whose startup trace would
@@ -812,7 +828,9 @@ class Platform:
                 else:
                     cmd = f'start /D "{cwd}" cmd /c "{command}"'
                 try:
-                    subprocess.Popen(cmd, shell=True, cwd=cwd)
+                    # env= works here: we spawn the shell ourselves, so the child really
+                    # does inherit what we pass (unlike the macOS Apple-event path).
+                    subprocess.Popen(cmd, shell=True, cwd=cwd, env={**os.environ, **_ee})
                     return True
                 except Exception as e:
                     # Fallback: try without title
@@ -824,8 +842,13 @@ class Platform:
                         return False
                 
             elif Platform.is_macos():
-                # macOS: Use osascript to open Terminal.app
-                escaped_command = command.replace('"', '\\"')
+                # macOS: Use osascript to open Terminal.app.
+                # `do script` is an Apple Event to the ALREADY RUNNING Terminal.app, and the
+                # shell it opens inherits Terminal.app's environment, not ours - so passing
+                # env= to the osascript Popen would silently do nothing. The per-spawn values
+                # have to travel inside the command string itself.
+                _mac_cmd = Platform._with_env_prefix(command, _ee)
+                escaped_command = _mac_cmd.replace('"', '\\"')
                 script = f'''
                 tell application "Terminal"
                     activate
@@ -837,11 +860,27 @@ class Platform:
                 
             else:
                 # Linux: Try different terminal emulators
+                # NO shell tail after the command. `; exec bash` used to be appended here,
+                # which replaces the finished child with an interactive shell so the window
+                # could never close - the auto-close countdown fired, printed "Terminal
+                # closing.", exited, and the window stayed on a prompt (live incident
+                # 2026-07-20). Keeping the window open on FAILURE is the child's job now
+                # (vaf/cli/autoclose.py): it is Python, so one implementation behaves the same
+                # on Linux, macOS and Windows, unlike a shell tail (macOS `do script` runs the
+                # user's login shell, zsh, where the bash `read -n1 -p` idiom errors out) and
+                # unlike emulator hold flags (support varies and x-terminal-emulator is an
+                # alternatives symlink to an unknown emulator).
+                # Per-spawn values travel INSIDE the command. gnome-terminal is a
+                # thin D-Bus client of a long-lived gnome-terminal-server, so whether
+                # the client's environment reaches the new shell is version dependent,
+                # and x-terminal-emulator is an alternatives symlink to an unknown
+                # emulator. env= on the Popen would therefore be unreliable here.
+                _lin_cmd = Platform._with_env_prefix(command, _ee)
                 terminals = [
-                    ('gnome-terminal', ['--', 'bash', '-c', f'{command}; exec bash']),
-                    ('xterm', ['-e', 'bash', '-c', f'{command}; exec bash']),
-                    ('konsole', ['-e', 'bash', '-c', f'{command}; exec bash']),
-                    ('x-terminal-emulator', ['-e', 'bash', '-c', f'{command}; exec bash']),
+                    ('gnome-terminal', ['--', 'bash', '-c', _lin_cmd]),
+                    ('xterm', ['-e', 'bash', '-c', _lin_cmd]),
+                    ('konsole', ['-e', 'bash', '-c', _lin_cmd]),
+                    ('x-terminal-emulator', ['-e', 'bash', '-c', _lin_cmd]),
                 ]
                 
                 for term_name, term_args in terminals:
@@ -861,6 +900,28 @@ class Platform:
                 
         except Exception:
             return False
+
+    @staticmethod
+    def _with_env_prefix(command: str, extra_env: Dict[str, str]) -> str:
+        """Prefix a POSIX shell command with `env K=V ...` so per-spawn values reach the child.
+
+        The three real-terminal branches all called Popen WITHOUT env=, so `extra_env` was
+        silently discarded and a terminal child lost VAF_SESSION_ID - for which no CLI flag
+        exists, so the child then had no session at all and anything it wrote (a paused
+        workflow record, a sub-agent task) could not be routed back.
+
+        Passing env= to Popen does not fix it everywhere: on macOS the window is opened by an
+        Apple event to the already-running Terminal.app, whose shell inherits ITS environment;
+        on Linux gnome-terminal is a D-Bus client of a long-lived server. Putting the
+        assignments in the command itself is the one form that works regardless of who
+        actually forks the shell. `env` is POSIX and present on macOS and every Linux.
+        """
+        if not extra_env:
+            return command
+        parts = " ".join(
+            f"{k}={shlex.quote(str(v))}" for k, v in sorted(extra_env.items()) if k and v is not None
+        )
+        return f"env {parts} {command}" if parts else command
 
     # Registry of sub-agent processes spawned from WebUI path.
     # Key: pid, Value: metadata dict

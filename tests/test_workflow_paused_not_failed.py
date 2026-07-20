@@ -172,7 +172,7 @@ def test_paused_run_exits_zero():
     watcher (Platform._stream_output), which would recreate the fabricated failure through
     a second route."""
     src = _source("vaf/cli/cmd/workflow.py")
-    assert "if not success and not paused:" in src
+    assert "exit_code=0 if (success or paused) else 1," in src
 
 
 def test_step_tool_sets_relationship_is_pinned():

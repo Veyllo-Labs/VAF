@@ -34,36 +34,9 @@ if sys.platform == "win32":
 
 app = typer.Typer()
 
-# Default auto-close delay in seconds
-AUTO_CLOSE_DELAY = 5
-
-
-def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
-    """
-    Show a countdown and then exit (closing the terminal).
-
-    Only meaningful in a real terminal (CLI mode). In WebUI / piped mode (no tty) the countdown
-    is pointless and its output spams the WebUI, so skip it and exit immediately.
-    """
-    _webui = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
-    _is_tty = False
-    try:
-        _is_tty = bool(sys.stdout.isatty())
-    except Exception:
-        _is_tty = False
-    if _webui or not _is_tty:
-        sys.exit(0)
-
-    print()  # Empty line for spacing
-
-    for remaining in range(delay, 0, -1):
-        sys.stdout.write(f"\r[*] Terminal closing in {remaining} seconds...  ")
-        sys.stdout.flush()
-        time.sleep(1)
-
-    sys.stdout.write(f"\r[OK] Terminal closing.                           \n")
-    sys.stdout.flush()
-    sys.exit(0)
+# The child owns its terminal window: closes on success, holds on failure or with
+# --no-auto-close. Single implementation, shared with the sub-agent runner.
+from vaf.cli.autoclose import AUTO_CLOSE_DELAY, finish_terminal  # noqa: F401
 
 
 @app.command(name="run")
@@ -169,9 +142,7 @@ def run_workflow(
                 debug_logger.event("workflow_json_error", error=str(e), variables_raw=variables[:100])
             if ipc and task_id:
                 ipc.fail_task(task_id, error_msg)
-            if not no_auto_close:
-                _auto_close_countdown()
-            sys.exit(1)
+            finish_terminal(success=False, no_auto_close=no_auto_close)
 
         # Load workflow template
         from vaf.workflows.templates import get_template
@@ -184,9 +155,7 @@ def run_workflow(
                 debug_logger.event("workflow_not_found", workflow_id=workflow_id)
             if ipc and task_id:
                 ipc.fail_task(task_id, error_msg)
-            if not no_auto_close:
-                _auto_close_countdown()
-            sys.exit(1)
+            finish_terminal(success=False, no_auto_close=no_auto_close)
 
         if debug_logger:
             debug_logger.event("workflow_template_loaded", workflow_name=template.get('name'),
@@ -425,15 +394,15 @@ def run_workflow(
     if heartbeat_thread:
         heartbeat_thread.join(timeout=1)
 
-    # Auto-close terminal after completion
-    if not no_auto_close:
-        _auto_close_countdown()
-
-    # A paused run exits 0 on purpose. The piped WebUI watcher (Platform._stream_output)
+    # The window closes on success and holds on failure, so an error stays readable.
+    # A paused run exits 0 on purpose: the piped WebUI watcher (Platform._stream_output)
     # turns any non-zero exit into ipc.fail_task plus a red "Process exited with error"
     # SubAgent card, which would recreate the fabricated failure through a second route.
-    if not success and not paused:
-        sys.exit(1)
+    finish_terminal(
+        success=bool(success or paused),
+        no_auto_close=no_auto_close,
+        exit_code=0 if (success or paused) else 1,
+    )
 
 
 @app.command(name="list")

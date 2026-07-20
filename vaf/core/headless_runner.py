@@ -1570,9 +1570,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     source_channel = str(task_source).strip().lower()
                     prev_webui_active = os.environ.get("VAF_WEBUI_ACTIVE")
                     force_webui_active = origin_channel == "web" or source_channel == "web"
-                    # Under a multi-worker pool, mutating this process-global env per-turn races across workers
-                    # (one worker's finally clears it mid-turn for another). web_server sets it to "1" at startup
-                    # (web_server.py:2486), so with >1 worker we leave it untouched.
+                    # This compensation is a belt, not the mechanism. web_server.run_server sets
+                    # VAF_WEBUI_ACTIVE once at startup and no longer clears it when the last
+                    # browser disconnects, so the spawn decision no longer depends on a browser
+                    # being attached at that instant. It is kept only for a process that starts
+                    # serving without going through run_server, and it still stays out of the way
+                    # of a multi-worker pool, where mutating a process-global env per turn races
+                    # across workers (one worker's finally clears it mid-turn for another).
+                    #
+                    # The comment that used to sit here claimed web_server set the flag at
+                    # startup already, citing a line that is an unrelated path allowlist. That
+                    # wrong claim is exactly why disabling this under >1 worker looked harmless -
+                    # and on a 2-worker install it left the real decision to a socket-lifetime
+                    # flag, which is how a host terminal window opened for a web-launched
+                    # sub-agent (live incident 2026-07-20).
                     _manage_webui_env = force_webui_active and total_workers <= 1
                     _task_images = task_meta_for_env.get("images") or None
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary

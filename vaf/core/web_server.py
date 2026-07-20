@@ -7355,8 +7355,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         except Exception:
             pass
         
-        if len(manager.active_connections) == 0:
-            os.environ.pop("VAF_WEBUI_ACTIVE", None)
+        # VAF_WEBUI_ACTIVE is NOT popped here any more. It used to mean "a browser is
+        # attached right now", and the sub-agent spawn decision read it - so a transient
+        # socket drop silently changed process-wide spawn behaviour and a host terminal
+        # window popped up for a web-launched sub-agent two minutes later (live incident
+        # 2026-07-20). It now means "this process serves a web UI", which is a property of
+        # the process and is set once at startup.
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
@@ -7371,8 +7375,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         except Exception:
             pass
         
-        if len(manager.active_connections) == 0:
-            os.environ.pop("VAF_WEBUI_ACTIVE", None)
+        # VAF_WEBUI_ACTIVE is NOT popped here any more. It used to mean "a browser is
+        # attached right now", and the sub-agent spawn decision read it - so a transient
+        # socket drop silently changed process-wide spawn behaviour and a host terminal
+        # window popped up for a web-launched sub-agent two minutes later (live incident
+        # 2026-07-20). It now means "this process serves a web UI", which is a property of
+        # the process and is set once at startup.
 
 
 async def process_uploaded_files(files: list) -> str:
@@ -7681,6 +7689,18 @@ async def process_files_to_sidebar_list(files: list) -> list:
 
 def run_server(host="127.0.0.1", port=8001):
     """Run the Uvicorn server. Uses TLS (HTTPS/WSS) when config has cert/key paths set."""
+    # This process serves a web UI, from now until it exits. That is what VAF_WEBUI_ACTIVE
+    # means, and it is why sub-agents spawned from here run PIPED into the browser panel
+    # instead of opening a host terminal window.
+    #
+    # It used to be set on WebSocket connect and cleared when the last one dropped, i.e. it
+    # tracked "is a browser attached right now". A socket drop then silently changed
+    # process-wide spawn behaviour: on 2026-07-20 the browser connection died mid-run and two
+    # minutes later a sub-agent spawn saw the flag unset and opened a real terminal window on
+    # the host. The connect-time write below is kept as a belt for a process that somehow
+    # starts serving without going through here.
+    os.environ["VAF_WEBUI_ACTIVE"] = "1"
+
     # Store the loop so the TUI thread can schedule updates
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

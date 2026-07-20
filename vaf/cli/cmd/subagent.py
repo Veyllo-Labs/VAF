@@ -29,41 +29,9 @@ if sys.platform == "win32":
 
 app = typer.Typer()
 
-# Default auto-close delay in seconds
-AUTO_CLOSE_DELAY = 5
-
-
-def _auto_close_countdown(delay: int = AUTO_CLOSE_DELAY):
-    """
-    Show a countdown and then exit (closing the terminal).
-    Cross-platform: works on Windows, Linux, macOS.
-
-    Only meaningful when the sub-agent runs in a REAL terminal window (CLI mode), where the
-    countdown gives the user a moment to read the result before the window closes. In WebUI /
-    piped mode (no tty) the countdown is pointless and harmful: its output is forwarded to the
-    WebUI console (spam) and the late exit overlaps the next workflow step, closing its
-    sub-agent window. So skip the countdown and exit immediately when not attached to a tty.
-    """
-    _webui = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
-    _is_tty = False
-    try:
-        _is_tty = bool(sys.stdout.isatty())
-    except Exception:
-        _is_tty = False
-    if _webui or not _is_tty:
-        sys.exit(0)
-    try:
-        print()
-        for remaining in range(delay, 0, -1):
-            sys.stdout.write(f"\r[*] Terminal closing in {remaining} seconds...  ")
-            sys.stdout.flush()
-            time.sleep(1)
-        sys.stdout.write(f"\r[OK] Terminal closing.                           \n")
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
-        pass
-    
-    sys.exit(0)
+# The child owns its terminal window: closes on success, holds on failure or with
+# --no-auto-close. Single implementation, shared with the workflow runner.
+from vaf.cli.autoclose import AUTO_CLOSE_DELAY, finish_terminal  # noqa: F401
 
 
 @app.command(name="run")
@@ -226,9 +194,7 @@ def run_subagent(
                 if lg:
                     lg.event("ipc_fail_task", ok=True, error="Unknown sub-agent type")
             
-            if not no_auto_close:
-                _auto_close_countdown()
-            sys.exit(1)
+            finish_terminal(success=False, no_auto_close=no_auto_close)
         
         # IPC first (file I/O) - MUST happen before any stdout writes
         if ipc and task_id and result:
@@ -315,12 +281,8 @@ def run_subagent(
         except (BrokenPipeError, OSError):
             pass
     
-    # Auto-close terminal after completion (success or failure)
-    if not no_auto_close:
-        _auto_close_countdown()
-    
-    if not success:
-        sys.exit(1)
+    # The window closes on success and holds on failure, so an error stays readable.
+    finish_terminal(success=bool(success), no_auto_close=no_auto_close)
 
 
 @app.command(name="status")

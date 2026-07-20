@@ -27,6 +27,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **Terminal windows opened for background work now close again on Linux.** A window opened
+  for a sub-agent or a workflow announced that it was closing and then stayed on a shell
+  prompt forever, because a shell was started on top of the finished task. Windows now close
+  when the work succeeded and stay open when it did not, so an error can still be read, and
+  `--no-auto-close` keeps working as documented. On macOS this also depends on your Terminal
+  profile setting for what happens when the shell exits.
+- **No stray terminal window when the browser connection drops.** Work started from the app
+  ran without a visible window only while a browser was connected. If the connection dropped
+  during a long run, the next helper opened a terminal window on the desktop, and the app's
+  Stop button could not reach it. The decision no longer depends on a browser being attached
+  at that moment.
 - **A busy workflow no longer floods and kills its own connection to the browser.** While a
   research step was running, its progress animation was forwarded to the browser frame by
   frame, hundreds of times per second. That was enough to drop the live connection in the

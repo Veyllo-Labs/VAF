@@ -672,6 +672,11 @@ class AgentWorkflowBuilderTool(BaseTool):
             username      = username,
         )
         engine._workflow_name = name   # used in debug logs
+        # Run identity for the pause record (routing back to this session and this panel).
+        # This lane has no saved template, hence the empty template id.
+        engine._template_id = ""
+        engine._session_id = session_id
+        engine._ui_workflow_id = workflow_id
 
         # Wire per-step output validation (opt-in via step.validate). Needs the agent's LLM
         # backend; only available here in run_temp. Other workflow paths leave these unset.
@@ -761,9 +766,16 @@ class AgentWorkflowBuilderTool(BaseTool):
             return f"Error executing temporary workflow '{name}': {_wf_exc}"
 
         if result.paused:
-            return (
-                f"Temporary workflow '{name}' paused (async sub-agent). "
-                "The result will arrive when the sub-agent completes."
+            # Shared wording (vaf/workflows/engine.py) so every lane tells the model the same
+            # thing about a pause. The old text here was too soft: a weak model read "paused"
+            # as "stalled" and re-ran the work.
+            from vaf.workflows.engine import paused_tool_message
+            _done = sum(1 for s in (result.steps or [])
+                        if getattr(getattr(s, "status", None), "value", "") == "success")
+            return paused_tool_message(
+                name, _done + 1, len(result.steps or []) or 1,
+                getattr(result, "waiting_for_agent", "") or "a background helper",
+                str(getattr(result, "waiting_for_task", "") or "?"),
             )
 
         # ── Intermediate file cleanup for run_temp ────────────────────────────

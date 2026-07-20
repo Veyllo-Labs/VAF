@@ -1404,9 +1404,29 @@ vaf automation delete <id>   # Delete task
                 )
                 # Add 'date' to workflow defaults so {date} can be resolved in templates
                 engine._workflow_defaults = {"date": date_str}
+                engine._workflow_name = task.name
                 workflow_result = engine.execute(steps, variables=task.parameters)
-                
-                if workflow_result.success:
+
+                if getattr(workflow_result, "paused", False):
+                    # PAUSED, NOT FAILED: a step handed off to an async sub-agent, so the run
+                    # is still alive and its remaining steps continue when the drain resumes
+                    # it. The old code fell through to the failure branch below and wrote
+                    # "# Workflow Failed / Error: None" into the automation report (error is
+                    # None precisely because nothing failed).
+                    _agent_t = getattr(workflow_result, "waiting_for_agent", "") or "a background helper"
+                    _task_t = str(getattr(workflow_result, "waiting_for_task", "") or "?")
+                    result = (
+                        f"# Workflow Still Running\n\n"
+                        f"Step {len([s for s in step_results if s.get('status') == 'success']) + 1} "
+                        f"of {len(steps)} handed off to {_agent_t} [Task: {_task_t}].\n"
+                        f"Nothing failed. The remaining steps continue on their own and the "
+                        f"result is delivered when the helper is done.\n\n"
+                    )
+                    result += "## Steps so far:\n"
+                    for i, step_result in enumerate(step_results, 1):
+                        result += f"{i}. {step_result['tool']} - {step_result['status']}\n"
+                    workflow_saved_file = False
+                elif workflow_result.success:
                     # MULTI-STEP AUTOMATION: Build detailed output showing each step
                     result_parts = ["# Workflow Execution Report\n"]
                     result_parts.append(f"**Automation:** {task.name}\n")

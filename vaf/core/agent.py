@@ -3138,9 +3138,37 @@ class Agent:
         from vaf.cli.ui import UI
         from vaf.core.subagent_ipc import get_ipc
         import re
-        
+
         ipc = get_ipc()
-        
+
+        # A workflow may be paused waiting for exactly this sub-agent. Continuing it is the
+        # web/headless counterpart of what the interactive CLI drain has always done
+        # (cli/cmd/run.py); without it a paused run in the Web UI was never resumed and every
+        # step after the sub-agent step silently never ran (live incident 2026-07-20).
+        # Ownership is claimed atomically, so the two drains can never both resume one run.
+        try:
+            from vaf.workflows.resume import try_resume_paused_workflow
+            _resumed, _resume_msg = try_resume_paused_workflow(self, task)
+        except Exception:
+            _resumed, _resume_msg = False, None
+        if _resumed:
+            UI.success(f"[OK] Workflow resumed after sub-agent [{task.task_id}]")
+            if _resume_msg:
+                self.history.append({"role": "system", "content": _resume_msg})
+            try:
+                log_timeline_event(
+                    "subagent_end",
+                    task_id=task.task_id,
+                    agent_type=getattr(task, "agent_type", ""),
+                    status="resumed_workflow",
+                    session=str(getattr(self, "current_session_id", "") or ""),
+                )
+            except Exception:
+                pass
+            self._async_subagent_tasks.pop(task.task_id, None)
+            ipc.consume_result(task.task_id)
+            return needs_retry
+
         if task.status == "completed":
             UI.success(f"✓ Sub-Agent [{task.task_id}] delivered result!")
             

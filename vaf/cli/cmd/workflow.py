@@ -214,6 +214,7 @@ def run_workflow(
         heartbeat_thread.start()
 
     success = False
+    paused = False
     final_summary = ""
 
     try:
@@ -389,11 +390,33 @@ def run_workflow(
         engine = WorkflowEngine(tools, callback=progress_callback)
         engine._workflow_defaults = template.get("defaults", {})
         engine._workflow_name = workflow_id
+        engine._template_id = workflow_id
+        engine._session_id = session_id
+        engine._ui_workflow_id = workflow_id
 
         # Execute the workflow
         result = engine.execute(steps, variables=vars_dict)
 
-        if result.success:
+        if getattr(result, "paused", False):
+            # PAUSED, NOT FAILED. The run handed a step to an async sub-agent and is still
+            # alive; the drain resumes it when that helper reports back. The old code fell
+            # through to the failure branch below and sent ipc.fail_task("Unknown error") to
+            # the main agent - a fabricated crash for a healthy run.
+            #
+            # cancel_task, never fail_task/complete_task: this terminal is done, but the
+            # WORK is not, and the result belongs to the sub-agent's own delivery. cancel_task
+            # is a no-op if the task is already gone (subagent_ipc), so it is safe either way.
+            from vaf.workflows.engine import paused_tool_message
+            _agent = getattr(result, "waiting_for_agent", "") or "a background helper"
+            _task = str(getattr(result, "waiting_for_task", "") or "?")
+            _done = sum(1 for s in steps
+                        if getattr(getattr(s, "status", None), "value", "") == "success")
+            UI.info(paused_tool_message(template["name"], _done + 1, len(steps), _agent, _task))
+            if ipc and task_id:
+                ipc.cancel_task(task_id)
+            paused = True
+            success = False
+        elif result.success:
             # Extract final output summary
             final_output = str(result.final_output) if result.final_output else ""
 
@@ -467,13 +490,22 @@ def run_workflow(
         except Exception:
             pass
 
-    # Always close the workflow panel — workflow_start was sent, workflow_done must follow
-    if session_id:
+    # Close the workflow panel — workflow_start was sent, so workflow_done must follow.
+    # EXCEPT when the run only paused: workflow_done carries success=False and the panel
+    # paints that red, which would report a crash for a run that is still going. The panel
+    # stays open until the drain resumes the run and a real terminal state arrives.
+    if session_id and not paused:
         send_web_update({
             "type": "workflow_done",
             "workflowId": workflow_id,
             "success": success,
             "error": "" if success else (final_summary or "Workflow failed")
+        })
+    elif session_id and paused:
+        send_web_update({
+            "type": "workflow_output_stream",
+            "workflowId": workflow_id,
+            "line": "[paused] waiting for background helper",
         })
 
     # Stop heartbeat thread
@@ -486,7 +518,10 @@ def run_workflow(
     if not no_auto_close:
         _auto_close_countdown()
 
-    if not success:
+    # A paused run exits 0 on purpose. The piped WebUI watcher (Platform._stream_output)
+    # turns any non-zero exit into ipc.fail_task plus a red "Process exited with error"
+    # SubAgent card, which would recreate the fabricated failure through a second route.
+    if not success and not paused:
         sys.exit(1)
 
 

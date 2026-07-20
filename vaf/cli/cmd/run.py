@@ -132,15 +132,20 @@ def _check_subagent_results(tui, agent):
         found_results_text = []
         
         for task in results:
-            # Check if a paused workflow is waiting for this result
+            # Check if a paused workflow is waiting for this result, and CLAIM it before
+            # acting on it. The headless/web drain can see the same finished task, and a
+            # read-then-resume would let both replay the remaining steps.
+            # claim_paused_workflow pops the record atomically: exactly one winner, and the
+            # loser falls through to the ordinary result handling below.
             paused_wf = ipc.get_paused_workflow_for_task(task.task_id)
-            
+            if paused_wf is not None and task.status == "completed":
+                paused_wf = ipc.claim_paused_workflow(paused_wf.workflow_id)
+
             if task.status == "completed":
                 # Detect if this is a workflow result (agent_type starts with "workflow:")
                 is_workflow = task.agent_type.startswith("workflow:")
                 
                 if paused_wf:
-                    # Resume the workflow!
                     tui.console.print()
                     tui.console.print(Panel(
                         f"[bold green][OK] Sub-Agent complete - resuming workflow[/bold green]\n\n"
@@ -150,8 +155,8 @@ def _check_subagent_results(tui, agent):
                         title="[>] Workflow Resuming",
                         border_style="green"
                     ))
-                    
-                    # Resume the workflow
+
+                    # Resume the workflow (record already claimed above)
                     _resume_paused_workflow(tui, agent, paused_wf, task.result)
                 elif is_workflow:
                     # Workflow completed in separate terminal

@@ -480,6 +480,12 @@ class ExecuteWorkflowTool(BaseTool):
                 tools         = tools,
                 callback      = _ws_callback,
             )
+            # Run identity, so a pause on an async sub-agent step produces a record that can
+            # be routed back to THIS session and THIS panel (see engine's pause branch).
+            engine._workflow_name = template.get('name', workflow_id)
+            engine._template_id = workflow_id
+            engine._session_id = session_id
+            engine._ui_workflow_id = wf_id
 
             _orig_stdout = sys.stdout
             _orig_stderr = sys.stderr
@@ -532,8 +538,17 @@ class ExecuteWorkflowTool(BaseTool):
                             success=_r.success,
                             paused=getattr(_r, 'paused', False),
                             error=str(_r.error or '')[:200])
-                    _push({"type": "workflow_done", "workflowId": wf_id,
-                           "success": _r.success, "error": _r.error or ""})
+                    if getattr(_r, 'paused', False):
+                        # A pause is not an end. workflow_done carries success=False and the
+                        # panel paints that red, so the run must NOT be closed here: it stays
+                        # open until the drain resumes it and a real terminal state arrives.
+                        # Same rule the builder lane already follows.
+                        _push({"type": "workflow_output_stream", "workflowId": wf_id,
+                               "line": f"[paused] waiting for background helper "
+                                       f"[Task: {getattr(_r, 'waiting_for_task', '') or '?'}]"})
+                    else:
+                        _push({"type": "workflow_done", "workflowId": wf_id,
+                               "success": _r.success, "error": _r.error or ""})
                 else:
                     _wf_log(wf_run_id, "PUSH_DONE_UNKNOWN_STATE")
                     _push({"type": "workflow_done", "workflowId": wf_id,
@@ -543,6 +558,22 @@ class ExecuteWorkflowTool(BaseTool):
                 return f"❌ Error executing workflow '{workflow_id}': {_exec_error[0]}"
 
             result = _exec_result[0]
+            # PAUSED FIRST. A step that handed off to an async sub-agent returns
+            # success=False with error=None - the run is alive, nothing failed. Without this
+            # branch the failure branch below rendered the literal text
+            # "Workflow '<name>' failed: None" and the agent apologized to the user for a
+            # crash that never happened (live incident 2026-07-20).
+            if getattr(result, 'paused', False):
+                _wf_log(wf_run_id, "RETURN_PAUSED",
+                        task=str(getattr(result, 'waiting_for_task', '') or ''),
+                        step=getattr(result, 'workflow_id', ''))
+                from vaf.workflows.engine import paused_tool_message
+                _done = sum(1 for s in steps if getattr(getattr(s, 'status', None), 'value', '') == 'success')
+                return paused_tool_message(
+                    template['name'], _done + 1, len(steps),
+                    getattr(result, 'waiting_for_agent', '') or 'a background helper',
+                    str(getattr(result, 'waiting_for_task', '') or '?'),
+                )
             if result.success:
                 _out = str(result.final_output) if result.final_output else ""
                 if len(_out) > 3000:

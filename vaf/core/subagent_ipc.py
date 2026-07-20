@@ -34,7 +34,7 @@ except ImportError:
         HAS_MSVCRT = False
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields
 from enum import Enum
 
 from vaf.core.platform import Platform
@@ -187,13 +187,26 @@ class PausedWorkflow:
     steps_data: List[Dict[str, Any]]    # Serialized workflow steps
     workflow_name: str                  # Name of the workflow (e.g., "deep_research")
     created_at: str                     # When the workflow was paused
-    
+    # Ownership. Defaulted so records written before these fields existed still load.
+    # Without a session a paused record cannot be routed back to the run that created it,
+    # which is why _cleanup_other_sessions_locked used to wipe the whole file (Rule 4.4).
+    session_id: Optional[str] = None     # Session that started the run
+    user_scope_id: Optional[str] = None  # Owning user (multi-user installs)
+    username: Optional[str] = None
+    template_id: str = ""                # Template key, e.g. "research_and_document"
+    ui_workflow_id: str = ""             # Id the Web UI panel knows this run by
+    awaiting_agent_type: str = ""        # Sub-agent the run is waiting for
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'PausedWorkflow':
-        return cls(**data)
+        # Drop unknown keys instead of raising: a record written by a NEWER build (or a
+        # hand-edited file) must not break the drain of an older one. Boundary coercion,
+        # same reason as SubAgentTask.from_dict above.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (data or {}).items() if k in known})
 
 
 class SubAgentIPC:
@@ -1002,10 +1015,51 @@ class SubAgentIPC:
         return None
     
     def get_all_paused_workflows(self) -> List[PausedWorkflow]:
-        """Get all paused workflows."""
+        """Get all paused workflows (process-global - prefer the session-scoped variant)."""
         paused = self._read_json(self.paused_workflows_file)
         return [PausedWorkflow.from_dict(wf) for wf in paused]
-    
+
+    def get_paused_workflows_for_session(self, session_id: Optional[str]) -> List[PausedWorkflow]:
+        """Paused workflows belonging to one session (Rule 4.4: never build user-facing
+        state from process-global data). A falsy session_id yields nothing rather than
+        everything - failing closed is the safe direction for a cross-user read."""
+        if not session_id:
+            return []
+        paused = self._read_json(self.paused_workflows_file)
+        return [
+            PausedWorkflow.from_dict(wf) for wf in paused
+            if wf.get('session_id') == session_id
+        ]
+
+    def claim_paused_workflow(self, workflow_id: str) -> Optional[PausedWorkflow]:
+        """Atomically take ownership of a paused workflow: return it AND remove it in one
+        locked step, or return None if somebody else got there first.
+
+        Two independent drains can see the same finished sub-agent - the CLI TUI drain
+        (cli/cmd/run.py) and the headless/web drain (agent._process_subagent_result). Read
+        followed by a separate remove would let both resume the same run, replaying its
+        remaining steps twice. This is the ONE claim both must go through.
+
+        Atomic against other threads via _mutation_guard, and against other PROCESSES only
+        as far as the file lock reaches (advisory flock on POSIX, a byte-range lock on
+        Windows) - the same guarantee the rest of this queue operates under, not a stronger
+        one.
+        """
+        with self._mutation_guard():
+            paused = self._read_json(self.paused_workflows_file)
+            claimed = None
+            remaining = []
+            for wf in paused:
+                if claimed is None and wf.get('workflow_id') == workflow_id:
+                    claimed = wf
+                else:
+                    remaining.append(wf)
+            if claimed is None:
+                return None
+            self._write_json(self.paused_workflows_file, remaining)
+            return PausedWorkflow.from_dict(claimed)
+
+
     def remove_paused_workflow(self, workflow_id: str):
         """Remove a paused workflow (after it's resumed or cancelled)."""
         with self._mutation_guard():
@@ -1135,10 +1189,13 @@ def _cleanup_other_sessions_locked(ipc: SubAgentIPC, current_session: str):
     still_pending = [t for t in pending if t.get('session_id') == current_session]
     ipc._write_json(ipc.pending_file, still_pending)
     
-    # Clean up paused workflows from other sessions
+    # Clean up paused workflows from other sessions. Paused records now carry a session_id,
+    # so this keeps the CURRENT session's runs alive instead of discarding every paused
+    # workflow on a session switch (which silently dropped runs that were still waiting for
+    # their sub-agent). Legacy records without a session cannot be routed to anyone and are
+    # dropped, same rule as the pending/active queues above.
     paused = ipc._read_json(ipc.paused_workflows_file)
-    # Paused workflows don't have session_id yet, so we'll add that next
-    # For now, clear all paused workflows on new session
-    if paused:
-        ipc._write_json(ipc.paused_workflows_file, [])
+    still_paused = [wf for wf in paused if wf.get('session_id') == current_session]
+    if len(still_paused) != len(paused):
+        ipc._write_json(ipc.paused_workflows_file, still_paused)
 

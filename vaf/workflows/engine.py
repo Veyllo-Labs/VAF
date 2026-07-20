@@ -118,6 +118,51 @@ def summarize_run_steps(steps) -> str:
     return "\n".join(lines)
 
 
+# Step tools that get the sub-agent environment (VAF_AGENT_TYPE / VAF_TASK_ID / the
+# in-terminal guard) forced around their step, and step tools that can run as a killable
+# CHILD PROCESS in wait-mode. The two sets are NOT identical and must not be quietly
+# merged: document_agent and browser_agent spawn without the env forcing, and forcing
+# VAF_IN_SUBAGENT_TERMINAL on document_agent silences its output entirely (UI.event
+# short-circuits to the web log), which would starve the workflow executor's own
+# silence watchdog and abort healthy runs. The asymmetry is deliberate; it is named here
+# and pinned by tests/test_workflow_paused_not_failed.py so it cannot drift by accident.
+SUBAGENT_STEP_TOOLS = ("coding_agent", "librarian_agent", "research_agent")
+SPAWNABLE_STEP_TOOLS = (
+    "coding_agent", "librarian_agent", "research_agent", "document_agent", "browser_agent",
+)
+
+
+def paused_tool_message(
+    workflow_name: str,
+    step_no: int,
+    total_steps: int,
+    agent_type: str,
+    task_id: str,
+) -> str:
+    """The ONE wording every consumer returns when a workflow pauses on an async sub-agent.
+
+    A pause is NOT a failure: the run is alive and its result will be delivered by the
+    drain. Consumers used to fall through to their failure branch and emit
+    "Workflow '<name>' failed: None" (the error field is None precisely because nothing
+    failed), which made the agent apologize to the user for a crash that never happened.
+
+    The wording is imperative because a weak local model skims status banners: it must not
+    declare failure, must not redo the work, and must not sit and wait for a result that
+    arrives on its own. It also avoids the words "failed" and "error" entirely - both the
+    repo's own result classifier (context.tool_result_is_error) and a skimming model key on
+    them, and this text is the opposite of a failure.
+    """
+    return (
+        f"[PAUSED] Workflow '{workflow_name}' is STILL RUNNING.\n"
+        f"Step {step_no}/{total_steps} handed off to {agent_type} "
+        f"[Task: {task_id}] and that helper is working in the background.\n"
+        f"NOTHING WENT WRONG. Do NOT report a problem, do NOT redo any step, do NOT re-run "
+        f"the workflow, and do NOT wait for it here. Tell the user briefly that the work is "
+        f"running and continue. The result is delivered automatically when the helper is "
+        f"done, and the remaining steps continue by themselves."
+    )
+
+
 def _workflow_step_timeout(tool_name: str) -> float:
     """Worst-case hard cap for one workflow step.
 
@@ -204,6 +249,7 @@ class WorkflowResult:
     paused: bool = False                # True if workflow is paused waiting for sub-agent
     workflow_id: Optional[str] = None   # ID for resuming paused workflow
     waiting_for_task: Optional[str] = None  # Task ID we're waiting for
+    waiting_for_agent: str = ""         # Sub-agent the paused run handed off to
 
 
 def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
@@ -269,6 +315,15 @@ class WorkflowEngine:
         # Left None elsewhere (persistent/scheduled workflows) → validation simply does not run.
         self._validate_step: Optional[Callable[[str, str, str, str], tuple]] = None
         self._workflow_user_intent: str = ""
+
+        # Run identity. Every lane that builds an engine sets what it knows; the pause
+        # branch copies these into the PausedWorkflow record so a paused run can be routed
+        # back to the session (and the UI panel) that started it. Initialised here so a lane
+        # that forgets one produces an empty string, never an AttributeError.
+        self._workflow_name: str = ""
+        self._template_id: str = ""
+        self._session_id: Optional[str] = None
+        self._ui_workflow_id: str = ""
 
         # Initialize context manager for workflow execution (like main agent)
         from vaf.core.context import ContextManager
@@ -712,16 +767,13 @@ class WorkflowEngine:
                             os.environ[_k] = _v
                 prev_spawn_browser = os.environ.get("VAF_SPAWN_BROWSER_SUBAGENT")
                 subagent_step_task_id = None
-                is_subagent_tool = step.tool in ("coding_agent", "librarian_agent", "research_agent")
+                is_subagent_tool = step.tool in SUBAGENT_STEP_TOOLS
                 # In wait-mode these heavy sub-agents run as KILLABLE CHILD PROCESSES
                 # (spawn → IPC wait), not in-process. document_agent is spawnable too (it
                 # isn't in is_subagent_tool, so it already spawns). browser_agent only spawns
                 # when opted-in via VAF_SPAWN_BROWSER_SUBAGENT (set below) so standalone
                 # browser usage stays in-process.
-                _spawnable = step.tool in (
-                    "coding_agent", "librarian_agent", "research_agent", "document_agent",
-                    "browser_agent",
-                )
+                _spawnable = step.tool in SPAWNABLE_STEP_TOOLS
                 _spawn_and_wait = bool(wait_for_subagents) and _spawnable
                 if _spawn_and_wait and step.tool == "browser_agent":
                     # Tell BrowserAgentTool.run to spawn a killable child process for this step.
@@ -1013,6 +1065,15 @@ class WorkflowEngine:
                         })
                     
                     # Save paused workflow state
+                    # Ownership: a record without a session cannot be routed back to the run
+                    # that created it, and used to be wiped wholesale on a session switch.
+                    _sess = getattr(self, '_session_id', None)
+                    if not _sess:
+                        try:
+                            from vaf.core.subagent_ipc import get_current_session_id
+                            _sess = get_current_session_id()
+                        except Exception:
+                            _sess = None
                     paused_wf = PausedWorkflow(
                         workflow_id=workflow_id,
                         waiting_for_task_id=task_id,
@@ -1020,8 +1081,14 @@ class WorkflowEngine:
                         outputs=outputs,
                         variables=dict(variables or {}),
                         steps_data=steps_data,
-                        workflow_name=getattr(self, '_workflow_name', 'unknown'),
-                        created_at=datetime.now().isoformat()
+                        workflow_name=getattr(self, '_workflow_name', '') or 'unknown',
+                        created_at=datetime.now().isoformat(),
+                        session_id=_sess,
+                        user_scope_id=getattr(self, 'user_scope_id', None),
+                        username=getattr(self, 'username', None),
+                        template_id=getattr(self, '_template_id', '') or '',
+                        ui_workflow_id=getattr(self, '_ui_workflow_id', '') or '',
+                        awaiting_agent_type=agent_type,
                     )
                     
                     ipc = get_ipc()
@@ -1037,7 +1104,8 @@ class WorkflowEngine:
                         error=None,
                         paused=True,
                         workflow_id=workflow_id,
-                        waiting_for_task=task_id
+                        waiting_for_task=task_id,
+                        waiting_for_agent=agent_type,
                     )
                 
                 # A bounded-run timeout/stop returns a sentinel string. Treat it as a hard

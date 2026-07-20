@@ -27,6 +27,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **A workflow that hands work to a background helper is no longer reported as crashed.**
+  When a workflow step passes its work to a helper (writing a document, researching a
+  topic), the workflow pauses and waits instead of finishing. Three of the places that read
+  the result knew only "done" and "broken", so a perfectly healthy run was announced as
+  failed while the work was still being produced, and the assistant apologized for a crash
+  that never happened. A paused run is now recognized everywhere as still running, in chat,
+  in the separate workflow terminal and in automation reports. Paused runs also remember
+  which conversation they belong to, so switching conversations no longer discards them, and
+  a run whose helper was the final step is now completed automatically in the app instead of
+  only in the terminal client.
 - **Telegram stays responsive while a voice message or file is transferred.** Sending or
   receiving audio, voice notes and documents held up the Telegram connection for as long as
   the transfer took, so other messages in the same chat had to wait behind it. Transfers now

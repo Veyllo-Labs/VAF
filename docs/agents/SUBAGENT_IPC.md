@@ -483,19 +483,47 @@ paused_wf = PausedWorkflow(
     variables={"query": "..."},
     steps_data=[...],  # Serialized workflow steps
     workflow_name="deep_research",
-    created_at="2025-01-01T12:00:00"
+    created_at="2025-01-01T12:00:00",
+    # Ownership. All optional, all defaulted so older records still load.
+    session_id="sess_123",        # the session that started the run
+    user_scope_id=None,           # owning user on multi-user installs
+    username=None,
+    template_id="deep_research",  # template key
+    ui_workflow_id="wf-12d75fb9", # id the Web UI panel knows this run by
+    awaiting_agent_type="document_agent",
 )
 ipc.pause_workflow(paused_wf)
 
-# Check for paused workflow waiting for a task
+# Check for paused workflow waiting for a task (read-only)
 paused = ipc.get_paused_workflow_for_task("task_xyz")
 
-# Get all paused workflows
+# Take ownership: returns the record AND removes it in one locked step, or None if
+# another drain got there first. Both drains MUST go through this.
+claimed = ipc.claim_paused_workflow("abc123")
+
+# Session-scoped listing (Rule 4.4). A falsy session yields nothing, never everything.
+mine = ipc.get_paused_workflows_for_session("sess_123")
+
+# All paused workflows, process-global - prefer the session-scoped variant above
 all_paused = ipc.get_all_paused_workflows()
 
-# Remove a paused workflow (after resuming)
+# Remove a paused workflow without taking it (e.g. its helper failed)
 ipc.remove_paused_workflow("abc123")
 ```
+
+**Why the claim exists.** Two drains can see the same finished sub-agent: the interactive
+CLI TUI drain and the headless/web drain. Reading the record and removing it in a second
+step let both resume the same run and replay its remaining steps. `claim_paused_workflow`
+pops it atomically, so exactly one of them wins. Atomic against threads via the mutation
+guard, and against other processes as far as the queue's file lock reaches (advisory
+`flock` on POSIX, a byte-range lock on Windows) - the same guarantee the rest of the queue
+operates under.
+
+**Session ownership.** Paused records used to carry no session, so a session switch wiped
+every one of them, discarding runs that were still waiting for their helper. They now carry
+`session_id` and the cleanup keeps the current session's records. Records written before
+this existed have no session and are dropped by that cleanup, because they cannot be routed
+to anyone.
 
 ### Session Tracking
 
@@ -589,9 +617,32 @@ vaf subagent run librarian_agent --task "..." --no-auto-close
 
 ## Workflow Integration
 
-Workflows now support **async sub-agents with pause/resume**. When a workflow step calls
-a sub-agent running in a separate terminal, the workflow **pauses** and returns control
-to the user. When the sub-agent finishes, the workflow **automatically resumes**.
+Workflows support **async sub-agents with pause/resume**. When a workflow step calls a
+sub-agent running in a separate terminal, the workflow **pauses** and returns control to the
+user. A paused run is **not** a failed run: the engine returns
+`WorkflowResult(success=False, error=None, paused=True)`, and every consumer must branch on
+`paused` before it looks at `success`. A consumer that knows only success and failure reports
+`failed: None` for a run that is still going (live incident 2026-07-20); this is pinned by
+`tests/test_workflow_paused_not_failed.py`, which also freezes the list of consumers.
+
+### Who resumes, and how far
+
+| Execution mode | What happens when the awaited sub-agent reports back |
+|---|---|
+| Interactive CLI (`vaf run`) | The TUI drain claims the record and runs the remaining steps in the foreground. |
+| Web UI / headless (tray, messengers, automations) | The result drain closes the run when the awaited step was the **last** one. That is pure bookkeeping, so it is safe to do inline. |
+
+A run in the Web UI that still has steps **ahead** of the awaited one is deliberately not
+continued from the drain, and its record is left intact. Running those steps there was
+designed and rejected: on a worker thread the engine's process-global `os.environ` handling
+would race the main thread's chat turn (the Rule 4.5 incident, where a leaked
+`VAF_IN_SUBAGENT_TERMINAL` made every coder run execute in-process), and a bare thread
+inherits no contextvars, so the session ContextVar would be unset and sub-agents would
+register under the wrong session. Inline on the drain thread is no better, because that
+drain is a single loop serving every session. Those steps need a proper owner, a child
+process with its own environment, heartbeat, stop support and panel events, the way
+`vaf/cli/cmd/workflow.py` already runs a whole workflow. That is open work; the deliverable
+still reaches the user in the meantime, because the sub-agent delivers its own result.
 
 ### Per-step output validation (opt-in)
 
@@ -706,7 +757,7 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 │                                                                             │
 │   KEY: Workflows are now NON-BLOCKING!                                      │
 │   - User can ask other questions while workflow is paused                   │
-│   - Workflow automatically resumes when sub-agent finishes                  │
+│   - Workflow resumes when the sub-agent finishes (see "Who resumes" above)  │
 │   - Status banner shows paused workflows                                    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -718,9 +769,9 @@ An infinite-loop guard aborts the workflow if the number of step-jumps exceeds `
 |---------|-----------|---------------|
 | **Blocking** | No (non-blocking) | No (pause/resume) |
 | **User Interaction** | Immediately possible | Immediately possible |
-| **Result Display** | On next input | Auto-resumes workflow |
+| **Result Display** | On next input | Resumes the workflow (CLI: fully; Web UI: closes a run whose awaited step was last) |
 | **Status Banner** | Yes (active tasks) | Yes (paused workflows) |
-| **On Complete** | Shows result panel | Auto-continues workflow |
+| **On Complete** | Shows result panel | Continues the workflow where a resumer exists |
 
 ---
 

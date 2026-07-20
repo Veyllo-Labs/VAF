@@ -23,9 +23,12 @@ def _run(env, platform="linux"):
     return status, e.get("QT_QPA_PLATFORM"), e.get("GDK_BACKEND")
 
 
-def test_overrides_session_wayland_when_xwayland_is_available():
+def test_overrides_session_wayland_when_xwayland_is_available(monkeypatch):
     """THE regression: a KDE/GNOME Wayland session exports QT_QPA_PLATFORM=wayland, and the
     old setdefault left it. With XWayland up (DISPLAY set) it must be overridden to xcb."""
+    # Hermetic: the guard also probes for the local X socket, which a headless CI runner does
+    # not have. Never let this assertion depend on the machine it runs on.
+    monkeypatch.setattr("os.path.exists", lambda p: True)
     status, qt, gdk = _run({
         "QT_QPA_PLATFORM": "wayland", "XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0",
     })
@@ -33,8 +36,9 @@ def test_overrides_session_wayland_when_xwayland_is_available():
     assert "forced" in status
 
 
-def test_wayland_session_type_alone_also_switches_both_toolkits():
+def test_wayland_session_type_alone_also_switches_both_toolkits(monkeypatch):
     """Only XDG_SESSION_TYPE=wayland (Qt/GTK unset) still means a Wayland session."""
+    monkeypatch.setattr("os.path.exists", lambda p: True)  # hermetic, see the test above
     status, qt, gdk = _run({"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"})
     assert (qt, gdk) == ("xcb", "x11")
     assert "forced" in status

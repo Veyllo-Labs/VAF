@@ -157,6 +157,28 @@ A weak model can confuse the two: `execute_workflow`'s `workflow_id` must be a *
 
 The redirect is an ECHO-BACK when possible: a model that merged the two hints usually delivers a complete, correct run_temp payload inside `variables` (live incident: `execute_workflow(workflow_id="create_agent_workflow", variables={action: "run_temp", steps: [...]})` with perfectly good steps - after a prose-only redirect the model gave up on workflows and did every step manually). When `variables` carries `steps`, the error message hands back the exact `create_agent_workflow(...)` call to copy, with the model's own arguments verbatim (action defaulted to `run_temp`, oversized payloads fall back to the generic advice). Weak models copy reliably; they rephrase poorly. The redirect stays a MESSAGE - it never auto-forwards the call (dispatch gates and the "agent decides" principle stay intact).
 
+### A workflow can end in THREE ways, not two
+
+`WorkflowEngine.execute()` returns success, failure, or **paused**. A step that hands its work
+to an async sub-agent (a document or browser step spawning a child) does not finish the run:
+the engine saves the state and returns `WorkflowResult(success=False, error=None, paused=True)`.
+
+Every consumer must branch on `paused` BEFORE it looks at `success`. A consumer that knows
+only two outcomes reports a healthy run as a crash: on 2026-07-20 the user was told
+`Workflow 'Research & Document' failed: None` (None because `error` is unset precisely when
+nothing failed) while the document was still being written, and the assistant then apologised
+for a crash that never happened. Three of the six consumers had the branch missing.
+
+All lanes share one wording, `paused_tool_message()` in `vaf/workflows/engine.py`. It avoids
+the words "failed" and "error" on purpose: both the repo's own result classifier
+(`context.tool_result_is_error`) and a skimming local model key on them, and this text is the
+opposite of a failure. `tests/test_workflow_paused_not_failed.py` pins the contract for every
+consumer and freezes the consumer list, so a new lane cannot join without a paused branch.
+
+Who continues a paused run is documented in
+[SUBAGENT_IPC.md](SUBAGENT_IPC.md#who-resumes-and-how-far): the CLI drain runs the remaining
+steps, while the Web UI drain currently only closes a run whose awaited step was the last one.
+
 ### `create_agent_workflow` — runtime workflow creation
 
 The agent can define and run its own workflows at runtime without any human involvement. Two modes:

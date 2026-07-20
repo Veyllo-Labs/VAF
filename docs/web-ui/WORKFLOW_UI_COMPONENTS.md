@@ -31,15 +31,22 @@ A compact card displayed inline in the chat showing:
 - Uses `workflowId` to match with the active workflow in store
 - Clicking opens the VAFWorkflowRuntime panel
 
-**Orphan timeout (60 s):**  
-If the right-side panel (`isOpen = false`) is already closed but this element still shows `status = 'running'`, a 60-second countdown starts automatically.  
-- Progress bar fills amber from left to right over 60 s  
-- Label shows `Waiting for output — timeout in Xs`  
-- At 0 s the store is force-set to `status: 'failed'`  
-This prevents the element from being stuck in "running" forever when `workflow_done` was lost or delayed.
+**Staleness hint (never a verdict):**
+While the run is `running`, the element compares `lastEventAt` in the store (bumped by step
+updates and output lines) against the wall clock. After 90 s without ANY signal it labels
+itself `No update for Ns, still running`. It changes nothing else, and it never writes the
+run's status.
 
-**Force-close via tool_update:**  
-When the `execute_workflow` ToolMessage transitions to `end` or `error`, the page handler checks whether the workflow store still has `status: 'running'` and force-sets it to `completed` or `failed`. This is a secondary safety net independent of the orphan timeout.
+This replaced an "orphan timeout" that keyed on whether the right-side panel was OPEN: closing
+the panel started a 60 s countdown and then force-set `status: 'failed'`. Panel visibility says
+nothing whatsoever about the run, so a healthy workflow was declared dead while it was still
+streaming output (reported live 2026-07-20, right after the panel gained a close button and the
+case became easy to hit). Absence of a signal is not evidence of failure; whether a run is
+still alive is answered by the backend via `get_workflow_run_state`, never guessed in the UI.
+Pinned by `tests/test_workflow_paused_not_failed.py`.
+
+**Force-close via tool_update:**
+When the `execute_workflow` ToolMessage transitions to `end` or `error`, the page handler checks whether the workflow store still has `status: 'running'` and force-sets it to `completed` or `failed`. Note that this net rides the SAME WebSocket as the events it compensates for, so it is useless in exactly the case it was written for (a dead socket); the reconciliation query below is the real answer.
 
 ```typescript
 <WorkflowChatElement
@@ -60,8 +67,35 @@ A slide-out panel on the right side containing:
 
 **Features:**
 - Auto-scrolls terminal output to bottom when new lines arrive
-- Auto-closes 2.5 seconds after workflow completion
+- Auto-closes 2.5 seconds after a TERMINAL state: `completed`, `failed` or `ended`. Never on
+  `paused` - that run is alive and will advance.
+- An unconditional close button in the header. Auto-close only fires on a terminal state, so a
+  panel that never learned it was finished used to be undismissable; on mobile it is full
+  screen, which locked the whole UI.
 - Receives output via `appendWorkflowLine()` from the store
+
+**Panel states:** `running`, `paused` ("Waiting for helper"), `completed`, `failed`, and
+`ended`. **`ended` is NEUTRAL**: the run is over but this panel never learned how it turned
+out, because its events were lost while the socket was down. It is deliberately not turned
+into success or failure - the real outcome is in the chat message. Two traps in the store are
+guarded against: the `allDone` rule in `updateStepStatus` must not rewrite `ended` into a
+manufactured `completed`, and a late frame arriving after a reconnect must not flip a terminal
+state back to `running`.
+
+**Reconciliation:** workflow events are fire and forget (no queue, no replay, no sequence
+numbers), so a socket that dies mid-run leaves the panel on its last received state with no way
+for the client to notice the gap - it sat at "step 1 running, 50 percent" for the rest of the
+session on 2026-07-20. The client therefore ASKS: `get_workflow_run_state` ->
+`workflow_run_state` (see [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md)), on reconnect, on
+window focus and on `visibilitychange`, plus once after mount for a tab reload that rehydrates
+a `running` panel from sessionStorage. A timer alone would not do: browsers freeze timers in
+hidden tabs.
+
+**Backend output is rate-capped** before it ever reaches the panel (`vaf/core/web_ticker.py`):
+ANSI stripped, repeats dropped, at most 15 lines per 0.25 s, plus a per-run ceiling, with
+suppressed volume surfaced as `[... N lines skipped]`. The 400-line client cap is a display
+limit, not the protection - the protection has to be at the emit site, because the damage is
+the frame rate on the socket.
 
 ### SubAgentWindow
 
@@ -307,4 +341,4 @@ Log files are one per day and can be deleted freely (GC-safe).
 
 3. **Document Loading**: DocumentEditor requires the `/api/file` endpoint to be accessible. Files must be in allowed directories (Documents, Downloads, or VAF data dir).
 
-4. **workflow_done delivery**: `_push_session_update` is fire-and-forget over WebSocket. If the message is dropped, the orphan timeout (60 s) and the tool_update force-close act as fallbacks.
+4. **workflow_done delivery**: `_push_session_update` is fire-and-forget over WebSocket - no queue, no replay, no sequence numbers. If the socket is down, `workflow_done` and every other panel event are delivered to nobody, and the two in-band fallbacks (the tool_update force-close, and the old orphan timeout) rode the same dead wire. The panel now reconciles by ASKING the backend (`get_workflow_run_state`) on reconnect, focus and visibility change; see the reconciliation note under VAFWorkflowRuntime above. Fields also have to be DECLARED on the `WorkflowUpdate` model in `web_server.py` to survive the subprocess route - an undeclared field is dropped silently, which is how `success` went missing and a finished run showed FAILED.

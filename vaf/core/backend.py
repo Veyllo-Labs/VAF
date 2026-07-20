@@ -109,15 +109,31 @@ _ENSURE_LOCAL_LOCK = threading.RLock()
 # so the handle is parked here and collected later. Popen.poll() is the reaping call.
 _ABANDONED_CHILDREN: list = []
 
+# Its OWN lock, deliberately NOT _ENSURE_LOCAL_LOCK. That one is held for the WHOLE model
+# load, which can legitimately run for minutes, while this reaper is called from the tray's
+# ~1s idle tick: sharing the lock would freeze the tray loop (icon, idle checks, the unload
+# decision itself) for the entire load. Found in review before it shipped. This lock is only
+# ever held for a handful of non-blocking poll() calls, and it also closes a lost-update race
+# between a parking stop_server and a concurrent sweep.
+_ABANDONED_LOCK = threading.Lock()
+
+
+def _park_abandoned_child(proc) -> None:
+    """Hand a child we stopped waiting for to the reaper."""
+    with _ABANDONED_LOCK:
+        _ABANDONED_CHILDREN.append(proc)
+
 
 def reap_abandoned_children() -> int:
     """Collect any child we stopped waiting for. Returns how many were reaped.
 
     Cheap and safe to call often: poll() is non-blocking, and a child that has not exited yet
-    simply stays on the list. No-op on Windows, which has no zombie concept.
+    simply stays on the list. Reaping matters on POSIX, where a killed child stays in the
+    process table until its parent wait()s it; on Windows there is no zombie concept, so this
+    is a harmless bookkeeping sweep there.
     """
     reaped = 0
-    with _ENSURE_LOCAL_LOCK:
+    with _ABANDONED_LOCK:
         still_running = []
         for proc in _ABANDONED_CHILDREN:
             try:
@@ -126,7 +142,8 @@ def reap_abandoned_children() -> int:
                 else:
                     reaped += 1                  # poll() just reaped it
             except Exception:
-                reaped += 1                      # unusable handle: drop it either way
+                pass                             # unusable handle: drop it, but do not
+                                                 # report it as reaped - nothing was
         _ABANDONED_CHILDREN[:] = still_running
     return reaped
 
@@ -1419,7 +1436,7 @@ class ServerManager:
                     # child), but dropping the handle here leaks a ZOMBIE: on POSIX a killed
                     # child stays in the process table until its parent reaps it, and the
                     # tray runs for days. Park it for reap_abandoned_children instead.
-                    _ABANDONED_CHILDREN.append(self.process)
+                    _park_abandoned_child(self.process)
 
             self.process = None
         if os.path.exists(self.pid_file) and force_external:

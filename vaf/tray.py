@@ -1071,9 +1071,17 @@ def _work_in_flight():
         # A live call holds the model even when nothing is queued: the next utterance must
         # not wait for a reload. Read the registry the call handler maintains; importing
         # web_server here is free, the tray already serves it.
-        from vaf.core.web_server import _VOICE_CALLS
+        #
+        # Intersect with the LIVE sockets instead of trusting the dict's non-emptiness. The
+        # teardown paths pop their entry, but a wedged-but-not-yet-disconnected socket could
+        # still leave one behind, and this term is uniquely dangerous: unlike the others it
+        # can be permanently true, which would pin the model forever and silently switch off
+        # idle unloading altogether. Found in review before it shipped.
+        from vaf.core.web_server import _VOICE_CALLS, manager as _ws_manager
         if _VOICE_CALLS:
-            return True, "Voice call"
+            live = {id(ws) for ws in getattr(_ws_manager, "active_connections", [])}
+            if any(key in live for key in _VOICE_CALLS):
+                return True, "Voice call"
     except Exception:
         # No call registry in this build: not an error, just nothing to report.
         pass
@@ -1282,7 +1290,11 @@ def check_activity_loop(update_icon_callback):
                 f"IdleCheck state: loaded={tray_context.model_loaded} "
                 f"persistent={is_persistent} ws={tray_context.active_websockets} "
                 f"lastHeartbeat={time_since_last:.1f}s lastWs={time_since_ws_activity:.1f}s "
-                f"lastDisconnect={time_since_disconnect:.1f}s telegramGrace={telegram_grace}"
+                f"lastDisconnect={time_since_disconnect:.1f}s telegramGrace={telegram_grace} "
+                # Without this the busy term is invisible: it only ever prints when it causes
+                # a LOAD, so a term stuck at True would keep the model pinned and leave no
+                # trace in the very log this incident was reconstructed from.
+                f"work={work_reason or '-'}"
             )
             log("Tray", state_line)
             try:

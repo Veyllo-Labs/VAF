@@ -134,9 +134,16 @@ _whisper_model = None
 _whisper_model_lock = threading.Lock()
 
 # Live-call state per WebSocket connection (voice-agent first layer):
-# {id(websocket): {"history": [...], "lang": str, "scope": str}}. Entries are
-# removed on voice_call_end; stale entries from abrupt disconnects are
-# harmless (few KB) and reused keys get overwritten on the next call start.
+# {id(websocket): {"history": [...], "lang": str, "scope": str}}. Entries are removed on
+# voice_call_end AND on socket teardown.
+#
+# A stale entry is NOT harmless any more (the comment here used to say it was, back when
+# nothing read this dict as a signal). The tray's idle watchdog now treats an entry as "a
+# call is live, keep the local model loaded", so a single orphan would pin the model for the
+# life of the process and silently disable idle unloading. voice_call_end is sent by exactly
+# one frontend site, inside endCall, so any abrupt teardown - closed tab, refresh, a wifi
+# blip that makes the client reconnect on a NEW id(websocket) - would leave one behind.
+# Hence the teardown pop, plus a liveness intersection at the reading end.
 _VOICE_CALLS: dict = {}
 
 def get_whisper_model():
@@ -7400,6 +7407,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        # Drop any live-call state for this socket. voice_call_end is sent by exactly one
+        # frontend site (inside endCall), so an abrupt teardown would leave an orphan behind -
+        # and the idle watchdog reads this dict as "a call is live, keep the model loaded",
+        # which would pin the local model for the life of the process.
+        _VOICE_CALLS.pop(id(websocket), None)
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
         log("API", f"WebSocket disconnected. Active: {tray_context.active_websockets}")
         
@@ -7420,6 +7432,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     except Exception as e:
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
+        _VOICE_CALLS.pop(id(websocket), None)   # same reason as the disconnect path above
         tray_context.set_websocket_count(len(manager.active_connections)) # Update active count
         log("API", f"WebSocket error; active now {tray_context.active_websockets}")
         

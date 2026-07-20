@@ -448,6 +448,28 @@ def test_the_panel_never_invents_an_outcome():
     assert "'paused'" in reconcile
 
 
+def test_the_chat_card_never_declares_a_run_dead_on_its_own():
+    """Reported live 2026-07-20, same failure logic as the backend bug this file is about.
+
+    The workflow card in the chat had an "orphan timeout": while the right panel was CLOSED
+    and the card said running, it counted down 60 seconds and then wrote status='failed' into
+    the store. Whether a panel is open says NOTHING about the run - the user had simply put it
+    away - so a healthy workflow was declared dead while it was still streaming output. The
+    close button added by the panel-reconciliation change made it easy to hit.
+
+    A card may report that it has not heard anything for a while. It may never decide that
+    the run is over: that answer comes from the backend (get_workflow_run_state).
+    """
+    src = (_REPO / "web/components/workflows/WorkflowChatElement.tsx").read_bytes().decode("utf-8")
+    code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("//"))
+
+    assert "!isOpen" not in code, "a closed panel is not evidence about the run"
+    assert "useWorkflowStore.setState" not in code, (
+        "the card must render the run's status, never write it"
+    )
+    assert "lastEventAt" in code, "staleness must be measured from real signals, not from the UI"
+
+
 def test_workflow_result_carries_the_awaited_agent():
     r = WorkflowResult(
         success=False, outputs={}, final_output=None, steps=[], total_duration=0.0,

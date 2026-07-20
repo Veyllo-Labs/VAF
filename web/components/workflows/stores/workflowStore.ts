@@ -31,6 +31,10 @@ export interface VAFWorkflow {
 interface WorkflowState {
   isOpen: boolean;
   workflow: VAFWorkflow | null;
+  // Wall-clock of the last event that actually said something about the run. A UI that
+  // wants to know "have we heard anything lately" must ask THIS, never whether a panel
+  // happens to be open.
+  lastEventAt: number | null;
   nodes: Node[];
   edges: Edge[];
   consoleLines: string[];
@@ -51,6 +55,7 @@ export const useWorkflowStore = create<WorkflowState>()(
     (set, get) => ({
   isOpen: false,
   workflow: null,
+  lastEventAt: null,
   nodes: [],
   edges: [],
   consoleLines: [],
@@ -79,7 +84,8 @@ export const useWorkflowStore = create<WorkflowState>()(
       workflow,
       nodes,
       edges,
-      consoleLines: []
+      consoleLines: [],
+      lastEventAt: Date.now(),
     });
   },
 
@@ -119,7 +125,8 @@ export const useWorkflowStore = create<WorkflowState>()(
 
     set({
       workflow: { ...workflow, steps: newSteps, status: wfStatus },
-      nodes: newNodes
+      nodes: newNodes,
+      lastEventAt: Date.now(),
     });
   },
 
@@ -136,7 +143,7 @@ export const useWorkflowStore = create<WorkflowState>()(
     set(state => {
       const next = [...state.consoleLines, entry];
       const capped = next.length > 400 ? next.slice(-400) : next;
-      return { consoleLines: capped };
+      return { consoleLines: capped, lastEventAt: Date.now() };
     });
   },
 
@@ -166,6 +173,7 @@ export const useWorkflowStore = create<WorkflowState>()(
       partialize: (state) => ({
         isOpen: state.isOpen,
         workflow: state.workflow,
+        lastEventAt: state.lastEventAt,
         nodes: state.nodes,
         edges: state.edges,
         consoleLines: state.consoleLines,

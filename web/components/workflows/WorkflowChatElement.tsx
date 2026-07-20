@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Veyllo GmbH
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useWorkflowStore } from './stores/workflowStore';
-import type { VAFWorkflow } from './stores/workflowStore';
 import { Activity, CheckCircle2, XCircle, Clock, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const ORPHAN_TIMEOUT = 60; // seconds before declaring "no output received"
+// How long without ANY signal about the run before this card admits it has not heard
+// anything for a while. It only ever changes the LABEL; it never changes the run's state.
+const STALE_AFTER_MS = 90_000;
 
 interface WorkflowChatElementProps {
   workflowId: string;
@@ -17,7 +18,10 @@ interface WorkflowChatElementProps {
 }
 
 export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workflowId, name, initialSteps, forceStatus }) => {
-  const { workflow, isOpen, openWorkflow } = useWorkflowStore();
+  // NOTE: deliberately does NOT read isOpen. Whether the right panel is open says nothing
+  // about the run, and treating it as a signal is what produced the false failure above.
+  const { workflow, openWorkflow } = useWorkflowStore();
+  const lastEventAt = useWorkflowStore(s => s.lastEventAt);
 
   const isMatch = workflow?.id === workflowId;
   const data = isMatch ? workflow : null;
@@ -34,63 +38,49 @@ export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workfl
     ? Math.round((completed / total) * 100)
     : (forceStatus === 'running' ? 0 : 100);
 
-  // ── Orphan timeout ─────────────────────────────────────────────────────────
-  // If the right panel closed but this element is still 'running', count down.
-  // After ORPHAN_TIMEOUT seconds with no update → force 'failed'.
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const isOrphaned = isMatch && status === 'running' && !isOpen;
-
+  // ── Staleness hint, never a verdict ────────────────────────────────────────
+  // This used to be an "orphan timeout": while the right panel was CLOSED and this element
+  // said 'running', it counted down 60 seconds and then wrote status='failed' into the store.
+  // A closed panel says nothing whatsoever about the run - the user had simply put it away -
+  // so a perfectly healthy workflow was declared dead while it was still streaming output.
+  // That is the same mistake as the backend reporting a paused run as crashed: absence of a
+  // signal treated as evidence of failure. Reported live on 2026-07-20, right after the panel
+  // gained a close button and the case became easy to hit.
+  //
+  // It now measures the only thing that carries information - how long since we last heard
+  // ANYTHING about this run - and it only says so. Whether the run is genuinely still alive
+  // is answered by the backend (get_workflow_run_state), never guessed here.
+  const isRunning = isMatch && status === 'running';
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (isOrphaned) {
-      setCountdown(ORPHAN_TIMEOUT);
-      intervalRef.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev === null) return null;
-          if (prev <= 1) {
-            clearInterval(intervalRef.current!);
-            intervalRef.current = null;
-            // Force-fail the workflow in the store
-            useWorkflowStore.setState(s => ({
-              workflow: s.workflow
-                ? { ...s.workflow, status: 'failed' as VAFWorkflow['status'] }
-                : null
-            }));
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      setCountdown(null);
-    }
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [isOrphaned]);
+    if (!isRunning) return;
+    const t = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, [isRunning]);
+
+  const silentForMs = (isRunning && lastEventAt) ? Math.max(0, now - lastEventAt) : 0;
+  const isStale = silentForMs > STALE_AFTER_MS;
 
   // ── Status label ────────────────────────────────────────────────────────────
   let statusLabel: React.ReactNode;
-  if (countdown !== null) {
+  if (isStale) {
     statusLabel = (
       <span className="text-amber-500">
-        Waiting for output — timeout in {countdown}s
+        No update for {Math.round(silentForMs / 1000)}s, still running
       </span>
     );
   } else if (status === 'running' && activeStep) {
     statusLabel = `Step ${currentStepIndex + 1}: ${activeStep.name}`;
+  } else if (status === 'running') {
+    statusLabel = 'Running';
+  } else if (status === 'paused') {
+    statusLabel = 'Waiting for a background helper';
   } else if (status === 'completed') {
     statusLabel = 'Workflow completed';
   } else if (status === 'failed') {
-    statusLabel = countdown === null && isOrphaned ? 'Failed to generate output' : 'Workflow failed';
+    statusLabel = 'Workflow failed';
+  } else if (status === 'ended') {
+    statusLabel = 'Finished, see the message below';
   } else {
     statusLabel = 'Workflow finished';
   }
@@ -110,14 +100,16 @@ export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workfl
     >
       <div className={cn(
         "w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors",
-        countdown !== null        ? "bg-amber-50 text-amber-500" :
+        isStale                   ? "bg-amber-50 text-amber-500" :
         status === 'running'      ? "bg-indigo-50 text-indigo-600" :
+        status === 'paused'       ? "bg-amber-50 text-amber-500" :
         status === 'completed'    ? "bg-green-50 text-green-600" :
         status === 'failed'       ? "bg-red-50 text-red-600" :
         "bg-gray-100 text-gray-400"
       )}>
-        {countdown !== null       ? <AlertTriangle size={20} className="animate-pulse" /> :
+        {isStale                  ? <AlertTriangle size={20} className="animate-pulse" /> :
          status === 'running'     ? <Activity size={20} className="animate-pulse" /> :
+         status === 'paused'      ? <Clock size={20} className="animate-pulse" /> :
          status === 'completed'   ? <CheckCircle2 size={20} /> :
          status === 'failed'      ? <XCircle size={20} /> :
          <Clock size={20} />}
@@ -132,12 +124,12 @@ export const WorkflowChatElement: React.FC<WorkflowChatElementProps> = ({ workfl
         <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mb-1">
           <div
             className={cn("h-full rounded-full transition-all duration-500",
-              countdown !== null     ? "bg-amber-400" :
               status === 'completed' ? "bg-green-500" :
               status === 'failed'    ? "bg-red-500" :
+              isStale                ? "bg-amber-400" :
               "bg-indigo-500"
             )}
-            style={{ width: countdown !== null ? `${Math.round((1 - countdown / ORPHAN_TIMEOUT) * 100)}%` : `${progress}%` }}
+            style={{ width: `${progress}%` }}
           />
         </div>
 

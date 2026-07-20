@@ -27,6 +27,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   blocking, a failure is remembered briefly instead of being retried on every redraw, and two
   simultaneous requests share one lookup. The same blocking pattern was fixed in the email
   account verification and the Telegram dashboard.
+- **A busy workflow no longer floods and kills its own connection to the browser.** While a
+  research step was running, its progress animation was forwarded to the browser frame by
+  frame, hundreds of times per second. That was enough to drop the live connection in the
+  middle of a run, after which the Workflow Runtime panel never advanced again and sat at
+  the last state it had received. Progress output is now filtered and rate-limited before it
+  is sent, in every place that forwards it, and the animation that produced it is no longer
+  started when nobody is watching a real terminal. The separate workflow terminal keeps its
+  colours and live display. Long, quiet steps are also no longer mistaken for stuck ones:
+  the "no output" watchdog now allows a heavy step the time it is actually given.
 - **A workflow that hands work to a background helper is no longer reported as crashed.**
   When a workflow step passes its work to a helper (writing a document, researching a
   topic), the workflow pauses and waits instead of finishing. Three of the places that read

@@ -153,6 +153,19 @@ These endpoints are used only for the native DOCX editor path. The legacy HTML e
 - `subagent_update`: sub-agent window payload
 - `subagent_output`: final sub-agent output block
 - `subagent_output_stream`: live stdout/stderr lines from headless sub-agents
+- **Mirrored output is rate-capped at the emit site** (`vaf/core/web_ticker.py`). Every lane
+  that mirrors a stream into the browser - the in-chat workflow executor, the workflow
+  builder, the separate workflow terminal and the piped sub-agent drain - feeds the ONE
+  shared ticker: ANSI stripped, repeats dropped, at most 15 lines per 0.25 s, a per-run
+  ceiling, and suppressed volume surfaced as `[... N lines skipped]` rather than hidden.
+  This is not cosmetic. Rich draws its Live panels by redrawing them 15 times a second, and
+  an unfiltered mirror turns that into one WebSocket frame, one React render and one HTTP
+  POST per redraw. It has caused two incidents: 2026-07-16 the tray browser froze, and
+  2026-07-20 the in-chat lane pushed 48,359 frames in 181 s and the socket died mid-run,
+  after which every event that would have closed the Workflow Runtime panel was broadcast to
+  zero subscribers. The mirrors used in-process also report `isatty()` as false, so Rich
+  never starts the animation in the first place; the separate-terminal lane keeps the real
+  stream's value, because that window exists to be watched.
 - **SubAgent window vs. running workflow:** while a workflow is running, the SubAgent window
   never opens - the Workflow Runtime panel's terminal is the single display for embedded
   sub-agent steps. The stream/output handlers route their lines into the workflow terminal

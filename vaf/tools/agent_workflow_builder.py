@@ -60,6 +60,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from vaf.core.web_ticker import MirroredStdout
 from vaf.tools.base import BaseTool
 
 
@@ -625,44 +626,8 @@ class AgentWorkflowBuilderTool(BaseTool):
                 })
 
         # ── Stdout / stderr wrapper ───────────────────────────────────────────
-        class _WebStreamWriter:
-            """
-            Forwards every write to the original stream AND splits on newlines
-            to emit workflow_output_stream events to the WebUI.
-            When session_id is None the WebUI path is skipped entirely.
-            """
-            def __init__(self, stream):
-                self._stream = stream
-                self._buf    = ""
-
-            def write(self, data: str) -> None:
-                try:
-                    self._stream.write(data)
-                    self._stream.flush()
-                except Exception:
-                    pass
-                if not session_id:
-                    return
-                self._buf += data
-                while "\n" in self._buf:
-                    line, self._buf = self._buf.split("\n", 1)
-                    _push({
-                        "type":       "workflow_output_stream",
-                        "workflowId": workflow_id,
-                        "line":       line,
-                    })
-
-            def flush(self) -> None:
-                try:
-                    self._stream.flush()
-                except Exception:
-                    pass
-
-            def isatty(self) -> bool:
-                return getattr(self._stream, "isatty", lambda: False)()
-
-            def fileno(self) -> int:
-                return getattr(self._stream, "fileno", lambda: -1)()
+        def _send_wf_line(line: str) -> None:
+            _push({"type": "workflow_output_stream", "workflowId": workflow_id, "line": line})
 
         # ── Execute ───────────────────────────────────────────────────────────
         engine = WorkflowEngine(
@@ -728,7 +693,12 @@ class AgentWorkflowBuilderTool(BaseTool):
         result = None
         _wf_exc = None
         try:
-            sys.stdout = _WebStreamWriter(sys.stdout)
+            # Shared, rate-capped mirror. interactive=False stops Rich from starting a
+            # Live animation behind the Web UI: its redraws are what flooded the socket.
+            # stdout ONLY here, deliberately - see the comment above about stderr.
+            sys.stdout = MirroredStdout(sys.stdout,
+                                        _send_wf_line if session_id else None,
+                                        interactive=False)
             os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
             if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                 os.environ["VAF_TOOL_MODEL"] = _subagent_model
@@ -739,6 +709,10 @@ class AgentWorkflowBuilderTool(BaseTool):
         except Exception as exc:
             _wf_exc = exc
         finally:
+            try:
+                sys.stdout.close_ticker()   # flush the tail before restoring
+            except Exception:
+                pass
             sys.stdout = _orig_stdout
             if _prev_wf_terminal is None:
                 os.environ.pop("VAF_IN_WORKFLOW_TERMINAL", None)

@@ -693,14 +693,28 @@ class Platform:
                         threading.Thread(target=_pipe_drain, daemon=True).start()
 
                         # Pre-compile patterns once per stream
-                        _ansi_re = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
                         # Rich TUI box borders  (╭─, ╰─, ├─, │ alone, etc.)
                         _box_border_re = re.compile(r'^[╭╰├└┤╞╡╔╗╚╝║╠╣╦╩╬─═╪╫]+')
                         # Rich TUI panel side lines:  │   42  content   │
                         _box_panel_re = re.compile(r'^[│]\s*\d*\s*(.*?)\s*[│]?\s*$')
                         # "... (N lines above)" scroll indicator (not useful in browser)
                         _scroll_ind_re = re.compile(r'^\.\.\.\s*\(\d+ lines above\)\s*$')
-                        _seen_lines: set = set()  # content-level dedup within this stream
+                        # Rate cap + bounded dedup live in the ONE shared ticker
+                        # (vaf/core/web_ticker.py). This lane used to push one frame per line
+                        # with no cap at all, into the very same 400-line panel ring that the
+                        # workflow mirror floods, and its dedup set grew without limit for the
+                        # whole life of the run.
+                        from vaf.core.web_ticker import ANSI_RE as _ansi_re, WebTicker
+
+                        def _emit_web_line(line: str) -> None:
+                            _send_web_update({
+                                "type": "subagent_output_stream",
+                                "taskId": task_id or None,
+                                "agentType": agent_type or None,
+                                "line": line
+                            })
+
+                        _ticker = WebTicker(_emit_web_line, dedup_window=200)
 
                         while True:
                             raw = _line_q.get()
@@ -725,17 +739,9 @@ class Platform:
                             # Skip scroll position indicators ("... (42 lines above)")
                             if _scroll_ind_re.match(send_line):
                                 continue
-                            # Content-level dedup: same message repeated across TUI re-renders
-                            if send_line in _seen_lines:
-                                continue
-                            _seen_lines.add(send_line)
+                            _ticker.feed(send_line + "\n")
 
-                            _send_web_update({
-                                "type": "subagent_output_stream",
-                                "taskId": task_id or None,
-                                "agentType": agent_type or None,
-                                "line": send_line
-                            })
+                        _ticker.close()
 
                         try:
                             proc.wait(timeout=900)

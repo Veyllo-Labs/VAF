@@ -10,76 +10,15 @@ runs in its own terminal and only reports the final summary back.
 """
 import typer
 import json
-import re
 import sys
 import os
 import time
 from pathlib import Path
 from typing import Optional
 
-# ANSI/VT escape sequences (CSI colors/cursor moves, OSC titles, charset
-# selects). Rich Live animations are made of these; the web ticker must
-# never see them (they rendered as literal garbage and their volume froze
-# the tray browser - live incident 2026-07-16).
-_ANSI_RE = re.compile(
-    r"\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-B])"
-)
-
-
-class _WebTickerFilter:
-    """Turns a raw terminal stream into a web-safe, rate-capped line ticker.
-
-    The workflow terminal mirrors its stdout into the Web UI panel. Sub-agents
-    (research agent) draw Rich Live animations: full-panel redraws many times
-    per second, hundreds of ANSI lines - one HTTP POST + one WebSocket event
-    + one React render EACH froze the tray browser until the WebSocket
-    dropped. This filter enforces ticker semantics at the emit site:
-
-    - strips ANSI escapes and carriage returns,
-    - drops lines that are empty after stripping (animation frames),
-    - drops consecutive duplicates (Live redraws),
-    - hard rate cap: at most MAX_LINES_PER_WINDOW sends per WINDOW seconds;
-      excess lines are counted and surfaced as one "[... N lines skipped]".
-    """
-
-    WINDOW = 0.25
-    MAX_LINES_PER_WINDOW = 15
-
-    def __init__(self, send_line):
-        self._send_line = send_line
-        self._buffer = ""
-        self._last_line = None
-        self._window_start = 0.0
-        self._window_count = 0
-        self._skipped = 0
-
-    def feed(self, data: str) -> None:
-        self._buffer += data
-        while "\n" in self._buffer:
-            raw, self._buffer = self._buffer.split("\n", 1)
-            self._handle_line(raw)
-
-    def _handle_line(self, raw: str) -> None:
-        line = _ANSI_RE.sub("", raw).replace("\r", "").rstrip()
-        if not line.strip():
-            return
-        if line == self._last_line:
-            return
-        self._last_line = line
-
-        now = time.monotonic()
-        if now - self._window_start >= self.WINDOW:
-            self._window_start = now
-            self._window_count = 0
-        if self._window_count >= self.MAX_LINES_PER_WINDOW:
-            self._skipped += 1
-            return
-        if self._skipped:
-            self._send_line(f"[... {self._skipped} lines skipped]")
-            self._skipped = 0
-            self._window_count += 1
-        self._send_line(line)
-        self._window_count += 1
+# The ONE web mirror/ticker for the whole codebase (vaf/core/web_ticker.py). This lane
+# used to own the only hardened copy; three other lanes had unfiltered ones.
+from vaf.core.web_ticker import MirroredStdout
 
 # Fix Windows encoding issues - must be done BEFORE any output
 if sys.platform == "win32":
@@ -308,40 +247,12 @@ def run_workflow(
             except:
                 pass
 
-        class WebStreamWriter(_WebTickerFilter):
-            """Real terminal gets everything; the web ticker gets the
-            filtered, rate-capped view (see _WebTickerFilter)."""
-
-            def __init__(self, stream):
-                super().__init__(send_web_line)
-                self.stream = stream
-
-            def write(self, data):
-                try:
-                    self.stream.write(data)
-                    self.stream.flush()
-                except Exception:
-                    pass
-                if not session_id:
-                    return
-                self.feed(data)
-
-            def flush(self):
-                try:
-                    self.stream.flush()
-                except Exception:
-                    pass
-
-            def isatty(self):
-                return getattr(self.stream, "isatty", lambda: False)()
-
-            def fileno(self):
-                return getattr(self.stream, "fileno", lambda: -1)()
-
         if session_id:
+            # interactive=None keeps the REAL stream's isatty(): this lane owns a visible
+            # terminal window, so its Rich TUI and colours must survive.
             workflow_output_enabled = True
-            sys.stdout = WebStreamWriter(sys.stdout)
-            sys.stderr = WebStreamWriter(sys.stderr)
+            sys.stdout = MirroredStdout(sys.stdout, send_web_line)
+            sys.stderr = MirroredStdout(sys.stderr, send_web_line)
 
         # Send initial workflow structure
         if session_id:
@@ -482,13 +393,13 @@ def run_workflow(
             ipc.fail_task(task_id, error_msg)
 
     if workflow_output_enabled:
-        try:
-            stdout_writer = sys.stdout
-            if getattr(stdout_writer, "_buffer", ""):
-                send_web_line(stdout_writer._buffer)
-                stdout_writer._buffer = ""
-        except Exception:
-            pass
+        # Flush both mirrors' tails. The old code reached into the writer's private buffer
+        # and only ever did stdout, so stderr's last partial line was silently dropped.
+        for _w in (sys.stdout, sys.stderr):
+            try:
+                _w.close_ticker()
+            except Exception:
+                pass
 
     # Close the workflow panel — workflow_start was sent, so workflow_done must follow.
     # EXCEPT when the run only paused: workflow_done carries success=False and the panel

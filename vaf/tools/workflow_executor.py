@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 
+from vaf.core.web_ticker import MirroredStdout
 from vaf.tools.base import BaseTool
 
 
@@ -97,7 +98,12 @@ class ExecuteWorkflowTool(BaseTool):
         _hb_stop = None      # heartbeat thread stop event; set in finally
         try:
             from vaf.workflows.templates import get_template, list_templates
-            from vaf.workflows.engine import WorkflowEngine, create_workflow
+            from vaf.workflows.engine import (
+                SPAWNABLE_STEP_TOOLS,
+                WorkflowEngine,
+                _workflow_step_timeout,
+                create_workflow,
+            )
 
             # Resolve the session ONCE, up front: prefer the injected agent's
             # session_id (survives worker threads), fall back to the module
@@ -368,10 +374,39 @@ class ExecuteWorkflowTool(BaseTool):
             # Timeout B (40s): previous step ended but next step never started
             _TIMEOUT_ACTIVE  = 60
             _TIMEOUT_BETWEEN = 40
+            # Silence floor for a heavy agent step (see _silence_budget below).
+            _TIMEOUT_HEAVY_FLOOR = 300.0
 
             _last_activity   = [time.time()]
             _last_cb         = ["none", time.time()]
             _stop_event      = threading.Event()
+            _running_tool    = [""]
+
+            def _silence_budget() -> float:
+                """How long the CURRENT step may stay silent before it counts as wedged.
+
+                60 s is right for a quick tool, and wrong for a heavy agent step. Until now
+                the difference was papered over by accident: the research agent drew a Rich
+                Live animation at 15 fps, and those frames alone kept this clock alive. That
+                animation is exactly what flooded the WebSocket, so it is gone - and without
+                a per-tool budget a healthy, quiet research step would now be aborted as
+                "stuck", handing the user the same fabricated failure this whole change set
+                exists to remove.
+
+                Heavy steps therefore fall back on the engine's own worst-case cap for that
+                tool (_workflow_step_timeout), so the two watchdogs agree instead of the
+                shorter one silently overruling the longer, with a floor for the heavy tools
+                whose cap is still the generic one. Silence is not evidence of death here: a
+                spawned child has its own heartbeat liveness check
+                (subagent_liveness_timeout_seconds), and a runaway is caught by that hard cap.
+                """
+                tool = _running_tool[0]
+                if tool in SPAWNABLE_STEP_TOOLS or tool == "document_writer":
+                    try:
+                        return max(float(_workflow_step_timeout(tool)), _TIMEOUT_HEAVY_FLOOR)
+                    except Exception:
+                        return _TIMEOUT_HEAVY_FLOOR
+                return float(_TIMEOUT_ACTIVE)
 
             def _touch():
                 _last_activity[0] = time.time()
@@ -392,9 +427,10 @@ class ExecuteWorkflowTool(BaseTool):
                         break
 
                     # Timeout A: step is running but completely silent for too long
-                    if _last_cb[0] == "start" and now - _last_activity[0] >= _TIMEOUT_ACTIVE:
+                    _budget = _silence_budget()
+                    if _last_cb[0] == "start" and now - _last_activity[0] >= _budget:
                         elapsed = round(now - _last_activity[0], 1)
-                        msg = f"Step-Timeout: Kein Output in {_TIMEOUT_ACTIVE}s — breche ab..."
+                        msg = f"Step-Timeout: Kein Output in {int(_budget)}s - breche ab..."
                         _wf_log(wf_run_id, "WATCHDOG_A",
                                 last_cb=_last_cb[0], silent_s=elapsed)
                         _push({"type": "workflow_output_stream", "workflowId": wf_id, "line": f"⚠ {msg}"})
@@ -407,6 +443,8 @@ class ExecuteWorkflowTool(BaseTool):
                 _touch()
                 _last_cb[0] = event
                 _last_cb[1] = time.time()
+                if event == "start":
+                    _running_tool[0] = str(getattr(step, "tool", "") or "")
                 _wf_log(wf_run_id, "STEP_CB",
                         cb=event,
                         step=f"{current}/{total}",
@@ -440,40 +478,8 @@ class ExecuteWorkflowTool(BaseTool):
                     _push({"type": "workflow_output_stream", "workflowId": wf_id,
                            "line": f"✗ Schritt {current}/{total} fehlgeschlagen: {err[:300]}"})
 
-            class _WebStreamWriter:
-                def __init__(self, stream):
-                    self._stream = stream
-                    self._buf = ""
-
-                def write(self, data: str) -> None:
-                    try:
-                        self._stream.write(data)
-                        self._stream.flush()
-                    except Exception:
-                        pass
-                    if not session_id:
-                        return
-                    self._buf += data
-                    while "\n" in self._buf:
-                        line, self._buf = self._buf.split("\n", 1)
-                        _touch()  # only reset silence clock when a visible line appears
-                        _push({
-                            "type":       "workflow_output_stream",
-                            "workflowId": wf_id,
-                            "line":       line,
-                        })
-
-                def flush(self) -> None:
-                    try:
-                        self._stream.flush()
-                    except Exception:
-                        pass
-
-                def isatty(self) -> bool:
-                    return getattr(self._stream, "isatty", lambda: False)()
-
-                def fileno(self) -> int:
-                    return getattr(self._stream, "fileno", lambda: -1)()
+            def _send_wf_line(line: str) -> None:
+                _push({"type": "workflow_output_stream", "workflowId": wf_id, "line": line})
 
             # ── Execute ───────────────────────────────────────────────────────
             engine = WorkflowEngine(
@@ -497,8 +503,18 @@ class ExecuteWorkflowTool(BaseTool):
             _exec_error  = [None]
             _wf_log(wf_run_id, "ENGINE_START")
             try:
-                sys.stdout = _WebStreamWriter(sys.stdout)
-                sys.stderr = _WebStreamWriter(sys.stderr)
+                # interactive=False is the actual fix for the 2026-07-20 frame storm: Rich
+                # gates Live on isatty() (and Console.is_terminal, which resolves lazily from
+                # sys.stdout), so reporting False stops the 15 fps animation at the source
+                # instead of filtering its frames afterwards. The old writer delegated
+                # isatty() to the real stdout, which is still a TTY in the tray process.
+                # on_activity feeds the silence watchdog: it must fire for every raw line,
+                # including the ones the rate cap drops, or throttling would look like a hang.
+                _mirror_send = _send_wf_line if session_id else None
+                sys.stdout = MirroredStdout(sys.stdout, _mirror_send,
+                                            interactive=False, on_activity=_touch)
+                sys.stderr = MirroredStdout(sys.stderr, _mirror_send,
+                                            interactive=False, on_activity=_touch)
                 os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
                 if _subagent_model and _subagent_model.lower() != "deepseek-auto":
                     os.environ["VAF_TOOL_MODEL"] = _subagent_model
@@ -516,6 +532,13 @@ class ExecuteWorkflowTool(BaseTool):
                 _wf_log(wf_run_id, "ENGINE_EXCEPTION", error=str(exc)[:300])
             finally:
                 _stop_event.set()   # always stop watchdog when execution ends
+                # Flush the mirrors' tails BEFORE restoring, or the last partial line and a
+                # pending "N lines skipped" notice are lost.
+                for _w in (sys.stdout, sys.stderr):
+                    try:
+                        _w.close_ticker()
+                    except Exception:
+                        pass
                 sys.stdout = _orig_stdout
                 sys.stderr = _orig_stderr
                 if _prev_wf_terminal is None:

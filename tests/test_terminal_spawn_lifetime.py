@@ -129,15 +129,67 @@ def test_no_auto_close_still_holds_the_window(monkeypatch, capsys):
 
 def test_a_piped_child_exits_at_once(monkeypatch, capsys):
     """In WebUI mode there is no window to hold: the countdown's output is forwarded into
-    the browser console as spam, and a late exit used to overlap the next workflow step."""
+    the browser console as spam, and a late exit used to overlap the next workflow step.
+
+    The predicate is asserted DIRECTLY against a stdout that claims to be a TTY. Asserting
+    only on finish_terminal() under pytest would be a tautology: capsys replaces stdout with
+    something whose isatty() is already False, so the test would pass even with both env
+    checks deleted."""
     from vaf.cli import autoclose
+
+    class _RealTty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(autoclose.sys, "stdout", _RealTty())
 
     monkeypatch.setenv("VAF_SPAWN_MODE", "piped")
     monkeypatch.delenv("VAF_WEBUI_ACTIVE", raising=False)
+    assert autoclose._is_interactive_window() is False, "an explicit piped spawn has no window"
+
+    monkeypatch.delenv("VAF_SPAWN_MODE", raising=False)
+    monkeypatch.setenv("VAF_WEBUI_ACTIVE", "1")
+    assert autoclose._is_interactive_window() is False, "a web-UI process has no window"
+
+    # An EXPLICIT terminal spawn wins over the ambient flag: the spawner knows what it opened,
+    # while VAF_WEBUI_ACTIVE only says the PARENT serves a web UI and is inherited by
+    # everything it starts. Ambient-first would make such a window unable to hold on failure.
+    monkeypatch.setenv("VAF_SPAWN_MODE", "terminal")
+    assert autoclose._is_interactive_window() is True
+
+    monkeypatch.setenv("VAF_SPAWN_MODE", "piped")
     with pytest.raises(SystemExit) as e:
         autoclose.finish_terminal(success=False, no_auto_close=True)
     assert e.value.code == 1
     assert capsys.readouterr().out == "", "a piped child must stay silent"
+
+
+def test_every_uvicorn_entry_point_declares_the_process_serves_a_web_ui():
+    """THE blocker adversarial review found in this change: the desktop app does NOT go
+    through web_server.run_server. vaf/tray.py has its own start_uvicorn that imports the app
+    and drives uvicorn itself, so putting the declaration only in run_server left the fix
+    inert on exactly the path where the incident happened."""
+    offenders = []
+    for rel in ("vaf/core/web_server.py", "vaf/tray.py"):
+        src = _source(rel)
+        if "uvicorn" not in src:
+            continue
+        if "mark_webui_process()" not in src:
+            offenders.append(rel)
+    assert not offenders, (
+        "These modules serve the web app but never declare it, so sub-agents spawned from "
+        "them can fall back to opening host terminal windows: " + ", ".join(offenders)
+    )
+
+
+def test_the_automation_terminal_child_owns_its_window():
+    """`vaf automation run <id>` is what run_task spawns into a terminal window. It used to
+    be held open by the `; exec bash` tail; without that it must hold its own window, or a
+    manual automation run flashes past unreadably."""
+    src = _source("vaf/core/automation.py")
+    run_cmd = src[src.index('@automation_app.command("run")'):]
+    run_cmd = run_cmd[:run_cmd.index("@automation_app.command", 10)]
+    assert "finish_terminal" in run_cmd
 
 
 def test_per_spawn_values_are_embedded_in_the_command():

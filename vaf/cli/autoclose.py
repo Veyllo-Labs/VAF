@@ -36,11 +36,20 @@ AUTO_CLOSE_DELAY = 5
 
 
 def _is_interactive_window() -> bool:
-    """True only when a human is watching this process in a real terminal window."""
-    if os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes"):
+    """True only when a human is watching this process in a real terminal window.
+
+    VAF_SPAWN_MODE is checked FIRST and wins: it is set per spawn by whoever opened this
+    process and therefore knows what it opened, while VAF_WEBUI_ACTIVE only says that the
+    PARENT serves a web UI and is inherited by everything it starts. Checking the ambient
+    flag first would make an explicit "terminal" spawn from inside the desktop app unable to
+    hold its own window open on failure.
+    """
+    mode = os.environ.get("VAF_SPAWN_MODE", "").strip().lower()
+    if mode == "piped":
         return False
-    if os.environ.get("VAF_SPAWN_MODE", "").strip().lower() == "piped":
-        return False
+    if mode != "terminal":
+        if os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes"):
+            return False
     try:
         return bool(sys.stdout.isatty())
     except Exception:

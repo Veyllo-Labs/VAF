@@ -632,7 +632,15 @@ def start_uvicorn(wait_for_db: bool = True):
         # Web server app is imported lazily here (not at module level) so that
         # `import vaf.tray` does not pull in fastapi/uvicorn/web_server. Only the
         # tray path, which actually serves the app, needs it.
-        from vaf.core.web_server import app
+        from vaf.core.web_server import app, mark_webui_process
+
+        # This process serves the web UI, so its sub-agents must run PIPED into the browser
+        # panel rather than opening host terminal windows. This path does NOT go through
+        # web_server.run_server (it drives uvicorn itself), so the declaration has to be made
+        # here too - otherwise the spawn decision falls back to a flag that a transient
+        # WebSocket drop used to clear, which is how a host terminal window appeared for a
+        # web-launched sub-agent (live incident 2026-07-20).
+        mark_webui_process()
 
         # Ensure UTF-8 output for background threads (prevents Unicode log crashes)
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")

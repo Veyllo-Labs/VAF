@@ -2358,19 +2358,31 @@ def run_automation(
     console = Console()
     manager = get_manager()
     
+    # This command is ALSO what run_task spawns into a terminal window (new_terminal=True
+    # builds "vaf automation run <id>"). That window used to be held open by the `; exec bash`
+    # tail the Linux spawn appended; now that the tail is gone, the child owns its own window
+    # and must say so explicitly, or a manual automation run would flash past unreadably.
+    from vaf.cli.autoclose import finish_terminal
+
     task = manager.get(task_id)
     if not task:
         console.print(f"[red]Task not found: {task_id}[/red]")
-        raise typer.Exit(1)
-    
+        finish_terminal(success=False)
+
     console.print(f"\n[cyan]⚡ Running: {task.name}[/cyan]\n")
-    
+
     def print_output(text):
         console.print(text, end="")
-    
-    # Don't open new terminal when called directly from CLI
-    result = manager.run_task(task, callback=print_output, new_terminal=False)
+
+    ok = True
+    try:
+        # Don't open ANOTHER terminal - we may already be running inside one.
+        manager.run_task(task, callback=print_output, new_terminal=False)
+    except Exception as exc:
+        ok = False
+        console.print(f"\n[red]Automation failed: {exc}[/red]")
     console.print("\n")
+    finish_terminal(success=ok)
 
 
 @automation_app.command("delete")

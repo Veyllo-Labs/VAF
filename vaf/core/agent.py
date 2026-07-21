@@ -503,7 +503,11 @@ def _parse_qwen_tool_calls(text: str, valid_names=None):
 
 
 def _parse_gemma4_tool_calls(text: str, valid_names=None):
-    """Parse Gemma-4 native tool calls from raw model output -> list of (name, args_dict).
+    """Parse pipe-delimited native tool calls from raw model output -> list of (name, args_dict).
+
+    Named for Gemma-4, which is where the format was first seen, but NOT Gemma-specific: the
+    local Qwen 3.5 4B emits the identical shape, and its call site (agent.py lane 4) runs this
+    for any local model as a last-resort recovery net.
 
     Format: `<|tool_call>call:NAME{key:<|"|>value<|"|>,key2:bare,...}<tool_call|>` (one or more).
     Pure (no Agent state) and delimiter-aware: the `}<tool_call|>` anchor stops a `}` inside a value
@@ -8889,11 +8893,16 @@ class Agent:
                             "function": {"name": _p_name, "arguments": json.dumps(_p_args)},
                         })
 
-                # 4. Gemma-4 native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
-                # Additive defensive net: only for a local Gemma-4 model and only when nothing matched
-                # above. The server normally converts these via --jinja; this catches the rare case
-                # where a raw call leaks into the text unconverted.
-                if not tool_calls_detected and getattr(self, "model_mode", None) == "gemma4":
+                # 4. Pipe-delimited native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
+                # Additive defensive net, tried only when nothing above matched. The server normally
+                # converts these via --jinja; this catches the rare case where a raw call leaks into
+                # the text unconverted. NOT model-gated: this was gated to model_mode=="gemma4", but
+                # the local Qwen 3.5 4B (VAF's default) emits the SAME format, so a leaked call was
+                # never recovered and vanished into the chat, doing nothing (live incident 2026-07-21:
+                # create_calendar_event leaked exactly this way). The format is highly specific (those
+                # delimiters plus the <|"|> quote markers) and _parse_gemma4_tool_calls filters to
+                # known tool names, so it is safe for any model - the same posture as lanes 5 and 6.
+                if not tool_calls_detected:
                     for _g_name, _g_args in _parse_gemma4_tool_calls(text_to_search, self.tools):
                         tool_calls_detected.append({
                             "id": _synth_tool_call_id(),

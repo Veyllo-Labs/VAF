@@ -49,6 +49,52 @@ def test_no_tool_calls_returns_empty():
     assert parse("", None) == []
 
 
+def test_incident_calendar_leak_is_parsed():
+    """Live incident 2026-07-21 (session purple636998): the local Qwen 3.5 4B emitted a
+    create_calendar_event call in exactly this pipe-delimited format. It leaked into the chat
+    as text and nothing ran, because lane 4 was gated to Gemma only. The parser itself handles
+    it; the gate is what failed."""
+    txt = ('<|tool_call>call:create_calendar_event{'
+           'end_time:<|"|>2026-07-28T11:00:00<|"|>,'
+           'start_time:<|"|>2026-07-28T10:00:00<|"|>,'
+           'title:<|"|>VAF Reddit Post Draft für r/opensource verfassen<|"|>}<tool_call|>')
+    assert parse(txt, {"create_calendar_event"}) == [
+        ("create_calendar_event", {
+            "end_time": "2026-07-28T11:00:00",
+            "start_time": "2026-07-28T10:00:00",
+            "title": "VAF Reddit Post Draft für r/opensource verfassen",
+        })
+    ]
+
+
+def test_the_recovery_lane_is_not_model_gated():
+    """The parser worked all along; the bug was that its call site (lane 4 in Agent chat_step)
+    only ran for model_mode == 'gemma4', so the identical Qwen output was never recovered. This
+    pins that the pipe-delimited recovery net runs for ANY local model, like lanes 5 and 6."""
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "vaf/core/agent.py").read_bytes().decode(
+        "utf-8").replace("\r\n", "\n")
+
+    # Find the `if <cond>:` that guards the call to _parse_gemma4_tool_calls and check the
+    # condition does not require a specific model_mode.
+    tree = ast.parse(src)
+    guards = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if "_parse_gemma4_tool_calls" in ast.dump(node.test) + "".join(
+                ast.dump(n) for n in node.body[:2]):
+            guards.append(ast.get_source_segment(src, node.test))
+    assert guards, "could not locate the pipe-delimited recovery lane"
+    for cond in guards:
+        assert "model_mode" not in cond and "gemma4" not in cond, (
+            f"the recovery lane is still model-gated ({cond!r}); Qwen's leaked calls will "
+            "vanish again"
+        )
+
+
 # ── _parse_paren_tool_calls (fallback 3: "name(...)" written as text) ──
 
 from vaf.core.agent import _parse_paren_tool_calls as parse_paren  # noqa: E402

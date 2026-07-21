@@ -12,6 +12,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **A tool the local model tried to run no longer silently vanishes.** With the built-in
+  local model, some tool calls (for example adding a calendar event) came out in a format the
+  app recognised only for one specific model family. For every other local model the call was
+  left as plain text in the chat and simply never ran, so nothing happened and no error was
+  shown. That format is now recognised for any local model.
 - **The app no longer runs its window on native Wayland, which could crash it on Linux.**
   VAF has always meant to run its window through XWayland (native Wayland conflicts with the
   browser engine and, with the GPU shared in-process, could freeze and then kill the app).

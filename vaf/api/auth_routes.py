@@ -55,16 +55,60 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE_NAME = "vaf_token"
 
 
-def _set_auth_cookie(request: Request, response: Response, token: str, max_age: int) -> None:
-    """Set the auth cookie with dynamic Secure flag based on current request protocol."""
+def _log_auth_failure(kind: str, request: Request, username: str = "", detail: str = "") -> None:
+    """Record a failed login/2FA attempt in the security event log (never the
+    password/code itself). Lazy + swallow-all: auditing must never break auth."""
+    try:
+        from vaf.core.security_events import log_security_event
+        ip = request.client.host if request.client else ""
+        log_security_event(kind, ip=ip or "", username=username, detail=detail)
+    except Exception:
+        pass
+
+
+def _cookie_max_age_for(token: str) -> int:
+    """Cookie lifetime derived from the token's own exp claim.
+
+    INVARIANT: the cookie must never outlive the JWT inside it. Hardcoded cookie
+    lifetimes (30 days) longer than the JWT expiry (default 24h) left a
+    present-but-expired cookie in the jar; the server-side route gate
+    (web/proxy.ts) correctly rejected it while a still-accepted bearer token
+    bounced the client back - the / <-> /login navigation loop of the
+    2026-07-22 live incident. Deriving the max_age here, at the single place
+    that sets the cookie, removes that desync class structurally.
+    """
+    try:
+        payload = decode_token(token)
+        exp = payload.get("exp") if payload else None
+        if isinstance(exp, (int, float)):
+            remaining = int(exp - datetime.now(timezone.utc).timestamp())
+            if remaining > 0:
+                return remaining
+    except Exception:
+        pass
+    # Fallback (fresh self-issued tokens always decode; this is belt-and-braces):
+    # mirror the configured JWT expiry rather than any longer hardcoded value.
+    try:
+        from vaf.core.config import Config
+        return int(float(Config.get("local_network_jwt_expiry_hours", 24)) * 3600)
+    except Exception:
+        return 24 * 3600
+
+
+def _set_auth_cookie(request: Request, response: Response, token: str) -> None:
+    """Set the auth cookie with dynamic Secure flag based on current request protocol.
+
+    The max_age always comes from the token's exp claim (see _cookie_max_age_for);
+    callers cannot pass a longer lifetime.
+    """
     # Check if we are on HTTPS or behind an HTTPS proxy
     is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-    
+
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        max_age=max_age,
+        max_age=_cookie_max_age_for(token),
         samesite="lax",
         secure=is_https,
         path="/",
@@ -242,8 +286,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             db.add(session)
             await db.commit()
 
-        max_age = 30 * 24 * 3600  # bootstrap: 30 days cookie for first admin
-        _set_auth_cookie(request, response, access, max_age)
+        _set_auth_cookie(request, response, access)
         return {
             "access_token": access,
             "refresh_token": refresh,
@@ -371,6 +414,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
     """
     payload = decode_token(body.temp_token)
     if not payload or payload.get("type") != "access":
+        _log_auth_failure("twofa_failed", request, detail="invalid temp token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid temp token")
 
     user_id = payload.get("sub")
@@ -399,6 +443,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
             )
 
         if not verify_totp(secret, code):
+            _log_auth_failure("twofa_failed", request, username=user.username or "", detail="wrong code")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid code")
 
         user.requires_2fa_setup = False
@@ -434,8 +479,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         db.add(session)
         await db.commit()
 
-    max_age = 30 * 24 * 3600
-    _set_auth_cookie(request, response, access, max_age)
+    _set_auth_cookie(request, response, access)
     return {"access_token": access, "refresh_token": refresh}
 
 
@@ -454,8 +498,10 @@ async def login(body: LoginRequest, request: Request, response: Response):
         )
         user = result.scalar_one_or_none()
         if not user:
+            _log_auth_failure("login_failed", request, username=username_clean, detail="unknown user")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
         if not verify_password(user.password_hash, body.password or ""):
+            _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
 
         # 2FA data may become undecryptable after key/config changes.
@@ -521,8 +567,11 @@ async def login(body: LoginRequest, request: Request, response: Response):
         db.add(login_session)
         await db.commit()
 
-    max_age = 30 * 24 * 3600 if (body.remember_me or _is_localhost) else 24 * 3600
-    _set_auth_cookie(request, response, access, max_age)
+    # NOTE: remember_me cannot extend the session beyond the JWT expiry - a cookie
+    # that outlives its token only recreates the login-loop desync. A real
+    # remember-me needs a longer-lived token (local_network_jwt_expiry_hours) or a
+    # refresh-token flow in the frontend (the /refresh endpoint exists, unused).
+    _set_auth_cookie(request, response, access)
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -713,5 +762,5 @@ async def refresh(body: RefreshRequest, request: Request, response: Response):
             str(user.user_scope_id),
             is_2fa_verified=True,
         )
-    _set_auth_cookie(request, response, access, 24 * 3600)
+    _set_auth_cookie(request, response, access)
     return {"access_token": access}

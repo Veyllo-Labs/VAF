@@ -154,19 +154,17 @@ export default function LoginPage() {
                     retry();
                 });
         };
-        const authHeaders: Record<string, string> = {
-            'Cache-Control': 'no-cache',
-        };
-        if (typeof window !== 'undefined') {
-            const token = localStorage.getItem('vaf_token');
-            if (token) authHeaders.Authorization = `Bearer ${token}`;
-        }
-
-        // Check if already authenticated (cookie and/or Bearer); do not skip when apiPrefix is ''.
+        // COOKIE-ONLY check, deliberately WITHOUT the Bearer/localStorage fallback: the
+        // server-side gate (web/proxy.ts) routes pages purely on the vaf_token COOKIE.
+        // If this bounce decision used a different authority (a still-valid localStorage
+        // token while the cookie JWT is expired - they can diverge, e.g. 24h JWT expiry
+        // vs 30-day cookie max_age), /login and / disagree forever: / 307s here, this
+        // check bounces back, and the window navigation-loops until Chromium throttles
+        // it (live incident 2026-07-22). One authority for routing: the cookie.
         fetch(`${apiPrefix}/api/auth/me`, {
             credentials: 'include',
             cache: 'no-store',
-            headers: authHeaders,
+            headers: { 'Cache-Control': 'no-cache' },
         })
             .then((res) => {
                 if (res.ok) {
@@ -177,6 +175,22 @@ export default function LoginPage() {
                         setCheckingSetup(false);
                         return;
                     }
+                    // Circuit breaker: if we land on /login and bounce to / repeatedly within a
+                    // short window, the server gate and this check disagree (split auth state).
+                    // A third bounce stays on the form instead of looping - never trap the user.
+                    if (typeof window !== 'undefined') {
+                        let bounce = { n: 0, t: 0 };
+                        try { bounce = JSON.parse(sessionStorage.getItem('vaf_login_bounce') || '{"n":0,"t":0}'); } catch { /* corrupt = reset */ }
+                        const now = Date.now();
+                        if (now - bounce.t > 15000) bounce = { n: 0, t: now };
+                        if (bounce.n >= 2) {
+                            sessionStorage.removeItem('vaf_login_bounce');
+                            localStorage.removeItem('vaf_token');
+                            setCheckingSetup(false);
+                            return;
+                        }
+                        sessionStorage.setItem('vaf_login_bounce', JSON.stringify({ n: bounce.n + 1, t: bounce.t || now }));
+                    }
                     // Full navigation so dashboard mounts with the same cookie/Bearer semantics as a refresh (avoids client-only transition loops).
                     if (typeof window !== 'undefined') {
                         window.location.replace(`${window.location.origin}/`);
@@ -186,7 +200,8 @@ export default function LoginPage() {
                     return; // Stop further checks
                 }
 
-                // If not authenticated, check setup status
+                // Not authenticated by the cookie: also drop a possibly stale localStorage
+                // token (split-brain cleanup, mirrors app/page.tsx), then check setup status.
                 if (typeof window !== 'undefined') {
                     localStorage.removeItem('vaf_token');
                 }

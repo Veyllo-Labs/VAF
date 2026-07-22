@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a17] - 2026-07-22
+
 ### Added
 - **VAF is published to PyPI with every release.** Library users can install the
   framework with `pip install --pre vaf` (`--pre` is the recommended spelling while

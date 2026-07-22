@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo, type CSSProperties, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   X, RefreshCw, ChevronDown, ChevronRight, Activity, Search,
   GitBranch, ShieldCheck, ShieldAlert, Clock, CheckCircle2,
   XCircle, Loader2, Link2, Zap, Sparkles, MessageSquare, Info, GraduationCap, Menu,
+  LayoutGrid, Bot, ShieldQuestion,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -81,17 +82,175 @@ type TimelineEvent = {
   hash?: string;
 };
 
+type SandboxStatus = {
+  state: 'ok' | 'warn';
+  reason: 'container_running' | 'ephemeral_on_demand' | 'docker_unavailable';
+  container_running: boolean;
+  hardening?: {
+    cap_drop_all: boolean;
+    no_new_privileges: boolean;
+    memory_bytes: number;
+    nano_cpus: number;
+    networks: string[];
+    isolated_network: boolean;
+  };
+};
+
+type DockerIsolation = {
+  state: 'ok' | 'warn';
+  any_lan_exposed: boolean;
+  sandbox_off_internal: boolean | null;
+  containers: {
+    name: string;
+    running: boolean;
+    networks: string[];
+    ports: { port: string; host_ip: string; host_port: string }[];
+    lan_exposed: boolean;
+  }[];
+};
+
+type FirewallStatus = {
+  state: 'ok';
+  reason: 'lan_enabled' | 'lan_disabled';
+  lan_enabled: boolean;
+  os_rules_enabled: boolean;
+  blocked_today: number;
+  failed_logins_today: number;
+  docker?: DockerIsolation | null;
+};
+
+type SecurityEvent = {
+  ts: string;
+  kind: string;
+  channel?: string;
+  ip?: string;
+  username?: string;
+  path?: string;
+  detail?: string;
+};
+
+type ChannelsStatus = {
+  state: 'ok' | 'warn';
+  any_permissive: boolean;
+  rejected_today: number;
+  channels: {
+    name: string;
+    enabled: boolean;
+    mode: string;
+    contact_fallback: boolean;
+    paired: number;
+    last_ts: number | null;
+    rejected_today: number;
+  }[];
+};
+
+type IsolationMetrics = {
+  scope_count: number;
+  scopes: { scope: string; username?: string; memories: number; chunks: number }[];
+  db_size_bytes: number | null;
+  rag_probe_ms: number | null;
+  user_folders: { name: string; folders: number; size_bytes: number; truncated: boolean }[];
+  workspace_count: number;
+  total_size_bytes: number;
+  truncated?: boolean;
+};
+
+type GuardrailsStatus = {
+  state: 'ok';
+  plan_gate: boolean;
+  confirmation_gate: boolean;
+  proactive_reply_gate: boolean;
+  ask_first_drain_gate: boolean;
+  channel_tools_unrestricted: boolean;
+  tools: {
+    total: number; read: number; write: number; dangerous: number; system: number;
+    admin_only: number; channel_restricted: number;
+  };
+  trust: { trusted_dirs: string[]; allow_always_tools: string[] };
+};
+
+type SkillsStatus = {
+  state: 'ok' | 'warn' | 'critical';
+  total: number;
+  counts: Record<string, number>;
+  worst: string;
+  quarantined_total: number;
+  acknowledged_total: number;
+  skills: { id: string; level: string; score: number; quarantined: boolean; acknowledged: boolean }[];
+  blocked_today: number;
+  overrides_today: number;
+  alerts_today: number;
+  last_rescan: { ts?: string; scanned?: number; changed?: number; alerts?: number; worst?: string } | null;
+};
+
+type ThinkingUserStatus = {
+  username: string;
+  scope: string;
+  running: boolean;
+  run_started_ts: number | null;
+  waiting: { question: string; since_ts: number | null; channel: string; nudged: boolean; escalated: boolean; username: string } | null;
+  minutes_since_last_run: number | null;
+  last_run: { ended_at: string | null; duration_s: number | null; tools: string[] } | null;
+  requests: { id: string; question: string; status: string; needs_reconfirm: boolean; created_at: string; updated_at: string }[];
+};
+type ThinkingStatus = { enabled: boolean; users: ThinkingUserStatus[] };
+
+type SupervisorUnit = {
+  task_id: string; agent_type: string; session_id: string | null; status: string;
+  task: string; runtime_s: number | null; heartbeat_age_s: number | null; stale: boolean; username?: string;
+};
+type SupervisorStatus = { units: SupervisorUnit[]; liveness_timeout_s?: number; count?: number; error?: string };
+
+type SkillScanDetail = {
+  id: string;
+  level: string;
+  score: number;
+  quarantined: boolean;
+  acknowledged: boolean;
+  findings: { category: string; severity: string; message: string; file: string; line: number; snippet: string }[];
+};
+
+type SecurityOverview = {
+  sandbox?: SandboxStatus;
+  firewall?: FirewallStatus;
+  isolation?: IsolationMetrics | null;
+  channels?: ChannelsStatus;
+  guardrails?: GuardrailsStatus;
+  skills?: SkillsStatus;
+  security_latest_ts?: string | null;
+};
+
+type MemoryHealth = {
+  status: string;
+  db_connected: boolean;
+  memory_enabled?: boolean;
+};
+
+type MailMessage = {
+  from: string;
+  subject: string;
+  date: string;
+  message_date_iso?: string | null;
+  suspicious_for_agent?: boolean;
+  suspicious_reasons?: string[];
+  suspicious_score?: number;
+};
+
 export interface NotificationsModalProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: NotificationItem[];
   onFetchComplete?: (list: NotificationItem[]) => void;
   userTimeFormat?: '24h' | '12h';
+  /** Called when the admin views the security log; carries the newest event ts
+   *  so the parent can clear the sidebar notification dot in sync. */
+  onSecuritySeen?: (ts: string) => void;
 }
 
 // ─── Domain colors ─────────────────────────────────────────────────────────────
 
 const DOMAIN_COLOR: Record<string, string> = {
+  security:         'bg-red-500',
   rag:              'bg-blue-500',
   memory:           'bg-purple-500',
   backend:          'bg-orange-500',
@@ -1039,6 +1198,1150 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
   );
 }
 
+// ─── Overview pane - antivirus-style protection dashboard ─────────────────────
+// Renders the complete Overview layout (hero, module grid, chain + skills panels,
+// background-agent panel, activity strip, supervised units, security posture).
+// Every metric deliberately renders the explicit no-data state instead of a
+// placeholder value; the status endpoints are wired step by step afterwards.
+
+type OvColors = ReturnType<typeof tlColors>;
+
+function OvSectionHeading({ C, title, hint }: { C: OvColors; title: string; hint?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '22px 2px 10px' }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, color: C.textStrong, margin: 0, letterSpacing: '0.01em' }}>{title}</h3>
+      {hint && <span style={{ fontSize: 11, color: C.textFaint }}>{hint}</span>}
+    </div>
+  );
+}
+
+function fmtBytes(n: number | null | undefined): string {
+  if (n === null || n === undefined || !isFinite(n)) return '–';
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
+}
+
+function OvNoData({ C, label }: { C: OvColors; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textDim }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'transparent', border: `1.5px solid ${C.textFaint}`, flexShrink: 0 }} />
+      {label}
+    </span>
+  );
+}
+
+function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateChange, security, memHealth, mail, thinking, supervisor, securityLogFile, onOpenLogFile, onRefreshSecurity }: {
+  chainOk: boolean | null;
+  events: TimelineEvent[];
+  totalRaw: number | null;
+  dates: string[];
+  date: string;
+  today: string;
+  onDateChange: (d: string) => void;
+  security: SecurityOverview | null;
+  memHealth: MemoryHealth | null;
+  mail: MailMessage[] | null;
+  thinking: ThinkingStatus | null;
+  supervisor: SupervisorStatus | null;
+  securityLogFile?: string;
+  onOpenLogFile: (filename: string) => void;
+  onRefreshSecurity: () => void;
+}) {
+  const t = useTranslations('notifications');
+  const dark = useThemeStore((st) => st.theme) === 'dark';
+  const C = tlColors(dark);
+  const noData = t('ovNoData');
+
+  // ── Audit-chain state (wired live; the first READY signal of the dashboard) ──
+  // Honesty floor: chain_ok defaults true on an empty/missing file, so "no events"
+  // must render as not-measured (grey), never as verified-green.
+  const hasChainData = chainOk !== null && (totalRaw ?? 0) > 0;
+  const heroState: 'ok' | 'broken' | 'nodata' = chainOk === false ? 'broken' : hasChainData ? 'ok' : 'nodata';
+  const green = dark ? '#4ade80' : '#15803d';
+  const red = dark ? '#f87171' : '#b91c1c';
+  const lastEv = events.length > 0 ? events[events.length - 1] : null;
+  const tailHashes = events.filter(e => e.hash).slice(-4);
+  const isToday = date === today;
+  const heroChrome = heroState === 'ok'
+    ? { border: 'rgba(34,197,94,.28)', bg: 'linear-gradient(135deg, rgba(34,197,94,.11), rgba(34,197,94,.02))', emblemBg: 'rgba(34,197,94,.14)', emblemBorder: 'rgba(34,197,94,.4)', color: green }
+    : heroState === 'broken'
+      ? { border: 'rgba(239,68,68,.34)', bg: 'linear-gradient(135deg, rgba(239,68,68,.13), rgba(239,68,68,.02))', emblemBg: 'rgba(239,68,68,.14)', emblemBorder: 'rgba(239,68,68,.45)', color: red }
+      : { border: C.border, bg: `linear-gradient(135deg, ${C.bgRuler}, transparent)`, emblemBg: C.bgRuler, emblemBorder: C.border, color: C.textDim };
+  const HeroIcon = heroState === 'ok' ? ShieldCheck : heroState === 'broken' ? ShieldAlert : ShieldQuestion;
+  // Overall protection status = worst-of roll-up over every module, four states:
+  //   critical (red) > attention (amber) > ok (green), with a nodata (grey) floor
+  //   so absent data never reads as safe. Today only the audit chain is wired, so
+  //   the only live critical input is a tampered chain; amber inputs (medium
+  //   findings, RLS pending cutover, a stale supervised unit, channel_tools_
+  //   unrestricted, a medium-risk skill, ...) join this array as they are wired.
+  // Sandbox module (live via /api/security/overview): ok = container-enforced
+  // (running or ephemeral-on-demand), warn = docker down -> execution BLOCKED
+  // (fail-closed, so attention rather than critical), undefined = not measured.
+  const sandbox = security?.sandbox;
+  // Firewall / LAN perimeter (live): blocks happening = the perimeter working
+  // (stays green with a count); lan disabled = remote surface closed entirely.
+  const firewall = security?.firewall;
+  const fwDeflected = firewall ? firewall.blocked_today + firewall.failed_logins_today : 0;
+  // User isolation (live via the existing scope-aware memory endpoints):
+  //   green = enforced (scope-filtered stats reachable), amber = memory DB down
+  //   (the known real failure: silent empty memory), neutral = memory disabled.
+  const isoState: 'ok' | 'db_down' | 'mem_off' | 'nodata' =
+    !memHealth ? 'nodata'
+      : memHealth.memory_enabled === false ? 'mem_off'
+        : memHealth.db_connected === false ? 'db_down'
+          : 'ok';
+  // Admin aggregate metrics (RAG latency, per-scope store sizes, workspaces).
+  const isolation = security?.isolation ?? null;
+
+  // ── Module detail popup ──────────────────────────────────────────────────────
+  const [detail, setDetail] = useState<string | null>(null);
+  // Blocked/rejected attempts for the firewall popup, fetched lazily on open.
+  const [secEvents, setSecEvents] = useState<SecurityEvent[] | null>(null);
+  useEffect(() => {
+    if (detail !== 'firewall' && detail !== 'channels') return;
+    fetch(`${getApiBase()}/api/security/events?limit=100`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setSecEvents(Array.isArray(d?.events) ? d.events : []))
+      .catch(() => setSecEvents([]));
+  }, [detail]);
+  const evKindLabel = (kind: string): string => {
+    switch (kind) {
+      case 'ip_blocked': return t('ovEvIpBlocked');
+      case 'unauthenticated_blocked': return t('ovEvUnauth');
+      case 'token_rejected': return t('ovEvToken');
+      case 'login_failed': return t('ovEvLogin');
+      case 'twofa_failed': return t('ovEv2fa');
+      case 'ws_rejected': return t('ovEvWs');
+      case 'channel_rejected': return t('ovEvChannel');
+      default: return kind;
+    }
+  };
+  const channels = security?.channels;
+  const guardrails = security?.guardrails;
+  const skills = security?.skills;
+
+  // ── Skill resolution actions (delete / acknowledge-2FA / restore-2FA / isolate) ─
+  type SkillAction = 'delete' | 'acknowledge' | 'restore' | 'isolate';
+  const NEEDS_2FA: Record<SkillAction, boolean> = { delete: false, isolate: false, acknowledge: true, restore: true };
+  const [qCode, setQCode] = useState('');
+  const [qBusy, setQBusy] = useState(false);
+  const [qError, setQError] = useState<string | null>(null);
+  const [qPending, setQPending] = useState<SkillAction | null>(null); // action awaiting a 2FA code
+  // Live re-scan findings for the skill detail popup (the "why").
+  const [skillScan, setSkillScan] = useState<SkillScanDetail | null>(null);
+  const runSkillAction = async (id: string, action: SkillAction) => {
+    setQBusy(true);
+    setQError(null);
+    try {
+      const res = await fetch(`${getApiBase()}/api/security/skills/${encodeURIComponent(id)}/${action}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(NEEDS_2FA[action] ? { code: qCode } : {}),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setQError(String(d?.detail ?? `HTTP ${res.status}`));
+      } else {
+        setQCode('');
+        setQPending(null);
+        if (action === 'delete') setDetail(null);
+        onRefreshSecurity();
+        setSkillScan(null); // force the popup to re-fetch the (now changed) state
+      }
+    } catch {
+      setQError('network error');
+    }
+    setQBusy(false);
+  };
+  const detailSkillId = detail?.startsWith('skill:') ? detail.slice(6) : null;
+  useEffect(() => {
+    if (!detailSkillId) { setSkillScan(null); return; }
+    setSkillScan(null); setQPending(null); setQCode(''); setQError(null);
+    fetch(`${getApiBase()}/api/security/skills/${encodeURIComponent(detailSkillId)}/scan`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setSkillScan(d && typeof d === 'object' ? d : null))
+      .catch(() => setSkillScan(null));
+  }, [detailSkillId]);
+  // Phishing shield: flags happening = the shield working (green with count).
+  // No synced mail = not scanning anything -> neutral grey, never false-green.
+  const mailFlagged = mail?.filter(m => m.suspicious_for_agent) ?? null;
+  const phReason = (code: string): string => {
+    switch (code) {
+      case 'provider_spam_category': return t('ovPhRProvider');
+      case 'punycode_domain': return t('ovPhRPunycode');
+      case 'social_engineering_language': return t('ovPhRSocial');
+      case 'exec_impersonation_free_mail': return t('ovPhRImperson');
+      case 'phishing_pattern': return t('ovPhRPattern');
+      default: return code;
+    }
+  };
+  // Worst-of roll-up, driven by NAMED reasons so the hero states the actual
+  // cause (a HIGH skill and a tampered chain both go red, but must not both
+  // say "chain tampered"). Reasons are ordered most-severe first.
+  const quarantinedSkills = skills?.quarantined_total ?? 0;
+  const criticalReasons: string[] = [
+    chainOk === false ? t('ovRcChain') : '',
+    quarantinedSkills > 0 ? t('ovRcSkillQuarantined', { n: quarantinedSkills }) : '',
+    (skills?.state === 'critical' && quarantinedSkills === 0) ? t('ovRcSkillHigh') : '',
+  ].filter(Boolean);
+  const amberReasons: string[] = [
+    sandbox?.state === 'warn' ? t('ovRaSandbox') : '',
+    isoState === 'db_down' ? t('ovRaDb') : '',
+    firewall?.docker?.state === 'warn' ? t('ovRaDocker') : '',
+    channels?.state === 'warn' ? t('ovRaChannel') : '',
+    skills?.state === 'warn' ? t('ovRaSkillMedium') : '',
+  ].filter(Boolean);
+  const overallState: 'critical' | 'attention' | 'ok' | 'nodata' =
+    criticalReasons.length > 0 ? 'critical'
+      : !hasChainData ? 'nodata'
+        : amberReasons.length > 0 ? 'attention'
+          : 'ok';
+  const amber = dark ? '#fbbf24' : '#b45309';
+  const overall = overallState === 'ok'
+    ? { rgb: '34,197,94', shield: 'rgba(74,222,128,.5)', color: green, Icon: ShieldCheck, border: 'rgba(34,197,94,.28)', head: t('ovHeroOk'), sub: `${t('ovHeroOkSub')} · ${totalRaw} ${t('ovEventsSecured')}`, pulse: false }
+    : overallState === 'attention'
+      ? { rgb: '245,158,11', shield: 'rgba(251,191,36,.5)', color: amber, Icon: ShieldAlert, border: 'rgba(245,158,11,.30)', head: t('ovHeroAttention'), sub: amberReasons.join(' · '), pulse: false }
+      : overallState === 'critical'
+        ? { rgb: '239,68,68', shield: 'rgba(248,113,113,.5)', color: red, Icon: ShieldAlert, border: 'rgba(239,68,68,.34)', head: t('ovHeroCritical'), sub: criticalReasons.join(' · '), pulse: true }
+        : { rgb: '150,150,150', shield: 'rgba(138,138,138,.3)', color: C.textMid, Icon: ShieldQuestion, border: C.border, head: t('ovHeroNoData'), sub: t('ovHeroNoDataSub'), pulse: false };
+  const OverallIcon = overall.Icon;
+
+  const strip: CSSProperties = { background: C.panel, border: `1px solid ${C.borderLt}`, borderRadius: 12 };
+  const panelH: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 };
+  const panelT: CSSProperties = { fontSize: 12.5, fontWeight: 700, color: C.textStrong };
+
+  return (
+    <div className="flex-1 overflow-auto" style={{ background: C.bg, padding: '16px 18px 26px' }}>
+
+      {/* ── Top layout (owner-decided 2026-07-22): ONE big protection panel left
+           (hero shield + the eight modules as a status list with traffic-light
+           dots: green ok, amber attention, red alert, grey not measured), and
+           the audit-chain + skills panels STACKED in the right column. ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 12, alignItems: 'stretch' }}>
+      <section style={{
+        position: 'relative', overflow: 'hidden', minHeight: 300,
+        border: `1px solid ${overall.border}`, borderRadius: 14, padding: '18px 20px',
+        display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap',
+        background: `linear-gradient(100deg, rgba(${overall.rgb},.15) 0%, rgba(${overall.rgb},.05) 34%, rgba(${overall.rgb},.01) 60%, transparent 100%)`,
+      }}>
+        {/* Big shield-in-disc motif filling the left, bleeding off the edge as a
+            half-circle, with the gradient (above) running rightward. State-tinted. */}
+        {/* Disc positioned BY ITS CENTRE (translate -50%,-50%); the shield is
+            nested + flex-centred, so shield centre == disc centre always
+            (owner: circle centre must equal shield centre). The soft radial
+            fade IS the "mega blur" - no filter/blur (banned by the anti-leak
+            rules). height 116% overflows top/bottom so the glow softly touches
+            both panel edges. */}
+        <div aria-hidden style={{ position: 'absolute', top: '50%', left: 90, height: '116%', aspectRatio: '1 / 1', transform: 'translate(-50%, -50%)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 0, pointerEvents: 'none', background: `radial-gradient(circle, rgba(${overall.rgb},.22) 0%, rgba(${overall.rgb},.16) 30%, rgba(${overall.rgb},.07) 52%, rgba(${overall.rgb},.02) 72%, transparent 90%)` }}>
+          <div style={{ color: overall.shield }}><OverallIcon size={210} strokeWidth={1.4} /></div>
+        </div>
+        <div style={{ position: 'relative', zIndex: 1, flex: '1 1 220px', minWidth: 200, paddingLeft: 160 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: C.textDim, fontWeight: 600, marginBottom: 3 }}>{t('ovEyebrow')}</div>
+          <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.01em', color: overallState === 'nodata' ? C.textMid : overall.color, ...(overall.pulse ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }}>{overall.head}</div>
+          <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>{overall.sub}</div>
+        </div>
+        {/* Module status list. Only the audit chain is wired; every other module
+            stays grey (not measured) until its data point lands. */}
+        <div style={{ position: 'relative', zIndex: 1, flex: '1 1 280px', minWidth: 260, display: 'flex', flexDirection: 'column' }}>
+          {([
+            {
+              key: 'audit',
+              name: t('ovCardAudit'),
+              dot: heroState === 'broken' ? '#ef4444' : heroState === 'ok' ? '#22c55e' : C.textFaint,
+              status: heroState === 'broken' ? t('ovAuditBroken') : heroState === 'ok' ? t('ovAuditOk') : noData,
+              statusColor: heroState === 'broken' ? red : heroState === 'ok' ? green : C.textDim,
+            },
+            {
+              key: 'sandbox',
+              name: t('ovCardSandbox'),
+              dot: sandbox ? (sandbox.state === 'warn' ? '#f59e0b' : '#22c55e') : C.textFaint,
+              status: !sandbox ? noData
+                : sandbox.state === 'warn' ? t('ovSandboxBlocked')
+                  : sandbox.reason === 'container_running' ? t('ovSandboxEnforced')
+                    : t('ovSandboxOnDemand'),
+              statusColor: !sandbox ? C.textDim : sandbox.state === 'warn' ? amber : green,
+            },
+            {
+              key: 'firewall',
+              name: t('ovCardFirewall'),
+              dot: !firewall ? C.textFaint : firewall.docker?.state === 'warn' ? '#f59e0b' : '#22c55e',
+              status: !firewall ? noData
+                : firewall.docker?.state === 'warn' ? t('ovFwDockerExposed')
+                  : firewall.reason === 'lan_disabled' ? t('ovFwLanOff')
+                    : t('ovFwActive', { n: fwDeflected }),
+              statusColor: !firewall ? C.textDim : firewall.docker?.state === 'warn' ? amber : green,
+            },
+            {
+              key: 'isolation',
+              name: t('ovCardIsolation'),
+              dot: isoState === 'ok' ? '#22c55e' : isoState === 'db_down' ? '#f59e0b' : C.textFaint,
+              status: isoState === 'ok' ? t('ovIsoEnforced')
+                : isoState === 'db_down' ? t('ovIsoDbDown')
+                  : isoState === 'mem_off' ? t('ovIsoMemOff') : noData,
+              statusColor: isoState === 'ok' ? green : isoState === 'db_down' ? amber : C.textDim,
+            },
+            {
+              key: 'channels',
+              name: t('ovCardChannels'),
+              dot: !channels ? C.textFaint : channels.state === 'warn' ? '#f59e0b' : '#22c55e',
+              status: !channels ? noData
+                : channels.state === 'warn' ? t('ovChPermissive')
+                  : t('ovChLocked', { n: channels.rejected_today }),
+              statusColor: !channels ? C.textDim : channels.state === 'warn' ? amber : green,
+            },
+            {
+              key: 'phishing',
+              name: t('ovCardPhishing'),
+              dot: mail === null || mail.length === 0 ? C.textFaint : '#22c55e',
+              status: mail === null ? noData
+                : mail.length === 0 ? t('ovPhNoMail')
+                  : t('ovPhActive', { n: mailFlagged?.length ?? 0 }),
+              statusColor: mail === null || mail.length === 0 ? C.textDim : green,
+            },
+            {
+              key: 'guardrails',
+              name: t('ovCardGuardrails'),
+              dot: guardrails ? '#22c55e' : C.textFaint,
+              status: !guardrails ? noData
+                : guardrails.tools.total > 0 ? t('ovGrActive', { n: guardrails.tools.total })
+                  : t('ovGrActiveNoCount'),
+              statusColor: !guardrails ? C.textDim : green,
+            },
+          ]).map((m, mi, arr) => (
+            <div
+              key={m.key}
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetail(m.key)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setDetail(m.key); }}
+              className="group"
+              style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 6px', margin: '0 -6px', borderRadius: 7, cursor: 'pointer', borderBottom: mi < arr.length - 1 ? `1px solid ${C.borderFaint}` : 'none' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = dark ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.04)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+            >
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: m.dot, flexShrink: 0, ...(m.dot === '#ef4444' ? { animation: 'pulse 1.6s ease-in-out infinite' } : {}) }} />
+              <span style={{ flex: 1, fontSize: 12, color: C.textStrong, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+              <span style={{ fontSize: 11, color: m.statusColor, textAlign: 'right', flexShrink: 0 }}>{m.status}</span>
+              <ChevronRight size={12} style={{ color: C.textFaint, flexShrink: 0 }} />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Chain + skills panels, stacked right column ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ ...strip, padding: 16 }}>
+          <div style={panelH}>
+            <span style={panelT}>{t('ovChainTitle')}</span>
+            {isToday && hasChainData && (
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: C.textFaint }}>
+                <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#22c55e' }} />{t('ovLiveTag')}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12 }}>
+            <div style={{ width: 58, height: 58, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: heroChrome.emblemBg, border: `1px solid ${heroChrome.emblemBorder}`, color: heroChrome.color }}>
+              <HeroIcon size={28} strokeWidth={1.8} />
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: heroState === 'nodata' ? C.textMid : heroChrome.color }}>
+                {heroState === 'ok' ? t('ovChainVerified') : heroState === 'broken' ? t('ovChainBroken') : noData}
+              </div>
+              {hasChainData && lastEv && (
+                <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>
+                  {totalRaw?.toLocaleString('de-DE')} {t('ovEventsSecured')} · {t('ovLast')}{' '}
+                  <span style={{ fontFamily: 'monospace' }}>
+                    {new Date(lastEv.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {lastEv.tool ? ` · ${lastEv.tool}` : lastEv.type === 'thinking_run' ? ' · thinking' : ''}
+                  </span>
+                </div>
+              )}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, fontFamily: 'monospace', padding: '2px 8px', borderRadius: 6, background: C.bgRuler, border: `1px solid ${C.borderLt}`, color: C.textMid, marginTop: 6 }}>
+                <Link2 size={10} />{t('ovChainAnchor')}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap', margin: '8px 0 12px' }} title={t('ovChainTailTitle')}>
+            <span style={{ fontFamily: 'monospace', fontSize: 9, color: C.textMid, background: C.bgRuler, border: `1px solid ${C.border}`, borderRadius: 4, padding: '4px 6px' }}>GENESIS</span>
+            <span style={{ color: C.textFaint, fontSize: 11 }}>→</span>
+            <span style={{ color: C.textFaint, fontSize: 11, letterSpacing: 2 }}>…</span>
+            {tailHashes.length > 0 ? tailHashes.map((ev, i) => {
+              const isNewest = i === tailHashes.length - 1;
+              const col = heroState === 'broken' ? red : green;
+              return (
+                <span key={ev.hash} style={{ display: 'contents' }}>
+                  <span style={{ color: C.textFaint, fontSize: 11 }}>→</span>
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 9, borderRadius: 4, padding: '4px 6px',
+                    color: heroState === 'broken' ? red : green,
+                    background: heroState === 'broken' ? 'rgba(239,68,68,.08)' : 'rgba(34,197,94,.08)',
+                    border: `1px solid ${heroState === 'broken' ? 'rgba(239,68,68,.3)' : 'rgba(34,197,94,.3)'}`,
+                    ...(isNewest && isToday ? { animation: 'pulse 1.8s ease-in-out infinite' } : {}),
+                  }}>
+                    {(ev.hash ?? '').slice(0, 4)}{isNewest && isToday ? ` · ${t('ovNew')}` : ''}
+                  </span>
+                </span>
+              );
+            }) : [0, 1, 2].map(i => (
+              <span key={i} style={{ display: 'contents' }}>
+                <span style={{ color: C.textFaint, fontSize: 11 }}>→</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 9, color: C.textFaint, background: C.bgRuler, border: `1px dashed ${C.borderLt}`, borderRadius: 4, padding: '4px 6px' }}>????</span>
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.5 }}>{t('ovChainExplain')}</div>
+          <select
+            value={date || today}
+            onChange={e => onDateChange(e.target.value)}
+            style={{ marginTop: 12, fontSize: 11, background: C.bgLabel, border: `1px solid ${C.border}`, borderRadius: 8, color: C.textMid, padding: '5px 9px', fontFamily: 'monospace' }}
+          >
+            {dates.length === 0 && <option value={today}>{today} ({t('today')})</option>}
+            {dates.map(d => (
+              <option key={d} value={d}>{d === today ? `${d} (${t('today')})` : d}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ ...strip, padding: 16 }}>
+          <div style={panelH}>
+            <span style={panelT}>{t('ovSkillsTitle')}</span>
+            {skills && skills.quarantined_total > 0 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: dark ? '#f87171' : '#b91c1c', background: 'rgba(239,68,68,.12)', border: '1px solid rgba(239,68,68,.3)', borderRadius: 999, padding: '1px 8px' }}>
+                <ShieldAlert size={11} />{t('ovSkIsolatedN', { n: skills.quarantined_total })}
+              </span>
+            )}
+            {skills?.last_rescan?.ts && (
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: C.textFaint, fontFamily: 'monospace' }}>
+                {t('ovSkLastScan')} {String(skills.last_rescan.ts).slice(5, 16).replace('T', ' ')}
+              </span>
+            )}
+          </div>
+          {!skills ? <OvNoData C={C} label={noData} /> : (
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                <svg width="118" height="118" viewBox="0 0 118 118" aria-hidden="true">
+                  <circle cx="59" cy="59" r="42" fill="none" stroke={C.barTrack} strokeWidth="15" />
+                  {skills.total > 0 && (() => {
+                    const CIRC = 2 * Math.PI * 42;
+                    const order: Array<[string, string]> = [['clean', '#22c55e'], ['low', '#3b82f6'], ['medium', '#f59e0b'], ['high', '#ef4444']];
+                    let offset = 0;
+                    return (
+                      <g transform="rotate(-90 59 59)">
+                        {order.map(([lvl, col]) => {
+                          const frac = (skills.counts[lvl] ?? 0) / skills.total;
+                          if (frac <= 0) return null;
+                          const seg = (
+                            <circle key={lvl} cx="59" cy="59" r="42" fill="none" stroke={col} strokeWidth="15"
+                              strokeDasharray={`${frac * CIRC} ${CIRC}`} strokeDashoffset={-offset} />
+                          );
+                          offset += frac * CIRC;
+                          return seg;
+                        })}
+                      </g>
+                    );
+                  })()}
+                  <text x="59" y="55" textAnchor="middle" fill={skills.total > 0 ? C.textStrong : C.textFaint} fontFamily="monospace" fontSize="24" fontWeight="600">{skills.total}</text>
+                  <text x="59" y="72" textAnchor="middle" fill={C.textDim} fontSize="10">{t('ovSkills')}</text>
+                </svg>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: C.textMid }}>
+                  {([['#22c55e', t('ovLvlClean'), 'clean'], ['#3b82f6', t('ovLvlLow'), 'low'], ['#f59e0b', t('ovLvlMedium'), 'medium'], ['#ef4444', t('ovLvlHigh'), 'high']] as const).map(([col, lbl, key]) => (
+                    <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: col, opacity: 0.7 }} />{lbl} · {skills.counts[key] ?? 0}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex: '1 1 220px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 26, fontWeight: 600, color: skills.blocked_today > 0 ? (dark ? '#f87171' : '#b91c1c') : C.textStrong }}>{skills.blocked_today}</span>
+                  <span style={{ fontSize: 11, color: C.textDim }}>{t('ovSkBlockedToday')}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: C.textMid }}>
+                  {skills.overrides_today > 0 && <span style={{ color: amber }}>{skills.overrides_today} {t('ovSkOverrides')}</span>}
+                  {skills.alerts_today > 0 && <span style={{ color: amber }}>{skills.alerts_today} {t('ovSkAlerts')}</span>}
+                </div>
+                <div style={{ borderTop: `1px solid ${C.borderLt}` }}>
+                  {skills.skills.slice(0, 6).map(s => (
+                    <div
+                      key={s.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setDetail(`skill:${s.id}`)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setDetail(`skill:${s.id}`); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px', margin: '0 -6px', borderRadius: 6, cursor: 'pointer', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11.5 }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = dark ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.04)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                    >
+                      <span style={{ flex: 1, fontFamily: 'monospace', color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.id}</span>
+                      {s.acknowledged && !s.quarantined && (
+                        <span style={{ fontSize: 9.5, color: C.textDim }}>{t('ovSkAckShort')}</span>
+                      )}
+                      {s.quarantined && (
+                        <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 7px', borderRadius: 999, color: dark ? '#f87171' : '#b91c1c', background: 'rgba(239,68,68,.14)', border: '1px solid rgba(239,68,68,.35)', animation: 'pulse 1.8s ease-in-out infinite' }}>
+                          {t('ovSkQuarantine')}
+                        </span>
+                      )}
+                      <span style={{
+                        fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 7px', borderRadius: 999,
+                        color: s.level === 'high' ? (dark ? '#f87171' : '#b91c1c') : s.level === 'medium' ? amber : s.level === 'low' ? '#60a5fa' : green,
+                        background: s.level === 'high' ? 'rgba(239,68,68,.12)' : s.level === 'medium' ? 'rgba(245,158,11,.10)' : s.level === 'low' ? 'rgba(59,130,246,.12)' : 'rgba(34,197,94,.10)',
+                      }}>
+                        {s.level === 'clean' ? t('ovLvlClean') : s.level === 'low' ? t('ovLvlLow') : s.level === 'medium' ? t('ovLvlMedium') : t('ovLvlHigh')}
+                      </span>
+                      <ChevronRight size={12} style={{ color: C.textFaint, flexShrink: 0 }} />
+                    </div>
+                  ))}
+                  {skills.skills.length > 6 && (
+                    <div style={{ fontSize: 10.5, color: C.textFaint, padding: '4px 0 0' }}>{t('ovMore', { n: skills.skills.length - 6 })}</div>
+                  )}
+                  {skills.total === 0 && (
+                    <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovSkNone')}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      </div>
+
+      {/* ── Background agent (admin view: per-user, cross-scope) ── */}
+      <OvSectionHeading C={C} title={t('ovBgAgent')} hint={t('ovBgAgentHint')} />
+      <div style={{ ...strip, padding: 16 }}>
+        <div style={{ ...panelH, marginBottom: 14 }}>
+          <span style={panelT}>{t('ovBgState')}</span>
+          {thinking && !thinking.enabled && (
+            <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '1px 7px', borderRadius: 999, color: C.textDim, background: C.bgRuler, border: `1px solid ${C.borderLt}` }}>{t('ovBgDisabled')}</span>
+          )}
+        </div>
+        {(() => {
+          if (!thinking) {
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <Bot size={16} style={{ color: C.textDim, flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>{noData}</span>
+              </div>
+            );
+          }
+          const ago = (mins: number): string => {
+            if (mins < 60) return t('ovAgoMin', { n: Math.max(1, Math.round(mins)) });
+            if (mins < 48 * 60) return t('ovAgoH', { n: Math.round(mins / 60) });
+            return t('ovAgoD', { n: Math.round(mins / 1440) });
+          };
+          // Users with any signal first (active/waiting/ran recently); cap the list.
+          const users = thinking.users.slice(0, 6);
+          const allAsked = thinking.users
+            .flatMap(u => u.requests.map(r => ({ ...r, username: u.username })))
+            .sort((a, b) => ((a.created_at ?? '') < (b.created_at ?? '') ? 1 : -1))
+            .slice(0, 6);
+          const stBadge = (status: string, reconfirm: boolean): { label: string; color: string; bg: string } => {
+            if (reconfirm) return { label: t('ovBgStReconfirm'), color: amber, bg: 'rgba(245,158,11,.10)' };
+            switch (status) {
+              case 'asked': return { label: t('ovBgStAsked'), color: amber, bg: 'rgba(245,158,11,.10)' };
+              case 'replied': return { label: t('ovBgStReplied'), color: '#60a5fa', bg: 'rgba(59,130,246,.12)' };
+              case 'done': case 'confirmed': return { label: t('ovBgStDone'), color: green, bg: 'rgba(34,197,94,.10)' };
+              case 'declined': return { label: t('ovBgStDeclined'), color: C.textDim, bg: C.bgRuler };
+              default: return { label: status, color: C.textDim, bg: C.bgRuler };
+            }
+          };
+          return (
+            <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+                {users.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <Bot size={16} style={{ color: C.textDim, flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: C.textMid }}>{t('ovBgNever')}</span>
+                  </div>
+                ) : users.map(u => (
+                  <div key={u.scope || '__admin__'} style={{ padding: '6px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                        background: u.running ? '#f59e0b' : u.waiting ? '#60a5fa' : u.minutes_since_last_run !== null ? '#22c55e' : C.textFaint,
+                        animation: u.running || u.waiting ? 'pulse 1.8s ease-in-out infinite' : undefined,
+                      }} />
+                      <span style={{ fontWeight: 700, color: C.textStrong }}>{u.username}</span>
+                      <span style={{ flex: 1, color: C.textDim, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {u.running ? t('ovBgRunning')
+                          : u.waiting ? t('ovBgWaiting', { channel: u.waiting.channel })
+                          : u.minutes_since_last_run !== null ? t('ovBgLastRun', { ago: ago(u.minutes_since_last_run) })
+                          : t('ovBgNever')}
+                      </span>
+                      {u.waiting?.nudged && (
+                        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: 999, color: '#60a5fa', background: 'rgba(59,130,246,.12)', flexShrink: 0 }}>{t('ovBgNudged')}</span>
+                      )}
+                    </div>
+                    {u.waiting && (
+                      <div style={{ background: C.bgAlt, borderLeft: '3px solid #60a5fa', borderRadius: '0 8px 8px 0', padding: '8px 11px', fontSize: 12, color: C.textMid, lineHeight: 1.45, marginTop: 6 }}>
+                        {u.waiting.question}
+                      </div>
+                    )}
+                    {!u.waiting && u.last_run && u.last_run.tools.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 5, paddingLeft: 16 }}>
+                        {u.last_run.tools.slice(0, 5).map(tool => (
+                          <span key={tool} style={{ fontSize: 9.5, fontFamily: 'monospace', padding: '1px 6px', borderRadius: 5, color: C.textDim, background: C.bgRuler, border: `1px solid ${C.borderLt}` }}>{tool}</span>
+                        ))}
+                        {u.last_run.tools.length > 5 && <span style={{ fontSize: 9.5, color: C.textFaint }}>+{u.last_run.tools.length - 5}</span>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.12em', color: C.textFaint, fontWeight: 600, marginBottom: 7 }}>{t('ovBgAsked')}</div>
+                <div style={{ borderTop: `1px solid ${C.borderLt}`, paddingTop: 4 }}>
+                  {allAsked.length === 0 ? (
+                    <OvNoData C={C} label={noData} />
+                  ) : allAsked.map(r => {
+                    const b = stBadge(r.status, r.needs_reconfirm);
+                    return (
+                      <div key={r.id + r.created_at} style={{ padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                        <div style={{ fontSize: 11.5, color: C.textMid, lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{r.question}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                          <span style={{ fontSize: 9.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999, color: b.color, background: b.bg }}>{b.label}</span>
+                          <span style={{ fontSize: 10, color: C.textFaint }}>{r.username}</span>
+                          <span style={{ flex: 1 }} />
+                          <span style={{ fontSize: 9.5, fontFamily: 'monospace', color: C.textFaint }}>{(r.created_at ?? '').slice(5, 16).replace('T', ' ')}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* ── Recent supervised activity ──
+          FE-only derivation from the already-loaded audit-chain events of the
+          selected day (no extra request): the newest supervised actions, i.e.
+          exactly what the hash chain vouches for. */}
+      <OvSectionHeading C={C} title={t('ovActivityTitle')} hint={t('ovActivityHint')} />
+      <div style={{ ...strip, padding: '12px 14px' }}>
+        {(() => {
+          const rows = [...events]
+            .filter(e => e.tool || e.type === 'thinking_run' || e.type === 'subagent_start' || e.type === 'ww_train_start')
+            .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+            .slice(0, 8);
+          if (rows.length === 0) return <OvNoData C={C} label={noData} />;
+          const kindLabel = (e: TimelineEvent): string =>
+            e.tool ?? (e.type === 'thinking_run' ? t('ovActThinking') : e.type === 'subagent_start' ? t('ovActSubagent') : t('ovActTraining'));
+          // Per-user attribution (admin view): scope uid8 -> username via the
+          // isolation block, same mapping the audit breakdown uses.
+          const userFor = (e: TimelineEvent): string | null => {
+            const uid8 = (e.scope ?? '').slice(0, 8);
+            if (!uid8) return null;
+            return isolation?.scopes.find(s => s.scope === uid8)?.username ?? uid8;
+          };
+          return (
+            <div>
+              {rows.map((e, i) => (
+                <div key={`${e.ts}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 0', borderBottom: i < rows.length - 1 ? `1px solid ${C.borderFaint}` : 'none', fontSize: 11.5 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: e.status === 'error' ? '#ef4444' : e.status === 'running' ? '#f59e0b' : '#22c55e' }} />
+                  <span style={{ fontFamily: 'monospace', color: C.textStrong, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{kindLabel(e)}</span>
+                  {!e.tool && (
+                    <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', padding: '1px 6px', borderRadius: 999, color: '#a5b4fc', background: 'rgba(99,102,241,.12)', flexShrink: 0 }}>
+                      {e.type === 'thinking_run' ? t('ovActThinkingBadge') : e.type === 'subagent_start' ? t('ovActSubagentBadge') : t('ovActTrainingBadge')}
+                    </span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  {userFor(e) && (
+                    <span style={{ fontSize: 10, color: C.textDim, flexShrink: 0 }}>{userFor(e)}</span>
+                  )}
+                  {typeof e.duration_s === 'number' && e.duration_s > 0 && (
+                    <span style={{ fontSize: 10, fontFamily: 'monospace', color: C.textFaint, flexShrink: 0 }}>{e.duration_s >= 10 ? Math.round(e.duration_s) : e.duration_s.toFixed(1)}s</span>
+                  )}
+                  <span style={{ fontSize: 10, fontFamily: 'monospace', color: C.textDim, flexShrink: 0 }}>{e.ts.slice(11, 19)}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* ── Supervised units (admin: all sessions, attributed per user) ── */}
+      <OvSectionHeading C={C} title={t('ovUnitsTitle')} hint={t('ovUnitsHint')} />
+      <div style={{ ...strip, padding: '12px 14px' }}>
+        {!supervisor ? (
+          <OvNoData C={C} label={noData} />
+        ) : supervisor.units.length === 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.textDim }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />
+            {t('ovUnitsNone')}
+          </div>
+        ) : (
+          supervisor.units.map((u, i) => (
+            <div key={u.task_id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 0', borderBottom: i < supervisor.units.length - 1 ? `1px solid ${C.borderFaint}` : 'none', fontSize: 11.5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: u.stale ? '#ef4444' : '#f59e0b', animation: 'pulse 1.8s ease-in-out infinite' }} />
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: C.textStrong, flexShrink: 0 }}>{u.agent_type}</span>
+              {u.username && <span style={{ fontSize: 10, color: C.textDim, flexShrink: 0 }}>{u.username}</span>}
+              <span style={{ flex: 1, color: C.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.task}</span>
+              {u.stale && (
+                <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: 999, color: dark ? '#f87171' : '#b91c1c', background: 'rgba(239,68,68,.12)', flexShrink: 0 }}>{t('ovUnitsStale')}</span>
+              )}
+              {typeof u.runtime_s === 'number' && (
+                <span style={{ fontSize: 10, fontFamily: 'monospace', color: C.textFaint, flexShrink: 0 }}>{u.runtime_s >= 90 ? `${Math.round(u.runtime_s / 60)}m` : `${Math.round(u.runtime_s)}s`}</span>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Security posture section removed by owner decision 2026-07-23: a
+          misconfiguration must surface as a warning in the module list above
+          (single source of attention), not as a second static checklist. */}
+
+      {/* ── Module detail popup (centered, click-outside closes) ── */}
+      {detail !== null && (() => {
+        const titles: Record<string, string> = {
+          audit: t('ovCardAudit'), sandbox: t('ovCardSandbox'), firewall: t('ovCardFirewall'),
+          isolation: t('ovCardIsolation'), channels: t('ovCardChannels'),
+          phishing: t('ovCardPhishing'), guardrails: t('ovCardGuardrails'),
+        };
+        const descs: Record<string, string> = {
+          audit: t('ovDescAudit'), sandbox: t('ovDescSandbox'), firewall: t('ovDescFirewall'),
+          isolation: t('ovDescIsolation'), channels: t('ovDescChannels'),
+          phishing: t('ovDescPhishing'), guardrails: t('ovDescGuardrails'),
+        };
+        const factRow = (label: string, value: ReactNode, okDot?: boolean | null) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 12 }}>
+            {okDot !== undefined && (
+              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: okDot === null ? C.textFaint : okDot ? '#22c55e' : '#f59e0b' }} />
+            )}
+            <span style={{ flex: 1, color: C.textMid }}>{label}</span>
+            <span style={{ color: C.textStrong, fontFamily: 'monospace', fontSize: 11 }}>{value}</span>
+          </div>
+        );
+        return (
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            onClick={() => setDetail(null)}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, width: 'min(560px, 94vw)', maxHeight: '82vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.5)' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: `1px solid ${C.borderLt}` }}>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: C.textStrong, flex: 1, fontFamily: detailSkillId ? 'monospace' : undefined }}>{detailSkillId ?? titles[detail] ?? detail}</span>
+                <button type="button" onClick={() => setDetail(null)} title={t('close')}
+                  style={{ background: 'transparent', border: 'none', color: C.textDim, cursor: 'pointer', padding: 4, display: 'flex' }}>
+                  <X size={16} />
+                </button>
+              </div>
+              <div style={{ padding: '14px 16px', overflow: 'auto' }}>
+                <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.5, marginBottom: 12 }}>{detailSkillId ? t('ovSkDetailDesc') : (descs[detail] ?? '')}</div>
+
+                {/* ── Skill detail: WHY it was flagged + resolution actions ── */}
+                {detailSkillId && (() => {
+                  const sc = skillScan;
+                  const level = sc?.level ?? skills?.skills.find(s => s.id === detailSkillId)?.level ?? 'clean';
+                  const catLabel = (c: string): string => {
+                    switch (c) {
+                      case 'prompt_injection': return t('ovSkCatInjection');
+                      case 'data_exfiltration': return t('ovSkCatExfil');
+                      case 'remote_code_exec': return t('ovSkCatRce');
+                      case 'credential_access': return t('ovSkCatCreds');
+                      case 'hardcoded_secret': return t('ovSkCatSecret');
+                      case 'obfuscation': return t('ovSkCatObfus');
+                      case 'dangerous_code': return t('ovSkCatDangerous');
+                      case 'destructive': return t('ovSkCatDestructive');
+                      case 'network': return t('ovSkCatNetwork');
+                      case 'covert_action': return t('ovSkCatCovert');
+                      case 'system_prompt_leak': return t('ovSkCatPromptLeak');
+                      default: return c;
+                    }
+                  };
+                  const canDelete = level !== 'clean';
+                  const canAck = level === 'medium' && !sc?.acknowledged;
+                  const canRestore = !!sc?.quarantined;
+                  const canIsolate = level === 'high' && !sc?.quarantined;
+                  const twoFaAction = qPending === 'acknowledge' || qPending === 'restore';
+                  return (
+                    <div>
+                      {factRow(t('ovSkLevel'), (level === 'clean' ? t('ovLvlClean') : level === 'low' ? t('ovLvlLow') : level === 'medium' ? t('ovLvlMedium') : t('ovLvlHigh')), level === 'high' ? false : level === 'clean' ? true : null)}
+                      {sc && factRow(t('ovSkScore'), String(sc.score))}
+                      {sc?.quarantined && factRow(t('ovSkState'), t('ovSkQuarantine'), false)}
+                      {sc?.acknowledged && factRow(t('ovSkState'), t('ovSkAckShort'), true)}
+
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovSkWhy')}</div>
+                      {sc === null ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('loading')}</div>
+                      ) : sc.findings.length === 0 ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovSkNoFindings')}</div>
+                      ) : (
+                        sc.findings.map((f, i) => (
+                          <div key={i} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: f.severity === 'high' ? '#ef4444' : f.severity === 'medium' ? '#f59e0b' : '#60a5fa' }} />
+                              <span style={{ flex: 1, fontSize: 12, color: C.textStrong }}>{f.message}</span>
+                              <span style={{ fontSize: 9.5, color: C.textFaint, fontFamily: 'monospace' }}>{f.file}:{f.line}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, paddingLeft: 16 }}>
+                              <span style={{ fontSize: 9.5, padding: '1px 6px', borderRadius: 5, color: C.textMid, background: C.bgRuler, border: `1px solid ${C.borderLt}` }}>{catLabel(f.category)}</span>
+                              {f.snippet && <span style={{ fontSize: 10, fontFamily: 'monospace', color: C.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.snippet}</span>}
+                            </div>
+                          </div>
+                        ))
+                      )}
+
+                      {/* actions */}
+                      {(canDelete || canAck || canRestore || canIsolate) && (
+                        <div style={{ marginTop: 14, borderTop: `1px solid ${C.borderLt}`, paddingTop: 12 }}>
+                          {twoFaAction ? (
+                            <div>
+                              <div style={{ fontSize: 11.5, color: C.textMid, marginBottom: 6 }}>
+                                {qPending === 'acknowledge' ? t('ovSkAckPrompt') : t('ovSkRestorePrompt')}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <input value={qCode} onChange={e => setQCode(e.target.value)} placeholder={t('ovSkCodePlaceholder')} inputMode="numeric" maxLength={8}
+                                  style={{ width: 120, fontSize: 12, fontFamily: 'monospace', padding: '5px 9px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgLabel, color: C.textStrong, outline: 'none' }} />
+                                <button type="button" disabled={qBusy || qCode.trim().length < 6} onClick={() => runSkillAction(detailSkillId, qPending!)}
+                                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: `1px solid ${qPending === 'restore' ? 'rgba(34,197,94,.35)' : 'rgba(245,158,11,.35)'}`, background: qPending === 'restore' ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.10)', color: qPending === 'restore' ? green : amber, cursor: 'pointer', opacity: qBusy || qCode.trim().length < 6 ? 0.5 : 1 }}>
+                                  {t('ovSkConfirm2fa')}
+                                </button>
+                                <button type="button" disabled={qBusy} onClick={() => { setQPending(null); setQCode(''); setQError(null); }}
+                                  style={{ fontSize: 11.5, padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgLabel, color: C.textMid, cursor: 'pointer' }}>
+                                  {t('ovSkCancel')}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              {canDelete && (
+                                <button type="button" disabled={qBusy} onClick={() => runSkillAction(detailSkillId, 'delete')}
+                                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: '1px solid rgba(239,68,68,.35)', background: 'rgba(239,68,68,.08)', color: dark ? '#f87171' : '#b91c1c', cursor: 'pointer' }}>
+                                  {t('ovSkDelete')}
+                                </button>
+                              )}
+                              {canAck && (
+                                <button type="button" onClick={() => { setQPending('acknowledge'); setQCode(''); setQError(null); }}
+                                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.border}`, background: 'transparent', color: C.textStrong, cursor: 'pointer' }}>
+                                  {t('ovSkAcknowledge')}
+                                </button>
+                              )}
+                              {canRestore && (
+                                <button type="button" onClick={() => { setQPending('restore'); setQCode(''); setQError(null); }}
+                                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.border}`, background: 'transparent', color: C.textMid, cursor: 'pointer' }}>
+                                  {t('ovSkFalsePositive')}
+                                </button>
+                              )}
+                              {canIsolate && (
+                                <button type="button" disabled={qBusy} onClick={() => runSkillAction(detailSkillId, 'isolate')}
+                                  style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.border}`, background: 'transparent', color: amber, cursor: 'pointer' }}>
+                                  {t('ovSkIsolate')}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {qError && <div style={{ fontSize: 11, color: dark ? '#f87171' : '#b91c1c', marginTop: 8 }}>{qError}</div>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {detail === 'audit' && (() => {
+                  // Per-user breakdown of the day's chained events. The timeline is ONE
+                  // shared chain for ALL users - tampering with any user's events breaks
+                  // chain_ok for the admin. This section makes that coverage visible.
+                  const byScope = new Map<string, number>();
+                  for (const ev of events) {
+                    const key = (ev.scope ?? '').slice(0, 8) || '__local__';
+                    byScope.set(key, (byScope.get(key) ?? 0) + 1);
+                  }
+                  const nameFor = (uid8: string): string => {
+                    const hit = isolation?.scopes.find(s => s.scope === uid8);
+                    return hit?.username ?? uid8;
+                  };
+                  const rows = [...byScope.entries()].sort((a, b) => b[1] - a[1]);
+                  return (
+                    <div>
+                      {factRow(t('ovChainTitle'), heroState === 'broken' ? t('ovChainBroken') : heroState === 'ok' ? t('ovChainVerified') : noData, heroState === 'ok' ? true : heroState === 'broken' ? false : null)}
+                      {factRow(t('ovEventsSecured'), hasChainData ? String(totalRaw) : '–')}
+                      {lastEv && factRow(t('ovLast'), `${new Date(lastEv.ts).toLocaleTimeString('de-DE')} · ${lastEv.tool ?? lastEv.type}`)}
+                      {factRow('GENESIS', t('ovChainAnchor'), true)}
+                      {rows.length > 0 && (
+                        <>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovAuditPerUser')}</div>
+                          {rows.map(([uid8, count]) => (
+                            <div key={uid8} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11 }}>
+                              <span style={{ flex: 1, color: uid8 === '__local__' ? C.textDim : C.textStrong, fontWeight: uid8 === '__local__' ? 400 : 600 }}>
+                                {uid8 === '__local__' ? t('ovAuditNoScope') : nameFor(uid8)}
+                              </span>
+                              <span style={{ color: C.textMid, fontFamily: 'monospace', fontSize: 10.5 }}>{count} {t('ovAuditEventsUnit')}</span>
+                            </div>
+                          ))}
+                          <div style={{ fontSize: 10.5, color: C.textFaint, lineHeight: 1.5, marginTop: 8 }}>{t('ovAuditSharedChain')}</div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {detail === 'sandbox' && (
+                  sandbox ? (
+                    <div>
+                      {factRow(t('ovCardSandbox'), sandbox.state === 'warn' ? t('ovSandboxBlocked') : sandbox.reason === 'container_running' ? t('ovSandboxEnforced') : t('ovSandboxOnDemand'), sandbox.state !== 'warn')}
+                      {sandbox.hardening && (
+                        <>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovHardening')}</div>
+                          {factRow(t('ovCapDrop'), sandbox.hardening.cap_drop_all ? 'ALL' : '–', sandbox.hardening.cap_drop_all)}
+                          {factRow('no-new-privileges', sandbox.hardening.no_new_privileges ? t('ovOn') : t('ovOff'), sandbox.hardening.no_new_privileges)}
+                          {factRow(t('ovRamLimit'), sandbox.hardening.memory_bytes ? `${Math.round(sandbox.hardening.memory_bytes / 1048576)} MB` : '–')}
+                          {factRow(t('ovCpuLimit'), sandbox.hardening.nano_cpus ? `${(sandbox.hardening.nano_cpus / 1e9).toFixed(1)} CPU` : '–')}
+                          {factRow(t('ovIsolatedNet'), sandbox.hardening.networks.join(', ') || '–', sandbox.hardening.isolated_network)}
+                        </>
+                      )}
+                    </div>
+                  ) : <OvNoData C={C} label={noData} />
+                )}
+
+                {detail === 'firewall' && (
+                  firewall ? (
+                    <div>
+                      {factRow(t('ovFwLan'), firewall.lan_enabled ? t('ovOn') : t('ovOff'), true)}
+                      {factRow(t('ovFwOsRules'), firewall.os_rules_enabled ? t('ovOn') : t('ovOff'), firewall.os_rules_enabled)}
+                      {factRow(t('ovFwBlockedCount'), String(firewall.blocked_today))}
+                      {factRow(t('ovFwFailedLogins'), String(firewall.failed_logins_today))}
+                      {firewall.docker && (
+                        <>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovFwDocker')}</div>
+                          {firewall.docker.sandbox_off_internal !== null &&
+                            factRow(t('ovFwSandboxIso'), firewall.docker.sandbox_off_internal ? t('ovOn') : t('ovOff'), firewall.docker.sandbox_off_internal)}
+                          {firewall.docker.containers.map(c => {
+                            const portsLabel = c.ports.length === 0
+                              ? t('ovFwNoPorts')
+                              : c.ports.map(p => `${p.host_ip || '0.0.0.0'}:${p.host_port}`).join(', ');
+                            return (
+                              <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11, opacity: c.running ? 1 : 0.55 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: !c.running ? C.textFaint : c.lan_exposed ? '#f59e0b' : '#22c55e' }} />
+                                <span style={{ flex: 1, color: C.textStrong, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {c.name}
+                                  <span style={{ color: C.textFaint, fontSize: 10, marginLeft: 6 }}>{c.networks.join(', ')}</span>
+                                </span>
+                                <span style={{ color: c.lan_exposed ? amber : C.textMid, fontFamily: 'monospace', fontSize: 10 }}>{portsLabel}</span>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovFwEventsTitle')}</div>
+                      {secEvents === null ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('loading')}</div>
+                      ) : secEvents.length === 0 ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovNoEventsToday')}</div>
+                      ) : (
+                        [...secEvents].reverse().map((ev, i) => (
+                          <div key={`${ev.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                            <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>{(ev.ts || '').slice(11, 19)}</span>
+                            <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, flexShrink: 0 }}>{evKindLabel(ev.kind)}</span>
+                            <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {[ev.ip, ev.username, ev.path, ev.detail].filter(Boolean).join(' · ')}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                      <button
+                        type="button"
+                        disabled={!securityLogFile}
+                        onClick={() => { if (securityLogFile) { setDetail(null); onOpenLogFile(securityLogFile); } }}
+                        title={securityLogFile ? undefined : t('ovNoEventsToday')}
+                        style={{ marginTop: 14, fontSize: 11.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgLabel, color: securityLogFile ? C.textStrong : C.textFaint, cursor: securityLogFile ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                      >
+                        <GitBranch size={12} />{t('ovShowLogHistory')}
+                      </button>
+                    </div>
+                  ) : <OvNoData C={C} label={noData} />
+                )}
+
+                {detail === 'isolation' && (
+                  memHealth ? (
+                    <div>
+                      {factRow(t('ovIsoScopeFilter'), t('ovOn'), true)}
+                      {firewall && factRow(t('ovIsoMode'), firewall.lan_enabled ? t('ovIsoModeServer') : t('ovIsoModeSingle'), true)}
+                      {factRow(t('ovIsoDb'), memHealth.db_connected ? t('ovOn') : t('ovOff'), memHealth.db_connected)}
+                      {isoState === 'mem_off' && factRow(t('ovCardIsolation'), t('ovIsoMemOff'), null)}
+                      {isolation && (
+                        <>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovIsoAdmin')}</div>
+                          {factRow(t('ovIsoRagLatency'), isolation.rag_probe_ms !== null ? `${isolation.rag_probe_ms} ms` : t('ovIsoNoChunks'), isolation.rag_probe_ms === null ? null : isolation.rag_probe_ms < 150)}
+                          {factRow(t('ovIsoDbSize'), fmtBytes(isolation.db_size_bytes))}
+                          {factRow(t('ovIsoScopeCount'), String(isolation.scope_count))}
+                          {isolation.scopes.slice(0, 8).map(s => (
+                            <div key={s.scope} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11 }}>
+                              <span style={{ flex: 1, color: C.textStrong, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {s.username ?? s.scope}
+                                {s.username && <span style={{ color: C.textFaint, fontFamily: 'monospace', fontWeight: 400, fontSize: 10, marginLeft: 6 }}>{s.scope}</span>}
+                              </span>
+                              <span style={{ color: C.textMid, fontFamily: 'monospace', fontSize: 10.5 }}>{s.memories} / {s.chunks} {t('ovIsoEntriesChunks')}</span>
+                            </div>
+                          ))}
+                          {isolation.scopes.length > 8 && (
+                            <div style={{ fontSize: 10.5, color: C.textFaint, padding: '4px 0 0 16px' }}>{t('ovMore', { n: isolation.scopes.length - 8 })}</div>
+                          )}
+                          {factRow(t('ovIsoWorkspaces'), `${isolation.workspace_count} · ${fmtBytes(isolation.total_size_bytes)}${isolation.truncated ? '+' : ''}`)}
+                          {(isolation.user_folders ?? []).slice(0, 8).map(u => (
+                            <div key={u.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11 }}>
+                              <span style={{ flex: 1, color: u.name === '__unassigned__' ? C.textDim : C.textStrong, fontWeight: u.name === '__unassigned__' ? 400 : 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {u.name === '__unassigned__' ? t('ovIsoUnassigned') : u.name}
+                              </span>
+                              <span style={{ color: C.textMid, fontFamily: 'monospace', fontSize: 10.5 }}>
+                                {u.folders} {t('ovIsoFoldersUnit')} · {fmtBytes(u.size_bytes)}{u.truncated ? '+' : ''}
+                              </span>
+                            </div>
+                          ))}
+                          {(isolation.user_folders ?? []).length > 8 && (
+                            <div style={{ fontSize: 10.5, color: C.textFaint, padding: '4px 0 0 16px' }}>{t('ovMore', { n: (isolation.user_folders ?? []).length - 8 })}</div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ) : <OvNoData C={C} label={noData} />
+                )}
+
+                {detail === 'channels' && (
+                  channels ? (
+                    <div>
+                      {channels.channels.map(ch => {
+                        const label = ch.name === 'telegram' ? 'Telegram' : ch.name === 'whatsapp' ? 'WhatsApp' : ch.name === 'discord' ? 'Discord' : ch.name;
+                        const parts = ch.enabled
+                          ? [
+                              ch.mode,
+                              `${ch.paired} ${t('ovChPaired')}`,
+                              ch.last_ts ? `${t('ovChLastUsed')} ${new Date(ch.last_ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : null,
+                              ch.rejected_today > 0 ? `${ch.rejected_today} ${t('ovChRejectedUnit')}` : null,
+                            ].filter(Boolean).join(' · ')
+                          : t('ovOff');
+                        const okDot = !ch.enabled ? null : ch.mode === 'permissive' ? false : true;
+                        return factRow(label, parts, okDot);
+                      })}
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovChRejectedSenders')}</div>
+                      {secEvents === null ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('loading')}</div>
+                      ) : (() => {
+                        const chEvents = secEvents.filter(ev => ev.kind === 'channel_rejected');
+                        return chEvents.length === 0 ? (
+                          <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovChNoRejected')}</div>
+                        ) : (
+                          [...chEvents].reverse().map((ev, i) => (
+                            <div key={`${ev.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                              <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>{(ev.ts || '').slice(11, 19)}</span>
+                              <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, flexShrink: 0 }}>{ev.channel ?? '?'}</span>
+                              <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {[ev.username, ev.detail].filter(Boolean).join(' · ')}
+                              </span>
+                            </div>
+                          ))
+                        );
+                      })()}
+                      <button
+                        type="button"
+                        disabled={!securityLogFile}
+                        onClick={() => { if (securityLogFile) { setDetail(null); onOpenLogFile(securityLogFile); } }}
+                        style={{ marginTop: 14, fontSize: 11.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgLabel, color: securityLogFile ? C.textStrong : C.textFaint, cursor: securityLogFile ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                      >
+                        <GitBranch size={12} />{t('ovShowLogHistory')}
+                      </button>
+                    </div>
+                  ) : <OvNoData C={C} label={noData} />
+                )}
+
+                {detail === 'phishing' && (
+                  mail === null ? <OvNoData C={C} label={noData} /> : (
+                    <div>
+                      {factRow(t('ovPhScanned'), String(mail.length))}
+                      {factRow(t('ovPhFlagged'), String(mailFlagged?.length ?? 0), (mailFlagged?.length ?? 0) >= 0 ? true : null)}
+                      <div style={{ fontSize: 10.5, color: C.textFaint, lineHeight: 1.5, margin: '8px 0' }}>{t('ovPhHiddenNote')}</div>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovPhFlaggedTitle')}</div>
+                      {(mailFlagged?.length ?? 0) === 0 ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovPhNone')}</div>
+                      ) : (
+                        (mailFlagged ?? []).map((m, i) => (
+                          <div key={`${m.date}-${i}`} style={{ padding: '7px 0', borderBottom: `1px solid ${C.borderFaint}` }}>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                              <span style={{ fontFamily: 'monospace', fontSize: 10, color: C.textFaint, flexShrink: 0 }}>
+                                {(m.message_date_iso || m.date || '').slice(0, 16).replace('T', ' ')}
+                              </span>
+                              <span style={{ fontSize: 11, color: C.textMid, fontFamily: 'monospace', flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.from}</span>
+                              <span style={{ fontSize: 11.5, color: C.textStrong, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.subject || '(–)'}</span>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, paddingLeft: 2 }}>
+                              {(m.suspicious_reasons ?? []).map(rc => (
+                                <span key={rc} style={{ fontSize: 9.5, padding: '1px 7px', borderRadius: 6, color: dark ? '#fbbf24' : '#b45309', background: 'rgba(245,158,11,.10)', border: '1px solid rgba(245,158,11,.25)' }}>
+                                  {phReason(rc)}
+                                </span>
+                              ))}
+                              {typeof m.suspicious_score === 'number' && (
+                                <span style={{ fontSize: 9.5, padding: '1px 7px', borderRadius: 6, color: C.textDim, background: C.bgRuler, border: `1px solid ${C.borderLt}` }}>
+                                  Score {m.suspicious_score}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )
+                )}
+
+                {detail === 'guardrails' && (
+                  guardrails ? (
+                    <div>
+                      {factRow(t('ovGatePlan'), guardrails.plan_gate ? t('ovOn') : t('ovOff'), guardrails.plan_gate)}
+                      {factRow(t('ovGateConfirm'), t('ovOn'), true)}
+                      {factRow(t('ovGrProactive'), guardrails.proactive_reply_gate ? t('ovOn') : t('ovOff'), guardrails.proactive_reply_gate)}
+                      {factRow(t('ovGrAskFirst'), guardrails.ask_first_drain_gate ? t('ovOn') : t('ovOff'), guardrails.ask_first_drain_gate)}
+                      {factRow(t('ovGrChannelRestr'), guardrails.channel_tools_unrestricted ? t('ovGrLoosened') : t('ovGrStrict'), !guardrails.channel_tools_unrestricted)}
+                      {guardrails.tools.total > 0 && (
+                        <>
+                          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovGrInventory')}</div>
+                          {factRow(t('ovGrTotal'), String(guardrails.tools.total))}
+                          {factRow('read', String(guardrails.tools.read))}
+                          {factRow('write', String(guardrails.tools.write))}
+                          {factRow('dangerous', String(guardrails.tools.dangerous))}
+                          {factRow('system', String(guardrails.tools.system))}
+                          {factRow(t('ovGrAdminOnly'), String(guardrails.tools.admin_only))}
+                          {factRow(t('ovGrChannelBlocked'), String(guardrails.tools.channel_restricted))}
+                        </>
+                      )}
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', color: C.textFaint, fontWeight: 600, margin: '12px 0 4px' }}>{t('ovGrStanding')}</div>
+                      {guardrails.trust.trusted_dirs.length === 0 && guardrails.trust.allow_always_tools.length === 0 ? (
+                        <div style={{ fontSize: 11, color: C.textDim, padding: '6px 0' }}>{t('ovGrNoStanding')}</div>
+                      ) : (
+                        <>
+                          {guardrails.trust.allow_always_tools.map(tool => (
+                            <div key={`t-${tool}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+                              <span style={{ flex: 1, color: C.textStrong, fontFamily: 'monospace' }}>{tool}</span>
+                              <span style={{ color: amber, fontSize: 10.5 }}>{t('ovGrAllowAlways')}</span>
+                            </div>
+                          ))}
+                          {guardrails.trust.trusted_dirs.map(d => (
+                            <div key={`d-${d}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 4px 16px', borderBottom: `1px solid ${C.borderFaint}`, fontSize: 11 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.textFaint, flexShrink: 0 }} />
+                              <span style={{ flex: 1, color: C.textMid, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d}</span>
+                              <span style={{ color: C.textDim, fontSize: 10.5 }}>{t('ovGrTrustedDir')}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      <div style={{ fontSize: 10.5, color: C.textFaint, lineHeight: 1.5, marginTop: 8 }}>{t('ovGrStandingNote')}</div>
+                    </div>
+                  ) : <OvNoData C={C} label={noData} />
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function NotificationsModal({
@@ -1047,11 +2350,13 @@ export default function NotificationsModal({
   notifications,
   onFetchComplete,
   userTimeFormat,
+  onSecuritySeen,
 }: NotificationsModalProps) {
   const t = useTranslations('notifications');
 
-  // 'timeline' = horizontal, 'tooluse' = vertical tool list, 'activity', or filename
-  const [selectedSource, setSelectedSource] = useState<string>('timeline');
+  // 'overview' = protection dashboard, 'timeline' = horizontal, 'tooluse' = vertical
+  // tool list, 'activity', or filename
+  const [selectedSource, setSelectedSource] = useState<string>('overview');
   const [logsExpanded, setLogsExpanded]     = useState(false);
 
   // Log files
@@ -1066,6 +2371,19 @@ export default function NotificationsModal({
   const [timelineDates, setTimelineDates]     = useState<string[]>([]);
   const [timelineDate, setTimelineDate]       = useState<string>('');
   const [timelineChainOk, setTimelineChainOk] = useState<boolean | null>(null);
+  const [timelineTotalRaw, setTimelineTotalRaw] = useState<number | null>(null);
+  // Aggregated protection-module status (GET /api/security/overview, admin-gated).
+  // null = not fetched / unavailable (403, backend down) -> rows stay grey.
+  const [securityOverview, setSecurityOverview] = useState<SecurityOverview | null>(null);
+  const [thinkingStatus, setThinkingStatus] = useState<ThinkingStatus | null>(null);
+  const [supervisorStatus, setSupervisorStatus] = useState<SupervisorStatus | null>(null);
+  // User-isolation health input: the EXISTING endpoint is reused on purpose -
+  // isolation-critical logic must never be reimplemented in a second place.
+  // (Admin aggregate metrics come from /api/security/overview's isolation block.)
+  const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
+  // Phishing-shield input: the synced-mail endpoint already carries the
+  // suspicious_* annotations per message (local store read, no IMAP roundtrip).
+  const [mailMessages, setMailMessages] = useState<MailMessage[] | null>(null);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   // mobile: the left nav is an off-canvas drawer opened from a hamburger in the header;
   // picking a section closes it again.
@@ -1091,7 +2409,39 @@ export default function NotificationsModal({
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isTimelineView = selectedSource === 'timeline' || selectedSource === 'tooluse';
-  const isFileView     = selectedSource !== 'activity' && !isTimelineView;
+  const isOverview     = selectedSource === 'overview';
+  const isFileView     = selectedSource !== 'activity' && !isOverview && !isTimelineView;
+  // Count of security events recorded today (blocked access, rejections, skill
+  // blocks/overrides/alerts). Drives the pulsing attention marker on the Log
+  // Files section so the admin is nudged to open the security log when
+  // something happened. Recomputed from the aggregator, no extra request.
+  const securityAlertCount = (() => {
+    const s = securityOverview;
+    if (!s) return 0;
+    const fw = s.firewall ? s.firewall.blocked_today + s.firewall.failed_logins_today : 0;
+    const ch = s.channels ? s.channels.rejected_today : 0;
+    const sk = s.skills ? s.skills.blocked_today + s.skills.overrides_today + s.skills.alerts_today : 0;
+    return fw + ch + sk;
+  })();
+  const securityLogFilename = logFiles.find(f => f.domain === 'security')?.filename;
+  // UNREAD gate: the badge/pulse only shows while there is a security event
+  // NEWER than the last time the admin opened the security log (shared marker
+  // with the sidebar dot). Clicking the security log clears it, and a fresh
+  // event re-lights it - not a permanent count.
+  const securityLatestTs = securityOverview?.security_latest_ts ?? null;
+  const [securitySeenTs, setSecuritySeenTs] = useState<string | null>(
+    () => (typeof window !== 'undefined' ? localStorage.getItem('vaf_logs_seen_ts') : null)
+  );
+  const securityUnread = securityAlertCount > 0 && !!securityLatestTs && (!securitySeenTs || securityLatestTs > securitySeenTs);
+  // Opening the security log marks everything up to the newest event as seen
+  // (clears this badge AND, via onSecuritySeen, the sidebar dot).
+  useEffect(() => {
+    if (!securityLogFilename || selectedSource !== securityLogFilename || !securityLatestTs) return;
+    if (securitySeenTs && securityLatestTs <= securitySeenTs) return;
+    setSecuritySeenTs(securityLatestTs);
+    try { localStorage.setItem('vaf_logs_seen_ts', securityLatestTs); } catch { /* private mode */ }
+    onSecuritySeen?.(securityLatestTs);
+  }, [selectedSource, securityLogFilename, securityLatestTs, securitySeenTs, onSecuritySeen]);
 
   // ── Fetchers ─────────────────────────────────────────────────────────────────
 
@@ -1139,12 +2489,13 @@ export default function NotificationsModal({
   const fetchTimeline = useCallback((date: string) => {
     setLoadingTimeline(true);
     fetch(`${getApiBase()}/api/logs/timeline/events?date=${encodeURIComponent(date)}&merge=true`, { credentials: 'include' })
-      .then(r => r.ok ? r.json() : { events: [], chain_ok: true })
+      .then(r => r.ok ? r.json() : { events: [], chain_ok: null, total_raw: null })
       .then(d => {
         setTimelineEvents(Array.isArray(d?.events) ? d.events : []);
         setTimelineChainOk(d?.chain_ok ?? null);
+        setTimelineTotalRaw(typeof d?.total_raw === 'number' ? d.total_raw : null);
       })
-      .catch(() => { setTimelineEvents([]); setTimelineChainOk(null); })
+      .catch(() => { setTimelineEvents([]); setTimelineChainOk(null); setTimelineTotalRaw(null); })
       .finally(() => setLoadingTimeline(false));
   }, []);
 
@@ -1158,9 +2509,53 @@ export default function NotificationsModal({
   }, [isOpen, fetchFiles, fetchActivity, fetchTimelineDates]);
 
   useEffect(() => {
-    if (!isOpen || !isTimelineView || !timelineDate) return;
+    if (!isOpen || !(isTimelineView || isOverview) || !timelineDate) return;
     fetchTimeline(timelineDate);
-  }, [isOpen, isTimelineView, timelineDate, fetchTimeline]);
+  }, [isOpen, isTimelineView, isOverview, timelineDate, fetchTimeline]);
+
+  // Overview: keep the audit chain live - always show the NEWEST end of today's
+  // chain (5 s cadence, matching the Live toggle's interval). Past dates are
+  // static, so polling only runs while today is selected.
+  useEffect(() => {
+    if (!isOpen || !isOverview || !timelineDate) return;
+    if (timelineDate !== new Date().toISOString().slice(0, 10)) return;
+    const iv = setInterval(() => fetchTimeline(timelineDate), 5000);
+    return () => clearInterval(iv);
+  }, [isOpen, isOverview, timelineDate, fetchTimeline]);
+
+  // Overview: protection-module status. Fetched on open + a slow 30 s cadence
+  // (docker inspect etc. change rarely; no need for the 5 s chain rhythm).
+  // Failures (403 for non-admins, backend down) leave it null -> grey rows.
+  // Exposed as a callback so pane actions (e.g. quarantine resolution) can
+  // refresh immediately after a mutation.
+  const loadSecurity = useCallback(() => {
+    fetch(`${getApiBase()}/api/security/overview`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setSecurityOverview(d && typeof d === 'object' ? d : null))
+      .catch(() => setSecurityOverview(null));
+    fetch(`${getApiBase()}/api/thinking/status`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setThinkingStatus(d && Array.isArray(d.users) ? d : null))
+      .catch(() => setThinkingStatus(null));
+    fetch(`${getApiBase()}/api/supervisor/status`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setSupervisorStatus(d && Array.isArray(d.units) ? d : null))
+      .catch(() => setSupervisorStatus(null));
+    fetch(`${getApiBase()}/api/memory/health`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setMemoryHealth(d && typeof d === 'object' ? d : null))
+      .catch(() => setMemoryHealth(null));
+    fetch(`${getApiBase()}/api/email/messages?limit=100`, { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setMailMessages(Array.isArray(d?.messages) ? d.messages : null))
+      .catch(() => setMailMessages(null));
+  }, []);
+  useEffect(() => {
+    if (!isOpen || !isOverview) return;
+    loadSecurity();
+    const iv = setInterval(loadSecurity, 30000);
+    return () => clearInterval(iv);
+  }, [isOpen, isOverview, loadSecurity]);
 
   useEffect(() => {
     if (!isOpen || !isFileView) return;
@@ -1382,7 +2777,7 @@ export default function NotificationsModal({
           )}
 
           {/* Live toggle */}
-          {selectedSource !== 'activity' && (
+          {selectedSource !== 'activity' && !isOverview && (
             <button
               type="button"
               onClick={() => {
@@ -1415,7 +2810,7 @@ export default function NotificationsModal({
           )}
 
           {/* Manual refresh */}
-          {selectedSource !== 'activity' && (
+          {selectedSource !== 'activity' && !isOverview && (
             <button
               type="button"
               onClick={() => {
@@ -1452,8 +2847,24 @@ export default function NotificationsModal({
           )}>
             <div className="flex-1 overflow-auto py-2 px-1.5 space-y-0.5">
 
-              {/* Timeline section */}
+              {/* Overview section */}
               <p className="text-[9px] uppercase tracking-widest text-gray-400 font-semibold px-2 pt-1 pb-0.5">
+                {t('ovSection')}
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedSource('overview')}
+                className={cn(
+                  'w-full flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors text-left',
+                  selectedSource === 'overview' ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
+                )}
+              >
+                <LayoutGrid size={13} className="shrink-0" />
+                <span className="flex-1 truncate">{t('ovLabel')}</span>
+              </button>
+
+              {/* Timeline section */}
+              <p className="text-[9px] uppercase tracking-widest text-gray-400 font-semibold px-2 pt-3 pb-0.5">
                 {t('sectionTimeline')}
               </p>
               <button
@@ -1517,15 +2928,30 @@ export default function NotificationsModal({
                 )}
               </button>
 
-              {/* Log Files — collapsible */}
+              {/* Log Files — collapsible. A pulsing count nudges the admin to the
+                  security log when access attempts / skill events were recorded. */}
               <button
                 type="button"
-                onClick={() => setLogsExpanded(v => !v)}
+                onClick={() => {
+                  const next = !logsExpanded;
+                  setLogsExpanded(next);
+                  // expanding via the unread badge jumps straight to the security log
+                  if (next && securityUnread && securityLogFilename) setSelectedSource(securityLogFilename);
+                }}
                 className="w-full flex items-center gap-1.5 px-2 pt-3 pb-0.5 text-left"
+                title={securityUnread ? t('ovLogAlert', { n: securityAlertCount }) : undefined}
               >
                 <p className="text-[9px] uppercase tracking-widest text-gray-400 font-semibold flex-1">
                   {t('sectionFiles')}
                 </p>
+                {securityUnread && (
+                  <span
+                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 animate-pulse"
+                    style={{ color: '#fff', background: '#ef4444' }}
+                  >
+                    {securityAlertCount}
+                  </span>
+                )}
                 {logsExpanded
                   ? <ChevronDown size={10} className="text-gray-400 shrink-0" />
                   : <ChevronRight size={10} className="text-gray-400 shrink-0" />}
@@ -1550,9 +2976,14 @@ export default function NotificationsModal({
                           isSelected ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'text-gray-700 hover:bg-gray-200'
                         )}
                       >
-                        <span className={cn('w-2 h-2 rounded-full shrink-0', DOMAIN_COLOR[domain] ?? 'bg-gray-400')} />
+                        <span className={cn('w-2 h-2 rounded-full shrink-0', DOMAIN_COLOR[domain] ?? 'bg-gray-400',
+                          domain === 'security' && securityUnread && !isSelected && 'animate-pulse')} />
                         <span className="flex-1 truncate font-mono text-xs">{domain}</span>
-                        {file.date && (
+                        {domain === 'security' && securityUnread ? (
+                          <span className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0', isSelected ? 'bg-white/20' : 'bg-red-500 text-white')}>
+                            {securityAlertCount}
+                          </span>
+                        ) : file.date && (
                           <span className={cn('text-[9px] shrink-0', isSelected ? 'text-white/50' : 'text-gray-400')}>
                             {file.date.slice(5)}
                           </span>
@@ -1583,8 +3014,28 @@ export default function NotificationsModal({
           {/* ── Content ── */}
           <div className="flex-1 min-w-0 flex flex-col min-h-0">
 
-            {/* HORIZONTAL TIMELINE */}
-            {selectedSource === 'timeline' ? (
+            {/* OVERVIEW - protection dashboard */}
+            {isOverview ? (
+              <OverviewPane
+                chainOk={timelineChainOk}
+                events={timelineEvents}
+                totalRaw={timelineTotalRaw}
+                dates={timelineDates}
+                date={timelineDate}
+                today={today}
+                onDateChange={setTimelineDate}
+                security={securityOverview}
+                memHealth={memoryHealth}
+                mail={mailMessages}
+                thinking={thinkingStatus}
+                supervisor={supervisorStatus}
+                securityLogFile={domainLatest['security']?.filename}
+                onOpenLogFile={(f) => setSelectedSource(f)}
+                onRefreshSecurity={loadSecurity}
+              />
+
+            /* HORIZONTAL TIMELINE */
+            ) : selectedSource === 'timeline' ? (
               loadingTimeline && timelineEvents.length === 0 ? (
                 <div className="flex-1 flex items-center justify-center" style={{ background: '#0d1117' }}>
                   <div className="flex items-center gap-2 text-sm" style={{ color: '#8b949e' }}>

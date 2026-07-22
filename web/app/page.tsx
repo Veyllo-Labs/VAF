@@ -1040,6 +1040,20 @@ function VAFDashboardContent() {
         return () => clearInterval(id);
     }, [currentUser]);
 
+    // Security-event notification poll (admins): drives the Logs sidebar dot.
+    useEffect(() => {
+        if (currentUser?.role !== 'admin') return;
+        const check = () => {
+            fetch(`${getApiBase()}/api/security/alert-count`, { credentials: 'include' })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && typeof d === 'object') setSecurityLatestTs(d.latest_ts ?? null); })
+                .catch(() => {});
+        };
+        check();
+        const id = setInterval(check, 60 * 1000); // every 60s (cheap: reads today's log)
+        return () => clearInterval(id);
+    }, [currentUser]);
+
     // OAuth callback redirect: open Settings with Connections tab when URL has connections=1 or cloud_oauth/email_oauth
     const openedFromOAuthRef = useRef(false);
 
@@ -1300,6 +1314,14 @@ function VAFDashboardContent() {
     }, []);
     useEffect(() => () => { if (agentReactionTimer.current) clearTimeout(agentReactionTimer.current); }, []);
     const [chainAlert, setChainAlert] = useState(false);
+    // Security-log notification dot on the sidebar Logs button. latest_ts is the
+    // newest security event today; the dot is UNREAD-based (clears when the Logs
+    // window is opened) so routine blocks don't stick a permanent red dot.
+    const [securityLatestTs, setSecurityLatestTs] = useState<string | null>(null);
+    const [securitySeenTs, setSecuritySeenTs] = useState<string | null>(
+        () => (typeof window !== 'undefined' ? localStorage.getItem('vaf_logs_seen_ts') : null)
+    );
+    const securityUnseen = !!securityLatestTs && (!securitySeenTs || securityLatestTs > securitySeenTs);
     // const [activeTools, setActiveTools] = useState<ToolState[]>([]); // REPLACED BY INLINE MESSAGES
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -5586,7 +5608,7 @@ function VAFDashboardContent() {
                         >
                             <div className="w-6 flex justify-center shrink-0 relative">
                                 <ScrollText size={20} />
-                                {chainAlert && (
+                                {(chainAlert || securityUnseen) && (
                                     <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse" />
                                 )}
                             </div>
@@ -5780,10 +5802,20 @@ function VAFDashboardContent() {
                                     return visibleMessages.map((msg, i) => {
                                         const trueIndex = messages.indexOf(msg);
                                         const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
-                                        const showDaySeparator = prevMsg !== null && !isSameDay(prevMsg.timestamp, msg.timestamp);
+                                        // Day separators must compare only messages that actually RENDER.
+                                        // System items render as null bubbles (see below), but a live system
+                                        // step spliced into an older turn carries Date.now() - comparing
+                                        // against it painted phantom "day ended / continued" pairs around an
+                                        // invisible row (live incident 2026-07-22). Skip system rows on both
+                                        // sides of the comparison.
+                                        let prevRendered: (typeof visibleMessages)[number] | null = null;
+                                        for (let p = i - 1; p >= 0; p--) {
+                                            if (visibleMessages[p].role !== 'system') { prevRendered = visibleMessages[p]; break; }
+                                        }
+                                        const showDaySeparator = msg.role !== 'system' && prevRendered !== null && !isSameDay(prevRendered.timestamp, msg.timestamp);
                                         return (
                                             <Fragment key={trueIndex}>
-                                                {showDaySeparator && <DaySeparator endDate={prevMsg.timestamp} startDate={msg.timestamp} />}
+                                                {showDaySeparator && prevRendered !== null && <DaySeparator endDate={prevRendered.timestamp} startDate={msg.timestamp} />}
                                                 {/* Message content */}
                                                 {(() => {
                                                     // Skip duplicate consecutive assistant messages (same visible answer) to avoid duplicated thinking + error text
@@ -7981,6 +8013,10 @@ function VAFDashboardContent() {
                 notifications={notifications}
                 onFetchComplete={setNotifications}
                 userTimeFormat={userTimeFormat}
+                onSecuritySeen={(ts) => {
+                    setSecuritySeenTs(ts);
+                    try { localStorage.setItem('vaf_logs_seen_ts', ts); } catch { /* private mode */ }
+                }}
             />
             <AnnouncementModal
                 isOpen={announcement !== null}

@@ -19,7 +19,7 @@ if (-not (Test-Path "venv")) {
 
 # 3. Install Dependencies
 if ($env:VAF_SKIP_PIP_INSTALL -eq "1") {
-    Write-Host "Skipping dependency installation (already running via setup.py)..."
+    Write-Host "Skipping dependency installation (managed by the outer installer)..."
 } else {
     Write-Host "Installing Dependencies..."
     $env:VIRTUAL_ENV = "$ProjectRoot\venv"

@@ -1,0 +1,162 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+#
+# Packaging metadata SSOT (PEP 621). setup.py remains only as a thin legacy
+# shim. Dependency layout: [project.dependencies] is the slim base needed to
+# use VAF as a headless library (`from vaf import Agent`); everything heavy
+# lives in optional extras so the library stays slim. The full desktop/server
+# product installs `pip install -r requirements.txt` (the canonical FLAT full
+# list used by install.sh / install.ps1) - that flow is unaffected by this file.
+
+[build-system]
+# setuptools >= 77 is required for PEP 639 (SPDX license expression +
+# license-files); older versions fail the isolated build on `license = "..."`.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vaf"
+description = "VAF - Veyllo Agentic Framework: Local AI tool for developers"
+readme = "README.md"
+# PEP 639 SPDX expression; emitted as License-Expression metadata. The
+# deprecated `License ::` classifier is intentionally omitted (setuptools
+# warns on, and PyPI rejects, specifying both).
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSING.md", "NOTICE"]
+authors = [{ name = "Veyllo GmbH", email = "legal@veyllo.io" }]
+# Floor only, DELIBERATELY no upper cap: an upper bound makes pip silently
+# resolve older releases on newer interpreters instead of failing clearly.
+# The supported range (3.10-3.13) is enforced by the installers and kept in
+# lockstep with the CI matrix via tests/test_installer_python_gate.py.
+requires-python = ">=3.10"
+dynamic = ["version"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    # CLI & UI
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+    "colorama>=0.4.0",
+    "shellingham>=1.5.0",
+    "psutil>=5.9.0",
+    # API & networking (core)
+    "requests>=2.31.0",
+    "httpx>=0.27.0",
+    "PyGithub>=2.1.1",
+    "beautifulsoup4>=4.12.0",
+    "markdownify>=1.0.0",
+    # LLM providers + model download
+    "huggingface_hub[hf_xet]>=0.20.0",
+    "tqdm>=4.65.0",
+    "openai>=1.12.0",
+    "anthropic>=0.18.0",
+    "google-genai>=1.0.0",
+    # Automation / scheduling
+    "schedule>=1.2.0",
+    "inquirer>=3.1.0",
+    # IANA tz database for zoneinfo on Windows (no system tz db); used by vaf/core/user_time.py
+    "tzdata>=2024.1",
+    # Linting (used by the built-in linter tool)
+    "ruff>=0.1.0",
+    # Schema validation for tool-input repair (core tool-dispatch path)
+    "jsonschema>=4.18.0",
+    # PEP 440 version parsing/comparison for the self-updater (vaf/cli/cmd/update.py)
+    "packaging>=23.0",
+    # Auth + encrypted credential store (core infra)
+    "argon2-cffi>=23.1.0",
+    "keyring>=24.0.0",
+    "filelock>=3.12.0",
+    "PyJWT>=2.8.0",
+    "pyotp>=2.9.0",
+    "qrcode[pil]>=7.4.0",
+    "cryptography>=41.0.0",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "pydantic>=2.0.0",
+]
+discord = ["discord.py>=2.3.2"]
+telegram = ["python-telegram-bot>=21.0"]
+desktop = [
+    "pystray>=0.19.5",
+    "pillow>=10.0.0",
+    "pywebview>=4.3.0",
+    "pyobjc-framework-Cocoa>=9.0; sys_platform == 'darwin'",
+    # PySide6 (LGPLv3) is the official Qt for Python binding. VAF is AGPL-3.0, so PyQt6
+    # (GPLv3) would be license-compatible; we pick PySide6 because its weak copyleft keeps
+    # the Qt *binding* itself unencumbered (dynamically linked, user-replaceable). VAF's own
+    # AGPL obligations are independent of this choice. PySide6 bundles Qt WebEngine.
+    "PySide6>=6.7.0; sys_platform == 'linux'",
+    "qtpy>=2.0.0; sys_platform == 'linux'",
+]
+memory = [
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.0",
+    "sentence-transformers>=2.2.0",
+    "onnxruntime>=1.16.0",
+    "tokenizers>=0.15.0",
+    "numpy>=1.24.0",
+    "redis>=5.0.0",
+]
+speech = ["SpeechRecognition>=3.10.0", "pyaudio>=0.2.14", "sherpa-onnx>=1.13"]
+browser = [
+    "browser-use>=0.12.9; python_version >= '3.11'",
+    "playwright>=1.49.0; python_version >= '3.11'",
+]
+pdf = [
+    "PyPDF2>=3.0.0",
+    "pdfplumber>=0.11.0",
+    "pycryptodome>=3.15.0",
+    "pdf2image>=1.16.0",
+    "pytesseract>=0.3.10",
+]
+docs = ["python-docx>=1.1.0", "openpyxl>=3.1.0", "python-pptx>=0.6.21"]
+dev = ["pytest>=7.0.0", "pytest-mock>=3.10.0"]
+# `all` = every extra above (parity with requirements.txt / the desktop
+# product). Self-referential on purpose: it cannot drift when an extra's
+# contents change. tests/test_slim_base_import.py enforces that every extra
+# is referenced here.
+all = ["vaf[server,discord,telegram,desktop,memory,speech,browser,pdf,docs,dev]"]
+
+[project.scripts]
+vaf = "vaf.main:main"
+
+[project.urls]
+Homepage = "https://github.com/Veyllo-Labs/VAF"
+Source = "https://github.com/Veyllo-Labs/VAF"
+Issues = "https://github.com/Veyllo-Labs/VAF/issues"
+Documentation = "https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md"
+Changelog = "https://github.com/Veyllo-Labs/VAF/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# Explicit include: the repo root also holds non-package dirs (web/, tests/,
+# scripts/, build/, models/, ...); without this, flat-layout auto-discovery
+# could error out or pick up strays. Matches the historical wheel content
+# (top_level.txt == "vaf").
+include = ["vaf*"]
+
+[tool.setuptools.package-data]
+vaf = ["py.typed", "media/*", "media/**/*"]
+
+[tool.setuptools.dynamic]
+# Resolved from the plain string literal in vaf/version.py via AST - the
+# package is NOT imported at build time (same guarantee the old setup.py
+# exec() approach had).
+version = { attr = "vaf.version.__version__" }

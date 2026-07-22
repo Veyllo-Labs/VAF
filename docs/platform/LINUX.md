@@ -18,7 +18,7 @@ duplicate the install steps.
   Qt / QtWebEngine (Chromium) backend** — it is a Qt window, **not** GTK.
   `requirements.txt` pins `PySide6>=6.7.0` and `qtpy>=2.0.0` for
   `sys_platform == "linux"` (see also the `desktop` extra in
-  [setup.py](../../setup.py)). PySide6 (LGPLv3) is chosen over PyQt6 (GPLv3) so
+  [pyproject.toml](../../pyproject.toml)). PySide6 (LGPLv3) is chosen over PyQt6 (GPLv3) so
   the Qt binding stays dynamically linked / user-replaceable;
   `vaf/core/desktop_window.py` sets `QT_API=pyside6` so both VAF and pywebview's
   Qt backend select PySide6. PySide6 bundles Qt WebEngine, so no separate

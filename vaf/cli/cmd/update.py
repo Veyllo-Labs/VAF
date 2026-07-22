@@ -242,8 +242,9 @@ def _start_service() -> None:
 
 def _install_python_deps(root: Path) -> None:
     UI.info("Installing Python dependencies...")
-    # Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_mac.sh /
-    # setup_win.ps1) during an update — that would redo brew/venv/alias/.app work.
+    # Legacy no-op guard: checkouts before the pyproject.toml migration had a setup.py
+    # post-install hook that read this. Updates can cross that boundary (downgrade, or
+    # the checkout mid-update), so keep setting it - platform setup must never re-run here.
     env = {**os.environ, "VAF_SKIP_POSTINSTALL": "1"}
     for args in (["-e", "."], ["-r", "requirements.txt"]):
         r = subprocess.run([sys.executable, "-m", "pip", "install", *args], cwd=str(root), env=env)

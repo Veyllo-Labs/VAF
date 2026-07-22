@@ -782,7 +782,8 @@ $env:Path = "$venvPath\Scripts;$env:Path"
 Write-Step "Installing Python Dependencies..."
 Write-Host "  (This may take 2-5 minutes depending on your internet connection)" -ForegroundColor DarkGray
 
-# Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_win.ps1).
+# Legacy no-op guard: checkouts before the pyproject.toml migration had a setup.py
+# post-install hook that read this; kept for update/downgrade onto such a checkout.
 # Start-Job (below) inherits this env var. install.ps1 already handles setup.
 $env:VAF_SKIP_POSTINSTALL = "1"
 

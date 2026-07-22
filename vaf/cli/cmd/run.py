@@ -15,9 +15,46 @@ from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.cli.ui import UI
 from vaf.core.log_helper import get_dated_log_path
-from vaf.core.web_server import start_background_server
-from vaf.core.web_interface import get_web_interface
 import threading
+
+
+class _NullWebInterface:
+    """No-op stand-in when the optional [server] extra is not installed."""
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+
+def get_web_interface():
+    """Real WebUI bridge when fastapi is installed; silent no-op on a slim install.
+
+    Deliberately shadows vaf.core.web_interface.get_web_interface and resolves it
+    at call time: web_interface imports fastapi at module level, which a slim
+    `pip install vaf` does not have. Chat telemetry must degrade to a no-op
+    there, never crash the CLI turn.
+    """
+    try:
+        from vaf.core.web_interface import get_web_interface as _real
+    except ModuleNotFoundError:
+        return _NullWebInterface()
+    return _real()
+
+
+def _require_server_extra() -> None:
+    """Friendly --web gate for slim installs, checked before any heavy startup."""
+    import importlib.util
+
+    missing = [m for m in ("fastapi", "uvicorn") if importlib.util.find_spec(m) is None]
+    if missing:
+        console.print(
+            f"[red]The Web UI needs VAF's optional server dependencies (missing: {', '.join(missing)}).[/red]"
+        )
+        # markup=False: rich would otherwise eat the [server]/[all] extras as tags.
+        console.print(
+            'Install with: pip install "vaf[server]"  (or the full product: pip install "vaf[all]")',
+            markup=False,
+        )
+        raise typer.Exit(1)
 
 
 def _make_cli_agent(verbose: bool = False, host_audio: bool = True) -> Agent:
@@ -668,6 +705,11 @@ def run(
     if ctx.invoked_subcommand:
         return
 
+    # Slim-install gate: --web needs the [server] extra. Fail fast and friendly
+    # here, before any heavy startup (this also prevents the tray auto-start path).
+    if web:
+        _require_server_extra()
+
     # CLI-only: drop the noisy "INFO:httpx:HTTP Request ..." lines from the chat console.
     _quiet_cli_http_logs()
 
@@ -792,7 +834,7 @@ def run_prompt(
     ndjson_emit({"type": "end"})
 
 
-def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = True):
+def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):
     """Run with modern TUI interface."""
     global global_agent
     
@@ -922,13 +964,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     if config_web_enabled is None:
         config_web_enabled = True
     
-    # CLI flag overrides Config only if explicitly disabled via --no-web
-    # In Typer, the default for 'web' is True.
-    # If the user does NOT pass --no-web, 'web' is True.
-    # In that case, we should respect the config.
-    # If the user passes --no-web, 'web' is False. We should disable.
-    
-    # Simple logic: If it's enabled in CLI, respect config. If disabled in CLI, it's disabled.
+    # The --web flag defaults to False (see the run() callback): the Web UI
+    # starts only when explicitly requested, and even then the config key
+    # web_ui_enabled can still veto it.
     if web_enabled:
         web_enabled = config_web_enabled
         
@@ -1066,6 +1104,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
         # ═══════════════════════════════════════════════════════════════
         if web_enabled:
             try:
+                # Lazy: web_server imports fastapi at module level, which slim
+                # installs lack. The --web gate in run() already fails friendly
+                # there; this import only runs once the extra is present.
+                from vaf.core.web_server import start_background_server
+
                 # 1. Start Python Backend (FastAPI + WebSocket)
                 # Respect local_network_enabled setting for host binding
                 local_network_enabled = Config.get("local_network_enabled", False)

@@ -649,8 +649,9 @@ if [[ "$OS_TYPE" == "macos" ]]; then
     export CFLAGS="-I$(brew --prefix portaudio)/include"
 fi
 
-# Don't let `pip install -e .` re-trigger setup.py's platform post-install (setup_mac.sh),
-# which would redo brew/venv/alias/.app work install.sh already did (macOS double-path).
+# Legacy no-op guard: checkouts before the pyproject.toml migration had a setup.py
+# post-install hook that read this. Kept so an update/downgrade onto such a checkout
+# never re-runs platform setup (brew/venv/alias/.app) mid-install.
 export VAF_SKIP_POSTINSTALL=1
 
 # Upgrade pip

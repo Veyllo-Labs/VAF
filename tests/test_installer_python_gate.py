@@ -19,6 +19,7 @@ These guards pin three things:
 """
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -95,8 +96,20 @@ def test_pyaudio_stays_out_of_core_requirements():
     active = [ln for ln in req.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     assert not any("pyaudio" in ln.lower() for ln in active), (
         "pyaudio must stay OUT of core requirements.txt (no wheels for brand-new Pythons broke "
-        "the whole install); it belongs to the optional vaf[speech] extra in setup.py"
+        "the whole install); it belongs to the optional vaf[speech] extra in pyproject.toml"
     )
-    # ...but must remain available via the speech extra
-    setup = (ROOT / "setup.py").read_text(encoding="utf-8")
-    assert "pyaudio" in setup and '"speech"' in setup
+    # ...but must remain available via the speech extra (pyproject.toml is the
+    # packaging SSOT; text check as the Python 3.10 fallback sans tomllib)
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "pyaudio" in pyproject and "speech = [" in pyproject
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        data = tomllib.loads(pyproject)
+        assert not any(
+            "pyaudio" in dep.lower() for dep in data["project"]["dependencies"]
+        ), "pyaudio must not be a base dependency"
+        assert any(
+            "pyaudio" in dep.lower()
+            for dep in data["project"]["optional-dependencies"]["speech"]
+        ), "pyaudio must live in the speech extra"

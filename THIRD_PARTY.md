@@ -13,7 +13,8 @@ package's well-known upstream license otherwise (marked accordingly). Entries th
 could not be confirmed are marked `unverified`.
 
 Scope of this file:
-- Python runtime deps from `setup.py` `BASE_REQUIRES` and the named `EXTRAS`.
+- Python runtime deps from `pyproject.toml` `[project.dependencies]` and the named
+  `[project.optional-dependencies]` extras.
 - Python deps from `requirements.txt` (the canonical full installer list).
 - Web UI deps from `web/package.json`.
 - WhatsApp bridge deps from `vaf/whatsapp_node/package.json`.
@@ -33,12 +34,12 @@ it is engineering documentation to support an informed review.
    library previously depended on the GPL-3.0 `html2text` for HTML-to-Markdown
    conversion (used by `webfetch` and the document editor). GPL-3.0 is strong
    copyleft and is incompatible with closed-source/commercial redistribution. It
-   has been replaced with `markdownify` (MIT) in `setup.py`, `requirements.txt`,
+   has been replaced with `markdownify` (MIT) in `pyproject.toml`, `requirements.txt`,
    and the code, so the base install no longer ships any strong-copyleft runtime
    dependency.
 
 2. **`requirements.lock` regenerated to pin PySide6 (LGPL-3.0), not PyQt6 (GPL-3.0)
-   — RESOLVED.** Both `setup.py` (`desktop` extra) and `requirements.txt`
+   — RESOLVED.** Both `pyproject.toml` (`desktop` extra) and `requirements.txt`
    intentionally specify **PySide6** (LGPL-3.0, weak copyleft) for the Linux Qt
    WebEngine window. The lockfile had drifted and still pinned `pyqt6*` (GPL-3.0);
    it has been regenerated from the current `requirements.txt`, so it now pins
@@ -48,7 +49,7 @@ it is engineering documentation to support an informed review.
 
 ## Python — runtime dependencies (base library)
 
-Source: `setup.py` `BASE_REQUIRES` (these are installed by `pip install vaf`).
+Source: `pyproject.toml` `[project.dependencies]` (these are installed by `pip install vaf`).
 Also present in `requirements.txt`.
 
 | Package | Min version | License |
@@ -82,7 +83,7 @@ Also present in `requirements.txt`.
 
 ## Python — runtime dependencies (optional extras)
 
-Source: `setup.py` `EXTRAS` and `requirements.txt`. Installed via
+Source: `pyproject.toml` `[project.optional-dependencies]` and `requirements.txt`. Installed via
 `pip install vaf[<extra>]`, `pip install vaf[all]`, or the full
 `requirements.txt` installer flow.
 
@@ -159,7 +160,7 @@ Note: the `desktop` extra intentionally uses **PySide6 (LGPL-3.0)**, not PyQt6
 
 ## Python — build / dev / test tooling
 
-Source: `setup.py` `dev` extra and `requirements.txt` testing section.
+Source: `pyproject.toml` `dev` extra and `requirements.txt` testing section.
 Not required at runtime.
 
 | Package | Min version | License |
@@ -249,7 +250,7 @@ the license requires.
 ## Notes and caveats
 
 - **Qt binding in `requirements.lock`:** the lockfile pins **PySide6 (LGPL-3.0)**
-  and `shiboken6`, matching `setup.py`/`requirements.txt`; it contains no
+  and `shiboken6`, matching `pyproject.toml`/`requirements.txt`; it contains no
   `pyqt6*` (GPL-3.0).
 - **Dual/multi-licensed packages** (e.g. `cryptography`, `PySide6`, `numpy`,
   `pycryptodome`) are used under the most permissive applicable option; the table

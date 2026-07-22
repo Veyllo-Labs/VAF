@@ -4,7 +4,6 @@
 import typer
 import os
 from typing import Optional
-from vaf.cli.cmd.bridge_discord import run_bridge as start_discord
 
 app = typer.Typer(help="Bridge VAF to external platforms (Discord, Slack, etc.)")
 
@@ -14,6 +13,15 @@ def discord(
     gateway: str = typer.Option("ws://127.0.0.1:8000", help="URL of the running VAF Gateway")
 ):
     """Starts the Discord Bridge."""
+    # Lazy: bridge_discord imports discord.py, which slim installs lack. Checked
+    # first so the user learns the real blocker before token validation.
+    try:
+        from vaf.cli.cmd.bridge_discord import run_bridge as start_discord
+    except ModuleNotFoundError as e:
+        typer.echo(f"Error: the Discord bridge requires an optional dependency (missing: {e.name}).", err=True)
+        typer.echo('Install with: pip install "vaf[discord]"  (or the full product: pip install "vaf[all]")', err=True)
+        raise typer.Exit(1)
+
     bot_token = token or os.getenv("DISCORD_TOKEN")
     if not bot_token:
         typer.echo("Error: No Discord token provided. Use --token or set DISCORD_TOKEN.", err=True)

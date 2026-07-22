@@ -11,6 +11,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+- **VAF's packaging moved to the modern Python standard (`pyproject.toml`).** The
+  install commands do not change (`pip install -e .`, extras like `vaf[server]` and
+  `vaf[all]` stay exactly the same), the license is now declared in the standard
+  machine-readable form, and the `LICENSING.md` terms file ships inside the package.
+- **Installing VAF with pip no longer runs platform setup scripts.** A plain
+  `pip install -e .` used to silently trigger macOS/Windows provisioning scripts in
+  some legacy flows; a pip install is now strictly a Python-package install. The
+  desktop installers (`install.sh` / `install.ps1`) are unaffected and keep doing the
+  full provisioning.
+- **The `vaf` command now works on a minimal library install.** With only the base
+  dependencies installed, `vaf --version`, `vaf prompt` and other light commands run
+  normally, and commands that need optional components (for example `vaf run --web`
+  or the Discord bridge) explain which extra to install (such as
+  `pip install "vaf[server]"`) instead of crashing with an import error.
+
 ### Fixed
 - **The document editor's page stays white in dark mode.** The DOCX editor's sheet is a
   rendering of real paper, and Print and PDF show exactly what is on screen, so it keeps its

@@ -12,7 +12,7 @@ Not yet. Install from source: `git clone` + `pip install -e .` (slim base) or
 with extras like `.[memory,server]` - see [EMBEDDING.md](EMBEDDING.md).
 
 **Which Python versions are supported?**
-3.10 or newer (`python_requires` in setup.py).
+3.10 or newer (`requires-python` in pyproject.toml).
 
 **Do I need Docker?**
 The agent itself runs without it. Docker is hard-required for code-execution

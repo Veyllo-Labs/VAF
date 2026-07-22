@@ -26,7 +26,7 @@ echo "ℹ️ Python Version: $(python3 --version)"
 
 # 3. Critical Dependencies First (Ensure Agent runs even if AI fails)
 if [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then
-    echo "ℹ️ Skipping dependency installation (already running via setup.py)..."
+    echo "ℹ️ Skipping dependency installation (managed by the outer installer)..."
 else
     echo "⬇️ Installing Core Audio Components..."
     export LDFLAGS="-L$(brew --prefix portaudio)/lib"

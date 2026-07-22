@@ -30,6 +30,14 @@ def bootstrap():
     if os.environ.get("VAF_SKIP_DEP_CHECK"):
         return
 
+    # Source-checkout gate: a pip-installed VAF (site-packages) manages deps via
+    # extras; never prompt or auto-run pip there. Only the git-checkout /
+    # installer layout ships requirements.txt one level above the package (the
+    # same file this bootstrap installs from, see below).
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.exists(os.path.join(base_dir, "requirements.txt")):
+        return
+
     # Map: pip package name -> Python import name
     # Some packages have different names when importing
     DEPENDENCIES = {
@@ -377,7 +385,9 @@ def tray_command():
     except ImportError as e:
         _log_tray_error("Tray ImportError", str(e))
         print(f"Error starting tray app: {e}")
-        print("Please ensure requirements are installed: pip install -r requirements.txt")
+        print("The tray/desktop app needs VAF's full dependency set:")
+        print('  pip install:      pip install "vaf[all]"')
+        print("  source checkout:  pip install -r requirements.txt")
     except Exception as e:
         import traceback
         _log_tray_error("Tray exception", f"{e}\n{traceback.format_exc()}")

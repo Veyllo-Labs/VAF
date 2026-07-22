@@ -40,7 +40,7 @@ class UpdateSkillTool(BaseTool):
         from vaf.core import skills_registry
         from vaf.skills import templates as skills_templates
         from vaf.skills.skill_md import parse_skill_md_text
-        from vaf.skills.scanner import scan_skill_md_text, format_findings
+        from vaf.skills.scanner import scan_skill_md_text, format_findings, emit_skill_security_event
 
         user_scope_id = kwargs.get("user_scope_id")
         username = kwargs.get("username") or "admin"
@@ -61,6 +61,7 @@ class UpdateSkillTool(BaseTool):
             return f"error: invalid skill: {parsed.get('error')}"
         scan = scan_skill_md_text(content)
         if scan.get("level") == "high":
+            emit_skill_security_event("skill_blocked", "update", sid, scan)
             return "error: skill blocked by safety scan.\n" + format_findings(scan)
 
         # Preserve ownership + share list + created_by across the edit.

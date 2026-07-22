@@ -148,6 +148,12 @@ def get_visible_skill_ids_for_user(user_scope_id: Optional[str]) -> List[str]:
     manifest = load_manifest()
     visible: List[str] = []
     for sid, entry in manifest.get("skills", {}).items():
+        # QUARANTINE GATE: a quarantined skill is invisible to EVERY agent path
+        # (prompt list, list_skills tool, read_skill) - including admin agent
+        # sessions. Resolution happens in the security dashboard (delete or
+        # 2FA-confirmed false-positive restore), never by the agent using it.
+        if entry.get("quarantined"):
+            continue
         shared_with: List[str] = entry.get("shared_with", ["*"])
         if user_scope_id is None:
             visible.append(sid)
@@ -376,10 +382,13 @@ def import_skill_zip(
                 raise ValueError(f"invalid SKILL.md: {parsed.get('error')}")
 
             # Security scan the full bundle (body + every bundled file) before install.
-            from vaf.skills.scanner import scan_skill_folder, SkillScanBlocked
+            from vaf.skills.scanner import scan_skill_folder, SkillScanBlocked, emit_skill_security_event
             scan = scan_skill_folder(extract_dir)
             if scan["level"] == "high" and not override:
+                emit_skill_security_event("skill_blocked", "import", skill_id, scan)
                 raise SkillScanBlocked(scan)
+            if scan["level"] == "high" and override:
+                emit_skill_security_event("skill_override", "import", skill_id, scan)
 
             if dest.exists():
                 shutil.rmtree(dest)
@@ -401,3 +410,68 @@ def get_all_skill_ids() -> List[str]:
 
 def get_skill_manifest_entry(skill_id: str) -> Optional[Dict[str, Any]]:
     return load_manifest().get("skills", {}).get(skill_id)
+
+
+def update_skill_scan(skill_id: str, scan: Dict[str, Any]) -> bool:
+    """Update ONLY the persisted scan block of an installed skill.
+
+    Used by the periodic re-scan (vaf/skills/rescan.py) so a post-install
+    modification of skill files on disk becomes visible in the manifest (and
+    thereby on the security dashboard) without touching ownership/share fields.
+    Returns True when the entry existed and was written.
+    """
+    with _manifest_lock:
+        data = load_manifest()
+        entry = data.get("skills", {}).get(skill_id)
+        if not isinstance(entry, dict):
+            return False
+        entry["scan"] = {
+            "score": int(scan.get("score", 0) or 0),
+            "level": str(scan.get("level", "clean") or "clean"),
+            "count": len(scan.get("findings") or []),
+        }
+        _save_manifest(data)
+        return True
+
+
+def set_skill_quarantined(skill_id: str, reason: str) -> bool:
+    """Quarantine an installed skill: it disappears from EVERY agent-facing
+    path (get_visible_skill_ids_for_user gate) until an admin resolves it in
+    the security dashboard (delete, or false-positive restore with 2FA)."""
+    with _manifest_lock:
+        data = load_manifest()
+        entry = data.get("skills", {}).get(skill_id)
+        if not isinstance(entry, dict):
+            return False
+        from datetime import datetime as _dt
+        entry["quarantined"] = {"at": _dt.now().isoformat(timespec="seconds"), "reason": str(reason)[:80]}
+        _save_manifest(data)
+        return True
+
+
+def clear_skill_quarantine(skill_id: str) -> bool:
+    """Lift the quarantine (admin false-positive decision)."""
+    with _manifest_lock:
+        data = load_manifest()
+        entry = data.get("skills", {}).get(skill_id)
+        if not isinstance(entry, dict) or not entry.get("quarantined"):
+            return False
+        entry.pop("quarantined", None)
+        _save_manifest(data)
+        return True
+
+
+def set_skill_acknowledged(skill_id: str, by: str = "") -> bool:
+    """Mark a MEDIUM-risk skill as reviewed/accepted by the admin. It stays fully
+    visible AND still displayed as medium, but no longer drives the protection
+    banner to amber (the admin has seen it and chose to keep it). Does NOT change
+    what the agent can do (medium skills are visible to the agent either way)."""
+    with _manifest_lock:
+        data = load_manifest()
+        entry = data.get("skills", {}).get(skill_id)
+        if not isinstance(entry, dict):
+            return False
+        from datetime import datetime as _dt
+        entry["acknowledged"] = {"at": _dt.now().isoformat(timespec="seconds"), "by": str(by)[:80]}
+        _save_manifest(data)
+        return True

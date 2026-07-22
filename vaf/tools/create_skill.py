@@ -54,7 +54,7 @@ class CreateSkillTool(BaseTool):
         from vaf.core import skills_registry
         from vaf.skills import templates as skills_templates
         from vaf.skills.skill_md import parse_skill_md_text
-        from vaf.skills.scanner import scan_skill_md_text, format_findings
+        from vaf.skills.scanner import scan_skill_md_text, format_findings, emit_skill_security_event
         from vaf.core.config import get_local_admin_scope_id
 
         user_scope_id = kwargs.get("user_scope_id")
@@ -75,6 +75,7 @@ class CreateSkillTool(BaseTool):
             return f"error: invalid skill: {parsed.get('error')}"
         scan = scan_skill_md_text(content)
         if scan.get("level") == "high":
+            emit_skill_security_event("skill_blocked", "create", sid, scan)
             return "error: skill blocked by safety scan.\n" + format_findings(scan)
 
         skills_registry.save_skill_md(sid, content)

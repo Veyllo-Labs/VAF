@@ -558,6 +558,11 @@ class Config:
         # agent, gated by the channel whitelist (paired_only) + the per-user admin check.
         "channel_tools_unrestricted": True,
 
+        # Periodic skill re-scan (post-install tamper detection): every N hours the security
+        # scanner re-checks ALL installed skills on disk and updates their manifest scan blocks;
+        # a worsened level raises a security event on the Overview dashboard. 0 disables.
+        "skills_rescan_interval_hours": 5,
+
         # Front Office: when True, replies to contacts (from_contact) require explicit approval in Web UI before sending.
         # Default False: contacts you added with "Can reach your assistant" get replies directly; set True to review each reply first.
         "front_office_contact_reply_require_approval": False,

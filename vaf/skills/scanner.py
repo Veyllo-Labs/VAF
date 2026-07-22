@@ -260,3 +260,20 @@ def format_findings(scan: Dict[str, Any], limit: int = 12) -> str:
     if len(findings) > limit:
         lines.append(f"  … and {len(findings) - limit} more.")
     return "\n".join(lines)
+
+
+def emit_skill_security_event(kind: str, source: str, skill_id: str,
+                              scan: Dict[str, Any]) -> None:
+    """Mirror a scan decision into the security event log (dashboard +
+    security_<date>.log). kinds: skill_blocked (HIGH stopped an install/update),
+    skill_override (admin explicitly accepted a HIGH result). Lazy import,
+    never raises - auditing must not break the skill pipeline."""
+    try:
+        from vaf.core.security_events import log_security_event
+        cats = ",".join(sorted({str(f.get("category", "")) for f in (scan.get("findings") or []) if f.get("category")}))
+        log_security_event(
+            kind,
+            detail=f"{source}:{skill_id} score={scan.get('score')} cats={cats}"[:200],
+        )
+    except Exception:
+        pass

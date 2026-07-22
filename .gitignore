@@ -105,3 +105,4 @@ CLAUDE.md
 
 # Internal LLM backend/provider probing notes (kept local, not public)
 docs/llm/LLM_BACKEND_FACTS.md
+.hygiene-deny.local

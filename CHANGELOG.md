@@ -12,6 +12,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Fixed
+- **The document editor's page stays white in dark mode.** The DOCX editor's sheet is a
+  rendering of real paper, and Print and PDF show exactly what is on screen, so it keeps its
+  light appearance while the app around it goes dark.
 - **A tool the local model tried to run no longer silently vanishes.** With the built-in
   local model, some tool calls (for example adding a calendar event) came out in a format the
   app recognised only for one specific model family. For every other local model the call was

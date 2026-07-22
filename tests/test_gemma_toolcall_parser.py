@@ -50,7 +50,7 @@ def test_no_tool_calls_returns_empty():
 
 
 def test_incident_calendar_leak_is_parsed():
-    """Live incident 2026-07-21 (session purple636998): the local Qwen 3.5 4B emitted a
+    """Live incident 2026-07-21: the local Qwen 3.5 4B emitted a
     create_calendar_event call in exactly this pipe-delimited format. It leaked into the chat
     as text and nothing ran, because lane 4 was gated to Gemma only. The parser itself handles
     it; the gate is what failed."""

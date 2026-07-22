@@ -261,6 +261,13 @@ def _run_bot() -> None:
                     str(getattr(message.channel, "id", "")),
                     reason,
                 )
+            # Security-event mirror (dashboard + security_<date>.log); own throttle.
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("channel_rejected", channel="discord",
+                                   username=sender_id, detail=str(reason or "not_paired"))
+            except Exception:
+                pass
             return
 
         text = (message.content or "").strip()

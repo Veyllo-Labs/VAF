@@ -69,6 +69,7 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
             from vaf.network.binding import is_allowed_ip
             if not is_allowed_ip(client_ip):
                 logger.warning("Blocked non-private IP: %s %s", client_ip, request.url.path)
+                _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Access denied: only local network clients are allowed"},
@@ -77,6 +78,7 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
             # Fallback: only allow obvious localhost
             if client_ip not in ("127.0.0.1", "::1", "localhost"):
                 logger.warning("Blocked IP (binding module unavailable): %s", client_ip)
+                _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "Access denied"},
@@ -164,6 +166,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # (local desktop with a stale cookie) is not locked out — it falls through to the
             # tokenless localhost path below rather than getting a hard 401.
             if not is_localhost(client_ip):
+                _emit_security_event("token_rejected", ip=client_ip, path=request.url.path)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or expired token"},
@@ -172,10 +175,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # No valid identity established.
         if is_localhost(client_ip):
             return await call_next(request)
+        _emit_security_event("unauthenticated_blocked", ip=client_ip, path=request.url.path)
         return JSONResponse(
             status_code=401,
             content={"detail": "Authentication required"},
         )
+
+
+def _emit_security_event(kind: str, **fields) -> None:
+    """Record a rejected access attempt in the security event log (dashboard +
+    security_<date>.log). Lazy import + swallow-all: auditing must never be able
+    to break or slow the request path. The writer itself throttles floods."""
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event(kind, **fields)
+    except Exception:
+        pass
 
 
 def _extract_token(request: Request) -> str | None:

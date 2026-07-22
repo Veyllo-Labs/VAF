@@ -1159,6 +1159,14 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     explicit_allow,
                     contact_allow,
                 )
+            # Security-event mirror (dashboard + security_<date>.log); own throttle,
+            # never raises (sync daemon-thread context).
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("channel_rejected", channel="whatsapp",
+                                   username=sender_for_throttle, detail=str(policy_reason or "not_paired"))
+            except Exception:
+                pass
             # Record activity so dashboard still shows this chat (as Read-only) even when Node chat list omits it after reconnect
             _reject_chat_id = _to_e164_display(_jid_to_e164(from_jid or "")) if _jid_to_e164(from_jid or "") else str(from_jid or "")
             if _reject_chat_id:

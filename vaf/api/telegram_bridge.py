@@ -139,6 +139,15 @@ def _drop_unauthorized_telegram(
             str(chat_id or ""),
             reason,
         )
+    # Security-event mirror (dashboard + security_<date>.log). Its writer has its
+    # own per-sender throttle - do NOT call should_log_unauthorized again (it is
+    # stateful and a second call would consume the log throttle window).
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("channel_rejected", channel="telegram", username=uid,
+                           detail=f"{message_kind}/{reason}")
+    except Exception:
+        pass
 
 
 def _whitelist_lookup(telegram_user_id: str) -> Optional[Dict[str, Any]]:

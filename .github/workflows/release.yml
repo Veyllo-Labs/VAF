@@ -2,8 +2,11 @@ name: VAF Release
 
 # Cutting a release: push a tag `v<version>` (see docs/setup/RELEASING.md).
 # This re-runs the test gate on the tagged commit and, on success, creates the
-# GitHub Release that `vaf update` targets. No build artifacts are uploaded —
-# clients update via git checkout of the tag.
+# GitHub Release that `vaf update` targets AND publishes the sdist+wheel to
+# PyPI (Trusted Publishing / OIDC, environment `pypi`). Every release is a
+# two-channel event: git checkouts update via `vaf update`, pip installs via
+# `pip install -U --pre vaf`. Dry-run against TestPyPI first via the manual
+# publish-testpypi.yml workflow.
 on:
   push:
     tags:
@@ -93,3 +96,34 @@ jobs:
           name: VAF ${{ github.ref_name }}
           body_path: release_notes.md
           prerelease: ${{ steps.notes.outputs.prerelease }}
+
+  # Publishes to PyPI via Trusted Publishing (OIDC): no long-lived token
+  # anywhere. PyPI-side counterpart: the trusted publisher registered for
+  # project `vaf` (owner Veyllo-Labs, repo VAF, workflow release.yml,
+  # environment pypi). The `pypi` environment must exist in the repo settings.
+  # PyPI versions are immutable: a bad upload cannot be replaced under the
+  # same version, hence the TestPyPI dry-run workflow.
+  publish-pypi:
+    needs: gate-and-release
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1

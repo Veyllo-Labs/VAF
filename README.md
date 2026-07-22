@@ -12,9 +12,9 @@ O))         O))       O))))))))
 
 An autonomous agent framework built on top of local and cloud LLMs. VAF runs as a desktop application, a headless server, or a terminal interface on Windows, macOS, and Linux.
 
-[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)
+[![CI](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml/badge.svg)](https://github.com/Veyllo-Labs/VAF/actions/workflows/ci.yml) [![Python](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)
 
-**Dual-licensed:** free under the [GNU AGPL-3.0](LICENSE), or a [commercial license](COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
+**Dual-licensed:** free under the [GNU AGPL-3.0](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE), or a [commercial license](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md) for proprietary/SaaS use without copyleft (`legal@veyllo.io`).
 
 **Requires:** Git to clone, and a container runtime. VAF keeps users, auth, setup and memory in a PostgreSQL/pgvector container, so one is required to finish setup and sign in. All three installers set the engine up for you: Windows installs the free Rancher Desktop, macOS auto-installs the free Colima (or uses Docker Desktop if present), and Linux auto-installs your distro's Docker (systemd + `docker` group). The installer also provisions Python and Node itself.
 
@@ -27,9 +27,29 @@ Pick your path:
 | You want to… | Go to |
 |---|---|
 | **Run VAF** as a desktop app, server, or terminal | [Installation](#installation) below |
-| **Build on VAF** as a library (embed the agent in your app) | [docs/EMBEDDING.md](docs/EMBEDDING.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| **Write a tool** (extend the agent, ship it as a pip package) | [vaf/tools/README.md](vaf/tools/README.md) · [docs/EMBEDDING.md](docs/EMBEDDING.md) |
-| **Contribute to the engine** (the core agent loop) | [vaf/core/README.md](vaf/core/README.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| **Build on VAF** as a library (embed the agent in your app) | [docs/EMBEDDING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) · [docs/ARCHITECTURE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/ARCHITECTURE.md) |
+| **Write a tool** (extend the agent, ship it as a pip package) | [vaf/tools/README.md](https://github.com/Veyllo-Labs/VAF/blob/main/vaf/tools/README.md) · [docs/EMBEDDING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) |
+| **Contribute to the engine** (the core agent loop) | [vaf/core/README.md](https://github.com/Veyllo-Labs/VAF/blob/main/vaf/core/README.md) · [docs/ARCHITECTURE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/ARCHITECTURE.md) |
+
+### Use it as a library
+
+```bash
+pip install --pre vaf
+```
+
+```python
+from vaf import Agent
+
+agent = Agent(config={"provider": "openai", "api_key_openai": "sk-..."})
+print(agent.run("In one short sentence, what is Python?"))
+```
+
+The same code runs on a fully local GGUF model (`provider="local"` - no key,
+nothing leaves the machine) or any supported API provider (`veyllo`, `openai`,
+`anthropic`, `google`, `deepseek`, `openrouter`). The base install is slim;
+heavy features are opt-in extras like `vaf[memory]` and `vaf[server]`.
+Developer guide: [docs/EMBEDDING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) ·
+runnable examples: [examples/](https://github.com/Veyllo-Labs/VAF/tree/main/examples/)
 
 ---
 
@@ -50,14 +70,14 @@ chmod +x install.sh && ./install.sh
 
 The installer sets up a Python venv, installs all dependencies, prepares the web UI (built on first launch), sets up a container engine for you (Rancher Desktop on Windows, Colima on macOS, your distro's Docker on Linux, or uses an existing one if present), and adds the `vaf` command to your shell.
 
-> New to this, or never used `git`/a terminal? Follow the step-by-step [Installation Guide](docs/setup/INSTALLATION_GUIDE.md). It covers installing git, where to put the folder, running the installer without admin, and troubleshooting.
+> New to this, or never used `git`/a terminal? Follow the step-by-step [Installation Guide](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/INSTALLATION_GUIDE.md). It covers installing git, where to put the folder, running the installer without admin, and troubleshooting.
 
 On **Linux**, the installer asks once which **installation mode** to use (macOS and Windows always install Desktop mode):
 ```
 [1] Desktop  - personal use, local only, system tray (default)
 [2] Server   - always-on service, LAN accessible via HTTPS, starts at boot
 ```
-Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) for details.
+Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md) for details.
 
 ---
 
@@ -82,7 +102,7 @@ vaf update           # Stop, fetch the latest release, reinstall, migrate, resta
 vaf update check     # Check whether a newer version is available
 ```
 
-`vaf update` only proceeds from a clean checkout, records a rollback point, and reverts automatically if any step fails. A one-line "update available" hint appears at startup (disable via `update_check_on_start` in `config.json`). Maintainers cutting releases: see [docs/setup/RELEASING.md](docs/setup/RELEASING.md).
+`vaf update` only proceeds from a clean checkout, records a rollback point, and reverts automatically if any step fails. A one-line "update available" hint appears at startup (disable via `update_check_on_start` in `config.json`). Maintainers cutting releases: see [docs/setup/RELEASING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/RELEASING.md).
 
 ---
 
@@ -125,7 +145,7 @@ vaf restart    # systemctl --user restart vaf
 vaf status     # systemctl --user status vaf
 ```
 
-LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md).
+LAN access (HTTPS on port 8443) is always enabled and locked in server mode. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md).
 
 ### Terminal (CLI)
 
@@ -312,7 +332,7 @@ Both are auto-discovered at startup, no registration needed.
 | Web UI | `localhost:3000` | `localhost:3000` | `localhost:3000` |
 | Install | `install.bat` | `install.sh` | `install.sh` |
 
-Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) for details.
+Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/LINUX_SETUP.md) for details.
 
 ---
 
@@ -320,26 +340,26 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 | Topic | Doc |
 |---|---|
-| Build on VAF (embed as a library) | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
-| Runnable examples (quickstart, events, custom tool) | [examples/](examples/) |
-| FAQ for developers | [docs/FAQ.md](docs/FAQ.md) |
-| Architecture (framework vs. harness) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Configuration reference (all config keys) | [docs/setup/CONFIG_SCHEMA.md](docs/setup/CONFIG_SCHEMA.md) |
-| Engine reference (CoreAgent contracts) | [docs/CORE_AGENT.md](docs/CORE_AGENT.md) |
-| Observability (events, NDJSON scripting) | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
-| Debugging & logging | [docs/DEBUGGING.md](docs/DEBUGGING.md) |
-| Write a tool (BaseTool, pip packaging) | [vaf/tools/README.md](vaf/tools/README.md) |
-| Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](docs/setup/SERVER_MODE.md) |
-| Linux setup & GPU | [docs/setup/LINUX_SETUP.md](docs/setup/LINUX_SETUP.md) |
-| LLM backend (local vs API) | [docs/llm/PROVIDER_MODES.md](docs/llm/PROVIDER_MODES.md) |
-| Voice agent (live call) | [docs/agents/VOICE_AGENT.md](docs/agents/VOICE_AGENT.md) |
-| Memory system | [docs/memory/MEMORY_SYSTEM.md](docs/memory/MEMORY_SYSTEM.md) |
-| Web UI & API reference | [docs/web-ui/WEB_UI.md](docs/web-ui/WEB_UI.md) |
-| Context management | [docs/memory/CONTEXT_MANAGEMENT.md](docs/memory/CONTEXT_MANAGEMENT.md) |
-| Automations | [docs/platform/AUTOMATIONS.md](docs/platform/AUTOMATIONS.md) |
-| Docker services | [docs/setup/DOCKER_SERVICES.md](docs/setup/DOCKER_SERVICES.md) |
-| Telegram / Discord / WhatsApp | [docs/integrations/TELEGRAM_INTEGRATION.md](docs/integrations/TELEGRAM_INTEGRATION.md) |
-| Workflows | [vaf/workflows/README.md](vaf/workflows/README.md) |
+| Build on VAF (embed as a library) | [docs/EMBEDDING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/EMBEDDING.md) |
+| Runnable examples (quickstart, events, custom tool) | [examples/](https://github.com/Veyllo-Labs/VAF/tree/main/examples/) |
+| FAQ for developers | [docs/FAQ.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/FAQ.md) |
+| Architecture (framework vs. harness) | [docs/ARCHITECTURE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/ARCHITECTURE.md) |
+| Configuration reference (all config keys) | [docs/setup/CONFIG_SCHEMA.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/CONFIG_SCHEMA.md) |
+| Engine reference (CoreAgent contracts) | [docs/CORE_AGENT.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/CORE_AGENT.md) |
+| Observability (events, NDJSON scripting) | [docs/OBSERVABILITY.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/OBSERVABILITY.md) |
+| Debugging & logging | [docs/DEBUGGING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/DEBUGGING.md) |
+| Write a tool (BaseTool, pip packaging) | [vaf/tools/README.md](https://github.com/Veyllo-Labs/VAF/blob/main/vaf/tools/README.md) |
+| Server mode (LAN, autostart) | [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md) |
+| Linux setup & GPU | [docs/setup/LINUX_SETUP.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/LINUX_SETUP.md) |
+| LLM backend (local vs API) | [docs/llm/PROVIDER_MODES.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/llm/PROVIDER_MODES.md) |
+| Voice agent (live call) | [docs/agents/VOICE_AGENT.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/agents/VOICE_AGENT.md) |
+| Memory system | [docs/memory/MEMORY_SYSTEM.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/memory/MEMORY_SYSTEM.md) |
+| Web UI & API reference | [docs/web-ui/WEB_UI.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/web-ui/WEB_UI.md) |
+| Context management | [docs/memory/CONTEXT_MANAGEMENT.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/memory/CONTEXT_MANAGEMENT.md) |
+| Automations | [docs/platform/AUTOMATIONS.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/platform/AUTOMATIONS.md) |
+| Docker services | [docs/setup/DOCKER_SERVICES.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/DOCKER_SERVICES.md) |
+| Telegram / Discord / WhatsApp | [docs/integrations/TELEGRAM_INTEGRATION.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/integrations/TELEGRAM_INTEGRATION.md) |
+| Workflows | [vaf/workflows/README.md](https://github.com/Veyllo-Labs/VAF/blob/main/vaf/workflows/README.md) |
 
 ---
 
@@ -357,15 +377,15 @@ Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](
 
 ## License
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](COMMERCIAL.md)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial%20license-available-success.svg)](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)
 
 VAF is **dual-licensed**:
 
-- **Open source - [GNU AGPL-3.0-or-later](LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use (even commercial) triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
-- **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](COMMERCIAL.md)**.
+- **Open source - [GNU AGPL-3.0-or-later](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSE)**: free to use, modify, and distribute. If you distribute VAF or run a **modified** version as a network service (SaaS), you must make your source available under the AGPL. Unmodified internal use (even commercial) triggers no disclosure. Building Plugins, Tools, and Workflows on top of VAF is explicitly permitted (Section 7 additional permission).
+- **Commercial license**: for embedding VAF in a closed-source product or running a proprietary SaaS without AGPL copyleft. See **[COMMERCIAL.md](https://github.com/Veyllo-Labs/VAF/blob/main/COMMERCIAL.md)**.
 
-See **[LICENSING.md](LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.
+See **[LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md)** for the full dual-licensing explanation (English & German) and how to choose.
 
-**Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSING.md](LICENSING.md).
+**Trademarks & brand:** "VAF", "Veyllo", the VAF logo, and the agent avatar (the living-dot visual identity and its animated states) are trademarks and brand assets of Veyllo GmbH and are **not** covered by the code license. See the "Trademarks and Brand Assets" section in [LICENSING.md](https://github.com/Veyllo-Labs/VAF/blob/main/LICENSING.md).
 
 For commercial and OEM licensing, contact **legal@veyllo.io** · **https://veyllo.io**.

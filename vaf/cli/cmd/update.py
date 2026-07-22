@@ -208,6 +208,16 @@ def _git(root: Path, *args):
     return code, (out or "").strip(), (err or "").strip()
 
 
+def _is_vaf_source_tree(root: Path) -> bool:
+    """True when `root` is a VAF source tree the self-updater may manage.
+
+    A git checkout and a downloaded ZIP both carry vaf/version.py AND
+    requirements.txt at the root; a pip/wheel install (site-packages) and a
+    foreign repository do not.
+    """
+    return (root / "vaf" / "version.py").exists() and (root / "requirements.txt").exists()
+
+
 def _breadcrumb_path() -> Path:
     return Path.home() / ".vaf" / "last_update.json"
 
@@ -460,6 +470,18 @@ def _convert_to_git_checkout(root: Path, assume_yes: bool) -> bool:
 def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
            include_prereleases: "bool | None" = None) -> None:
     root = _repo_root()
+    # Source-tree guard: the self-updater may only ever operate on a real VAF
+    # source tree. Two dangerous non-source cases end up here otherwise:
+    # (a) a pip/wheel install, where _repo_root() resolves to site-packages
+    # (parents[3] of this file) and the ZIP-conversion offer below would
+    # git-init and hard-reset site-packages; (b) a venv nested in some OTHER
+    # git repository, where `git rev-parse --show-toplevel` resolves to that
+    # foreign repo and fetch/checkout would run against it.
+    if not _is_vaf_source_tree(root):
+        UI.warning(f"{root} is not a VAF source checkout, so the self-updater does not apply.")
+        UI.print("If VAF was installed with pip, update it with:  pip install -U --pre vaf")
+        UI.print("(The git self-updater only manages source checkouts / installer setups.)")
+        raise typer.Exit(1)
     # A non-git install (downloaded ZIP) has no history to fetch/checkout. Rather than refuse, we
     # offer to convert it into a git checkout (below, after the target is known) and then adopt the
     # tree at the target tag via `git reset --hard`.
@@ -646,6 +668,13 @@ def _recover() -> None:
         UI.error("Update breadcrumb is unreadable; remove ~/.vaf/last_update.json manually.")
         raise typer.Exit(1)
     root = _repo_root()
+    # Same source-tree guard as _apply: never run git against site-packages or
+    # a foreign repo. The breadcrumb is kept so recovery still works once the
+    # user is back on the real checkout.
+    if not _is_vaf_source_tree(root):
+        UI.warning(f"{root} is not a VAF source checkout; recovery does not apply here.")
+        UI.print("(The update breadcrumb is kept for the real checkout.)")
+        raise typer.Exit(1)
     anchor = data.get("recorded_head") or data.get("branch") or "main"
     UI.info(f"Recovering an interrupted update — restoring {str(anchor)[:12]}...")
     if not _rollback(root, anchor):

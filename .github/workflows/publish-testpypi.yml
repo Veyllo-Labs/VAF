@@ -1,0 +1,49 @@
+name: Publish to TestPyPI (dry run)
+
+# Manual rehearsal for the PyPI release channel: builds the current commit and
+# uploads it to test.pypi.org, so the full build+upload+install round-trip can
+# be validated WITHOUT touching the real (immutable) PyPI project.
+# TestPyPI-side counterpart: a trusted publisher registered on test.pypi.org
+# for project `vaf` (owner Veyllo-Labs, repo VAF, workflow publish-testpypi.yml,
+# environment testpypi). The `testpypi` environment must exist in the repo
+# settings. Note: TestPyPI versions are immutable too - re-runs of the same
+# version fail; bump vaf/version.py (or accept the failure) when rehearsing twice.
+#
+# Verify afterwards from any machine (PIN the rehearsed version: unpinned,
+# pip may resolve `vaf` from real PyPI once the project exists there):
+#   pip install --pre -i https://test.pypi.org/simple/ \
+#     --extra-index-url https://pypi.org/simple/ "vaf==<version>"
+#   python -c "from vaf import Agent; import vaf; print(vaf.__version__)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-testpypi:
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Publish to TestPyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

@@ -46,6 +46,9 @@ def patched(monkeypatch, tmp_path):
     fg = FakeGit()
     monkeypatch.setattr(upd, "run_git", fg)
     monkeypatch.setattr(upd, "is_git_repo", lambda p: True)
+    # The fake root is not a real VAF tree on disk; the source-tree guard has
+    # its own dedicated tests below.
+    monkeypatch.setattr(upd, "_is_vaf_source_tree", lambda p: True)
 
     events = {"stopped": 0, "started": 0}
     monkeypatch.setattr(upd.service, "cmd_stop", lambda: events.__setitem__("stopped", events["stopped"] + 1))
@@ -224,3 +227,26 @@ def test_apply_tag_downgrade_warns(patched, monkeypatch):
     with pytest.raises(typer.Exit):
         upd._apply(dry_run=True, assume_yes=True, target_tag="v0.0.1")
     assert any("DOWNGRADE" in m for m in msgs)
+
+
+def test_is_vaf_source_tree_layouts(tmp_path):
+    """Git checkouts and ZIP installs qualify; pip/foreign layouts do not."""
+    # Empty dir (site-packages-like): no markers.
+    assert not upd._is_vaf_source_tree(tmp_path)
+    # Only the package marker (a wheel install DOES ship vaf/version.py).
+    (tmp_path / "vaf").mkdir()
+    (tmp_path / "vaf" / "version.py").write_text('__version__ = "0.0.0"\n', encoding="utf-8")
+    assert not upd._is_vaf_source_tree(tmp_path)
+    # Full source layout (checkout or ZIP): both markers present.
+    (tmp_path / "requirements.txt").write_text("typer\n", encoding="utf-8")
+    assert upd._is_vaf_source_tree(tmp_path)
+
+
+def test_apply_refuses_non_source_layout(monkeypatch, tmp_path, capsys):
+    """On a pip-install layout, _apply must exit with the pip hint before any action."""
+    monkeypatch.setattr(upd, "_repo_root", lambda: tmp_path)
+    with pytest.raises(typer.Exit) as ei:
+        upd._apply(dry_run=True, assume_yes=True, target_tag=None)
+    assert ei.value.exit_code == 1
+    out = capsys.readouterr().out
+    assert "pip install -U --pre vaf" in out

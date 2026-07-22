@@ -11,7 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- **VAF is published to PyPI with every release.** Library users can install the
+  framework with `pip install --pre vaf` (`--pre` is the recommended spelling while
+  VAF is in alpha) and update it with `pip install -U --pre vaf`; the desktop/server installers
+  keep working exactly as before. Publishing is tokenless (PyPI Trusted Publishing),
+  and releases can be rehearsed against TestPyPI via a manual workflow first. The
+  embedding guide gained a "Choosing a backend: local vs API" section, and the README
+  now opens with a library quickstart.
+
 ### Changed
+- **`vaf update` refuses to run outside a VAF source checkout.** On a pip-installed
+  VAF (or a folder that is not a VAF source tree) the git self-updater now points to
+  `pip install -U --pre vaf` instead of offering a git conversion that could have
+  damaged the Python environment.
 - **VAF's packaging moved to the modern Python standard (`pyproject.toml`).** The
   install commands do not change (`pip install -e .`, extras like `vaf[server]` and
   `vaf[all]` stay exactly the same), the license is now declared in the standard

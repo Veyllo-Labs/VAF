@@ -11,13 +11,16 @@ For the desktop/server product, see the main [README](../README.md).
 
 ## Install
 
-The base install is intentionally slim — only what a headless agent needs. VAF is not
-on PyPI yet, so install from source (this is also what `install.sh` uses):
+The base install is intentionally slim - only what a headless agent needs:
 
 ```bash
-git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF
-pip install -e .
+pip install --pre vaf
 ```
+
+(`--pre` because VAF is currently an alpha prerelease; the flag becomes
+unnecessary with the first stable release. To work from source instead - this
+is also what `install.sh` uses:
+`git clone https://github.com/Veyllo-Labs/VAF.git && cd VAF && pip install -e .`)
 
 This pulls the core runtime and the LLM provider SDKs (OpenAI, Anthropic,
 Google) — but **not** the web server, desktop UI, embeddings stack, or chat
@@ -36,11 +39,11 @@ bridges. Add those only if you need them, via extras:
 | `vaf[all]` | everything above | parity with the full product |
 
 ```bash
-pip install -e ".[memory,server]"     # mix and match
-pip install -e ".[all]"               # everything (parity with the full product)
+pip install --pre "vaf[memory,server]"    # mix and match
+pip install --pre "vaf[all]"              # everything (parity with the full product)
 ```
 
-(Once VAF is published to PyPI, the same works as `pip install "vaf[memory,server]"`.)
+(From a source checkout the same works as `pip install -e ".[memory,server]"`.)
 
 Tools whose extra is not installed are not loaded at startup (they are
 unavailable until you install the extra); the agent still runs.
@@ -127,6 +130,53 @@ normal return channel. Compare against the constants in `vaf.markers`
 (`SYSTEM_LOG_ONLY`, `GENERATION_STOPPED`, `LOOP_PROTECTION`, `ASYNC_ACK`,
 `TOOL_CONFIRMATION_REQUIRED`) instead of copying string literals from the
 docs - a CI guard keeps the constants in sync with the engine.
+
+---
+
+## Choosing a backend: local vs API
+
+Every `Agent` needs a model backend; the `provider` key picks it. Both lanes
+drive the exact same agent, tools and API surface - switching is a config
+change, not a code change.
+
+**Local (`provider="local"`, the default)** - VAF manages its own llama.cpp
+server (exactly one per machine, on `127.0.0.1:8080`) and auto-picks a GGUF
+model for your hardware (`model="auto"`; override with a filename or repo).
+
+- No API key, no per-token cost, prompts never leave the machine.
+- Needs hardware: a multi-GB model download on first run and roughly 3-18 GB
+  of RAM/VRAM depending on the model tier; tool use needs the 32k-token
+  context floor.
+- One server per machine, never two concurrent inferences - many *parallel*
+  agents on one box want an API provider instead.
+- Quality: small local models handle chat and light tool use well; long
+  agentic runs and the coder sub-agent are noticeably stronger on API models.
+
+**API (`provider="veyllo" | "openai" | "anthropic" | "google" | "deepseek" |
+"openrouter"`)** - per-request HTTPS to the provider, no local model at all.
+
+- Zero VRAM, fast first start, and parallel `Agent` instances scale freely
+  (each request is independent).
+- Needs a key: pass `api_key_<provider>` (raw, e.g. `"sk-..."`) and
+  optionally `api_model_<provider>` per instance via `config=`; your prompts
+  are sent to that provider.
+- `veyllo` is Veyllo's own hosted OpenAI-compatible endpoint (multimodal
+  `veyllo-chat`); `openrouter` fans out to many third-party models behind
+  one key.
+
+| You want | Pick |
+|---|---|
+| Privacy / offline / no per-token cost | `local` |
+| Strongest quality, parallel load, or weak hardware | an API provider |
+| Mixed: private by default, strong when needed | both - each `Agent` chooses independently |
+
+```python
+private_agent = Agent(config={"provider": "local"})
+power_agent = Agent(config={
+    "provider": "anthropic",
+    "api_key_anthropic": "sk-ant-...",
+})
+```
 
 ---
 

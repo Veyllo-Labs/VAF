@@ -1,8 +1,17 @@
 # Releasing VAF
 
-VAF is distributed as a git checkout and updated in place via `vaf update`, which
-targets the latest **published GitHub Release** (a git tag `v<version>`). Cutting
-a release is therefore the act that makes a new version available to all clients.
+VAF is distributed over two channels, and every release feeds both:
+
+- **Source checkouts** (desktop/server installs): a git checkout updated in
+  place via `vaf update`, which targets the latest **published GitHub Release**
+  (a git tag `v<version>`).
+- **The PyPI package** (library embedders): the same tag also builds and
+  publishes the sdist+wheel to PyPI, so `pip install --pre vaf` serves the
+  release. pip installs update via `pip install -U --pre vaf`, never via
+  `vaf update` (the self-updater refuses non-source layouts).
+
+Cutting a release is therefore the act that makes a new version available to
+all clients on both channels.
 
 ## Versioning
 
@@ -72,11 +81,42 @@ waiting for a stable `X.Y.Z`.
    ```
 6. The tag triggers `.github/workflows/release.yml`, which re-runs the test gate
    and, on success, creates the GitHub Release (notes pulled from the matching
-   `CHANGELOG.md` section). No artifact upload is needed — clients update via git.
+   `CHANGELOG.md` section) and then publishes the sdist+wheel to PyPI
+   (`publish-pypi` job). Source checkouts update via git; pip installs via pip.
+
+## The PyPI channel
+
+- **Publishing is tokenless** (Trusted Publishing / OIDC): PyPI trusts this
+  repo's `release.yml` running in the GitHub environment `pypi`. There is no
+  API token to rotate or leak. First-time setup: the trusted publisher must be
+  registered on pypi.org (project `vaf`, owner `Veyllo-Labs`, repo `VAF`,
+  workflow `release.yml`, environment `pypi`) and the `pypi` environment must
+  exist in the repo settings.
+- **PyPI versions are immutable.** A published version can be yanked but never
+  replaced - a broken upload burns that version number for good. Rehearse the
+  full build+upload round-trip against TestPyPI first: run the manual
+  `publish-testpypi.yml` workflow (its trusted publisher lives on
+  test.pypi.org with environment `testpypi`), then verify with
+  `pip install --pre -i https://test.pypi.org/simple/ --extra-index-url
+  https://pypi.org/simple/ "vaf==<version>"` - pin the rehearsed version:
+  unpinned, pip may resolve `vaf` from real PyPI once the project exists
+  there.
+- **Alpha releases need `--pre`**: plain `pip install vaf` resolves
+  prereleases only while no stable release exists; documenting
+  `pip install --pre vaf` stays correct either way until the first stable.
+- **Keep the channels in lockstep**: never tag without the PyPI publish
+  succeeding (a stale PyPI package is worse for framework credibility than
+  none). If `publish-pypi` fails after the GitHub Release was created,
+  nothing has been uploaded yet (the upload is the last step) - first fix
+  the cause and RE-RUN the failed job; the version is not burned. Re-tag as
+  the next patch/prerelease version only when the tagged commit or the
+  built artifact itself is at fault.
 
 ## Verifying
 
 - The release appears at `https://github.com/Veyllo-Labs/VAF/releases`.
+- PyPI shows the new version at `https://pypi.org/project/vaf/`, and
+  `pip install --pre "vaf==<version>"` works from a clean environment.
 - `gh api repos/Veyllo-Labs/VAF/releases` lists it (the first entry is the newest). Note
   `releases/latest` only returns **stable** releases, so during the alpha it stays empty.
 - On any installed checkout, `vaf update check` reports the new version (a `0.1.0aN` build sees

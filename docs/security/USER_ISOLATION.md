@@ -202,7 +202,7 @@ Without this, User A could receive cached search results or graph data that was 
 
 PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table.
 
-**Status (important):** on a default install the application data connection (`memory_db_url`) still runs as the table **owner role `vaf` (superuser), which bypasses RLS** (`config.py`; `database.py` notes both DSNs are the owner role until the cutover). So today the application-layer scope filter (Section 2, also fail-closed) is the active enforcement; the RLS policy below is created and fail-closed by design but only becomes the enforced **second** line after the **cutover**: set `memory_db_url` to a non-superuser role (`vaf_app`, `NOSUPERUSER`, `NOBYPASSRLS`) and `memory_db_owner_url` to the owner DSN (used only for DDL, migrations, and global maintenance). The policy is fail-closed:
+**Status (important):** on a default install the application data connection (`memory_db_url`) still runs as the table **owner role `vaf` (superuser), which bypasses RLS** (`config.py`; `database.py` notes both DSNs are the owner role until the cutover). So today the application-layer scope filter (Section 2, also fail-closed) is the active enforcement; the RLS policy below is created and fail-closed by design but only becomes the enforced **second** line after the **cutover**: set `memory_db_url` to a non-superuser role (`vaf_app`, `NOSUPERUSER`, `NOBYPASSRLS`) and `memory_db_owner_url` to the owner DSN. The owner connection is used for DDL, migrations, global maintenance, and one admin-gated aggregate lane: `get_admin_isolation_metrics()` (`vaf/memory/database.py`) runs on it to serve `GET /api/security/overview` with cross-scope metadata only (per-scope memory/chunk counts and sizes, never memory content); that lane bypasses RLS by nature and must never be exposed on a per-user route. The policy is fail-closed:
 
 ```sql
 ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
@@ -392,6 +392,16 @@ Synced messages are stored per-scope in `scopes/<user_scope_id>/email_sync.db` (
 
 The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local Network** tabs only to admins (controlled by the `adminOnly` flag in the `CATEGORIES` array and per-tab content rendering guards). Non-admin users are automatically redirected away from admin-only tabs. All users see Persona, Voice, Interface, Connections, Automations, and About, and receive the global config they need for display/behavior, but it is **credential-redacted**: for non-admins the backend strips secret values (`api_key_*`, `*_client_secret`, `*_secret`, `*_credentials_key`, `*_encryption_key`, `*_kek`, `*_password`, plus `secure_store_kek`, `memory_db_url`, `redis_url`) from every config read (`GET /api/config` and the WebSocket config push) via `Config.config_for_user()` / `Config.is_secret_config_key()`. This read-redaction is intentionally narrower than the admin-only *write* denylist (`is_secret_config_key` vs `is_global_config_key`): non-secret admin-only keys the UI needs (model/provider names, non-secret network settings) stay readable, only credentials are removed. Admins receive the full config.
 
+## 7. Watchdog and Admin Security APIs
+
+### Sub-agent watchdog (`vaf/api/supervisor_routes.py`)
+
+`GET /api/supervisor/status` and `POST /api/supervisor/cancel` are caller-scoped. Unit payloads carry user-authored task text, and a task id is all `/cancel` needs, so before this gate any authenticated user could list every user's running sub-agents, read their task text, and kill them. Now a non-admin sees, and can cancel, only units belonging to sessions owned by their own scope; a foreign or unowned `?session` yields an empty list (never a 403, because the web tool bubble polls generically), and `/cancel` on a foreign unit returns "not permitted". Sessions without a recorded scope count as admin-only, matching the WebSocket ownership policy, and the ownership lookup is fail-closed: if it fails, a non-admin sees nothing. Admins and the tokenless localhost desktop (which resolves to the local admin) keep the full watchdog view with per-unit username attribution. Details in [TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md); guarded by `tests/test_supervisor_scoping.py`.
+
+### Security dashboard (`vaf/api/security_routes.py`)
+
+The `/api/security/*` surface (overview, events, skill actions) is admin-only (`Depends(require_admin)`) by design: it deliberately aggregates cross-user data for the admin's Logs Overview dashboard, including per-user workspace sizes and per-scope memory/chunk counts, with usernames attached server-side. Full scope UUIDs never leave the backend (the overview shortens them to the first 8 characters for display). This aggregate lane, including the owner-connection read path described in Section 4, must never be reachable from a per-user route.
+
 ## Isolation Summary Table
 
 | Component | Isolation mechanism | Level |
@@ -408,6 +418,8 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 | Central Data Explorer (`/api/workspaces`) | Per-user root derived from authenticated scope; lists/searches/renames/deletes only the caller's own workspaces (incl. orphans); opaque handles, not paths; search takes only a query string, never a path | Application |
 | Librarian agent (filesystem read) | Per-user jail (contextvar over `is_safe_path`): remote user confined to own `VAF_Projects/<uid[:8]>/`, local admin full; another user's tree always denied, fail-closed | OS |
 | Sandbox | Per-user working directory in Docker | Container |
+| Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
+| Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
 | Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id | OS |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
@@ -537,7 +549,7 @@ When testing new features, create at least two test users and verify:
 | Discord | Single-admin only | Implement per-user Discord bot or multi-guild routing |
 | Sandbox | Shared Docker container with per-user dirs | Consider per-user containers for stronger isolation |
 | Rate limiting | No per-user rate limits | Add per-user rate limiting to prevent abuse |
-| Audit logging | No isolation audit trail | Log cross-scope access attempts for security monitoring |
+| Audit logging | Perimeter/auth trail exists: the always-on security event log (`vaf/core/security_events.py`) records blocked IPs, invalid tokens, failed logins/2FA, rejected WebSocket handshakes, rejected channel senders, and skill blocks/quarantines; admin-readable via `GET /api/security/events`, the `security_<date>.log` file, and the Logs Overview dashboard | Log application-level cross-scope DATA access denials (e.g. a scoped memory query returning "not found" for a foreign id, or a WS session-ownership denial), which are still unrecorded |
 | Memory encryption keys | Shared key across users | Consider per-user encryption keys for stronger data separation |
 | WebSocket connections | Shared event loop | Monitor for resource exhaustion by single user |
 

@@ -104,6 +104,7 @@ Docs are grouped into category folders. Full index by category:
 - [SANDBOXING.md](security/SANDBOXING.md) — Secure code execution via Docker.
 - [SANDBOX_MODULES.md](security/SANDBOX_MODULES.md) — Sandboxed module system.
 - [USER_ISOLATION.md](security/USER_ISOLATION.md) — Per-user scope isolation.
+- [SECURITY_DASHBOARD.md](security/SECURITY_DASHBOARD.md) - Admin security dashboard: `/api/security` aggregator, the always-on security event log, and the skill quarantine lifecycle.
 
 ### platform/ — per-OS runtime, tray, automations, i18n
 - [LINUX.md](platform/LINUX.md) — How VAF runs on Linux (Qt/QtWebEngine window, tray, X11/GPU notes).

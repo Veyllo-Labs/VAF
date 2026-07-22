@@ -91,6 +91,25 @@ Big modal headers overflow a 360px row. Make them compact:
   drop non-essential buttons (`max-md:hidden`) so the close `X` always fits, shrink
   wide controls (e.g. a date `<select>` gets `max-md:max-w-[120px]`).
 
+### Inline-styled panes (Logs timeline, Overview dashboard)
+
+Some panes are styled entirely with inline `style={{...}}` objects instead of Tailwind
+classes (the Logs timeline and the Overview dashboard in
+`web/components/NotificationsModal.tsx`). `max-md:` utilities **cannot reach inline
+style objects**, so none of the class-string patterns above apply there. Responsive
+behavior must come from one of:
+
+- **Fluid CSS in the style object itself**: `flexWrap: 'wrap'`, auto-fit grids with a
+  track minimum that fits a ~320px viewport
+  (`gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))'`), and `minWidth: 0`
+  on flex children so they can actually shrink.
+- **An explicit `useIsMobile` branch** that swaps the style object values.
+
+Current example: the Overview pane (`OverviewPane`) uses
+`minmax(380px, 1fr)` grid tracks and a `paddingLeft: 160` hero inset - both exceed
+narrow phone widths, so a mobile pass is still owed there. Either way, desktop stays
+byte-identical: fluid values must resolve to the same layout at desktop widths.
+
 ## Gotchas that actually bit us (read before debugging mobile)
 
 - **Touch scroll "swallowed" on content.** If swiping on a message/card does nothing

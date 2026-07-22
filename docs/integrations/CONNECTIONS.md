@@ -196,6 +196,7 @@ The Discord configuration is stored locally in your VAF config:
 - **Verified account owner**: The user who linked their Telegram with the bot (via the whitelist step or by having sent at least one message) does not need to be manually re-added for proactive sends. The bot resolves their chat ID from the whitelist (with loose matching on scope and username) or from the single linked account when there is only one.
 - **Contact whitelist**: In strict pairing mode (`channel_ingress_policy.mode = paired_only`, default), contact-based fallback is disabled for Telegram. Contacts must be explicitly paired via Telegram whitelist/relay whitelist before inbound messages are accepted.
 - Only whitelisted users receive replies. Non-whitelisted inbound messages are dropped at ingress (no reply, no queue task), reducing abuse/amplification risk.
+- Every drop at ingress is additionally recorded as a `channel_rejected` security event (platform, sender id, time; with its own flood throttle), visible in the security log and in the Overview dashboard's channel module. This applies to all channel bridges (Telegram, WhatsApp, Discord). "Silently" means the sender gets no reply, not that the attempt goes unrecorded.
 - RAG, memories, and user identity are scoped per user, same as in the Web UI.
 
 ### Session storage and memory compaction (15-message rule)
@@ -244,7 +245,7 @@ Global options (top-level in config):
 
 - **No reply for a non-whitelisted Telegram account**: Expected behavior. Unauthorized traffic is silently dropped by design.
 - **No reply for a whitelisted account**: Ensure the bridge is running (Settings → Connections, Telegram toggle on). After a VAF restart, the bridge auto-starts if Telegram is enabled.
-- **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts.
+- **High unauthorized traffic**: Unauthorized drops are logged with per-user throttling to avoid log amplification under spam/flood attempts. Each drop is also mirrored as a `channel_rejected` security event (with its own per-sender throttle), so rejected senders show up in the security log and the Overview channel module even when the sender sees nothing.
 - **Telegram reconnects after restart even after Disconnect**: Disconnect now clears token + verification + whitelist and persists `enabled=false`. After disconnect, Telegram should stay off across restarts. If it still reconnects, refresh Settings and verify `telegram_config` is empty/disabled in the saved config.
 
 ## WhatsApp Integration

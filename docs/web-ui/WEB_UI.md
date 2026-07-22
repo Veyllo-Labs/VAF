@@ -150,11 +150,29 @@ Planner data is loaded with `get_automation_notes` and `get_automation_todos` wh
 
 **Logs window (admin only):** Clicking **Logs** in the sidebar opens a split-pane log viewer (same window size as the Automation window). It is only visible to users with the `admin` role.
 
-The left sidebar has three sections:
+The left sidebar has five sections:
 
-- **Timeline** (top) — the agent tool-use timeline (see below). The default view when opening the window.
-- **Activity** — the notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
-- **Log Files** (collapsible) — lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, …) with a colour dot per domain. Collapsed by default; only meaningful when **Debug Logs** is enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`).
+- **Overview** (top) - the protection dashboard (see below). The default view when opening the window.
+- **Timeline** - the agent tool-use timeline as a horizontal scrubber (see below).
+- **Tool Use** - the same timeline events as a vertical, expandable tool-call list ("Tool Calls", newest first; sub-agent, thinking-run, and training entries get their own icons).
+- **Activity** - the notification feed: thinking-mode results, automation run results (success/error + summary), handoff decisions, and channel replies. Items expand to show the full summary. Loaded from `GET /api/notifications`; new items pushed via WebSocket.
+- **Log Files** (collapsible) - lists every `.log` file in the VAF log directory (`~/.vaf/logs/`), grouped by domain (rag, memory, backend, prompt, headless, attach, tool_use, security, …) with a colour dot per domain. Collapsed by default. Most domains only fill while **Debug Logs** is enabled (on by default; disable via `debug_logs_enabled: false` in `~/.vaf/config.json`); the **security** domain (blocked access attempts, failed logins, rejected senders) is always written, independent of that setting.
+
+**Security notification badges:** for admins the frontend polls `GET /api/security/alert-count` once a minute; a red dot appears on the sidebar **Logs** button while the newest security event is newer than the last-seen marker (`localStorage` key `vaf_logs_seen_ts`; the same dot also lights when the hash chain reports tampering). Inside the window, the **Log Files** section header shows a pulsing red count under the same unread gate, and expanding it while unread jumps straight to the security log. Opening the security log marks everything up to the newest event as seen and clears both badges - the marker is unread-based, not a permanent counter.
+
+#### Overview view
+
+The Overview is an antivirus-style protection dashboard summarising VAF's security posture for admins:
+
+- **Hero panel** - a large shield showing the overall status as a worst-of roll-up over all modules: `critical` (red; tampered hash chain, a quarantined or high-risk skill) > `attention` (amber; e.g. Docker down so execution is blocked, memory DB down, exposed container ports, permissive channels, a medium-risk skill) > `ok` (green), with a grey no-data floor so absent data never reads as safe. The headline names the actual reasons, not just the colour.
+- **Module status list** - one row per protection module (audit chain, sandbox, firewall/LAN incl. Docker isolation, user isolation, channels, phishing shield, guardrails) with a traffic-light dot and short status. Clicking a row opens a detail popup; the firewall and channels popups lazily fetch the recent blocked/rejected attempts from `GET /api/security/events`.
+- **Audit chain panel** - live view of the selected day's hash chain (verified/tampered, event count, last event, tail hashes) with a date selector; while today is selected the chain refreshes every 5 s.
+- **Skills panel** - a donut of installed skills by scan level (clean/low/medium/high) plus today's blocked installs, admin overrides, and re-scan alerts. Clicking a skill opens its scan detail (`GET /api/security/skills/{id}/scan`) with resolution actions: **delete** and **isolate** are plain admin actions, while **acknowledge** (medium finding) and **restore** (quarantined skill) additionally require the admin's TOTP code, so a stolen admin session alone cannot silence a warning.
+- **Background agent** - per-user thinking-mode status (admin view across scopes) from `GET /api/thinking/status`.
+- **Recent supervised activity** - the newest supervised actions of the selected day, derived frontend-side from the already-loaded audit-chain events (no extra request) and attributed per user via the isolation scope map.
+- **Supervised units** - currently running sub-agent units from `GET /api/supervisor/status`, with per-user attribution and a stale marker.
+
+Module data comes from the admin-only `GET /api/security/overview` aggregator plus the reused `GET /api/thinking/status`, `GET /api/supervisor/status`, `GET /api/memory/health`, and `GET /api/email/messages` endpoints, refreshed every 30 s while the Overview is open. Fetch failures (non-admin 403, backend down) leave the affected rows grey (not measured), never green. The backend design (module collectors, event-log contract, skill lifecycle) is documented in [Security Dashboard](../security/SECURITY_DASHBOARD.md).
 
 #### Timeline view
 
@@ -222,7 +240,7 @@ The hash is SHA-256 of the canonical JSON of the event (all fields except `hash`
 
 #### API endpoints
 
-All timeline and log endpoints require the `admin` role:
+All timeline, log, and security endpoints require the `admin` role:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -231,6 +249,14 @@ All timeline and log endpoints require the `admin` role:
 | `GET` | `/api/logs/timeline/dates` | Dates for which JSONL files exist |
 | `GET` | `/api/logs/timeline/events?date=YYYY-MM-DD&merge=true` | Merged timeline events + `chain_ok` |
 | `GET` | `/api/logs/timeline/context` | Event-specific log lines (see below) |
+| `GET` | `/api/security/overview` | Aggregated protection-module status (sandbox, firewall, isolation, channels, guardrails, skills) |
+| `GET` | `/api/security/alert-count` | Today's security-event count + newest timestamp (sidebar dot poll) |
+| `GET` | `/api/security/events?date=YYYY-MM-DD&limit=100` | Structured blocked/rejected access attempts for a day |
+| `GET` | `/api/security/skills/{id}/scan` | Live re-scan detail for one skill |
+| `POST` | `/api/security/skills/{id}/delete`, `.../isolate` | Skill resolution (plain admin action) |
+| `POST` | `/api/security/skills/{id}/acknowledge`, `.../restore` | Skill resolution (admin plus TOTP `code` in the body) |
+
+The security lane is gated via `require_admin` (`vaf/api/security_routes.py`). The Overview additionally reuses the existing `/api/thinking/status`, `/api/supervisor/status`, `/api/memory/health`, and `/api/email/messages` endpoints rather than duplicating their logic.
 
 The `merge=true` parameter (default) pairs `tool_start` + `tool_end` events by `call_id` into a single merged record. Still-running tools (no matching `tool_end`) appear with `status: "running"`.
 
@@ -252,7 +278,7 @@ Path-traversal is prevented on all file endpoints: the resolved path is checked 
 
 #### Log gating
 
-All debug log functions in `vaf/core/log_helper.py` (`append_domain_log`, `append_domain_log_always`, `log_attachment`, `log_thinking_run`, `log_telegram_reply`, `log_discord_reply`, `log_whatsapp_*`, `log_timeline_event`) respect the `debug_logs_enabled` setting — no files are written when it is off.
+All debug log functions in `vaf/core/log_helper.py` (`append_domain_log`, `append_domain_log_always`, `log_attachment`, `log_thinking_run`, `log_telegram_reply`, `log_discord_reply`, `log_whatsapp_*`, `log_timeline_event`) respect the `debug_logs_enabled` setting - no files are written when it is off. The security event log (`vaf/core/security_events.py`, the `security` domain in the file rail) is deliberately exempt: rejected access attempts are audit signal, not debug noise, and are written regardless of that setting.
 
 #### Terminal log viewer
 
@@ -602,9 +628,11 @@ The Web UI runs alongside the CLI interface:
 ### Security
 
 - **CORS**: Restricted by middleware (localhost and private-LAN origin patterns), not unrestricted `*`.
-- **Authentication**: The UI treats `GET /api/auth/me` as the source of truth for a valid session (JWT in `Authorization: Bearer` and/or `vaf_token` cookie, validated server-side). The dashboard redirects to `/login` when that call is not OK.
-- **Next.js edge proxy (`web/proxy.ts`)**: Next.js 16 uses this file as the **Proxy** middleware (replacing the older `middleware.ts` name). It guards routes by **validating the `vaf_token` JWT's `exp` claim** (an edge-safe payload decode), **not by mere cookie presence** — an expired, malformed, or missing token counts as unauthenticated. So `/` without a valid token → `/login`, and `/login` with a valid (unexpired) token → `/`. A present-but-expired cookie is **actively cleared** by the guard (the browser cannot delete an httpOnly cookie itself); without this, an expired-but-present cookie used to fight the client (401 on `/` but a presence-only 307 from `/login`) and cause an infinite `/login ↔ /` redirect loop. The backend (`/api/auth/me`, `/ws`) stays the real authority — the guard only has to **agree with it on expiry**, so never regress this to a presence-only check. After a successful `/me` on the login page, the app uses a **full navigation** to `/` so session and assets align with the HTTPS entry point.
-- **`GET /api/auth/me` (backend)**: When both `Authorization: Bearer` and `vaf_token` are present, the server tries the **Bearer token first**, then the cookie, so a stale cookie cannot shadow a valid in-memory token.
+- **Authentication**: The dashboard treats `GET /api/auth/me` as the source of truth for a valid session (JWT in `Authorization: Bearer` and/or `vaf_token` cookie, validated server-side) and redirects to `/login` when that call is not OK.
+- **Next.js edge proxy (`web/proxy.ts`)**: Next.js 16 uses this file as the **Proxy** middleware (replacing the older `middleware.ts` name). It guards routes by **validating the `vaf_token` JWT's `exp` claim** (an edge-safe payload decode), **not by mere cookie presence** - an expired, malformed, or missing token counts as unauthenticated. So `/` without a valid token → `/login`, and `/login` with a valid (unexpired) token → `/`. A present-but-expired cookie is **actively cleared** by the guard (the browser cannot delete an httpOnly cookie itself); without this, an expired-but-present cookie used to fight the client (401 on `/` but a presence-only 307 from `/login`) and cause an infinite `/login ↔ /` redirect loop. The backend (`/api/auth/me`, `/ws`) stays the real authority - the guard only has to **agree with it on expiry**, so never regress this to a presence-only check. After a successful `/me` on the login page, the app uses a **full navigation** to `/` so session and assets align with the HTTPS entry point.
+- **Login-page bounce (cookie-only, deliberate)**: the login page's already-authenticated check calls `/api/auth/me` with the **cookie only** (no `Authorization`/localStorage fallback), so the client and the server-side gate in `web/proxy.ts` route on a **single authority**. Never re-add a Bearer/localStorage fallback to this check: a still-valid localStorage token next to an expired cookie makes `/` and `/login` disagree forever and reintroduces the `/login ↔ /` navigation loop (live incident 2026-07-22). As a backstop, a `sessionStorage` circuit breaker (`vaf_login_bounce`) keeps the user on the login form after two bounces within 15 seconds instead of looping, and a failed cookie check also drops any stale localStorage token.
+- **Cookie lifetime = token lifetime**: the backend derives the `vaf_token` cookie's `max_age` from the JWT's own `exp` claim at the single place that sets the cookie (`_set_auth_cookie`/`_cookie_max_age_for` in `vaf/api/auth_routes.py`), so the cookie can never outlive the token it carries; the old hardcoded 30-day cookies are gone and `remember_me` no longer extends the session. This removes the cookie/token desync class behind the redirect loop structurally.
+- **`GET /api/auth/me` (backend)**: When both `Authorization: Bearer` and `vaf_token` are present, the server tries the **Bearer token first**, then the cookie, so a stale cookie cannot shadow a valid in-memory token. This applies to the dashboard's session check; the login-page bounce deliberately sends no Bearer header (see above).
 - **Origin scope note**: Auth state can differ between `http://localhost:3000` and `https://localhost:8443` because cookies/storage are origin-scoped.
 
 ## Troubleshooting

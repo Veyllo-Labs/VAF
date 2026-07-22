@@ -114,12 +114,19 @@ VAF sets the following environment variables automatically on startup:
 - `GDK_BACKEND=x11` — forces GTK (pystray) to use X11/XWayland
 - `QT_QPA_PLATFORM=xcb` — forces Qt WebEngine to use X11/XWayland (avoids EGL/GLX conflict)
 - `WEBKIT_DISABLE_DMABUF_RENDERER=1` — avoids GBM buffer errors under XWayland
+- `__GL_THREADED_OPTIMIZATIONS=0` - NVIDIA hosts only: disables the proprietary
+  driver's CPU-offload worker threads for this process. A live incident (2026-07-22)
+  aborted the whole tray process from inside the NVIDIA GL library while presenting
+  a frame during a window resize; the driver's extra GL threads are implicated in
+  that abort class. GPU acceleration and vsync are unaffected. Exporting the
+  variable yourself (any non-empty value) opts out.
 
 The first two are set together by `force_x11()` in `vaf/core/display_platform.py` and
 **override** a Wayland session's own `QT_QPA_PLATFORM` (KDE/GNOME export it, so the earlier
 `setdefault` never applied). They are skipped when XWayland is missing (no `DISPLAY`) or
 when `VAF_ALLOW_WAYLAND=1` is set; the choice is logged as `display platform: ...`.
-See [LINUX.md](LINUX.md).
+The NVIDIA workaround is applied by `nvidia_gl_workarounds()` from the same choke point,
+so its decision appears in the same log line. See [LINUX.md](LINUX.md).
 
 **GPU acceleration** is on (Chromium-based Qt WebEngine). The exact
 `QTWEBENGINE_CHROMIUM_FLAGS` live in `vaf/core/desktop_window.py` and are tuned to
@@ -221,3 +228,34 @@ into the **renderer** process — the JS heap stays tiny (~10 MB) while the OS R
 - **Re-diagnosing:** a disabled, opt-in memory logger lives in `desktop_window.py`.
   Uncomment the `_start_mem_logger()` call, restart, and read `logs/leak_diag_<date>.log`
   (columns: total / gpu / renderer / jsHeap / domNodes RSS over time).
+
+## Host-Process Crash Notes (Linux / NVIDIA, 2026-07)
+
+Two SIGABRT incidents killed the whole tray process (not the renderer child) on the
+host-side compositing path with Qt 6.11.1 and NVIDIA driver 580.159.03:
+
+- 2026-07-20: mutex abort during the WebEngine-to-QtQuick scene-graph sync
+  (`RenderWidgetHostViewQtDelegateItem::updatePaintNode`); matches the open
+  QTBUG-145962 / QTBUG-145574 family (the QTBUG-141739 deadlock fix is already
+  contained in 6.11.1).
+- 2026-07-22: abort raised inside the NVIDIA GL library during the GLX present
+  (`QRhi::endFrame`) of a backing-store flush while the window was being resized.
+
+The in-app crash recovery (`renderProcessTerminated`) cannot catch these: it only
+covers the renderer child dying while the host survives. Mitigations shipped:
+
+- `__GL_THREADED_OPTIMIZATIONS=0` on NVIDIA hosts (see the env list above).
+- `scripts/tray_supervisor.sh`: the Linux shell launchers run the windowed tray
+  under a bounded restart supervisor (restart only on abnormal exit; never on
+  exit 0/130/143; at most 3 restarts per 10 minutes; waits for the singleton
+  port to free). Two launch paths run WITHOUT this supervision: a direct
+  `python -m vaf.main tray` invocation, and the freedesktop login-autostart
+  entry written by `Platform.set_tray_autostart` (its `Exec` line calls the
+  Python module directly). Only the shell launchers (`run_vaf.sh`,
+  `start_vaf.sh`) and the installer's application desktop entry (which execs
+  `run_vaf.sh`) go through the supervisor. A future fix is to point the
+  autostart `Exec` at `run_vaf.sh` as well.
+
+Watch items: a PySide6 release above 6.11.1 that closes the QTBUG family above, and
+the NVIDIA driver branch beyond 580.x (do not roll back inside 580.x; no known-good
+exists there).

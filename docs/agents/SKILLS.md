@@ -10,13 +10,14 @@ checks whether a skill matches the request and, if so, suggests it.
 
 Skills use **progressive disclosure**. Only each skill's `name` and
 `description` are ever loaded for routing. The full instruction body is loaded
-on demand — when the agent calls `use_skill(<id>)` — and any bundled files are
+on demand - when the agent calls `use_skill(<id>)` - and any bundled files are
 read only when the instructions reference them. This keeps the routing context
 cheap regardless of how many (or how large) the installed skills are.
 
 Skills are user content: an admin authors them in the settings editor or
 uploads a `.zip` bundle. Every skill is security-scanned before installation
-(see [Security scanning](#security-scanning)).
+and periodically re-scanned after it (see
+[Security scanning](#security-scanning)).
 
 ---
 
@@ -66,7 +67,7 @@ description: Fills PDF forms from a JSON field map. Use when the user has a
   `pdf-form-filler` → id `pdf_form_filler`). The folder is the identity; `name`
   is a display label.
 - A malformed skill (missing fence, invalid YAML, missing required field) is
-  **never silently dropped** — it parses as `valid=false` with an error and is
+  **never silently dropped** - it parses as `valid=false` with an error and is
   shown as "broken" in the settings list, but excluded from routing.
 
 The parser is the format authority: `vaf/skills/skill_md.py` (pure parsing, no
@@ -97,12 +98,22 @@ registry:
 }
 ```
 
+Two optional per-skill fields track the post-install security lifecycle:
+`quarantined` (`{at, reason}`, set by auto- or manual quarantine) and
+`acknowledged` (`{at, by}`, an admin reviewed a medium-risk skill). See
+[Security scanning](#security-scanning).
+
 Visibility uses the same rules as custom tools (see
 [User Isolation](../security/USER_ISOLATION.md)):
 
-- `shared_with: ["*"]` — visible to every user.
-- `shared_with: []` — admin only.
-- `shared_with: ["<scope_id>", ...]` — those users plus admin.
+- `shared_with: ["*"]` - visible to every user.
+- `shared_with: []` - admin only.
+- `shared_with: ["<scope_id>", ...]` - those users plus admin.
+
+**Quarantine overrides `shared_with`**: a quarantined skill is invisible on
+every agent path (routing, `list_skills`, `read_skill`, `use_skill`) for ALL
+users, including admin agent sessions, until an admin resolves it in the
+security dashboard (`get_visible_skill_ids_for_user` filters it out first).
 
 **Visibility** (read/list/use) is governed by `shared_with` (above). **Edit/delete
 authority** is governed separately by ownership: the optional `owner_scope_id` field
@@ -113,10 +124,10 @@ WebUI skills) are admin-only to edit.
 
 There are two mutation paths:
 
-- **Admin WebUI / WebSocket** — create / edit / delete / upload and permission changes
+- **Admin WebUI / WebSocket** - create / edit / delete / upload and permission changes
   are **admin-only** (enforced in the handlers); these can set any `shared_with` and may
   override a high-risk scan. They do not set `owner_scope_id` (the field stays absent).
-- **Agent self-service tools** — a regular user manages their **own** skills through the
+- **Agent self-service tools** - a regular user manages their **own** skills through the
   agent (`create_skill` / `update_skill` / `delete_skill`); see
   [Self-service skill tools](#self-service-skill-tools-per-user). These stamp
   `owner_scope_id`, keep the skill **private** (`shared_with=[owner]`), and cannot make a
@@ -230,7 +241,7 @@ read/write `BaseTool`s under `vaf/tools/`, all **user-isolated** (the calling us
 Isolation and safety rules:
 
 - **Private by default.** `create_skill` sets `shared_with=[owner_scope]` and
-  `owner_scope_id=owner_scope` — visible to the owner and admins only. The agent can
+  `owner_scope_id=owner_scope` - visible to the owner and admins only. The agent can
   never set `["*"]` (making a skill public stays an admin/WebUI action).
 - **Own skills only.** `update_skill`/`delete_skill` require
   `can_user_edit_skill`; another user's private skill returns a uniform *"not found or not
@@ -239,7 +250,7 @@ Isolation and safety rules:
   `created_at`, and never widens visibility.
 - **Same validation + scan as the WebUI.** Create/edit build `SKILL.md` (from `name` +
   `description` + `body`, or a raw `skill_md`), validate with `parse_skill_md_text` before
-  writing, and run the static scanner — a **`high`** result blocks the write. Unlike the
+  writing, and run the static scanner - a **`high`** result blocks the write. Unlike the
   admin WebUI there is **no override** exposed to the agent. SKILL.md only: bundled
   scripts still come via the admin zip upload.
 - Every mutation calls `reload_skills()` so the router list and `list_skills` cache stay
@@ -257,7 +268,7 @@ the message is about skills (EN/DE keywords incl. "skill"/"fähigkeit"): list/sh
 
 Because skill bundles carry instructions (prompt injection) and scripts
 (dangerous code) that the agent will load, every skill is statically scanned
-before installation. The scanner (`vaf/skills/scanner.py`) is **static only** —
+before installation. The scanner (`vaf/skills/scanner.py`) is **static only** -
 regex and heuristics, no LLM, no network, and it never executes anything.
 
 It scans the SKILL.md body for authored/edited skills, and the body plus every
@@ -274,7 +285,7 @@ Each finding has a severity; the scan yields a score (0–100) and a level:
 
 | Level | Gate |
 |-------|------|
-| `high` | **Blocked** — not installed unless an admin overrides. |
+| `high` | **Blocked** - not installed unless an admin overrides. |
 | `medium` | Allowed; recorded and badged as caution. |
 | `low` / `clean` | Allowed. |
 
@@ -285,9 +296,47 @@ Each finding has a severity; the scan yields a score (0–100) and a level:
   surfaced by `list_skills`, so the settings grid shows a risk badge.
 - Static analysis produces false positives by design; the admin override is the
   intended escape hatch, not a bypass to remove.
+- Every high block and every admin override is mirrored into the security
+  event log as `skill_blocked` / `skill_override`
+  (`emit_skill_security_event` in the scanner) from all install paths: the
+  WebUI editor, zip import, and the `create_skill` / `update_skill` agent
+  tools (the agent tools can only emit `skill_blocked`, since they have no
+  override).
 
 This is inspired conceptually by NVIDIA SkillSpector's risk taxonomy; the
 implementation is native to VAF (no third-party code or dependency).
+
+### Post-install lifecycle: re-scan, quarantine, resolution
+
+The install-time gate cannot catch a skill whose files change AFTER
+installation (edited on disk, a swapped bundle). Two mechanisms close that gap:
+
+- **Periodic re-scan** (`vaf/skills/rescan.py`): a daemon worker, armed by the
+  web-server startup hook, re-scans every installed skill folder every
+  `skills_rescan_interval_hours` (default 5, `0` disables). Changed results
+  update the manifest scan block; a **worsened** level emits a
+  `skill_scan_alert` security event (which flips the Skills module on the
+  Overview dashboard); worsening to `high` **auto-quarantines** the skill and
+  emits `skill_quarantined` instead. An override-installed high skill is
+  untouched: its stored level is already high, so nothing "worsens".
+- **Quarantine**: a quarantined skill vanishes from every agent path for all
+  users including admins (see [Storage and scoping](#storage-and-scoping)). It
+  is resolved only in the security dashboard, never by the agent.
+
+Resolution endpoints (`vaf/api/security_routes.py`, all admin-only, under
+`/api/security/skills/<id>/`):
+
+| Endpoint | Second factor | Effect |
+|----------|---------------|--------|
+| `GET .../scan` | none | Live re-scan with per-rule findings (the manifest stores only the aggregate). |
+| `POST .../delete` | none | Delete a quarantined skill entirely (removes the threat); logs `skill_removed`. |
+| `POST .../isolate` | none | Manually quarantine an installed skill (e.g. an override-installed high). |
+| `POST .../acknowledge` | admin TOTP code | Mark a **medium**-risk skill as reviewed: the dashboard banner stops, agent visibility is unchanged. Refused for high. |
+| `POST .../restore` | admin TOTP code | False-positive resolution: lift the quarantine, re-exposing the skill to the agent; logs `skill_override`. |
+
+The 2FA split is deliberate: actions that reduce risk (delete, isolate) need
+plain admin auth; actions that silence a warning or re-expose a skill
+(acknowledge, restore) additionally require the admin's TOTP code.
 
 ---
 
@@ -298,7 +347,7 @@ admin-only.
 
 | Message (client → server) | Payload | Effect |
 |---------------------------|---------|--------|
-| `get_skills` | — | Returns `skills_list` scoped to the user (admins also get invalid skills and the raw `source`). |
+| `get_skills` | - | Returns `skills_list` scoped to the user (admins also get invalid skills and the raw `source`). |
 | `get_skill_source` | `skill_id` | Returns `skill_source` with the raw SKILL.md (admin). |
 | `create_skill` | `skill_id`, `name`, `description`, `body` (or raw `skill_md`), `shared_with?`, `override?` | Writes the folder, scans, registers. |
 | `update_skill` | same as create | Rewrites SKILL.md (bundled files preserved), scans, re-registers. |
@@ -342,8 +391,10 @@ Components: `web/components/settings/SkillsEditor.tsx`,
 |------|------|
 | `vaf/skills/skill_md.py` | SKILL.md parser; `derive_skill_id`; in-memory text validator. |
 | `vaf/skills/templates.py` | Discovery, `list_skills`, `reload_skills`. |
-| `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`. |
-| `vaf/core/skills_registry.py` | Manifest, scoping, `save_skill_md`, `import_skill_zip`, scan gate. |
+| `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`; `emit_skill_security_event`. |
+| `vaf/skills/rescan.py` | Periodic post-install re-scan; auto-quarantine on worsened-to-high. |
+| `vaf/core/skills_registry.py` | Manifest, scoping, quarantine gate, `save_skill_md`, `import_skill_zip`, scan gate. |
+| `vaf/api/security_routes.py` | Admin resolution endpoints (scan/acknowledge/isolate/restore/delete). |
 | `vaf/tools/use_skill.py` | On-demand delivery tool. |
 | `vaf/tools/{list,read,create,update,delete}_skill.py` | Per-user self-service skill-management tools (owner-isolated). |
 | `vaf/core/agent.py` | Unified router, `[SKILL SUGGESTION]` injection, `use_skill` pinning, scope injection, self-service skill-tool gating. |
@@ -354,9 +405,12 @@ Components: `web/components/settings/SkillsEditor.tsx`,
 
 ## Configuration
 
-Skills have no dedicated toggle. Skill auto-suggestion rides on the workflow
+Skill auto-suggestion has no dedicated toggle: it rides on the workflow
 router, so `workflows_enabled: false` disables it (the `use_skill` tool remains
-available). Storage lives under `~/.vaf/skills/`.
+available). One dedicated key exists: `skills_rescan_interval_hours` (default
+`5`) sets the cadence of the periodic post-install re-scan in hours, `0`
+disables it (see [Config Schema](../setup/CONFIG_SCHEMA.md)). Storage lives
+under `~/.vaf/skills/`.
 
 ---
 
@@ -364,22 +418,23 @@ available). Storage lives under `~/.vaf/skills/`.
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| Skill never suggested | Its `description` must clearly state when to use it — the router matches on `name` + `description` only. Confirm the skill is `valid` and visible to the user. |
+| Skill never suggested | Its `description` must clearly state when to use it - the router matches on `name` + `description` only. Confirm the skill is `valid` and visible to the user. |
 | Skill shows as "broken" | Frontmatter is missing/invalid or lacks `name`/`description`. Open it in the editor; the error is shown. |
 | Upload/create rejected as high-risk | The scanner found a high-severity pattern. Review the findings; if the skill is trusted, tick the override and retry. |
-| Skill not visible to a user | Check `shared_with`. `[]` is admin-only; add the user's scope id or `"*"`. |
+| Skill not visible to a user | Check `shared_with`. `[]` is admin-only; add the user's scope id or `"*"`. Also check `quarantined` in the manifest: quarantine hides a skill from everyone, including admins. |
+| Skill vanished for everyone (incl. admin) | It was quarantined: the re-scan worsened it to high, or an admin isolated it. Resolve in the security dashboard: delete it, or restore it with the admin 2FA code. |
 | Agent ignores the suggestion | The hint is advisory. The agent decides based on full context; it may handle the request directly. |
 
 ---
 
 ## Related Documentation
 
-- [Workflow Selection](WORKFLOW_SELECTION.md) — the first routing tier and the shared router.
-- [Tool Router Architecture](TOOL_ROUTER_ARCHITECTURE.md) — per-turn tool scoping.
-- [Whare Wananga](../memory/WHARE_WANANGA.md) — per-tool learned know-how (a different layer).
-- [User Isolation](../security/USER_ISOLATION.md) — per-user scoping model.
-- [Web UI](../web-ui/WEB_UI.md) — settings and the WebSocket API.
+- [Workflow Selection](WORKFLOW_SELECTION.md) - the first routing tier and the shared router.
+- [Tool Router Architecture](TOOL_ROUTER_ARCHITECTURE.md) - per-turn tool scoping.
+- [Whare Wananga](../memory/WHARE_WANANGA.md) - per-tool learned know-how (a different layer).
+- [User Isolation](../security/USER_ISOLATION.md) - per-user scoping model.
+- [Web UI](../web-ui/WEB_UI.md) - settings and the WebSocket API.
 
 ---
 
-*Last updated: 2026-06-26*
+*Last updated: 2026-07-23*

@@ -410,6 +410,20 @@ The reply is:
 
 ---
 
+## Admin status endpoint (`GET /api/thinking/status`)
+
+The Logs > Overview "Background agent" panel reads one ADMIN-gated, read-only
+endpoint (`vaf/api/thinking_routes.py`) that reports the proactive agent
+**per user across all scopes**: active run, waiting-for-reply question (with
+channel and nudge state), minutes since the last completed run, tools of the
+newest run log, and the recent question lifecycle from `thinking_requests`
+(whitelisted fields only - replies and details stay in the chat surfaces).
+It is built on `thinking_status_snapshot()` in `thinking_mode.py`, which is
+strictly read-only: an expired waiting latch is skipped but never deleted
+(deletion belongs to the lifecycle readers, not to a status probe). Non-admins
+get 403; there is no per-user variant of this route. Guarded by
+`tests/test_thinking_status_route.py`.
+
 ## Output: logs only, not in Web UI
 
 Thinking mode output is **not shown in the Web UI chat list**. It is logged to:

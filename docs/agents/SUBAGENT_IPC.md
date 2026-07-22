@@ -83,7 +83,10 @@ can no longer freeze the backend, and the Stop button cancels in-flight work. Th
 `GET /api/supervisor/status` (agent type, runtime, heartbeat age, and staleness vs
 `subagent_liveness_timeout_seconds`) and can be force-killed individually via
 `POST /api/supervisor/cancel` `{task_id}` → `Platform.stop_webui_subagent_process_by_task`
-kills the child process tree and the IPC task is failed so any engine wait unblocks. The WebUI
+kills the child process tree and the IPC task is failed so any engine wait unblocks. Both
+endpoints are caller-scoped: admins (and the tokenless localhost desktop, which counts as the
+local admin) see all units, while non-admins see and can cancel only units belonging to their
+own sessions; details in [Tool Supervision](TOOL_SUPERVISION.md). The WebUI
 shows this inline in the sub-agent's tool bubble (gated on a live unit, so it stays while the
 delegated subprocess runs), and as lines in the Workflow Runtime terminal for sub-agents that have
 no bubble (workflow steps). See [Workflow UI Components](../web-ui/WORKFLOW_UI_COMPONENTS.md).

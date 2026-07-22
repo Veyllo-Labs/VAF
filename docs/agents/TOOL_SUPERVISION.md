@@ -102,6 +102,15 @@ The currently-running subprocess units are exposed read-only and can be killed i
   heartbeat age, and whether a unit is stale (no heartbeat for longer than the liveness window).
 - `POST /api/supervisor/cancel {task_id}` — kill one unit's process tree and fail its IPC task.
 
+Both endpoints are caller-scoped (unit payloads carry user-authored task text, and a task id is
+enough to cancel a unit, so the unfiltered listing was a cross-user leak): an admin - including
+the tokenless localhost desktop, which resolves to the local admin - keeps the full watchdog view
+with `?session` as an optional filter, and each unit is attributed with the owning username for
+the Logs Overview panel. A non-admin only ever sees (and can only cancel) units whose session is
+owned by their own scope; a foreign or unowned `?session` yields an empty list rather than a 403
+because the web tool bubble polls generically. Sessions without a recorded scope count as
+admin-only, matching the WebSocket ownership policy. Guarded by `tests/test_supervisor_scoping.py`.
+
 The WebUI shows this **inline in the sub-agent's own tool bubble** — gated on a live supervised unit
 (matched by task id), so it stays visible while the delegated subprocess runs even though the tool
 call itself already returned. A sub-agent that has no tool bubble (a **workflow step**) instead

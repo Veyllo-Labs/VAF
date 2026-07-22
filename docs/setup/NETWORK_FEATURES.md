@@ -144,13 +144,23 @@ Requests pass through middleware from outermost to innermost:
 Request -> RateLimitMiddleware -> IPValidationMiddleware -> AuthMiddleware -> SecurityHeaders -> Route Handler
 ```
 
+### Security Event Log
+
+Rejections from the layers above are recorded in an always-on security event log (independent of `debug_logs_enabled`; the writer never raises and never slows the request path):
+
+- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `ws_rejected` (rejected WebSocket handshakes), and `channel_rejected` (unauthorized messenger senders).
+- **Sinks**: each event is appended to `security_events_<date>.jsonl` (structured) and mirrored human-readably to `security_<date>.log` (the "security" domain in the Logs file rail).
+- **Throttle**: a per-source throttle (kind + ip + username + channel, 5s) prevents floods without letting distinct sources swallow each other's events.
+- **Never logged**: passwords, 2FA codes, or tokens - only the event kind, source, and a short detail.
+- **Visibility**: admin-only via `GET /api/security/events` (`vaf/api/security_routes.py`), surfaced on the Logs Overview dashboard.
+
 ### Authentication Details
 
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB)
 - **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days)
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM
 - **Session Tracking**: Token hashes (SHA-256) stored in PostgreSQL, no plaintext tokens in DB
-- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active)
+- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours` or wiring the existing `/api/auth/refresh` flow into the frontend. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
 1. **Config** (`~/.vaf/config.json` or `VAF_CONFIG_DIR`): The JWT secret used to encrypt TOTP secrets must be kept. If this file is missing or the secret is lost (e.g. new install or different user), the server cannot decrypt existing 2FA data.

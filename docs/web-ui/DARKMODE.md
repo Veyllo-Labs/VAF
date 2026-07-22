@@ -120,6 +120,7 @@ own body square stays the neutral avatar body (`#2d2d2d`).
 | ReactFlow controls | bg `#262626`, border `#2f2f2f`, icon `#b0b0b0` |
 | ReactFlow minimap | `#202020` |
 | ReactFlow attribution | `rgba(24,24,24,0.7)`, text `#6b6b6b` |
+| Logs / observation window (timeline, canvas, and the Overview protection dashboard) | Draws with raw inline hex from the `tlColors(dark)` token set in `web/components/NotificationsModal.tsx`, resolved via `useThemeStore` (rule 4 in Adding new UI). Dark status inks use the lighter 400-range hues (green `#4ade80`, red `#f87171`, amber `#fbbf24`); category and semantic hues stay shared across both themes |
 | Accent chips (`bg-blue-50` etc.) | HSL-derived dark tints (50 → L12%/S35%, 100 → L16%, 200 → L25%); accent text 600/700/800 → the stock 400/300/200 light hues |
 | Semantic accents kept | primary/link blue `217 91% 60%`, destructive red `0 84% 60%` |
 | `color-scheme` | `dark` (native selects, date pickers, scrollbars) |

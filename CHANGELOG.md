@@ -11,6 +11,153 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- **The desktop window no longer navigation-loops between the dashboard and the
+  login page.** With an expired auth cookie but a still-valid token in browser
+  storage, the server-side route gate and the login page's "already logged in"
+  check disagreed forever: the gate redirected to /login, the login page bounced
+  back, and the window reloaded in a tight loop until the browser engine
+  throttled navigation and the UI froze. The login page's bounce decision now
+  uses the same authority as the server gate (the cookie only), stale
+  browser-storage tokens are cleaned up, and a circuit breaker stops any future
+  redirect ping-pong after two bounces instead of trapping the user. The root
+  desync is also removed on the backend: the auth cookie's lifetime is now
+  always derived from the token's own expiry instead of hardcoded 30-day
+  values, so a cookie can never outlive the session it carries.
+- **The Linux desktop window no longer stays dead after a GPU-driver crash.** Two
+  incidents aborted the whole tray process from inside the host-side GPU
+  compositing path (once inside the NVIDIA GL library while resizing the window),
+  which the existing renderer-only crash recovery cannot catch. VAF now disables
+  the NVIDIA driver's threaded optimizations for the tray process on NVIDIA hosts
+  (GPU acceleration and vsync unaffected; export `__GL_THREADED_OPTIMIZATIONS`
+  yourself to opt out), and the Linux shell launchers run the windowed tray under
+  a bounded restart supervisor: an abnormal exit restarts the app within seconds
+  (at most 3 times per 10 minutes), while a normal quit or Ctrl+C never does.
+
+- **Chat no longer shows phantom date separators around invisible rows.** Live
+  system-step notes are spliced into the message list with the current time;
+  when one landed inside an older conversation, the day-separator logic compared
+  against the invisible row and painted misordered "day ended / continued"
+  pairs (e.g. July 21 / July 22 / July 22 / July 21) between two messages from
+  the same day. Separators now only compare messages that actually render.
+
+### Added
+- **Installed skills are re-scanned periodically (post-install tamper
+  detection).** The security scanner already checks every skill at create,
+  update, upload and editor-save time (verified end-to-end against synthetic
+  malicious skills); what it could not catch was a skill whose files change on
+  disk AFTER installation. A background worker now re-scans all installed
+  skills every `skills_rescan_interval_hours` (default 5, `0` disables),
+  updates their persisted scan results, and raises a security event when a
+  skill's risk level worsened. Blocked installs and admin overrides are
+  recorded as security events too, so the Overview's skills panel shows real
+  numbers: skills by risk level as a live donut, threats blocked today, admin
+  overrides, re-scan alerts, the riskiest skills, and the time of the last
+  full scan - an installed high-risk skill turns the protection banner red,
+  a medium-risk one amber. A skill that re-scans as high-risk after install is
+  automatically QUARANTINED: it disappears from every agent path (skill list,
+  the read/list tools, the system prompt) until an admin resolves it on the
+  dashboard - either delete it, or, if it is a false positive, restore it,
+  which requires re-entering the admin's 2FA code so a stolen session alone
+  cannot re-expose it to the agent. The protection banner now names the actual
+  worst cause (e.g. "High-risk skill installed", "Channel in permissive mode")
+  instead of always attributing a red state to the audit chain. Clicking a skill
+  in the panel opens a detail view that re-scans it live and shows exactly WHY
+  it was flagged (the matched rules with category, message and snippet) next to
+  the resolution actions. A medium-risk skill can be acknowledged (2FA): it
+  stays visible and still shown as medium, but the banner returns to green -
+  the admin has reviewed and accepted it. When security events were recorded
+  today (blocked access, rejected senders, skill blocks), the Log Files section
+  shows a pulsing count that nudges the admin to open the security log, and the
+  Logs button in the main sidebar shows an unread notification dot for new
+  security events, so a blocked login or a quarantined skill is noticed without
+  the window being open. Both the sidebar dot and the in-window log badge are
+  unread-based against a shared marker: they clear once the admin opens the
+  security log and re-light only on a newer event, rather than sticking as a
+  permanent count.
+- Logs Overview: the last three panels are now live. "Background agent" shows
+  the proactive agent per user across all scopes (active run, the question it
+  is waiting on with channel and nudge state, time since the last run with the
+  tools it used, and the recent asked/replied/done/declined question history) -
+  an admin oversight view served by a new admin-gated `GET /api/thinking/status`.
+  "Recent supervised activity" lists the newest hash-chained tool actions of
+  the selected day with per-user attribution, derived from already-loaded audit
+  data. "Active supervised units" shows the live sub-agent watchdog (agent
+  type, owner, runtime, heartbeat) with a stuck marker for stale units.
+- Security: the supervisor watchdog endpoints are now caller-scoped. Previously
+  any authenticated user could list ALL running sub-agent units (including
+  other users' task text) and kill them by task id; now non-admins only see and
+  cancel units of their own sessions, while the admin keeps the full attributed
+  watchdog view.
+- Fixed a test-isolation gap where a test suite wrote synthetic scope
+  directories into the real thinking-requests store; the debris surfaced as
+  phantom users in the new Background-agent panel and has been cleaned up.
+- **Security event log: blocked access attempts are now recorded and visible.**
+  Rejected connection attempts (non-LAN IPs, requests without or with invalid
+  authentication, rejected WebSocket handshakes), failed login/2FA attempts,
+  and unauthorized messenger senders (Telegram/WhatsApp/Discord messages
+  dropped by the pairing gate, recorded with channel, sender id and time)
+  are written to a new `security` log (visible in the Logs window's file rail)
+  and to a structured store behind an admin-only API. Never logs passwords,
+  codes, or tokens; a flood throttle keeps hammering attackers from growing the
+  log unboundedly. In the Overview dashboard every protection module is now
+  clickable: a detail popup shows the module's live data - for the firewall
+  module the deflected attempts of the day (with counts for blocked requests
+  and failed logins), the live-inspected Docker network isolation - every VAF
+  container with its network and published ports, shown independent of LAN
+  mode; a port bound beyond loopback (LAN-exposed) flips the module and the
+  banner to the warning state - plus a button that jumps straight into the
+  security log's history; for the code sandbox the live-inspected container hardening; for the
+  audit chain the verification facts; for user isolation the enforcement mode
+  (fail-closed in server mode), memory-DB reachability, and admin-level
+  operational metrics: a live-measured RAG search latency (real pgvector
+  distance query), the isolated per-user memory stores by username with their
+  entry counts, the total memory-DB size, and the per-user folder totals (how
+  many isolated folders each user owns and their summed disk usage, with
+  legacy folders in an explicit unassigned bucket) - an unreachable memory
+  database now shows as an amber warning on the dashboard instead of failing
+  silently. The channel-perimeter module answers "is someone unauthorized
+  talking to my bot?": per messenger it shows enabled state, ingress mode,
+  paired-sender count, last activity and today's rejected count, with the
+  rejected senders listed in the detail popup - and an enabled channel running
+  in permissive mode turns the module and the banner amber. The audit-chain
+  popup additionally breaks the day's secured events down per user, making
+  visible that all users share one tamper-evident chain the admin verifies.
+  The phishing-shield module shows how many synced messages are flagged and,
+  per flagged mail, WHY: the matched heuristics (provider spam category,
+  punycode sender domain, urgency/social-engineering language, executive
+  impersonation via free-mail, phishing wording patterns) as readable chips
+  with the score, plus a note that flagged mail is hidden from the agent's
+  tools but never deleted. The guardrails module shows what actually governs
+  the agent: the gate switches (plan gate, confirmation gate, incident gates,
+  channel tool restrictions - with a visible warning when loosened), the live
+  tool inventory grouped by permission level (read/write/dangerous/system,
+  admin-only, channel-blocked), and - previously invisible anywhere - the
+  standing permissions from the trust store: which tools carry a permanent
+  "always allow" and which directories are trusted. With that, every
+  protection module of the overview is wired to live data.
+- **Logs window: new "Overview" tab (protection dashboard).** The Logs window now
+  opens on an antivirus-style overview summarizing VAF's protection mechanisms:
+  an overall protection-status banner, eight protection-module cards (audit
+  hash-chain integrity, code sandbox, LAN firewall, user isolation, held actions,
+  channel perimeter, phishing shield, guardrails/tool policy), an audit-chain
+  panel, a skills-scanned/threats-blocked panel, a background-agent panel, and
+  security-posture sections. The audit-integrity card, the audit-chain panel,
+  and the overall status banner are wired live: chain verification verdict,
+  events-secured count, the newest chain links (updating every 5 seconds while
+  the tab is open), the last secured event, and a per-day selector. The status
+  banner is a worst-of roll-up with four states (green "no anomalies", amber
+  "attention", red "critical", grey "not measured") shown as a large shield
+  motif filling the panel: it turns red the moment chain verification fails,
+  amber on warning-level module states, and absent data renders as "not
+  measured" instead of a false green. The code-sandbox module is wired live via
+  a new admin-only status endpoint that inspects the real container: green
+  while execution is container-enforced (running or on-demand), amber when the
+  Docker daemon is unavailable (execution stays blocked, fail-closed) - the
+  first warning input that can actually turn the banner amber. All remaining
+  modules render an explicit
+  "No data available" state; their bindings follow step by step.
+
 ## [0.1.0a17] - 2026-07-22
 
 ### Added

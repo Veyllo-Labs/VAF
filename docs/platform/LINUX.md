@@ -95,6 +95,18 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
 - **Renderer crash auto-recovery.** If the QtWebEngine render process dies,
   `renderProcessTerminated` fires and the window reloads to respawn the renderer
   (with a crash-loop guard), instead of leaving a blank window.
+- **Host-process crash supervision.** `renderProcessTerminated` only covers the
+  renderer child; an abort in the host process itself (e.g. a GPU-driver
+  assertion during a resize, live incident 2026-07-22) kills the whole tray.
+  The shell launchers (`run_vaf.sh`, `start_vaf.sh`) therefore run the windowed
+  tray under `scripts/tray_supervisor.sh`: restart only on abnormal exit (never
+  on exit 0/130/143), at most 3 restarts per 10 minutes, waiting for the
+  singleton port to free first. On NVIDIA hosts the driver's threaded
+  optimizations are additionally disabled for the process
+  (`__GL_THREADED_OPTIMIZATIONS=0`, opt-out by exporting the variable; applied
+  via `nvidia_gl_workarounds()` in `vaf/core/display_platform.py` and logged in
+  the `display platform: ...` line). Details in the Host-Process Crash Notes of
+  [SYSTEM_TRAY.md](./SYSTEM_TRAY.md).
 - **Native Save/Print dialogs parented to the window.** On X11 a parentless
   `QFileDialog` can open *behind* the webview (looks like "nothing happens"), so
   VAF wires Qt6-correct `downloadRequested` / print handlers parented to the main
@@ -103,7 +115,10 @@ Qt desktop window; a bare `vaf` / `run_vaf.sh` with no arguments defaults to the
   switches to the Web UI once the Next.js frontend is serving. See
   [STARTUP_SPLASH.md](./STARTUP_SPLASH.md).
 - **Autostart is freedesktop-native.** Tray login-autostart writes
-  `~/.config/autostart/vaf-tray.desktop` (`Platform.set_tray_autostart`). Server
+  `~/.config/autostart/vaf-tray.desktop` (`Platform.set_tray_autostart`). Note
+  that this entry execs the Python module directly and is NOT covered by the
+  crash supervisor above; the installer's application desktop entry
+  (`Exec=run_vaf.sh`) is. Server
   mode instead installs a systemd **user** service (`systemctl --user enable vaf`)
   with `loginctl enable-linger` so it starts at boot without a login session.
 

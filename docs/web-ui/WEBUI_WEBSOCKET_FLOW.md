@@ -65,6 +65,11 @@ non-localhost client must come from an RFC1918 IP, present a valid `access` JWT,
 | Auth-phase error (secret/import/other) for a **non-localhost** client | reject — close `4003` (fail-closed) |
 | Auth success | `manager.connect` + `set_connection_user(user_scope_id, username, role)` |
 
+Every rejected NETWORK handshake (`_emit_sec_ws` in `vaf/core/web_server.py`) also emits a
+`ws_rejected` security event into the security event log (admin-only `GET /api/security/events`,
+mirrored human-readably into `security_<date>.log`); the trusted-localhost rejection paths in
+network-disabled mode do not emit.
+
 **Client reconnect (`web/app/page.tsx`).** The browser only opens `/ws` once `GET /api/auth/me` reports an
 authenticated session, and reconnects with **exponential backoff + jitter (capped 30s)** rather than a fixed
 interval. When a socket closes **without ever opening** — the handshake was rejected (`4001`/`4003`, e.g. an

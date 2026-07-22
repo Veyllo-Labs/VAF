@@ -27,6 +27,11 @@ diagnostics. For everything else, set `VAF_LOG_DIR` explicitly - especially
 when embedding, where the default can otherwise land inside your venv's
 site-packages.
 
+The pytest suite pins `VAF_LOG_DIR` to a temporary directory for the entire
+run (`tests/conftest.py`), so test-generated logs and security events never
+land in the real log directory; tests that need their own directory still
+monkeypatch `VAF_LOG_DIR` per-test.
+
 Dated files are named `<family>_YYYY-MM-DD.<ext>` and garbage-collected after
 `gc_max_age_hours` (default 48h; `gc_enabled`, `gc_interval_hours` in config).
 
@@ -43,8 +48,12 @@ gates the domain logs, queue metrics, timeline, and channel logs. Notes:
   `faulthandler.log`, `stream_debug_*.txt`, `workflow_debug_*.log`,
   `platform_subprocess_*.log`, the web-interface `[SEND_FAIL]`-style queue
   lines, the sub-agent `events.jsonl` tree, the desktop window's
-  `leak_diag_*.log` (disable with `VAF_LEAK_DIAG=0`), and the local server's
-  rolling `server_last.log` / `server_last.prev.log` pair.
+  `leak_diag_*.log` (disable with `VAF_LEAK_DIAG=0`), the local server's
+  rolling `server_last.log` / `server_last.prev.log` pair, and the security
+  event pair `security_<date>.log` / `security_events_<date>.jsonl`
+  (rejected access attempts are audit signal, not debug noise; flood-throttled
+  per source, and entries never contain secrets - no passwords, 2FA codes, or
+  tokens).
 - `memory_db_echo` (default `false`) additionally enables SQL query logging.
 
 ## Log families - which file answers which question
@@ -63,6 +72,7 @@ gates the domain logs, queue metrics, timeline, and channel logs. Notes:
 | `startup_trace_*.txt`, `tray_startup_*.txt`, `tray_debug_*.log` | Startup sequencing; tray issues |
 | `crash_*.log`, `faulthandler.log` | Unhandled exceptions in the CLI loop; native crashes (SIGSEGV etc.) |
 | `telegram_reply_*` / `discord_reply_*` / `whatsapp_*` | Channel bridge send/receive diagnostics |
+| `security_*.log`, `security_events_*.jsonl` | Who was blocked or rejected: non-LAN IPs, tokenless/invalid-token requests, failed logins/2FA, rejected WebSocket handshakes, rejected channel senders, skill blocks/quarantines. The `.jsonl` is the structured source of truth (served via `GET /api/security/events`); the `.log` is its human-readable mirror. Always on, flood-throttled per source, entries never contain secrets |
 | `logs/debug/<agent_type>/<task_id>/events.jsonl` | Per-sub-agent-run structured event stream (sanitized args/results with length/sha256/preview); swept after 14 days by the writer itself, but the periodic GC removes them after `gc_max_age_hours` (48h) in a running app |
 
 Admins can list and tail `.log` files over HTTP: `GET /api/logs` and

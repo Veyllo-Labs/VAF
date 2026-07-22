@@ -6,8 +6,18 @@
 """
 import pathlib
 
+import pytest
+
 from vaf.core import vocab
 from vaf.core import thinking_requests as tr
+from vaf.core.platform import Platform
+
+
+@pytest.fixture(autouse=True)
+def _isolate_vaf_dir(monkeypatch, tmp_path):
+    """Keep request records out of the REAL ~/.vaf store (this file previously
+    polluted it with u-* scope dirs that then surfaced in the admin dashboard)."""
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
 
 
 # ── Vocabulary book ───────────────────────────────────────────────────────────

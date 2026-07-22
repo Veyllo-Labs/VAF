@@ -3249,3 +3249,98 @@ def stop_thinking_mode_background() -> None:
     global _background_thread
     _stop_event.set()
     _background_thread = None
+
+
+# --- Admin dashboard snapshot (Logs > Overview "Background agent" panel) ---
+
+def scope_storage_key(user_scope_id: Any) -> str:
+    """Public alias of the canonical storage key ('default' = local admin)."""
+    return _key(user_scope_id)
+
+
+def _last_run_overview(scope_key: str) -> Optional[Dict[str, Any]]:
+    """Newest run-log overview for one storage key: end time, duration, tools used."""
+    try:
+        d = Platform.vaf_dir() / "thinking_mode_logs" / scope_key
+        files = [p for p in d.glob("*.json")] if d.exists() else []
+        if not files:
+            return None
+        newest = max(files, key=lambda p: p.stat().st_mtime)
+        data = json.loads(newest.read_text(encoding="utf-8"))
+        tools: List[str] = []
+        for m in data.get("messages") or []:
+            for name in m.get("tool_calls") or []:
+                if name and name not in tools:
+                    tools.append(str(name))
+        return {
+            "ended_at": data.get("ended_at"),
+            "duration_s": data.get("duration_seconds"),
+            "tools": tools[:12],
+        }
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return None
+
+
+def thinking_status_snapshot() -> Dict[str, Dict[str, Any]]:
+    """Per-user snapshot of the background agent for the admin dashboard.
+
+    Returns a dict keyed by canonical storage key (see _key; 'default' is the
+    local admin). Strictly READ-ONLY: unlike get_waiting_for_reply() an
+    expired waiting latch is skipped, never deleted - a status probe must not
+    mutate lifecycle state. Per key:
+      running / run_started_ts   active lock younger than the 30-min run bound
+      waiting                    sanitized latch (question, since, channel, ...)
+      minutes_since_last_run     None if this user never completed a run
+      last_run                   newest run-log overview (ended_at, duration, tools)
+    """
+    locks = _load_locks()
+    waiting = _load_waiting()
+    try:
+        path = _last_completed_path()
+        last_completed = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(last_completed, dict):
+            last_completed = {}
+    except (json.JSONDecodeError, OSError):
+        last_completed = {}
+    keys = set(locks) | set(waiting) | set(last_completed) | set(_load_run_seq())
+    logs_root = Platform.vaf_dir() / "thinking_mode_logs"
+    try:
+        if logs_root.exists():
+            keys.update(d.name for d in logs_root.iterdir() if d.is_dir())
+    except OSError:
+        pass
+
+    try:
+        from vaf.core.config import Config
+        ttl_h = float(Config.get("thinking_reply_wait_ttl_hours", 12) or 0)
+    except Exception:
+        ttl_h = 12.0
+    now = time.time()
+    out: Dict[str, Dict[str, Any]] = {}
+    for key in keys:
+        lock = locks.get(key) or {}
+        started_ts = float(lock.get("started_at_ts") or 0)
+        w = waiting.get(key)
+        if w:
+            sent_ts = float(w.get("question_sent_at_ts") or 0)
+            if ttl_h > 0 and sent_ts > 0 and (now - sent_ts) > ttl_h * 3600:
+                w = None  # expired: skip (read-only - the lifecycle owns deletion)
+        out[key] = {
+            "running": bool(lock) and (now - started_ts) < 30 * 60,
+            "run_started_ts": started_ts or None,
+            "waiting": {
+                "question": str(w.get("question_text") or "")[:300],
+                "since_ts": float(w.get("question_sent_at_ts") or 0) or None,
+                "channel": str(w.get("channel") or "web"),
+                "nudged": bool(w.get("nudge_sent_at_ts")),
+                "escalated": bool(w.get("escalated_to_web")),
+                "username": str(w.get("username") or ""),
+            } if w else None,
+            "minutes_since_last_run": (
+                round((now - float(last_completed[key]["completed_at_ts"])) / 60.0, 1)
+                if isinstance(last_completed.get(key), dict) and last_completed[key].get("completed_at_ts")
+                else None
+            ),
+            "last_run": _last_run_overview(key),
+        }
+    return out

@@ -387,6 +387,22 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Supervisor routes: {e}")
 
+# Mount Security overview routes (admin-only protection-module status)
+try:
+    from vaf.api.security_routes import router as security_router
+    app.include_router(security_router)
+    log("WebServer", "Security routes mounted at /api/security")
+except Exception as e:
+    log("WebServer", f"Failed to mount Security routes: {e}")
+
+# Mount Background-agent status routes (admin-only, Logs > Overview panel)
+try:
+    from vaf.api.thinking_routes import router as thinking_router
+    app.include_router(thinking_router)
+    log("WebServer", "Thinking status routes mounted at /api/thinking")
+except Exception as e:
+    log("WebServer", f"Failed to mount Thinking status routes: {e}")
+
 # Mount Agent Brain routes (working memory, plan, intent, team state)
 try:
     from vaf.api.brain_routes import router as brain_router
@@ -732,6 +748,19 @@ def _get_trusted_sources_for_ui():
 
 _auth_db_init_task = None  # module-level ref so the background retry task is not garbage collected
 _auth_db_init_gate = threading.Lock()  # in TLS mode the same app runs on 8001 AND 8005 -> two lifespans
+
+
+@app.on_event("startup")
+async def start_skills_rescan():
+    # Periodic skill re-scan (post-install tamper detection for the security
+    # dashboard). start_periodic_rescan is idempotent - required because this
+    # startup hook runs twice in TLS mode (8001 + 8005 lifespans).
+    try:
+        from vaf.skills.rescan import start_periodic_rescan
+        if start_periodic_rescan():
+            log("WebServer", "Skills periodic re-scan armed")
+    except Exception as e:
+        log("WebServer", f"Skills re-scan not armed: {e}")
 
 
 @app.on_event("startup")
@@ -2773,6 +2802,16 @@ async def get_workflow_details(wf_id: str):
 VAF_TOKEN_COOKIE = "vaf_token"
 
 
+
+
+def _emit_sec_ws(detail: str, ip: str = "") -> None:
+    """Security-event mirror for rejected NETWORK WebSocket handshakes (lazy, never raises)."""
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("ws_rejected", ip=ip, detail=detail)
+    except Exception:
+        pass
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """
@@ -2872,6 +2911,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     if not local_network_enabled:
         if not is_localhost_client:
             log("API", f"WebSocket rejected: Local network disabled, non-localhost IP {client_ip}")
+            _emit_sec_ws("local network disabled", ip=client_ip)
             # Update tracker if possible
             try: get_tracker().unregister_connection(connection_id)
             except: pass
@@ -2909,6 +2949,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             # Validate IP is from local network
             if not is_allowed_ip(client_ip):
                 log("API", f"WebSocket rejected: Non-local IP {client_ip}")
+                _emit_sec_ws("non-local ip", ip=client_ip)
                 try: get_tracker().unregister_connection(connection_id)
                 except: pass
                 await websocket.close(code=4003, reason="Local network only")
@@ -2917,6 +2958,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             # Require token authentication for all network-mode clients (including localhost).
             if not token:
                 log("API", f"WebSocket rejected: No token from {client_ip}")
+                _emit_sec_ws("no token", ip=client_ip)
                 # Keep tracked as Guest/Unauth for map visibility?
                 # Yes, but maybe mark as 'Auth Required'
                 try: 
@@ -2958,10 +3000,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                 except jwt.ExpiredSignatureError:
                     log("API", f"WebSocket rejected: Expired token from {client_ip}")
+                    _emit_sec_ws("expired token", ip=client_ip)
                     await websocket.close(code=4001, reason="Token expired")
                     return
                 except jwt.InvalidTokenError:
                     log("API", f"WebSocket rejected: Invalid token from {client_ip}")
+                    _emit_sec_ws("invalid token", ip=client_ip)
                     await websocket.close(code=4001, reason="Invalid token")
                     return
         except ImportError:
@@ -2984,6 +3028,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     # backstop against any future fall-through that left user_context unset.
     if user_context is None and not is_localhost_client:
         log("API", f"WebSocket rejected: no auth context for non-localhost {client_ip}")
+        _emit_sec_ws("no auth context", ip=client_ip)
         try:
             get_tracker().unregister_connection(connection_id)
         except Exception:
@@ -5328,6 +5373,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             from vaf.skills.scanner import scan_skill_md_text as _scan_text_fn, format_findings as _fmt_findings
                             _scan = _scan_text_fn(_content)
                             _blocked = _scan["level"] == "high" and not cmd.get("override")
+                            try:
+                                from vaf.skills.scanner import emit_skill_security_event as _emit_sk
+                                if _blocked:
+                                    _emit_sk("skill_blocked", "editor", _sk_id, _scan)
+                                elif _scan["level"] == "high":
+                                    _emit_sk("skill_override", "editor", _sk_id, _scan)
+                            except Exception:
+                                pass
                             if _blocked:
                                 await websocket.send_json({
                                     "type": "skill_error",

@@ -584,3 +584,69 @@ def init_db_sync(drop_existing: bool = False):
     Useful for CLI commands or startup scripts.
     """
     asyncio.run(init_db(drop_existing))
+
+
+async def get_admin_isolation_metrics() -> dict:
+    """ADMIN-ONLY aggregate metrics across ALL user scopes.
+
+    Runs on the owner engine (the documented lane for global stats) and returns
+    operational numbers for the security dashboard's isolation module:
+    how many isolated per-user stores exist, how big each is, the total DB
+    size, and a live RAG ANN-search latency probe (a real pgvector distance
+    query using an existing embedding as the probe vector, so no embedder is
+    involved and the number reflects pure retrieval latency).
+
+    Never raises; individual metrics degrade to None/empty on failure. The
+    caller (GET /api/security/overview) is admin-gated - these aggregates are
+    cross-scope METADATA (counts/sizes, never content) and must not be exposed
+    on any per-user route.
+    """
+    from sqlalchemy import text
+    import time as _time
+
+    out: dict = {"scope_count": 0, "scopes": [], "db_size_bytes": None, "rag_probe_ms": None}
+    try:
+        engine = await get_owner_engine()
+        async with engine.connect() as conn:
+            try:
+                rows = (await conn.execute(text(
+                    "SELECT COALESCE(m.user_scope_id::text, '') AS scope, "
+                    "       COUNT(*) AS memories, "
+                    "       COALESCE(SUM(c.cnt), 0) AS chunks "
+                    "FROM memories m "
+                    "LEFT JOIN (SELECT memory_id, COUNT(*) AS cnt FROM chunks GROUP BY memory_id) c "
+                    "       ON c.memory_id = m.id "
+                    "WHERE m.is_deleted = false "
+                    "GROUP BY m.user_scope_id ORDER BY COUNT(*) DESC"
+                ))).fetchall()
+                # Full scope ids here; the admin route maps them to usernames and
+                # shortens for display.
+                out["scopes"] = [
+                    {"scope": (r.scope or "") or "unscoped", "memories": int(r.memories or 0), "chunks": int(r.chunks or 0)}
+                    for r in rows
+                ]
+                out["scope_count"] = len(out["scopes"])
+            except Exception:
+                pass
+            try:
+                out["db_size_bytes"] = int(await conn.scalar(text("SELECT pg_database_size(current_database())")))
+            except Exception:
+                pass
+            try:
+                probe = await conn.execute(text(
+                    "SELECT embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1"
+                ))
+                if probe.first() is not None:
+                    t0 = _time.perf_counter()
+                    await conn.execute(text(
+                        "SELECT c.id FROM chunks c "
+                        "WHERE c.embedding IS NOT NULL "
+                        "ORDER BY c.embedding <=> (SELECT embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1) "
+                        "LIMIT 5"
+                    ))
+                    out["rag_probe_ms"] = round((_time.perf_counter() - t0) * 1000.0, 1)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out

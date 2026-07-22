@@ -40,6 +40,13 @@ if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     echo "Starting VAF using venv Python: $VENV_PYTHON ($("$VENV_PYTHON" --version 2>&1))"
     # exec to keep the PID (matters for the app bundle / signal handling)
     if [ -z "$1" ]; then
+        # Linux: run the windowed tray under the bounded crash supervisor - a
+        # host-process GPU abort (see scripts/tray_supervisor.sh) restarts the
+        # tray instead of leaving it dead. macOS keeps the direct exec: the app
+        # bundle relies on the PID staying the python process.
+        if [ "$(uname -s)" = "Linux" ]; then
+            exec bash "$PROJECT_ROOT/scripts/tray_supervisor.sh" "$VENV_PYTHON"
+        fi
         exec "$VENV_PYTHON" -m vaf.main tray
     else
         exec "$VENV_PYTHON" -m vaf.main "$@"

@@ -13,7 +13,12 @@ QT_QPA_PLATFORM=wayland, so the guard silently did nothing on exactly the system
 protects. Qt and GTK must always be switched TOGETHER (a mismatch is itself a GLX/EGL
 conflict).
 """
-from vaf.core.display_platform import ALLOW_WAYLAND_ENV, force_x11
+from vaf.core.display_platform import (
+    ALLOW_WAYLAND_ENV,
+    GL_THREADED_OPT_ENV,
+    force_x11,
+    nvidia_gl_workarounds,
+)
 
 
 def _run(env, platform="linux"):
@@ -151,3 +156,49 @@ def test_remote_display_is_assumed_reachable(monkeypatch):
         "QT_QPA_PLATFORM": "wayland", "XDG_SESSION_TYPE": "wayland", "DISPLAY": "box:0",
     })
     assert (qt, gdk) == ("xcb", "x11")
+
+
+# ── NVIDIA GL workaround (live incident: host-process SIGABRT inside the NVIDIA
+#    GL library during the GLX present of a window resize) ──────────────────────
+
+def test_nvidia_gl_workaround_sets_default_when_driver_present():
+    env = {}
+    status = nvidia_gl_workarounds(env, nvidia_present=True)
+    assert env[GL_THREADED_OPT_ENV] == "0"
+    assert status == f"{GL_THREADED_OPT_ENV}=0"
+
+
+def test_nvidia_gl_workaround_honors_user_export():
+    """Exporting the variable (any non-empty value) is the opt-out; never override it."""
+    env = {GL_THREADED_OPT_ENV: "1"}
+    status = nvidia_gl_workarounds(env, nvidia_present=True)
+    assert env[GL_THREADED_OPT_ENV] == "1"
+    assert "(user)" in status
+
+
+def test_nvidia_gl_workaround_is_a_no_op_without_the_driver():
+    """Non-NVIDIA hosts must see no env change and an empty status (log stays clean)."""
+    env = {}
+    assert nvidia_gl_workarounds(env, nvidia_present=False) == ""
+    assert GL_THREADED_OPT_ENV not in env
+
+
+def test_nvidia_gl_workaround_never_raises():
+    class _Hostile(dict):
+        def get(self, *args, **kwargs):
+            raise RuntimeError("boom")
+
+        def __setitem__(self, *args):
+            raise RuntimeError("boom")
+
+    assert nvidia_gl_workarounds(_Hostile(), nvidia_present=True) == ""
+
+
+def test_force_x11_carries_the_gl_decision_in_its_status(monkeypatch):
+    """force_x11 is the single logged choke point; the GL decision must ride along."""
+    monkeypatch.setattr(
+        "vaf.core.display_platform.nvidia_gl_workarounds",
+        lambda env, nvidia_present=None: f"{GL_THREADED_OPT_ENV}=0",
+    )
+    status = force_x11({}, "linux")
+    assert f"{GL_THREADED_OPT_ENV}=0" in status

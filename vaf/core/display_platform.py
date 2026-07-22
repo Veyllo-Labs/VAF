@@ -66,6 +66,45 @@ def _x_socket_available(display: str) -> bool:
         return True
 
 
+# NVIDIA proprietary driver presence marker; scopes the GL workaround below.
+_NVIDIA_PROC_VERSION = "/proc/driver/nvidia/version"
+GL_THREADED_OPT_ENV = "__GL_THREADED_OPTIMIZATIONS"
+
+
+def nvidia_gl_workarounds(env: Optional[MutableMapping[str, str]] = None,
+                          nvidia_present: Optional[bool] = None) -> str:
+    """Disable the NVIDIA driver's threaded optimizations for this process.
+
+    Live incident 2026-07-22: the tray process died with SIGABRT raised INSIDE the
+    NVIDIA GL userspace library while presenting a frame during a window resize
+    (`QRhi::endFrame` on the GLX swapchain, host process). That abort class is
+    associated with the driver's own CPU-offload worker threads, which the crash
+    dump showed active in a process that also runs Chromium's in-process GL
+    threads. Turning the feature off costs nothing here (GPU acceleration and
+    vsync stay untouched) and removes the driver's extra threads from the crash
+    equation.
+
+    setdefault semantics: a value the user already exported wins, so exporting the
+    variable (any non-empty value) IS the opt-out. Scoped to hosts with the
+    proprietary NVIDIA driver; returns "" elsewhere so non-NVIDIA startup logs are
+    unchanged. Pure with respect to its arguments (pass `env`/`nvidia_present` in
+    tests); never raises.
+    """
+    try:
+        env = os.environ if env is None else env
+        if nvidia_present is None:
+            nvidia_present = os.path.exists(_NVIDIA_PROC_VERSION)
+        if not nvidia_present:
+            return ""
+        existing = env.get(GL_THREADED_OPT_ENV)
+        if existing is not None and str(existing).strip() != "":
+            return f"{GL_THREADED_OPT_ENV}={existing} (user)"
+        env[GL_THREADED_OPT_ENV] = "0"
+        return f"{GL_THREADED_OPT_ENV}=0"
+    except Exception:
+        return ""
+
+
 def force_x11(env: Optional[MutableMapping[str, str]] = None,
               platform: Optional[str] = None) -> str:
     """Point Qt AND GTK at X11/XWayland on Linux. Returns a short status string to log.
@@ -82,6 +121,11 @@ def force_x11(env: Optional[MutableMapping[str, str]] = None,
          rendering risk into a guaranteed failure to start.
       4. Nothing requested                 -> set xcb/x11 as the default (unchanged behavior).
 
+    On Linux the returned status additionally carries the `nvidia_gl_workarounds()`
+    decision (separated by "; ") - this function is the single choke point both
+    call sites (tray start + desktop_window fallback) already log, so the GL
+    workaround cannot drift between them.
+
     Pure with respect to its arguments (pass `env`/`platform` in tests); never raises.
     """
     try:
@@ -91,8 +135,11 @@ def force_x11(env: Optional[MutableMapping[str, str]] = None,
         if not str(platform or "").startswith("linux"):
             return "skipped (not linux)"
 
+        gl_status = nvidia_gl_workarounds(env)
+        gl_suffix = f"; {gl_status}" if gl_status else ""
+
         if _is_truthy(env.get(ALLOW_WAYLAND_ENV, "")):
-            return f"skipped ({ALLOW_WAYLAND_ENV} set, keeping session display server)"
+            return f"skipped ({ALLOW_WAYLAND_ENV} set, keeping session display server){gl_suffix}"
 
         qt = str(env.get("QT_QPA_PLATFORM", "") or "").strip()
         gdk = str(env.get("GDK_BACKEND", "") or "").strip()
@@ -121,17 +168,17 @@ def force_x11(env: Optional[MutableMapping[str, str]] = None,
             # Nothing (or already X11/offscreen/...) requested: historical default behavior.
             env.setdefault("QT_QPA_PLATFORM", "xcb")
             env.setdefault("GDK_BACKEND", "x11")
-            return "default xcb/x11"
+            return f"default xcb/x11{gl_suffix}"
 
         display = str(env.get("DISPLAY", "") or "").strip()
         if not display:
-            return "kept wayland (no DISPLAY - XWayland unavailable)"
+            return f"kept wayland (no DISPLAY - XWayland unavailable){gl_suffix}"
         if not _x_socket_available(display):
-            return f"kept wayland (DISPLAY {display!r} has no reachable X socket)"
+            return f"kept wayland (DISPLAY {display!r} has no reachable X socket){gl_suffix}"
 
         previous = qt or gdk or session
         env["QT_QPA_PLATFORM"] = "xcb"
         env["GDK_BACKEND"] = "x11"
-        return f"forced xcb/x11 over session wayland (was {previous!r})"
+        return f"forced xcb/x11 over session wayland (was {previous!r}){gl_suffix}"
     except Exception as exc:  # never let a display heuristic break startup
         return f"skipped (error: {exc})"

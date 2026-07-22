@@ -29,9 +29,15 @@ if [ -f "$DIR/venv/bin/python3" ]; then
     echo "Using venv: $PYTHON_CMD"
 fi
 
-# Run with nohup to detach from terminal session
-# use python3 -m vaf.main tray
-nohup "$PYTHON_CMD" -m vaf.main tray > logs/tray_debug.log 2>&1 &
+# Run with nohup to detach from terminal session. On Linux the bounded crash
+# supervisor (scripts/tray_supervisor.sh) restarts the tray after an abnormal
+# exit (host-process GPU aborts kill the whole process; the in-app recovery
+# only covers renderer-child crashes).
+if [ "$(uname -s)" = "Linux" ]; then
+    nohup bash "$DIR/scripts/tray_supervisor.sh" "$PYTHON_CMD" > logs/tray_debug.log 2>&1 &
+else
+    nohup "$PYTHON_CMD" -m vaf.main tray > logs/tray_debug.log 2>&1 &
+fi
 
 PID=$!
 echo "VAF started with PID $PID"

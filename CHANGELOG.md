@@ -11,6 +11,30 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Fixed
+- A timed-out or stopped sandbox execution is now actually terminated inside
+  the container. Slim sandbox images ship no pkill, so the old kill path
+  silently did nothing: a timed-out package install kept running blind,
+  finished after the workspace cleanup and left a 229MB orphan directory
+  behind. The kill is also scoped to the single run's process tree, so it can
+  never take down another user's concurrent sandbox execution in the shared
+  container.
+- The Logs window now follows the calendar: after midnight the audit chain,
+  hero and activity panels advance to the new day as soon as it has events,
+  instead of silently continuing to show yesterday (fresh tool runs appeared
+  to be missing from the audit chain). Date handling also switched from UTC
+  to local time, which had marked the previous day as "Today" until 02:00
+  CEST - the same fix applies to the sidebar chain-alert probe. Explicitly
+  picking an older day in the date selector still pins it.
+- Running the test suite on a development machine no longer writes fake
+  "Message sent via Discord" entries into the live Activity feed and channel
+  history. A unit test executed the real send tool with only the network call
+  mocked, so its bookkeeping side effects (activity notification, channel
+  store row, outbound session stub for a placeholder recipient) landed in the
+  real stores on every run - hundreds of entries had accumulated and looked
+  like a compromise at first glance. No message ever left the machine; the
+  test now isolates all side-effect stores and the debris has been removed.
+
 ## [0.1.0a18] - 2026-07-23
 
 ### Security

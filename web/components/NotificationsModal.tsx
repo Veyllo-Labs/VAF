@@ -58,6 +58,15 @@ type LogFile = {
   modified: number;
 };
 
+// LOCAL calendar date (YYYY-MM-DD). The backend names timeline files by the
+// server's local date, so the frontend must compare in local time too -
+// toISOString() is UTC and marked yesterday as "(Today)" until 02:00 CEST
+// (live incident: the Overview kept showing the previous day's chain after
+// midnight and the fresh sandbox runs seemed to be missing from the audit).
+function localDateStr(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 type TimelineEvent = {
   ts: string;
   type: 'tool_start' | 'tool_end' | 'subagent_start' | 'thinking_run' | 'ww_train_start';
@@ -705,7 +714,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
 
   // Time range
   const now = Date.now();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
   const isToday = date === today;
   const tsArr = events.map(e => new Date(e.ts).getTime()).filter(n => isFinite(n));
   const rawT0 = tsArr.length ? Math.min(...tsArr) : now - MIN_SPAN_MS;
@@ -2370,6 +2379,13 @@ export default function NotificationsModal({
   const [timelineEvents, setTimelineEvents]   = useState<TimelineEvent[]>([]);
   const [timelineDates, setTimelineDates]     = useState<string[]>([]);
   const [timelineDate, setTimelineDate]       = useState<string>('');
+  // True once the admin explicitly picked a non-today date; suspends the
+  // auto-follow-today behavior until they select the current day again.
+  const datePinnedRef = useRef(false);
+  const pickTimelineDate = useCallback((d: string) => {
+    datePinnedRef.current = d !== localDateStr();
+    setTimelineDate(d);
+  }, []);
   const [timelineChainOk, setTimelineChainOk] = useState<boolean | null>(null);
   const [timelineTotalRaw, setTimelineTotalRaw] = useState<number | null>(null);
   // Aggregated protection-module status (GET /api/security/overview, admin-gated).
@@ -2479,7 +2495,7 @@ export default function NotificationsModal({
       .then(d => {
         const dates: string[] = Array.isArray(d?.dates) ? d.dates : [];
         setTimelineDates(dates);
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDateStr();
         const best = dates.includes(today) ? today : (dates[0] ?? today);
         setTimelineDate(prev => prev || best);
       })
@@ -2518,7 +2534,7 @@ export default function NotificationsModal({
   // static, so polling only runs while today is selected.
   useEffect(() => {
     if (!isOpen || !isOverview || !timelineDate) return;
-    if (timelineDate !== new Date().toISOString().slice(0, 10)) return;
+    if (timelineDate !== localDateStr()) return;
     const iv = setInterval(() => fetchTimeline(timelineDate), 5000);
     return () => clearInterval(iv);
   }, [isOpen, isOverview, timelineDate, fetchTimeline]);
@@ -2549,7 +2565,10 @@ export default function NotificationsModal({
       .then(r => (r.ok ? r.json() : null))
       .then(d => setMailMessages(Array.isArray(d?.messages) ? d.messages : null))
       .catch(() => setMailMessages(null));
-  }, []);
+    // Keep the day list fresh so the follow-today effect sees the new day's
+    // file as soon as it exists (otherwise the list is only loaded on open).
+    fetchTimelineDates();
+  }, [fetchTimelineDates]);
   useEffect(() => {
     if (!isOpen || !isOverview) return;
     loadSecurity();
@@ -2656,7 +2675,18 @@ export default function NotificationsModal({
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateStr();
+
+  // Follow the calendar: unless the admin explicitly pinned an older day in
+  // the date picker, the Overview/Timeline always track TODAY - after
+  // midnight the selection advances as soon as the new day has events, so
+  // the audit panel never silently keeps showing yesterday's chain.
+  useEffect(() => {
+    if (!isOpen || datePinnedRef.current) return;
+    if (timelineDate && timelineDate !== today && timelineDates.includes(today)) {
+      setTimelineDate(today);
+    }
+  }, [isOpen, today, timelineDate, timelineDates]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -2752,7 +2782,7 @@ export default function NotificationsModal({
           {isTimelineView && (
             <select
               value={timelineDate}
-              onChange={e => setTimelineDate(e.target.value)}
+              onChange={e => pickTimelineDate(e.target.value)}
               className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-400 bg-gray-50 shrink-0 max-md:max-w-[120px] max-md:px-1.5"
             >
               {timelineDates.length === 0 && <option value={today}>{t('today')}</option>}
@@ -3023,7 +3053,7 @@ export default function NotificationsModal({
                 dates={timelineDates}
                 date={timelineDate}
                 today={today}
-                onDateChange={setTimelineDate}
+                onDateChange={pickTimelineDate}
                 security={securityOverview}
                 memHealth={memoryHealth}
                 mail={mailMessages}

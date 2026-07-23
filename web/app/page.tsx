@@ -1029,7 +1029,11 @@ function VAFDashboardContent() {
     useEffect(() => {
         if (currentUser?.role !== 'admin') return;
         const check = () => {
-            const today = new Date().toISOString().slice(0, 10);
+            // LOCAL date, not toISOString() (UTC): the backend names timeline files
+            // by the server's local day, and until 02:00 CEST the UTC date is still
+            // yesterday - the dot then watched a day the app no longer writes to.
+            const d = new Date();
+            const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             fetch(`${getApiBase()}/api/logs/timeline/events?date=${today}&merge=false`, { credentials: 'include' })
                 .then(r => r.ok ? r.json() : null)
                 .then(d => { if (d && d.total_raw > 0) setChainAlert(d.chain_ok === false); })

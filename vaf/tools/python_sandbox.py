@@ -200,18 +200,26 @@ class PythonSandboxTool(BaseTool):
         except Exception:
             return lambda: False
 
-    def _kill_sandbox_exec(self, proc) -> None:
-        """Halt a sandbox exec: kill the host docker-exec client and best-effort the in-container
-        process (docker exec does not propagate the kill into the container, so the code would keep
-        running otherwise)."""
+    def _kill_sandbox_exec(self, proc, command: str = "") -> None:
+        """Halt a sandbox exec: kill the host docker-exec client and the run's OWN
+        process tree inside the container (docker exec does not propagate the kill,
+        so the code would keep running otherwise). The in-container kill is scoped
+        to this run's workspace marker: the old `pkill -9 -f python` no-opped on
+        slim images (no procps) - a timed-out pip finished its 229MB install into
+        an already-cleaned workspace - and would have killed every other user's
+        run in the shared container if it had existed."""
         try:
             proc.kill()
         except Exception:
             pass
+        from vaf.tools.sandbox import extract_run_marker, kill_run_processes_cmd
+        marker = extract_run_marker(command)
+        if not marker:
+            return
         try:
             subprocess.run(
-                ["docker", "exec", SANDBOX_CONTAINER, "pkill", "-9", "-f", "python"],
-                capture_output=True, timeout=5, **self._get_subprocess_kwargs()
+                ["docker", "exec", SANDBOX_CONTAINER, "sh", "-c", kill_run_processes_cmd(marker)],
+                capture_output=True, timeout=10, **self._get_subprocess_kwargs()
             )
         except Exception:
             pass
@@ -246,7 +254,7 @@ class PythonSandboxTool(BaseTool):
                 f"timed out after {int(timeout)}s" if time.monotonic() >= deadline else None
             )
             if reason:
-                self._kill_sandbox_exec(proc)
+                self._kill_sandbox_exec(proc, command)
                 try:
                     out, err = proc.communicate(timeout=5)
                 except Exception:

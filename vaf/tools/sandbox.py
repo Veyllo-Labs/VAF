@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import os
+import re
 import subprocess
 import uuid
 import logging
@@ -33,6 +34,36 @@ def ephemeral_hardening_flags(network: Optional[str]) -> List[str]:
             "--add-host", "host.docker.internal:host-gateway",
         ]
     return flags
+
+
+# Per-run workspace paths double as kill markers: unique per execution and
+# present in every command of that run (cd/pip --target/rm -rf).
+_RUN_MARKER_RE = re.compile(r"/tmp/vaf_[A-Za-z0-9_]+")
+
+
+def extract_run_marker(command: str) -> Optional[str]:
+    """The per-run workspace path embedded in a sandbox command, or None."""
+    m = _RUN_MARKER_RE.search(command or "")
+    return m.group(0) if m else None
+
+
+def kill_run_processes_cmd(marker: str) -> str:
+    """Pure-sh in-container killer for ONE run's process tree.
+
+    Kills every process whose cwd is the run's workspace or whose cmdline
+    carries the workspace path. Needs only procfs and shell builtins: slim
+    images ship no procps, so the previous `pkill -9 -f python` silently
+    no-opped (a timed-out pip kept running and re-populated the workspace
+    AFTER cleanup) - and had it existed, it would have killed every OTHER
+    user's run in the shared container too. The scan shell excludes itself
+    (its own cmdline contains the marker)."""
+    return (
+        'for d in /proc/[0-9]*; do p="${d##*/}"; '
+        '[ "$p" = "$$" ] && continue; '
+        f'if [ "$(readlink "$d/cwd" 2>/dev/null)" = "{marker}" ] '
+        f'|| grep -qa -- "{marker}" "$d/cmdline" 2>/dev/null; '
+        'then kill -9 "$p" 2>/dev/null; fi; done'
+    )
 
 
 class DockerSandbox:
@@ -211,8 +242,21 @@ class DockerSandbox:
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             logger.warning(f"Command timed out after {timeout}s: {command}")
-            # Try to kill the specific exec process inside (complex), or just restart container?
-            # For now, we return a timeout error.
+            # Kill THIS run's process tree inside the container (scoped by the
+            # per-run workspace marker) - otherwise the payload keeps running
+            # after the host-side exec client is gone.
+            marker = extract_run_marker(command)
+            if marker:
+                kill_kwargs = {"capture_output": True, "timeout": 10}
+                if platform.system() == "Windows":
+                    kill_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                try:
+                    subprocess.run(
+                        ["docker", "exec", self.container_name, "sh", "-c",
+                         kill_run_processes_cmd(marker)],
+                        **kill_kwargs)
+                except Exception:
+                    pass
             return -1, "", "Error: Execution timed out."
         except Exception as e:
             return -1, "", str(e)

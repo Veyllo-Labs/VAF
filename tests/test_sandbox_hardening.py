@@ -59,3 +59,49 @@ def test_package_specs_reject_shell_metacharacters():
     assert ok is None
     for evil in (["numpy; rm -rf /"], ["$(curl evil)"], ["a && b"], ["pkg`x`"], ["-r/etc/passwd"]):
         assert PythonSandboxTool._validate_packages(evil) is not None
+
+
+# -- targeted timeout kill (the pkill-on-slim gap) ------------------------------
+
+def test_run_marker_extracted_from_every_command_shape():
+    from vaf.tools.sandbox import extract_run_marker
+    wd = "/tmp/vaf_ab12cd34ef56_deadbeef"
+    for cmd in (f"mkdir -p {wd}",
+                f"pip install --target {wd}/_pkgs numpy",
+                f"cd {wd} && PIP_TARGET={wd}/_pkgs python3",
+                f"rm -rf {wd}"):
+        assert extract_run_marker(cmd) == wd
+    assert extract_run_marker("docker ps") is None
+    assert extract_run_marker("") is None
+
+
+def test_kill_script_is_scoped_and_self_excluding():
+    from vaf.tools.sandbox import kill_run_processes_cmd
+    s = kill_run_processes_cmd("/tmp/vaf_x_1")
+    assert '[ "$p" = "$$" ] && continue' in s          # the scanner never kills itself
+    assert 'readlink "$d/cwd"' in s                     # catches children (pip) via inherited cwd
+    assert 'grep -qa -- "/tmp/vaf_x_1" "$d/cmdline"' in s  # catches the payload shell
+    assert 'kill -9' in s
+    assert "pkill" not in s                             # slim images have no procps
+
+
+def test_timeout_kill_uses_marker_and_skips_without_one(monkeypatch):
+    from vaf.tools.python_sandbox import PythonSandboxTool
+
+    calls = []
+    import vaf.tools.python_sandbox as ps
+    monkeypatch.setattr(ps.subprocess, "run", lambda *a, **k: calls.append(a[0]))
+
+    class _P:
+        def kill(self): pass
+
+    tool = PythonSandboxTool()
+    tool._kill_sandbox_exec(_P(), "cd /tmp/vaf_scope1_run9 && python3 x.py")
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:3] == ["docker", "exec", ps.SANDBOX_CONTAINER]
+    assert "/tmp/vaf_scope1_run9" in argv[-1] and "kill -9" in argv[-1]
+
+    calls.clear()
+    tool._kill_sandbox_exec(_P(), "echo no marker here")
+    assert calls == []                                  # never falls back to a broad kill

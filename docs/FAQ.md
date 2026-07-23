@@ -8,8 +8,9 @@ docs; debugging runtime issues in [DEBUGGING.md](DEBUGGING.md).
 ## Install and requirements
 
 **Is VAF on PyPI?**
-Not yet. Install from source: `git clone` + `pip install -e .` (slim base) or
-with extras like `.[memory,server]` - see [EMBEDDING.md](EMBEDDING.md).
+Yes (prerelease during the alpha): `pip install --pre vaf` gets the slim base,
+`pip install --pre "vaf[memory,server]"` adds extras. A source checkout
+(`git clone` + `pip install -e .`) works too. See [EMBEDDING.md](EMBEDDING.md).
 
 **Which Python versions are supported?**
 3.10 or newer (`requires-python` in pyproject.toml).
@@ -35,8 +36,9 @@ model load. Use an API provider for a quick first test.
 
 **Can one `Agent` be shared across threads?**
 No. One instance is one conversation and is effectively single-threaded;
-create one instance per parallel conversation. There is no async API today.
-See the concurrency contract in [CORE_AGENT.md](CORE_AGENT.md).
+create one instance per parallel conversation. For async callers there is
+`await agent.run_async(...)` (a thread-executor wrapper, not a natively async
+engine). See the concurrency contract in [CORE_AGENT.md](CORE_AGENT.md).
 
 **Why did `chat_step()` return `"..."` instead of the answer?**
 That is its contract: the return value is a status, the real answer arrives

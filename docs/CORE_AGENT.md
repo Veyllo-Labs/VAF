@@ -149,7 +149,9 @@ per-turn state lives in instance attributes, `history` and `tools` are
 mutated without locks. Do not call `chat_step` on the same instance from two
 threads. Multiple instances in one process (each on its own thread) are the
 intended parallel pattern. Pass `register_signals=False` off the main thread
-(the facade always does). There is no async API; calls block.
+(the facade always does). The engine's `chat_step` is synchronous and blocks;
+the facade offers `await agent.run_async(...)`, a thread-executor wrapper over
+`run()` (not a natively async engine).
 
 ## Advanced identity/scoping attributes
 

@@ -183,6 +183,7 @@
     "timelineEmpty": "Noch keine Timeline-Ereignisse.\nDebug-Logs aktivieren und Agent starten.",
     "chainOk": "Kette intakt",
     "chainFailed": "Kette gebrochen",
+    "chainNoData": "Noch keine Daten",
     "today": "Heute",
     "timelineRunning": "läuft",
     "subagentLabel": "Sub-Agent",

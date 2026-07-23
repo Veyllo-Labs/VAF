@@ -600,7 +600,7 @@ const MAX_ZOOM    = 20;
 
 function HorizontalTimeline({ events, date, hour12, i18n }: {
   events: TimelineEvent[]; date: string; hour12?: boolean;
-  i18n?: { activityTitle: string; clickHint: string; canvasHint: string };
+  i18n?: { activityTitle: string; clickHint: string; canvasHint: string; empty?: string };
 }) {
   const C = tlColors(useThemeStore((st) => st.theme) === 'dark');
   const scrollRef      = useRef<HTMLDivElement>(null);
@@ -821,7 +821,7 @@ function HorizontalTimeline({ events, date, hour12, i18n }: {
     return (
       <div className="flex-1 flex items-center justify-center bg-white">
         <p className="text-sm whitespace-pre-line text-center text-gray-400">
-          {'No events yet.\nEnable Debug Logs and run the agent.'}
+          {i18n?.empty ?? 'No events yet.\nEnable Debug Logs and run the agent.'}
         </p>
       </div>
     );
@@ -2741,14 +2741,22 @@ export default function NotificationsModal({
                 onClick={() => setShowChainInfo(v => !v)}
                 className={cn(
                   'flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border transition-opacity hover:opacity-80',
-                  timelineChainOk
-                    ? 'bg-green-50 text-green-700 border-green-200'
-                    : 'bg-red-50 text-red-600 border-red-200 animate-pulse'
+                  timelineChainOk === false
+                    ? 'bg-red-50 text-red-600 border-red-200 animate-pulse'
+                    : (timelineTotalRaw ?? 0) > 0
+                      ? 'bg-green-50 text-green-700 border-green-200'
+                      : 'bg-gray-50 text-gray-500 border-gray-200'
                 )}
               >
-                {timelineChainOk
-                  ? <><ShieldCheck size={11} /><span className="max-md:hidden">{t('chainOk')}</span></>
-                  : <><ShieldAlert size={11} /><span className="max-md:hidden">{t('chainFailed')}</span></>}
+                {/* chain_ok is vacuously true for a missing or empty timeline file
+                    (logs_routes returns events: [], chain_ok: true), so "intact" is
+                    only claimed when events exist - same honesty floor as the
+                    OverviewPane hero's nodata state. */}
+                {timelineChainOk === false
+                  ? <><ShieldAlert size={11} /><span className="max-md:hidden">{t('chainFailed')}</span></>
+                  : (timelineTotalRaw ?? 0) > 0
+                    ? <><ShieldCheck size={11} /><span className="max-md:hidden">{t('chainOk')}</span></>
+                    : <><ShieldQuestion size={11} /><span className="max-md:hidden">{t('chainNoData')}</span></>}
               </button>
 
               {showChainInfo && (
@@ -3084,6 +3092,7 @@ export default function NotificationsModal({
                     activityTitle: t('activityPanelTitle'),
                     clickHint: t('activityClickHint'),
                     canvasHint: t('canvasHint'),
+                    empty: t('timelineEmpty'),
                   }}
                 />
               )

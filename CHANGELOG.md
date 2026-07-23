@@ -22,6 +22,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   modes and the coder's sandbox need the full product's services.
 
 ### Fixed
+- The Logs page no longer dead-ends when debug logging is off. Three fixes
+  from a live incident on a macOS install where a legacy config had
+  `debug_logs_enabled: false`: the chain badge no longer claims "Chain
+  intact" for an empty or missing timeline (an empty chain is vacuously
+  intact; it now shows a neutral "No data yet" state), the timeline empty
+  state is localized instead of hardcoded English, and the Debug Logs
+  switch is back in Settings → Advanced - the empty states tell the user to
+  enable it, so the switch has to exist in the UI.
 - Corrected stale embedder docs: the FAQ said VAF was "not yet on PyPI" (it is,
   as a prerelease) and three docs claimed "no async API" despite the shipped
   `run_async`.

@@ -308,7 +308,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `ux_auto_open_links` | `False` | Auto-open `web_search` source links as browser tabs (skipped in non-interactive runs, `VAF_NONINTERACTIVE`). |
 | `ux_auto_open_outputs` | `True` | Auto-open finished outputs: HTML reports in the browser, other output files via their folder in the file manager, created project folders (skipped in non-interactive runs). |
 | `ux_auto_open_max_tabs` | `8` | Cap on browser tabs auto-opened per search; clamped to 1-20. |
-| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). Location resolves via `VAF_LOG_DIR`, then repo `logs/`, then the data dir (`~/.vaf/logs/` is a later fallback) - see [DEBUGGING.md](../DEBUGGING.md). |
+| `debug_logs_enabled` | `True` | Write the domain/debug log families (queue metrics, backend, rag, timeline, ...). Toggleable in Settings → Advanced (the Logs page's audit timeline depends on it). Location resolves via `VAF_LOG_DIR`, then repo `logs/`, then the data dir (`~/.vaf/logs/` is a later fallback) - see [DEBUGGING.md](../DEBUGGING.md). |
 | `redis_enabled` | `True` | Use Redis (cache/queues). |
 | `redis_url` | `redis://localhost:6379/0` | Redis DSN. |
 | `gc_enabled` | `True` | Background garbage collection of stale data. |

@@ -3754,9 +3754,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.channel_tools_unrestricted ?? true}
                                         onChange={(v: boolean) => handleChange('channel_tools_unrestricted', v)}
                                     />
-                                    {/* Memory system + Debug logs toggles are intentionally hidden from the UI.
-                                        Both default to ON (config.py: memory_enabled / debug_logs_enabled = True)
-                                        and stay on unless a user opts out manually in ~/.vaf/config.json.
+                                    {/* Memory system toggle stays intentionally hidden from the UI:
+                                        memory_enabled defaults to ON (config.py) and only changes when a
+                                        user opts out manually in ~/.vaf/config.json.
                                     <div className="h-4" />
                                     <Switch
                                         label={tAdvanced('memorySystem')}
@@ -3764,6 +3764,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.memory_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('memory_enabled', v)}
                                     />
+                                    */}
+                                    {/* Debug logs switch is visible again: the Logs page gates its audit
+                                        timeline on debug_logs_enabled and its empty states tell the user
+                                        to "Enable Debug Logs" - so the switch must exist in the UI (live
+                                        incident: a legacy config had it off and the Logs page dead-ended
+                                        with no way to turn it back on). */}
                                     <div className="h-4" />
                                     <Switch
                                         label={tAdvanced('debugLogs')}
@@ -3771,7 +3777,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.debug_logs_enabled ?? true}
                                         onChange={(v: boolean) => handleChange('debug_logs_enabled', v)}
                                     />
-                                    */}
                                     <div className="h-4" />
                                     <button
                                         onClick={() => setShowToolsModal(true)}

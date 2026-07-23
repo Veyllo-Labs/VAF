@@ -11,6 +11,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+- The session token that rides in the WebSocket handshake URL
+  (`/ws?token=<jwt>`, unavoidable because WebSockets cannot send an
+  Authorization header) is now masked to `token=***` in the server access log
+  instead of being printed in full. A live, short-lived admin token could
+  otherwise be replayed by anyone who read the terminal or the tray log. The
+  same mask also covers `access_token` / `api_key` / `password` if they ever
+  appear in a logged URL.
+
+### Fixed
+- The Logs window no longer crashes with a blank "This page couldn't load"
+  after a rebuild. A calendar-follow effect had been placed after the modal's
+  early return, so the number of React hooks changed when the window opened
+  (React error #310); the effect is back above the guard.
+
+### Added
+- The skill scanner module gained a dependency-free content-hashing facility
+  (SHA-2 and SHA-3): `hash_bytes` / `hash_text` and a deterministic,
+  tamper-evident `hash_skill_folder` fingerprint, on a strong-only algorithm
+  allow-list. Available for later integrity checks; not yet wired into the
+  scan result.
+
 ### Fixed
 - A timed-out or stopped sandbox execution is now actually terminated inside
   the container. Slim sandbox images ship no pkill, so the old kill path

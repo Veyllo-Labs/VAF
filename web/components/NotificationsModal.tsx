@@ -2643,6 +2643,21 @@ export default function NotificationsModal({
     prevTimelineIdsRef.current = currentIds;
   }, [timelineEvents]);
 
+  const today = localDateStr();
+
+  // Follow the calendar: unless the admin explicitly pinned an older day in
+  // the date picker, the Overview/Timeline always track TODAY - after
+  // midnight the selection advances as soon as the new day has events, so
+  // the audit panel never silently keeps showing yesterday's chain. MUST stay
+  // above the `!isOpen` early return - a hook after it renders conditionally
+  // (React error #310: fewer hooks when the modal is closed).
+  useEffect(() => {
+    if (!isOpen || datePinnedRef.current) return;
+    if (timelineDate && timelineDate !== today && timelineDates.includes(today)) {
+      setTimelineDate(today);
+    }
+  }, [isOpen, today, timelineDate, timelineDates]);
+
   if (!isOpen) return null;
 
   // ── Derived ──────────────────────────────────────────────────────────────────
@@ -2674,19 +2689,6 @@ export default function NotificationsModal({
       </>
     );
   }
-
-  const today = localDateStr();
-
-  // Follow the calendar: unless the admin explicitly pinned an older day in
-  // the date picker, the Overview/Timeline always track TODAY - after
-  // midnight the selection advances as soon as the new day has events, so
-  // the audit panel never silently keeps showing yesterday's chain.
-  useEffect(() => {
-    if (!isOpen || datePinnedRef.current) return;
-    if (timelineDate && timelineDate !== today && timelineDates.includes(today)) {
-      setTimelineDate(today);
-    }
-  }, [isOpen, today, timelineDate, timelineDates]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 

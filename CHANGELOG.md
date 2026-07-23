@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a18] - 2026-07-23
+
 ### Security
 - The ephemeral sandbox fallback (used when the persistent vaf-sandbox
   container is unavailable) now carries the same hardening as the persistent

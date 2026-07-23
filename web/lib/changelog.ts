@@ -31,6 +31,35 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a18',
+    date: '2026-07-23',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'A new Overview in the Logs window shows, at a glance, whether everything is protected: the tamper-proof audit log, the code sandbox, the firewall, user isolation, your channels, the tool guardrails, and your installed skills. It stays green when all is well, and turns amber or red with the actual reason when something needs your attention.',
+          'Installed skills are now re-checked on a schedule, not just when you add them. If a skill is changed to something dangerous after install, it is automatically quarantined (hidden from the agent) until you review it - delete it, or clear it as a false alarm by confirming with your 2FA code.',
+          'The Logs button now shows a notification dot when something new lands in the security log - a blocked sign-in, a rejected message sender - so you notice without keeping the window open. It clears once you have looked.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Admins can see what the background agent has been doing per user (what it asked, what it is waiting on, and which tools its last run used) and which helper tasks are running right now, all from the new Logs Overview.',
+          'The code sandbox is more isolated: temporary package installs are cleaned up after each run instead of piling up, and the fallback sandbox is locked down to the same degree as the main one.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'The desktop window no longer gets stuck looping between the app and the login page after a session expires.',
+          'On Linux, the desktop window recovers automatically after a graphics-driver crash instead of staying dead.',
+          'Chat no longer shows out-of-order date separators (like July 21 / 22 / 22 / 21) around background system notes.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a8',
     date: '2026-07-06',
     sections: [

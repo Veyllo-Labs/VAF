@@ -75,10 +75,11 @@ docker compose -f docker-compose.memory.yml up -d
 | **Memory** | 512MB |
 | **CPU** | 0.5 Cores |
 | **Network** | `vaf-sandbox-network` (isolated bridge). Cannot reach postgres/redis/gotenberg/tts/stt by hostname. Outbound internet (pip install) and Tool Bridge back-channel (`host.docker.internal`) still work. |
-| **Filesystem** | Isolated (no host access). Packages installed via `pip` persist in the container between executions (by design, for performance). |
+| **Filesystem** | Isolated (no host access). Packages installed via the `packages` parameter are TEMPORARY: pip runs with `--target` into the run's private `_pkgs` dir (plus `--no-cache-dir` so the shared pip cache does not grow), `PYTHONPATH`/`PIP_TARGET` point there for the run - `PIP_TARGET` also redirects code that shells out to pip itself - and the whole directory is deleted with the per-run workspace. Nothing accumulates in the shared container across runs or users. |
 | **Workspace** | Per-execution temp dir under `/tmp/vaf_*` (unique UUID per run, auto-deleted after). Container `working_dir` is `/workspace` (persistent volume), but code always executes in the per-run `/tmp/vaf_*` dir. |
 | **Capabilities** | `cap_drop: ALL`, `no-new-privileges: true` — container has no Linux capabilities beyond default isolation. |
 | **Module blocking** | None at Python level — `subprocess`, `socket`, `os` are importable. Constraints are enforced by Docker process/filesystem isolation, network isolation, and resource limits, not by a Python import blocklist. |
+| **Ephemeral fallback** | When the persistent container is unavailable, executions fall back to a per-instance ephemeral container that carries the SAME hardening: `--cap-drop ALL`, `no-new-privileges`, and its own isolated bridge network `vaf-sandbox-ephemeral` (auto-created; a separate name because docker compose refuses to adopt a same-name network it did not create) plus the `host.docker.internal` alias for the Tool Bridge. If the network cannot be provided, the container starts degraded (capabilities still dropped, default bridge) with a loud warning. Never `--network none`: outbound pip and the Tool Bridge are designed features. |
 
 ### Performance
 

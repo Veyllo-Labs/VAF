@@ -75,7 +75,10 @@ def derive_sandbox_status(docker_available: bool,
       ok      -> docker up; execution is container-enforced. Two flavors:
                  the persistent container is running (hardening live-verified),
                  or it is not running and executions fall back to ephemeral
-                 `--network none` containers (still enforced, just slower).
+                 containers carrying the same hardening (cap-drop ALL,
+                 no-new-privileges, own isolated bridge network - never
+                 `--network none`: outbound pip and the Tool Bridge are
+                 designed features, see docs/security/SANDBOXING.md).
       warn    -> docker daemon down/missing: sandboxed execution is BLOCKED.
                  Fail-closed (nothing escapes to the host), but the feature is
                  unavailable - attention, not critical.

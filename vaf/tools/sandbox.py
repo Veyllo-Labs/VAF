@@ -10,6 +10,31 @@ from typing import Optional, Tuple, List
 
 logger = logging.getLogger("vaf.sandbox")
 
+# Own bridge network for ephemeral fallback containers. Deliberately NOT the
+# compose-managed "vaf-sandbox-network": docker compose refuses to adopt a
+# same-name network it did not create (label mismatch), so sharing the name
+# would break a later `docker compose up`. Same isolation semantics: no route
+# to other VAF service networks, outbound internet stays available (pip).
+EPHEMERAL_NETWORK = "vaf-sandbox-ephemeral"
+
+
+def ephemeral_hardening_flags(network: Optional[str]) -> List[str]:
+    """Docker-run flags mirroring the persistent vaf-sandbox hardening
+    (cap_drop ALL + no-new-privileges + isolated bridge + host-gateway alias
+    for the Tool Bridge). Pure so tests can assert the exact flag set.
+    `network=None` builds the degraded set (caps only) for the retry path."""
+    flags = [
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true",
+    ]
+    if network:
+        flags += [
+            "--network", network,
+            "--add-host", "host.docker.internal:host-gateway",
+        ]
+    return flags
+
+
 class DockerSandbox:
     """
     Provides an isolated execution environment using Docker.
@@ -92,22 +117,59 @@ class DockerSandbox:
             logger.info(f"Image {self.image} not found locally, pulling...")
             subprocess.run(["docker", "pull", self.image], check=True, **_win_flags)
 
-        # Run container with resource limits and auto-remove
-        cmd = [
+        # Run container with resource limits, auto-remove, and the same
+        # hardening the persistent compose sandbox got in its network-isolation
+        # hardening pass - this fallback path was skipped back then, so
+        # ephemeral containers landed on the DEFAULT bridge with full caps
+        # (concurrent sandboxes of different users could reach each other).
+        network = self._ensure_isolated_network(_win_flags)
+        base_cmd = [
             "docker", "run", "-d", "--rm",
             "--name", self.container_name,
             "--memory", "512m",  # Limit memory
             "--cpus", "0.5",     # Limit CPU
-            self.image, "sleep", "infinity"
         ]
+        tail = [self.image, "sleep", "infinity"]
 
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, **_win_flags)
+            subprocess.run(base_cmd + ephemeral_hardening_flags(network) + tail,
+                           check=True, stdout=subprocess.DEVNULL, **_win_flags)
             self.is_running = True
             time.sleep(1)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to start sandbox container: {e}")
-            raise RuntimeError(f"Could not start container: {e}")
+        except subprocess.CalledProcessError:
+            # Degraded retry: keep the capability hardening (the bigger win),
+            # drop only the network flags. Loud on purpose - if this fires the
+            # cross-container isolation is NOT in effect.
+            logger.warning(
+                "Sandbox start with isolated network failed; retrying WITHOUT "
+                "network isolation (default bridge). Check the %s network.",
+                network or EPHEMERAL_NETWORK,
+            )
+            try:
+                subprocess.run(base_cmd + ephemeral_hardening_flags(None) + tail,
+                               check=True, stdout=subprocess.DEVNULL, **_win_flags)
+                self.is_running = True
+                time.sleep(1)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to start sandbox container: {e}")
+                raise RuntimeError(f"Could not start container: {e}")
+
+    def _ensure_isolated_network(self, _win_flags: dict) -> Optional[str]:
+        """Return the ephemeral isolation network, creating it if missing.
+        None (-> degraded caps-only flags) if docker cannot provide it."""
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, **_win_flags}
+        try:
+            if subprocess.run(["docker", "network", "inspect", EPHEMERAL_NETWORK],
+                              **kwargs).returncode == 0:
+                return EPHEMERAL_NETWORK
+            # Racing creators are fine: the loser's create fails, the re-inspect wins.
+            subprocess.run(["docker", "network", "create", EPHEMERAL_NETWORK], **kwargs)
+            if subprocess.run(["docker", "network", "inspect", EPHEMERAL_NETWORK],
+                              **kwargs).returncode == 0:
+                return EPHEMERAL_NETWORK
+        except Exception as e:
+            logger.warning(f"Could not ensure sandbox network: {e}")
+        return None
 
     def stop(self):
         """Kills and removes the container."""

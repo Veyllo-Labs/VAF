@@ -42,7 +42,7 @@ import time
 import uuid
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from vaf.tools.base import BaseTool
 
 logger = logging.getLogger("vaf.python_sandbox")
@@ -108,7 +108,11 @@ class PythonSandboxTool(BaseTool):
             "packages": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional: pip packages to install before running (e.g., ['numpy', 'pandas'])"
+                "description": (
+                    "Optional: pip packages to install before running (e.g., ['numpy', 'pandas']). "
+                    "Installs are TEMPORARY: they go into this run's private directory and are "
+                    "deleted with it after the run - nothing accumulates in the shared sandbox."
+                )
             },
             "export_files": {
                 "type": "array",
@@ -289,6 +293,45 @@ class PythonSandboxTool(BaseTool):
 
         return None, []
 
+    # ------------------------------------------------------------------ #
+    #  Temporary per-run package installs                                   #
+    # ------------------------------------------------------------------ #
+    # Packages land in {workdir}/_pkgs via pip --target, and PYTHONPATH /
+    # PIP_TARGET point there for the run. The existing end-of-run
+    # `rm -rf {workdir}` then removes them together with the workspace, so
+    # installs never accumulate in the SHARED persistent container (before
+    # this, every install went into global site-packages and persisted for
+    # all users until the container was recreated). PIP_TARGET also catches
+    # code that shells out to pip itself.
+
+    _PKG_SPEC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\[\],~=<>!-]*$")
+
+    @staticmethod
+    def _pkgs_dir(workdir: str) -> str:
+        return f"{workdir}/_pkgs"
+
+    @classmethod
+    def _validate_packages(cls, packages: List[str]) -> Optional[str]:
+        """Return an error message if any spec is not a plain pip requirement
+        (defense against shell metacharacters riding in via the model)."""
+        for p in packages:
+            if not isinstance(p, str) or len(p) > 120 or not cls._PKG_SPEC_RE.match(p):
+                return f"Invalid package spec: {p!r}"
+        return None
+
+    @classmethod
+    def _pip_install_cmd(cls, packages: List[str], workdir: str) -> str:
+        pkg_list = " ".join(packages)
+        return (
+            f"pip install --quiet --disable-pip-version-check --no-cache-dir "
+            f"--target {cls._pkgs_dir(workdir)} {pkg_list}"
+        )
+
+    @classmethod
+    def _run_env_prefix(cls, workdir: str, extra_pythonpath: str = "") -> str:
+        pp = f"{extra_pythonpath}:{cls._pkgs_dir(workdir)}" if extra_pythonpath else cls._pkgs_dir(workdir)
+        return f"PIP_TARGET={cls._pkgs_dir(workdir)} PYTHONPATH={pp}"
+
     def _run_with_bridge(
         self,
         code: str,
@@ -313,7 +356,7 @@ class PythonSandboxTool(BaseTool):
         b64_code = base64.b64encode(code.encode()).decode()
         cmd = (
             f"cd {workdir} && "
-            f"PYTHONPATH={workdir} {env_prefix} "
+            f"{self._run_env_prefix(workdir, extra_pythonpath=workdir)} {env_prefix} "
             f"sh -c 'echo {b64_code} | base64 -d | python3'"
         )
         return execute_fn(cmd, timeout=timeout)
@@ -510,12 +553,15 @@ class PythonSandboxTool(BaseTool):
                 logger.warning("python_sandbox: workspace creation failed (workdir=%s): %s", workdir, err)
                 return f"[ERROR] Failed to create workspace: {err}"
 
-            # Step 4: Install packages if requested
+            # Step 4: Install packages if requested - into the run's private
+            # _pkgs dir, removed with the workdir in Step 6 (temporary by design).
             if packages:
-                pkg_list = " ".join(packages)
-                logger.info(f"Installing packages: {pkg_list}")
+                bad = self._validate_packages(packages)
+                if bad:
+                    return f"[ERROR] {bad}"
+                logger.info(f"Installing packages (temporary, per-run): {' '.join(packages)}")
                 exit_code, out, err = execute_fn(
-                    f"pip install --quiet --disable-pip-version-check {pkg_list}",
+                    self._pip_install_cmd(packages, workdir),
                     timeout=120
                 )
                 if exit_code != 0:
@@ -530,7 +576,10 @@ class PythonSandboxTool(BaseTool):
             else:
                 # Standard execution: Base64 encode to avoid shell escaping issues
                 b64_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
-                safe_cmd = f"cd {workdir} && echo {b64_code} | base64 -d | python3"
+                safe_cmd = (
+                    f"cd {workdir} && {self._run_env_prefix(workdir)} "
+                    f"sh -c 'echo {b64_code} | base64 -d | python3'"
+                )
                 logger.debug(f"Executing: {code[:100]}...")
                 exit_code, stdout, stderr = execute_fn(safe_cmd, timeout=timeout)
 

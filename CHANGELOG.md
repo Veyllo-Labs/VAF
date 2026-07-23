@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+- The ephemeral sandbox fallback (used when the persistent vaf-sandbox
+  container is unavailable) now carries the same hardening as the persistent
+  one: all Linux capabilities dropped, no-new-privileges, and its own isolated
+  bridge network instead of Docker's default bridge - previously two
+  concurrent ephemeral sandboxes (for example of two different users) could
+  reach each other over the shared default bridge.
+- Sandbox pip installs are now temporary and per-run: packages requested via
+  the tool's packages parameter (and even in-code pip installs, redirected via
+  PIP_TARGET) land in the run's private directory and are deleted with it, so
+  nothing accumulates in the shared sandbox container across runs or users;
+  package specs are validated before reaching the shell and the shared pip
+  cache no longer grows.
+
 ### Fixed
 - **The desktop window no longer navigation-loops between the dashboard and the
   login page.** With an expired auth cookie but a still-valid token in browser

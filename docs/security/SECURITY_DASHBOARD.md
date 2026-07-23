@@ -62,15 +62,20 @@ truncated to 8 characters for display; the full scope UUIDs never leave the
 backend. This aggregate must never be exposed on a per-user route (see
 [USER_ISOLATION.md](USER_ISOLATION.md)).
 
-### Known gap: ephemeral sandbox network
+### Ephemeral sandbox fallback (gap closed)
 
 When the persistent `vaf-sandbox` container is not running, execution falls
 back to ephemeral containers (`DockerSandbox` in `vaf/tools/sandbox.py`).
-These carry the same memory/CPU limits, but they are started without a
-`--network` flag, i.e. on Docker's default bridge, NOT on the isolated
-`vaf-sandbox-network` and not network-less. The sandbox module still reports
-`ok`/`ephemeral_on_demand` because execution remains container-enforced; do
-not document the ephemeral path as `--network none`.
+Historically these started without a `--network` flag (Docker's default
+bridge) and with full capabilities - the compose hardening pass never touched
+this path. The fallback now mirrors the persistent container: `--cap-drop
+ALL`, `no-new-privileges`, its own isolated bridge (`vaf-sandbox-ephemeral`,
+auto-created; a separate name because docker compose refuses to adopt a
+same-name network it did not create) and the `host.docker.internal` alias for
+the Tool Bridge. If the network cannot be provided the start degrades loudly
+to caps-only. Deliberately never `--network none`: outbound pip and the Tool
+Bridge back-channel are designed features (see
+[SANDBOXING.md](SANDBOXING.md)). Guarded by `tests/test_sandbox_hardening.py`.
 
 ---
 

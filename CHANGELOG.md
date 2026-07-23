@@ -27,6 +27,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `run_async`.
 
 ### Security
+- Dependency updates closing all 13 open Dependabot alerts: Next.js 16.2.9 to
+  16.2.11 (nine advisories, incl. SSRF in Server Actions and in rewrites,
+  middleware bypass with Turbopack, Server Action DoS and cache confusion),
+  sharp 0.34.5 to 0.35.3 (inherited libvips CVEs, now forced via an override
+  because Next.js still pins the vulnerable minor), brace-expansion 1.1.14 to
+  1.1.16 (exponential-time expansion DoS, dev-only), DOMPurify 3.4.11 to
+  3.4.12 (`CUSTOM_ELEMENT_HANDLING` bypass) and protobufjs 7.6.4 to 7.6.5 in
+  the WhatsApp bridge (infinite loop in `.proto` option parsing).
 - The session token that rides in the WebSocket handshake URL
   (`/ws?token=<jwt>`, unavoidable because WebSockets cannot send an
   Authorization header) is now masked to `token=***` in the server access log

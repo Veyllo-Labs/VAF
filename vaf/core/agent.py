@@ -712,8 +712,13 @@ class Agent:
             return True
 
     def __init__(self, verbose=False, register_signals=True, config_overrides=None, run_kind=None,
-                 host_audio=False):
+                 host_audio=False, system_prompt=None):
         self.verbose = verbose
+        # Embedder persona override (docs/EMBEDDING.md): when set (via the
+        # library facade Agent(system_prompt=...)), it REPLACES the on-disk
+        # admin Soul in the system prompt for this instance; None keeps the
+        # Soul path (desktop/server product). Read by SystemPromptManager.
+        self._system_prompt_override = (str(system_prompt) if system_prompt else None)
         # Per-instance run kind: 'thinking' | 'automation' | 'chat' | None.
         # Tool registration and dispatch decisions MUST use this instance truth,
         # never the process-global env vars: env is shared across threads, so a

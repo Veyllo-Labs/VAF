@@ -11,6 +11,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+- Library embedders can now set the agent's persona directly:
+  `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
+  for that instance only, while the engine's technical instructions are kept.
+  Previously the persona was a global on-disk file with no public API.
+  Documented in EMBEDDING.md with a runnable example (examples/06_custom_persona.py).
+- EMBEDDING.md now has a "Sub-agents as a library" section explaining that
+  sub-agents run inline in a bare library process, while their windowed/async
+  modes and the coder's sandbox need the full product's services.
+
+### Fixed
+- Corrected stale embedder docs: the FAQ said VAF was "not yet on PyPI" (it is,
+  as a prerelease) and three docs claimed "no async API" despite the shipped
+  `run_async`.
+
 ### Security
 - The session token that rides in the WebSocket handshake URL
   (`/ws?token=<jwt>`, unavoidable because WebSockets cannot send an

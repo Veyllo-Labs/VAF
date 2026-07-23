@@ -24,9 +24,11 @@ def test_facade_exports_exactly_the_documented_surface():
 
 def test_agent_constructor_signature_is_stable():
     params = list(inspect.signature(Agent.__init__).parameters.values())[1:]
-    assert [p.name for p in params] == ["config", "verbose", "user_scope", "session"]
-    config, verbose, user_scope, session = params
+    assert [p.name for p in params] == ["config", "system_prompt", "verbose", "user_scope", "session"]
+    config, system_prompt, verbose, user_scope, session = params
     assert config.default is None
+    assert system_prompt.kind is inspect.Parameter.KEYWORD_ONLY
+    assert system_prompt.default is None
     assert verbose.kind is inspect.Parameter.KEYWORD_ONLY
     assert verbose.default is False
     assert user_scope.kind is inspect.Parameter.KEYWORD_ONLY
@@ -131,11 +133,12 @@ class _StubCore:
 
     calls: list = []
 
-    def __init__(self, verbose=False, register_signals=True, config_overrides=None):
+    def __init__(self, verbose=False, register_signals=True, config_overrides=None, system_prompt=None):
         self.api_backend = None
         self.llm = None
         self.use_server = False
         self.tools = {}
+        self._system_prompt_override = system_prompt
 
     def init_chat(self):
         type(self).calls.append("init_chat")

@@ -58,6 +58,12 @@ class Agent:
         ``provider`` ("local" | "openai" | "anthropic" | "google" | "deepseek" |
         "openrouter" | "veyllo"), ``model``, ``api_key_<provider>``, ``n_ctx``,
         ``temperature``. See vaf/core/config.py for the full schema.
+    system_prompt:
+        Optional persona/instructions for THIS agent. Replaces the on-disk
+        admin "Soul" in the system prompt (the engine's technical
+        instructions are kept); nothing is written to disk. None falls back
+        to the machine's Soul, or a neutral built-in identity if none exists.
+        See docs/EMBEDDING.md "Setting the persona".
     verbose:
         Forwarded to the core agent (extra diagnostic output).
     """
@@ -66,11 +72,17 @@ class Agent:
         self,
         config: Optional[dict] = None,
         *,
+        system_prompt: Optional[str] = None,
         verbose: bool = False,
         user_scope: Optional[str] = None,
         session: Optional[str] = None,
     ):
         self._config = dict(config) if config else None
+        # Persona for THIS agent: replaces the on-disk admin "Soul" in the
+        # system prompt (the engine's technical instructions are kept). None
+        # falls back to the machine's Soul, or a neutral built-in if none.
+        # See docs/EMBEDDING.md "Setting the persona".
+        self._system_prompt = str(system_prompt) if system_prompt else None
         self._verbose = verbose
         self._agent: Optional[CoreAgent] = None
         self._pending_tools: list = []
@@ -174,6 +186,7 @@ class Agent:
                 verbose=self._verbose,
                 register_signals=False,
                 config_overrides=self._config,
+                system_prompt=self._system_prompt,
             )
             # Per-instance tools go in BEFORE init_chat so the system prompt
             # and the tool schemas the model sees include them. Mirror the

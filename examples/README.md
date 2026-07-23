@@ -16,6 +16,7 @@ venv/bin/python examples/01_hello_agent.py
 | [03_stream_json_subprocess.py](03_stream_json_subprocess.py) | Driving VAF as a subprocess via `vaf prompt --output-format stream-json` and parsing the NDJSON - the pattern for non-Python integrations |
 | [04_inline_tool.py](04_inline_tool.py) | Per-instance tool registration with `agent.add_tool()` - no package, no file drop-in |
 | [05_chatbot_with_memory.py](05_chatbot_with_memory.py) | A chatbot that survives restarts: `save_session()` + `Agent(session=...)` |
+| [06_custom_persona.py](06_custom_persona.py) | Give the agent its own voice and instructions with `Agent(system_prompt=...)` |
 | [vaf_example_tool/](vaf_example_tool/) | A complete installable pip package that adds a custom tool through the `vaf.tools` entry-point group |
 
 ## Prerequisites

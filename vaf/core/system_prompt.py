@@ -559,61 +559,83 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
 
         _log_soul("build_prompt persona block entered")
 
-        # Attempt to load Admin Persona (Global for all users)
-        persona_loaded = False
-        try:
-            from vaf.auth.user_workspace import get_user_workspace
-            # Soul and Identity bind to the Admin account
-            ws = get_user_workspace("admin")
-            identity = ws.get_identity()
-            soul = ws.get_soul()
-            
-            # Construct identity
-            persona_parts = []
-            # Use the name from identity.json - this is the Soul's name, not "AI" or "VAF"
-            soul_name = identity.get('name') or 'Assistant'  # Neutral fallback, not "VAF" or "AI"
-            soul_emoji = identity.get('emoji') or ''
-            # Combine name and emoji in one clean line: "You are **Nobel933DarkBlue** 🧿."
-            if soul_emoji:
-                persona_parts.append(f"You are **{soul_name}** {soul_emoji}.")
-            else:
-                persona_parts.append(f"You are **{soul_name}**.")
-            persona_parts.append(
-                "\nYour Soul determines the way and voice of every answer. "
-                "Every answer must be thought through with the Soul – in this personality, not as a generic assistant. "
-                "Do not describe yourself as an 'AI assistant', 'trained to help', or list generic capabilities; "
-                "answer only in the voice and style defined in your Soul:\n\n"
-            )
-            persona_parts.append("## Your Personality & Rules (Soul)\n")
-            persona_parts.append(soul)
-            
-            # Technical instructions
-            persona_parts.append("\n## Technical Instructions")
-            persona_parts.append("### Thinking Format")
-            persona_parts.append("IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:")
-            persona_parts.append("```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```")
+        # Technical instructions the ENGINE needs (thinking format, optional
+        # action tag, action-verification, working-memory hygiene). Appended
+        # after the persona in BOTH the Soul path and the embedder-override
+        # path, so an override replaces only the personality, never the
+        # mechanics - and the two paths can never drift.
+        def _technical_instructions() -> list:
+            tp = [
+                "\n## Technical Instructions",
+                "### Thinking Format",
+                "IMPORTANT: When you think through a problem, wrap your thoughts in `<think>` tags:",
+                "```\n<think>\nYour internal reasoning here...\n</think>\n\nYour actual response to the user here.\n```",
+            ]
             if _action_on and not _gemma4:
-                persona_parts.append("\n### Action Declaration (when you use a tool)")
-                persona_parts.append("When you use a tool, briefly declare it first: emit one short `<Action>` block right after `</think>` and immediately before the tool call. For example:\n"
+                tp.append("\n### Action Declaration (when you use a tool)")
+                tp.append("When you use a tool, briefly declare it first: emit one short `<Action>` block right after `</think>` and immediately before the tool call. For example:\n"
                     "```\n<think>\n...your reasoning...\n</think>\n<Action>\nUsing web_search to find the current Berlin weather.\n</Action>\n```\n"
                     "Then make the tool call. The `<Action>` block is ONE short sentence naming the tool and the goal; it is shown separately in the UI. Omit it when you reply without using a tool.")
-            persona_parts.append("\n### Action Verification")
-            persona_parts.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
+            tp.append("\n### Action Verification")
+            tp.append("**NEVER claim an action was done unless you actually called a tool that performs it.** "
                 "update_working_memory/update_intent do NOT rename, send, or delete. No tool call = no success. "
                 "If you planned to rename a file but did not call move_file or librarian_agent, say you will do it and call the tool – do NOT say \"Done\" or \"Ich habe die Datei umbenannt\".")
-            persona_parts.append(
+            tp.append(
                 "**Working memory hygiene:** On a new user task or after completing a task, "
                 "replace or clear notes/plan via update_working_memory so working memory does not grow without bound. "
                 "Use tasks (update_working_memory(add_task='...'), mark_task_done) for checkable steps; done tasks are auto-removed after 12h. "
                 "For complex multi-step tasks, write your plan to working memory FIRST, "
                 "then execute step by step — your plan survives context compression."
             )
+            return tp
+
+        persona_loaded = False
+
+        # Embedder persona override (docs/EMBEDDING.md "Setting the persona"):
+        # Agent(system_prompt="...") sets self._system_prompt_override on the
+        # engine; it REPLACES the on-disk admin Soul for THIS instance only.
+        # The desktop product never sets it and keeps the Soul path below.
+        _persona_override = getattr(self.agent, "_system_prompt_override", None)
+        if _persona_override and str(_persona_override).strip():
+            persona_parts = [str(_persona_override).strip(), *_technical_instructions()]
             parts.append("<identity>\n" + "\n".join(persona_parts) + "\n</identity>")
             persona_loaded = True
-            soul_len = len(soul) if soul else 0
-            _log_soul(f"Soul/identity loaded name={soul_name} soul_len={soul_len}")
-        except Exception as e:
-            _log_soul(f"Soul/identity load failed: {e}")
+            _log_soul("Embedder system_prompt override applied (Soul bypassed)")
+
+        # Attempt to load Admin Persona (Global for all users)
+        if not persona_loaded:
+            try:
+                from vaf.auth.user_workspace import get_user_workspace
+                # Soul and Identity bind to the Admin account
+                ws = get_user_workspace("admin")
+                identity = ws.get_identity()
+                soul = ws.get_soul()
+
+                # Construct identity
+                persona_parts = []
+                # Use the name from identity.json - this is the Soul's name, not "AI" or "VAF"
+                soul_name = identity.get('name') or 'Assistant'  # Neutral fallback, not "VAF" or "AI"
+                soul_emoji = identity.get('emoji') or ''
+                # Combine name and emoji in one clean line: "You are **Nobel933DarkBlue** 🧿."
+                if soul_emoji:
+                    persona_parts.append(f"You are **{soul_name}** {soul_emoji}.")
+                else:
+                    persona_parts.append(f"You are **{soul_name}**.")
+                persona_parts.append(
+                    "\nYour Soul determines the way and voice of every answer. "
+                    "Every answer must be thought through with the Soul – in this personality, not as a generic assistant. "
+                    "Do not describe yourself as an 'AI assistant', 'trained to help', or list generic capabilities; "
+                    "answer only in the voice and style defined in your Soul:\n\n"
+                )
+                persona_parts.append("## Your Personality & Rules (Soul)\n")
+                persona_parts.append(soul)
+                persona_parts.extend(_technical_instructions())
+                parts.append("<identity>\n" + "\n".join(persona_parts) + "\n</identity>")
+                persona_loaded = True
+                soul_len = len(soul) if soul else 0
+                _log_soul(f"Soul/identity loaded name={soul_name} soul_len={soul_len}")
+            except Exception as e:
+                _log_soul(f"Soul/identity load failed: {e}")
 
         if not persona_loaded:
             _log_soul("Using fallback identity (soul.md not found)")

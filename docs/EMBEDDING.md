@@ -133,6 +133,38 @@ docs - a CI guard keeps the constants in sync with the engine.
 
 ---
 
+## Setting the persona (system prompt)
+
+Pass `system_prompt=` to give the agent its identity and instructions:
+
+```python
+from vaf import Agent
+
+agent = Agent(
+    config={"provider": "openai", "api_key_openai": "sk-..."},
+    system_prompt=(
+        "You are Aria, a terse code-review assistant. "
+        "Answer in short, direct bullet points. Never apologise."
+    ),
+)
+print(agent.run("Review this: def add(a, b): return a - b"))
+```
+
+`system_prompt` replaces VAF's built-in on-disk persona (the desktop product's
+"Soul") for THIS agent only; nothing is written to disk. The engine's own
+technical instructions (the `<think>` format, action verification, working-
+memory hygiene) are always kept, so tools and streaming behave normally - you
+are setting the personality and task framing, not rewiring the engine.
+
+When you omit `system_prompt`, the agent uses the machine's Soul file
+(`~/.vaf/users/admin/soul.md`); if none exists yet, VAF materializes its
+default persona there on first use (a neutral built-in identity is only the
+last resort when that load fails). For an embedded app you almost always want
+to set `system_prompt` explicitly, so your agent's voice does not depend on
+machine-local state.
+
+---
+
 ## Choosing a backend: local vs API
 
 Every `Agent` needs a model backend; the `provider` key picks it. Both lanes
@@ -324,6 +356,37 @@ What an embedded agent can and cannot do on the host - the short version of
 
 ---
 
+## Sub-agents as a library
+
+VAF's heavy sub-agents (`coding_agent`, `research_agent`, `document_agent`,
+`librarian_agent`, `browser_agent`) are tools the model can call, but they are
+built for the full product and only partially apply in a bare library process.
+What to expect:
+
+- **Inline execution works.** In a headless library there is no terminal to
+  spawn and no web server to stream to, so a sub-agent call runs INLINE, in the
+  same process, and returns its result to your `run()` turn. This is the
+  supported library path and needs nothing extra.
+- **The product's async/windowed modes do not apply.** In the desktop/server
+  product a sub-agent can open its own terminal window or a child process that
+  streams back to the web server; those paths need that infrastructure (a
+  display plus `vaf` on PATH, or the running web server). On a headless host the
+  spawn simply fails and falls back to inline, so leave
+  `sub_agents_in_separate_terminals` at its default.
+- **The coder needs a sandbox.** The coding agent's shell needs bubblewrap or
+  Docker; its test runner and `python_sandbox` need Docker specifically (see
+  [Security posture](#security-posture)). Without them, those steps return an
+  error string and the run continues.
+- **Memory/research depth needs services.** `research_agent` and RAG-backed
+  work reach for the memory stack (PostgreSQL + Redis); without it they fail
+  soft. Install `vaf[memory]` and run that stack if you need it.
+
+Rule of thumb for a library embedding: prefer your own tools (`add_tool`) on
+the main agent; treat sub-agents as a bonus that works inline and gets richer
+once you add the product's services.
+
+---
+
 ## Multi-tenant embedding: `user_scope`
 
 To serve multiple end users from your application, tell each `Agent`
@@ -472,7 +535,8 @@ Three companion pages cover the operational side of embedding:
 **Concurrency contract (short version):** one `Agent` is one conversation and
 is effectively single-threaded - drive it from one thread at a time. For
 parallelism, create multiple `Agent` instances (each in its own thread is
-fine). There is no async API today; `run()` blocks.
+fine). `run()` blocks; `await run_async()` wraps it in a thread executor (see
+[Async applications](#async-applications)) - there is no natively async engine.
 
 ### More extension points
 
@@ -506,7 +570,7 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `BaseTool` - the tool contract.

@@ -55,6 +55,7 @@ Network clients must authenticate via JWT tokens. The `AuthMiddleware` enforces 
 - **Network Clients**: Must present a valid JWT via `Authorization: Bearer <token>` header or `vaf_token` cookie.
 - **Auth-Exempt Paths**: Login, bootstrap, and static asset endpoints are accessible without a token.
 - **2FA Enforcement**: If `local_network_require_2fa` is enabled, tokens from users who haven't completed 2FA setup are rejected with HTTP 403.
+- **WebSocket token in the URL, redacted from logs**: a WebSocket handshake cannot carry an `Authorization` header, so the `/ws` client passes its JWT in the query string (`/ws?token=<jwt>`). uvicorn's access log would otherwise print that live token in full (terminal and `tray_debug`); a redaction filter (`RedactTokenFilter` / `redacted_uvicorn_log_config` in `vaf/core/log_helper.py`, wired at every uvicorn start in `tray.py`) masks it to `token=***` (and the same for `access_token` / `api_key` / `password`). The URL still authenticates; only the log line is masked.
 - **User Context Propagation**: On successful authentication, the middleware populates `request.state` with both individual attributes and a consolidated `user` dict for downstream route handlers (see below).
 
 #### `request.state` Population

@@ -6,14 +6,62 @@ Shared log directory and domain log writers for VAF.
 Consolidates logs into one file per domain (rag, memory, webui, prompt, headless, backend) with timestamps.
 Respects Config.debug_logs_enabled: when False, no domain logs and no queue.log are written.
 """
+import copy
 import hashlib
 import json
+import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from vaf.core.platform import Platform
+
+# ── Access-log secret redaction ───────────────────────────────────────────────
+# WebSockets cannot carry an Authorization header at the handshake, so the JWT
+# rides in the /ws?token=<jwt> query string. uvicorn's access log then prints
+# the full request line, leaking a live (short-lived, admin) session token into
+# the terminal and tray_debug log. Whoever reads the log could replay the token
+# until it expires. Mask it at the logging boundary (the URL still works; only
+# the log is redacted). Also covers access_token / api_key / password if they
+# ever appear in a logged URL.
+_SECRET_QS_RE = re.compile(r'((?:token|access_token|api_key|apikey|password)=)[^&"\s]+', re.IGNORECASE)
+
+
+def _redact_secrets(value: Any) -> Any:
+    return _SECRET_QS_RE.sub(r'\1***', value) if isinstance(value, str) else value
+
+
+class RedactTokenFilter(logging.Filter):
+    """Logging filter that masks secret query params in a record's message and
+    args (uvicorn access records carry the request line in record.args)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = _SECRET_QS_RE.sub(r'\1***', record.msg)
+            if isinstance(record.args, tuple):
+                record.args = tuple(_redact_secrets(a) for a in record.args)
+            elif isinstance(record.args, dict):
+                record.args = {k: _redact_secrets(v) for k, v in record.args.items()}
+        except Exception:
+            pass  # logging must never raise
+        return True
+
+
+def redacted_uvicorn_log_config() -> Dict[str, Any]:
+    """uvicorn's default LOGGING_CONFIG with the token-redaction filter wired
+    onto the access and default handlers. Passed as uvicorn.Config(log_config=)
+    so the mask survives uvicorn's own dictConfig at server start."""
+    from uvicorn.config import LOGGING_CONFIG
+    cfg = copy.deepcopy(LOGGING_CONFIG)
+    cfg.setdefault("filters", {})["redact_secrets"] = {
+        "()": "vaf.core.log_helper.RedactTokenFilter",
+    }
+    for handler in cfg.get("handlers", {}).values():
+        handler.setdefault("filters", []).append("redact_secrets")
+    return cfg
 
 # Domains get a single {domain}.log file each; use prefixes like [COMPACTION], [EMIT] inside messages.
 ALLOWED_DOMAINS = ("rag", "memory", "webui", "prompt", "headless", "backend", "attach")

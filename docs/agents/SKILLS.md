@@ -306,6 +306,28 @@ Each finding has a severity; the scan yields a score (0–100) and a level:
 This is inspired conceptually by NVIDIA SkillSpector's risk taxonomy; the
 implementation is native to VAF (no third-party code or dependency).
 
+### Content hashing (integrity)
+
+The scanner module also exposes a small, dependency-free content-hashing
+facility (stdlib `hashlib`) for skill integrity fingerprints and any other
+"did these bytes change / do they match" need:
+
+- `hash_bytes(data, algo)` / `hash_text(text, algo)` - hex digest of raw bytes
+  or a string.
+- `hash_skill_folder(folder, algo)` - a deterministic fingerprint of a skill:
+  every regular file (binaries included, unlike the text-only scan) folded in
+  as a canonical length-prefixed record in sorted path order, so the same
+  content always yields the same hash and any changed, added, removed, renamed
+  or moved byte changes it. Symlinks and paths resolving outside the folder are
+  skipped; files are streamed, so memory stays bounded.
+- `algo` accepts SHA-2 (`sha256` default, `sha512`) and SHA-3 (`sha3_256`,
+  `sha3_512`), resolved via `resolve_hash_algo`; the allow-list is strong-only
+  (md5/sha1 raise), because an integrity hash must not be downgradable.
+
+These are standalone helpers - not yet folded into the scan result or the
+manifest (that would change a consumed contract); available for a later
+integrity/tamper-pinning use. Guarded by `tests/test_scanner_hashing.py`.
+
 ### Post-install lifecycle: re-scan, quarantine, resolution
 
 The install-time gate cannot catch a skill whose files change AFTER
@@ -391,7 +413,7 @@ Components: `web/components/settings/SkillsEditor.tsx`,
 |------|------|
 | `vaf/skills/skill_md.py` | SKILL.md parser; `derive_skill_id`; in-memory text validator. |
 | `vaf/skills/templates.py` | Discovery, `list_skills`, `reload_skills`. |
-| `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`; `emit_skill_security_event`. |
+| `vaf/skills/scanner.py` | Static security scanner; `SkillScanBlocked`; `emit_skill_security_event`; content-hashing helpers (`hash_bytes`/`hash_text`/`hash_skill_folder`, SHA-2/SHA-3). |
 | `vaf/skills/rescan.py` | Periodic post-install re-scan; auto-quarantine on worsened-to-high. |
 | `vaf/core/skills_registry.py` | Manifest, scoping, quarantine gate, `save_skill_md`, `import_skill_zip`, scan gate. |
 | `vaf/api/security_routes.py` | Admin resolution endpoints (scan/acknowledge/isolate/restore/delete). |

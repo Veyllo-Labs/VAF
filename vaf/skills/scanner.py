@@ -21,9 +21,15 @@ It returns findings + a 0-100 risk score + a level. The caller gates on it:
 
 Static only: regex/heuristics. Never executes anything. False positives are
 possible by design — hence the admin override on the high block.
+
+It also exposes a small content-hashing facility (SHA-2 and SHA-3) used for
+skill integrity fingerprints - see the "content hashing" section below. Like
+the scan itself it only reads bytes, never executes, and pulls in no
+dependency (hashlib is stdlib).
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -243,6 +249,97 @@ def scan_skill_folder(folder: Path | str) -> Dict[str, Any]:
         except (OSError, ValueError):
             continue
     return _result(findings)
+
+
+# ── content hashing (SHA-2 / SHA-3) ───────────────────────────────────────────
+# A small, dependency-free hashing facility for integrity checks: computing a
+# stable fingerprint of a skill's bytes so tampering after install is provable,
+# and reusable for any other "did these bytes change / do they match" need.
+# Deliberately allow-listed to strong algorithms only (no md5/sha1) - a caller
+# must not be able to request a weak digest for an integrity purpose.
+
+# Canonical hashlib names -> the supported set. SHA-2 = sha256/sha512,
+# SHA-3 = sha3_256/sha3_512. Both families ship in the stdlib (hashlib).
+SUPPORTED_HASH_ALGOS = frozenset({"sha256", "sha512", "sha3_256", "sha3_512"})
+DEFAULT_HASH_ALGO = "sha256"
+
+# Friendly spellings a caller might pass -> canonical name.
+_HASH_ALGO_ALIASES = {
+    "sha256": "sha256", "sha-256": "sha256", "sha2": "sha256", "sha-2": "sha256",
+    "sha512": "sha512", "sha-512": "sha512",
+    "sha3": "sha3_256", "sha-3": "sha3_256", "sha3-256": "sha3_256", "sha3_256": "sha3_256",
+    "sha3-512": "sha3_512", "sha3_512": "sha3_512",
+}
+
+_HASH_CHUNK = 64 * 1024
+
+
+def resolve_hash_algo(algo: str = DEFAULT_HASH_ALGO) -> str:
+    """Normalize an algorithm spelling to its canonical name, or raise
+    ValueError for anything not in the allow-list (weak/unknown digests)."""
+    key = str(algo or "").strip().lower()
+    canon = _HASH_ALGO_ALIASES.get(key)
+    if canon not in SUPPORTED_HASH_ALGOS:
+        raise ValueError(
+            f"Unsupported hash algorithm {algo!r}; use one of "
+            f"{', '.join(sorted(SUPPORTED_HASH_ALGOS))} (SHA-2 / SHA-3)."
+        )
+    return canon
+
+
+def hash_bytes(data: bytes, algo: str = DEFAULT_HASH_ALGO) -> str:
+    """Hex digest of raw bytes with the chosen SHA-2/SHA-3 algorithm."""
+    return hashlib.new(resolve_hash_algo(algo), data).hexdigest()
+
+
+def hash_text(text: str, algo: str = DEFAULT_HASH_ALGO) -> str:
+    """Hex digest of a string (UTF-8 encoded) with the chosen algorithm."""
+    return hash_bytes(text.encode("utf-8"), algo)
+
+
+def hash_skill_folder(folder: Path | str, algo: str = DEFAULT_HASH_ALGO) -> str:
+    """Deterministic content fingerprint of a skill folder for integrity checks.
+
+    Independent of filesystem walk order and machine: every regular file
+    (including binaries - integrity must cover everything the skill ships, not
+    only the text files the scanner reads) is folded in as a canonical,
+    length-prefixed record `relpath \\0 size \\0 file-digest \\0`, processed in
+    sorted path order. Same content always yields the same hash; any changed,
+    added, removed, renamed or moved byte changes it. Symlinks and paths that
+    resolve outside the folder are skipped (never followed). Files are streamed,
+    so memory stays bounded regardless of size. A file that fails to read is
+    skipped whole (never a partial record), keeping the digest well-defined.
+    """
+    canon = resolve_hash_algo(algo)
+    folder = Path(folder)
+    base = folder.resolve()
+
+    records: List[tuple[str, Path]] = []
+    for p in folder.rglob("*"):
+        try:
+            if p.is_dir() or p.is_symlink():
+                continue
+            if not p.resolve().is_relative_to(base):
+                continue  # symlink/traversal escape — never read
+            records.append((p.relative_to(folder).as_posix(), p))
+        except (OSError, ValueError):
+            continue
+
+    h = hashlib.new(canon)
+    for rel, p in sorted(records, key=lambda t: t[0]):
+        fh = hashlib.new(canon)
+        size = 0
+        try:
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(_HASH_CHUNK), b""):
+                    fh.update(chunk)
+                    size += len(chunk)
+        except OSError:
+            continue  # unreadable -> skip the whole record, digest stays well-defined
+        h.update(rel.encode("utf-8")); h.update(b"\0")
+        h.update(str(size).encode("ascii")); h.update(b"\0")
+        h.update(fh.digest()); h.update(b"\0")
+    return h.hexdigest()
 
 
 def format_findings(scan: Dict[str, Any], limit: int = 12) -> str:

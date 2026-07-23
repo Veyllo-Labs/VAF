@@ -95,6 +95,14 @@ Source: `pyproject.toml` `[project.optional-dependencies]` and `requirements.txt
 | websockets | >=12.0 | BSD-3-Clause |
 | pydantic | >=2.0.0 | MIT |
 
+### mail (mail client engine, see docs/integrations/EMAIL_CLIENT.md)
+| Package | Min version | License |
+|---|---|---|
+| IMAPClient | >=3.0.0 | BSD-3-Clause |
+| aiosmtplib | >=3.0.0 | MIT |
+| nh3 | >=0.2.17 | MIT (binds the Rust crate ammonia, MIT OR Apache-2.0) |
+| zstandard | >=0.22.0 | BSD-3-Clause (bundles zstd, BSD-3-Clause OR GPL-2.0 dual - used under BSD) |
+
 ### discord
 | Package | Min version | License |
 |---|---|---|

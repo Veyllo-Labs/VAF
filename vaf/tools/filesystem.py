@@ -18,11 +18,13 @@ BLOCKED_DIRS = [
 # VAF program root - agent must NEVER access this (source code, config, secrets)
 _VAF_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# ── Librarian per-user jail ──────────────────────────────────────────────────────────────────────
-# While a librarian_agent run executes, is_safe_path additionally enforces that the agent can read only
-# the CALLER's OWN data — never another user's VAF_Projects/<uid8>/. This is a contextvar so it is scoped
-# to the librarian run only: when unset (the default for coder/document/every other caller) it has ZERO
-# effect. Set/reset via set_librarian_scope/reset_librarian_scope from LibrarianTool.run.
+# ── Per-user filesystem jail ─────────────────────────────────────────────────────────────────────
+# While a jailed tool run executes, is_safe_path additionally enforces that the tool can access only
+# the CALLER's OWN data - never another user's VAF_Projects/<uid8>/. This is a contextvar so it is
+# scoped to that run only: when unset (the default) it has ZERO effect. Set/reset via
+# set_librarian_scope/reset_librarian_scope; the jail info comes from compute_user_jail (single
+# source - do not re-derive it per tool). Installers today: LibrarianTool.run, WriteFileTool.run,
+# SendMailTool attachment resolution.
 import contextvars as _contextvars
 _librarian_scope_ctx = _contextvars.ContextVar("vaf_librarian_scope", default=None)
 
@@ -38,6 +40,29 @@ def reset_librarian_scope(token):
         _librarian_scope_ctx.reset(token)
     except Exception:
         pass
+
+
+def compute_user_jail(user_scope_id):
+    """Jail info for set_librarian_scope, shared by every tool that confines file
+    access to the caller (librarian, write_file, send_mail attachments).
+
+    The LOCAL ADMIN is "no scope OR the configured local-admin scope": an owner
+    session carries the admin's real UUID, not None, so a plain truthiness check
+    would jail the machine owner out of their own files (live regression class).
+    Fail-closed: on any error the caller gets a jail with no allowed roots rather
+    than no jail at all."""
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        from vaf.core.session import get_user_projects_root
+        scope = str(user_scope_id or "")
+        local_admin = str(get_local_admin_scope_id() or "")
+        if (not scope) or (scope == local_admin):
+            return {"is_admin": True, "uid8": None, "allowed_roots": []}
+        own_root = get_user_projects_root(scope)
+        return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
+                "allowed_roots": [own_root] if own_root else []}
+    except Exception:
+        return {"is_admin": False, "uid8": "", "allowed_roots": []}
 
 
 def _librarian_jail_ok(abs_path) -> bool:
@@ -649,30 +674,9 @@ class WriteFileTool(BaseTool):
         _jail_token = None
         _scope = kwargs.pop("user_scope_id", None)
         if _scope:
-            # Librarian semantics (librarian.py _compute_jail): the LOCAL ADMIN is
-            # "no scope OR the configured local-admin scope". A logged-in owner
-            # session carries the admin's real UUID, not None - without this
-            # comparison the machine owner got jailed out of their own
-            # VAF_Projects root (live regression, live acceptance test).
-            try:
-                from vaf.core.config import get_local_admin_scope_id
-                if str(_scope) == str(get_local_admin_scope_id() or ""):
-                    _scope = None
-            except Exception:
-                pass
-        if _scope:
-            try:
-                from vaf.core.platform import Platform as _PlatJail
-                _uid8 = str(_scope).replace("-", "").lower()[:8]
-                _own = _PlatJail.documents_dir() / "VAF_Projects" / _uid8
-                _jail_token = set_librarian_scope(
-                    {"is_admin": False, "uid8": _uid8, "allowed_roots": [_own]}
-                )
-            except Exception:
-                # Fail-closed: jail with no allowed roots rather than no jail at all.
-                _jail_token = set_librarian_scope(
-                    {"is_admin": False, "uid8": "", "allowed_roots": []}
-                )
+            _info = compute_user_jail(_scope)
+            if not _info.get("is_admin"):
+                _jail_token = set_librarian_scope(_info)
         try:
             return self._run_write(**kwargs)
         finally:

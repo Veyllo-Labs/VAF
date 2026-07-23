@@ -1315,7 +1315,7 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail", "send_to_user"}
+_SENT_TOOLS = {"send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail", "reply_mail", "forward_mail", "send_to_user"}
 
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:

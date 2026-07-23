@@ -471,6 +471,10 @@ Telegram uses the same pipeline as the Web UI:
 
 ## Email Integration
 
+> Architecture design doc: [EMAIL_CLIENT.md](EMAIL_CLIENT.md) (current subsystem
+> layout, safety layers, and the decided v2 mail-client architecture). Read it
+> before changing any mail-related file.
+
 ### Features
 
 - **Multiple accounts**: Connect **Gmail** (OAuth2 + Gmail API), **Microsoft Outlook** (OAuth2 + Microsoft Graph Mail), or any provider via **IMAP/SMTP**. **iCloud Mail** has no OAuth mail API; use IMAP with an app-specific password (see Apple / iCloud below).
@@ -500,10 +504,12 @@ Message bodies are always returned as plain text: HTML and MIME structure are st
 - **Goal**: reduce prompt-injection and social-engineering risk from email content while keeping operator visibility in the dashboard.
 - **Agent filter scope**: `mail_inbox` and `find_mail` apply a phishing heuristic filter before returning results to the agent. Messages over the configured risk threshold are hidden from tool results.
 - **Dashboard scope**: suspicious messages are still shown in the Web UI Mail dashboard with a warning indicator and reason tooltip.
-- **Config keys**:
+- **Config keys** (registered in `Config.DEFAULTS`, admin-write-only via the
+  `email_agent_` prefix; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md)):
   - `email_agent_phishing_filter_enabled` (default `true`)
   - `email_agent_phishing_score_threshold` (default `3`, range `1..10`)
-  - `email_agent_trusted_sender_domains` (list of domains that bypass suspicious classification)
+  - `email_agent_trusted_sender_domains` (list of domains that bypass suspicious
+    classification; the From header is not authenticated, so use sparingly)
 - **Important**: this layer is additive to provider spam filtering; it does not delete or modify mailbox data.
 
 ### Setup

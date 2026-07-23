@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-OAuth2 Authorization Code Flow with PKCE for email providers (Google, Microsoft, Apple).
+OAuth2 Authorization Code Flow with PKCE for email providers (Google, Microsoft).
 
 State and code_verifier are stored temporarily (file under data_dir); tokens
 are stored only in credential_store, never in config.
@@ -48,6 +48,13 @@ _SHIPPED_GOOGLE_CLIENT_ID = "827949283932-0l83lmf1ip671vqta9d6m9k2fa4gii42.apps.
 
 # Buffer in seconds before expiry to consider token expired (refresh early)
 TOKEN_EXPIRY_BUFFER = 60
+
+
+def _mask_account(account_id) -> str:
+    """Mask an account id (usually an email address) for logs: first 3 chars + '***'.
+    Same single masking rule as email_transport._mask_account (kept local to avoid
+    an import cycle; never log full account ids or scope UUIDs)."""
+    return (str(account_id) if account_id else "")[:3] + "***"
 
 logger = logging.getLogger("vaf.core.oauth_pkce")
 
@@ -158,6 +165,14 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         ],
         "client_id_key": "email_oauth_google_client_id",
         "client_secret_key": "email_oauth_google_client_secret",
+        # E1 re-consent (EMAIL_CLIENT.md): IMAP/SMTP via XOAUTH2 needs the
+        # restricted mail scope; the UNION keeps calendar working on the same
+        # token record, so re-consent never breaks the calendar connection.
+        "imap_scopes": [
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/calendar",
+        ],
     },
     "microsoft": {
         "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
@@ -173,13 +188,25 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "client_id_key": "email_oauth_microsoft_client_id",
         "client_secret_key": "email_oauth_microsoft_client_secret",
     },
-    "apple": {
-        "auth_url": "https://appleid.apple.com/auth/authorize",
-        "token_url": "https://appleid.apple.com/auth/token",
-        "scopes": ["email", "name"],
-        "client_id_key": "email_oauth_apple_client_id",
-        "client_secret_key": "email_oauth_apple_client_secret",
+    # Microsoft IMAP/SMTP tokens live on the outlook.office.com resource and
+    # CANNOT be combined with Graph scopes in one token - the mail lane gets
+    # its own provider record ("microsoft_imap") while calendar keeps using
+    # the existing Graph token under "microsoft" (EMAIL_CLIENT.md, E1).
+    "microsoft_imap": {
+        "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        "scopes": [
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "https://outlook.office.com/SMTP.Send",
+            "offline_access",
+            "openid",
+            "email",
+        ],
+        "client_id_key": "email_oauth_microsoft_client_id",
+        "client_secret_key": "email_oauth_microsoft_client_secret",
     },
+    # No "apple" entry: Apple offers no OAuth mail API (iCloud Mail = IMAP with an
+    # app-specific password, handled by the IMAP lane in the setup wizard).
 }
 
 
@@ -210,6 +237,8 @@ def is_oauth_provider_configured(provider: str) -> bool:
     Gmail: client_secret optional (Desktop app flow works without it).
     Microsoft: requires client_secret.
     """
+    if provider == "microsoft_imap":
+        provider = "microsoft"  # same client registration as the Graph lane
     if provider not in ("gmail", "microsoft"):
         return False
     client_id = _get_oauth_client_credential(provider, "client_id")
@@ -248,7 +277,8 @@ def get_state_user(state: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def get_authorization_url(
-    provider: str, redirect_uri: str, username: Optional[str] = None, user_scope_id: Optional[str] = None
+    provider: str, redirect_uri: str, username: Optional[str] = None, user_scope_id: Optional[str] = None,
+    imap: bool = False,
 ) -> Tuple[str, str]:
     """
     Build OAuth authorization URL with PKCE and store state/code_verifier.
@@ -268,7 +298,7 @@ def get_authorization_url(
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(conf["scopes"]),
+        "scope": " ".join(conf.get("imap_scopes") or conf["scopes"]) if imap else " ".join(conf["scopes"]),
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
@@ -365,7 +395,6 @@ def get_oauth_callback_redirect_uri(request_base_url: str) -> str:
 def get_valid_access_token(account_id: str, provider: str, username: Optional[str] = None, user_scope_id: Optional[str] = None) -> Optional[str]:
     """
     Return a valid access token for the account, refreshing if expired.
-    Only gmail and microsoft support refresh; apple returns current token or None.
     Returns None if credentials missing, invalid, or refresh fails.
     Optional username/user_scope_id for multi-user credential scope.
     """
@@ -374,7 +403,7 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     creds = get_email_credentials(account_id, provider, username, user_scope_id=user_scope_id)
 
     if not (creds and creds.get("type") == "oauth"):
-        append_domain_log_always("backend", f"OAUTH_ERROR credentials_missing account={account_id} provider={provider} scope={user_scope_id}")
+        append_domain_log_always("backend", f"OAUTH_ERROR credentials_missing account={_mask_account(account_id)} provider={provider} scope_set={bool(user_scope_id)}")
         return None
 
     access = creds.get("access_token")
@@ -386,10 +415,10 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
     
     # Refresh required or token expired
     if not refresh or provider not in PROVIDERS:
-        append_domain_log_always("backend", f"OAUTH_WARNING refresh_impossible account={account_id} has_refresh={bool(refresh)}")
+        append_domain_log_always("backend", f"OAUTH_WARNING refresh_impossible account={_mask_account(account_id)} has_refresh={bool(refresh)}")
         return access  # Return possibly expired token; caller may get 401
     
-    append_domain_log_always("backend", f"OAUTH_REFRESH_START account={account_id} provider={provider}")
+    append_domain_log_always("backend", f"OAUTH_REFRESH_START account={_mask_account(account_id)} provider={provider}")
     conf = PROVIDERS[provider]
     client_id = _get_oauth_client_credential(provider, "client_id")
     client_secret = _get_oauth_client_credential(provider, "client_secret")
@@ -409,12 +438,12 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
         if resp.status_code != 200:
             err_msg = _safe_oauth_error(resp)
             logger.warning("Token refresh failed for %s: %s %s", provider, resp.status_code, err_msg)
-            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} status={resp.status_code} error={err_msg}")
+            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={_mask_account(account_id)} status={resp.status_code} error={err_msg}")
             return access
         data = resp.json()
         new_access = data.get("access_token")
         if not new_access:
-            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={account_id} reason=no_access_token_in_response")
+            append_domain_log_always("backend", f"OAUTH_REFRESH_ERROR account={_mask_account(account_id)} reason=no_access_token_in_response")
             return access
         expires_in = data.get("expires_in")
         new_expires_at = time.time() + int(expires_in) if expires_in else None
@@ -431,10 +460,10 @@ def get_valid_access_token(account_id: str, provider: str, username: Optional[st
             save_scope = None
 
         set_email_oauth_tokens(account_id, provider, new_access, new_refresh, new_expires_at, username, user_scope_id=save_scope)
-        append_domain_log_always("backend", f"OAUTH_REFRESH_SUCCESS account={account_id}")
+        append_domain_log_always("backend", f"OAUTH_REFRESH_SUCCESS account={_mask_account(account_id)}")
         return new_access
     except Exception as e:
         logger.warning("Token refresh error for %s: %s", provider, e)
-        append_domain_log_always("backend", f"OAUTH_REFRESH_EXCEPTION account={account_id} error={e}")
+        append_domain_log_always("backend", f"OAUTH_REFRESH_EXCEPTION account={_mask_account(account_id)} error={e}")
         return access
 

@@ -110,12 +110,15 @@ _FREE_MAIL_DOMAINS = {
     "protonmail.com",
 }
 
+# Shared with send_mail's high-risk outbound gate - single source, do not copy
+# (the previous duplicate in send_mail.py had already drifted).
 _EXEC_IMPERSONATION_WORDS = (
     "ceo",
     "cfo",
     "finance",
     "accounts payable",
     "buchhaltung",
+    "geschaeftsfuehrung",
     "geschäftsführung",
     "director",
     "vorstand",

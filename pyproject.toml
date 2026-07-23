@@ -125,12 +125,20 @@ pdf = [
     "pytesseract>=0.3.10",
 ]
 docs = ["python-docx>=1.1.0", "openpyxl>=3.1.0", "python-pptx>=0.6.21"]
+# Mail client engine (vaf/mail/, docs/integrations/EMAIL_CLIENT.md). All imports
+# of these are lazy so the slim base stays importable without the extra.
+mail = [
+    "IMAPClient>=3.0.0",
+    "aiosmtplib>=3.0.0",
+    "nh3>=0.2.17",
+    "zstandard>=0.22.0",
+]
 dev = ["pytest>=7.0.0", "pytest-mock>=3.10.0"]
 # `all` = every extra above (parity with requirements.txt / the desktop
 # product). Self-referential on purpose: it cannot drift when an extra's
 # contents change. tests/test_slim_base_import.py enforces that every extra
 # is referenced here.
-all = ["vaf[server,discord,telegram,desktop,memory,speech,browser,pdf,docs,dev]"]
+all = ["vaf[server,discord,telegram,desktop,memory,speech,browser,pdf,docs,mail,dev]"]
 
 [project.scripts]
 vaf = "vaf.main:main"

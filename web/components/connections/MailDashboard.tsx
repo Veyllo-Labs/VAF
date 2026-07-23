@@ -7,7 +7,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Mail, Loader2, UserPlus, RefreshCw, Inbox, Search, AlertTriangle } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
-/** Use direct backend (port 8001) to bypass Next.js proxy which can return 500 on sync/body. */
+/** All mail requests ride the Next.js catch-all proxy (getApiBase() returns ''),
+ * which forwards cookie/authorization headers to the internal backend. */
 const api = (path: string) => {
     const p = path.startsWith('/') ? path : `/${path}`;
     return `${getApiBase()}${p}`;

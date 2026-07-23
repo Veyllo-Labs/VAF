@@ -12,6 +12,44 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ## [Unreleased]
 
 ### Added
+- New built-in mail client engine (v2, opt-in via `mail_engine_v2_enabled`,
+  design doc `docs/integrations/EMAIL_CLIENT.md`): a real per-user mail store
+  (SQLite with full-text search over subject/sender/recipients/BODY, threaded
+  conversations, encrypted-at-rest cached bodies, configurable retention with
+  headers kept forever), an RFC 4549 incremental IMAP sync engine (UID-based,
+  UIDVALIDITY-safe, batched fetches, IMAP IDLE push on the inbox plus periodic
+  sweeps, Gmail thread/label capture), a new `/mail` page (three-pane layout,
+  conversation view, HTML mail rendered sanitized in a sandboxed frame with
+  remote images blocked by default for tracking protection, attachment
+  download), and new `/api/mail` endpoints. With the flag on, the existing
+  agent mail tools and the Mail dashboard transparently serve from the new
+  store (search gains body search; opening messages works offline from the
+  local cache). The engine is strictly read-only against mailboxes in this
+  phase; server-side writes stay behind a separate `mail_engine_write_enabled`
+  flag that ships later. New permissive-licensed dependencies (in the `mail`
+  extra): IMAPClient (BSD-3-Clause), aiosmtplib (MIT), nh3 (MIT), zstandard
+  (BSD-3-Clause) - listed in `THIRD_PARTY.md` and the About tab's third-party
+  license list.
+- Mail client v2 write path (still behind the same opt-in flags): read/unread,
+  star, archive and trash directly in the new `/mail` page (trash-only delete
+  semantics - nothing is ever expunged), reply/reply-all/forward with proper
+  quoting and threading, compose with a 15-second undo window (the mail is
+  held locally and can be withdrawn before it leaves the machine), and
+  automatic filing of sent mail into the Sent folder for IMAP accounts.
+  Changes apply locally first and replay to the mail server through a durable
+  operation queue once `mail_engine_write_enabled` is on. The agent gains
+  `reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` tools (all
+  excluded from the front-office contact lane by design).
+- Mail accounts can now be upgraded to IMAP-capable OAuth for the v2 engine:
+  an "Upgrade (IMAP)" re-consent button in the email wizard requests the
+  needed scopes (Google keeps calendar working via a single union token;
+  Microsoft mail gets its own token while calendar stays on the existing
+  one). IMAP/SMTP server presets added for GMX, web.de, T-Online and
+  outlook.de addresses.
+- Blocked remote images in mail can now be loaded on explicit opt-in through
+  a privacy proxy: the sender's server never sees the reader's address, SVG
+  and non-image responses are refused, and refused hosts are logged to the
+  security event log.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.
@@ -35,6 +73,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `run_async`.
 
 ### Security
+- Outgoing email attachments now resolve their file paths under the same
+  per-user filesystem jail that already protects librarian and file-write
+  operations: in network mode a non-admin user's agent can no longer attach
+  files outside that user's own data (previously only the static block list
+  applied). The jail computation is now a single shared helper used by all
+  three tools, with a regression test.
+- The agent-side phishing-filter settings
+  (`email_agent_phishing_filter_enabled`, `email_agent_phishing_score_threshold`,
+  `email_agent_trusted_sender_domains`) and the IMAP/SMTP SSRF opt-out
+  (`email_allow_private_hosts`) are now registered config keys and
+  admin-write-only. Previously they were read with inline defaults and, in the
+  SSRF case, any LAN user could have toggled the guard for the whole instance.
+- Mail transport logs now mask account ids consistently (first 3 characters)
+  and truncate provider error-response bodies; several error paths used to
+  write the full account address and full API response into the always-on
+  domain log.
 - Dependency updates closing all 13 open Dependabot alerts: Next.js 16.2.9 to
   16.2.11 (nine advisories, incl. SSRF in Server Actions and in rewrites,
   middleware bypass with Turbopack, Server Action DoS and cache confusion),
@@ -55,7 +109,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   same mask also covers `access_token` / `api_key` / `password` if they ever
   appear in a logged URL.
 
+### Changed
+- Removed the dead Apple OAuth lane (provider entry, config keys
+  `email_oauth_apple_client_id`/`_secret`, admin settings inputs and their
+  locale strings, a dead sign-in URL branch in the setup wizard): Apple
+  offers no OAuth mail API. iCloud Mail continues to connect via IMAP with
+  an app-specific password, unchanged.
+
 ### Fixed
+- Opening the Mail dashboard no longer freezes the whole backend while a sync
+  runs. The sync, message-body fetch, IMAP credential test/verify, and OAuth
+  token-exchange endpoints ran blocking network IO directly on the uvicorn
+  event loop, so the message list (and every other API request) hung until the
+  provider round-trips finished - worst right after a restart, when the first
+  auto-sync fires on dashboard open. All provider IO in the email routes now
+  runs in worker threads; the list loads instantly from the local store while
+  a sync proceeds in the background.
 - The Logs window no longer crashes with a blank "This page couldn't load"
   after a rebuild. A calendar-follow effect had been placed after the modal's
   early return, so the number of React hooks changed when the window opened

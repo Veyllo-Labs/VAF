@@ -14,13 +14,30 @@ from pathlib import Path
 from vaf.core.config import Config
 from vaf.core.email_transport import send_mail, get_account
 from vaf.tools.base import BaseTool
-from vaf.tools.filesystem import is_safe_path
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user
+from vaf.tools.filesystem import (
+    compute_user_jail,
+    is_safe_path,
+    reset_librarian_scope,
+    set_librarian_scope,
+)
+from vaf.tools.mail_utils import (
+    _EXEC_IMPERSONATION_WORDS,
+    _FREE_MAIL_DOMAINS,
+    cred_scope_from_kwargs,
+    cred_username_from_kwargs,
+    list_accounts_for_user,
+)
 
 
 def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
     """Resolve file path (supports file:// URLs, folder aliases like Downloads).
-    Returns (resolved_path, error_message). Exactly one is None."""
+    Returns (resolved_path, error_message). Exactly one is None.
+    Callers must have the per-user jail installed (see run) so a non-admin
+    user cannot attach files outside their own data. Symlinks are resolved
+    BEFORE the check and the real path is re-checked, so a link inside the
+    user's data cannot point outside it. The transport reads the file after
+    the jail is released; v2 serves attachments from the per-user store,
+    which closes that remaining swap window."""
     s = (path_str or "").strip()
     if not s:
         return None, None
@@ -29,35 +46,16 @@ def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
     safe, result = is_safe_path(s)
     if not safe:
         return None, result  # result = error message
+    try:
+        real = Path(result).resolve()
+    except OSError:
+        return None, "Invalid path"
+    if str(real) != str(result):
+        safe, result = is_safe_path(str(real))
+        if not safe:
+            return None, result
     return Path(result), None
 
-
-_FREE_MAIL_DOMAINS = {
-    "gmail.com",
-    "googlemail.com",
-    "outlook.com",
-    "hotmail.com",
-    "live.com",
-    "yahoo.com",
-    "icloud.com",
-    "gmx.de",
-    "gmx.net",
-    "mail.com",
-    "proton.me",
-    "protonmail.com",
-}
-
-_EXEC_IMPERSONATION_WORDS = (
-    "ceo",
-    "cfo",
-    "finance",
-    "accounts payable",
-    "buchhaltung",
-    "geschaeftsfuehrung",
-    "geschäftsführung",
-    "director",
-    "vorstand",
-)
 
 _HIGH_RISK_REQUEST_WORDS = (
     "urgent",
@@ -216,21 +214,41 @@ class SendMailTool(BaseTool):
         if not subject:
             subject = "(No subject)"
 
+        # Per-user filesystem jail while resolving attachment paths: a non-admin
+        # user's agent must not be able to attach (= exfiltrate) files outside
+        # their own data. Same mechanism as LibrarianTool/WriteFileTool; the
+        # contextvar must be set here in the tool's own worker thread.
         attachments = []
-        for p in attachment_paths:
-            if not p:
-                continue
-            resolved, path_error = _resolve_path(str(p))
-            if path_error:
-                return path_error
-            if resolved and resolved.is_file():
-                attachments.append({"path": str(resolved), "filename": resolved.name})
+        if attachment_paths:
+            _jail_token = None
+            _jail_info = compute_user_jail(user_scope_id)
+            if not _jail_info.get("is_admin"):
+                _jail_token = set_librarian_scope(_jail_info)
+            try:
+                for p in attachment_paths:
+                    if not p:
+                        continue
+                    resolved, path_error = _resolve_path(str(p))
+                    if path_error:
+                        return path_error
+                    if resolved and resolved.is_file():
+                        attachments.append({"path": str(resolved), "filename": resolved.name})
+            finally:
+                if _jail_token is not None:
+                    reset_librarian_scope(_jail_token)
 
         # Safety gate: do not auto-send potentially fraudulent/social-engineering requests.
         # The user must explicitly confirm before we allow risky messages.
         risk_reasons = _high_risk_send_reasons(to=to, subject=subject, body=body or "", attachments=attachments)
         if risk_reasons and not confirm_high_risk:
             reasons = ", ".join(risk_reasons)
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("mail_high_risk_send_blocked",
+                                   username=cred_username or "",
+                                   detail=f"reasons: {reasons}")
+            except Exception:
+                pass
             return (
                 "Security check blocked this email as potentially high-risk. "
                 f"Reasons: {reasons}. "

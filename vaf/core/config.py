@@ -574,15 +574,28 @@ class Config:
         "email_config_by_user": None,  # { "<username>": { "accounts": [...] } } — legacy per-username config
         "email_credentials_key": "",  # AES key (Base64) for fallback encrypted file; auto-generated if empty
         "secure_store_kek": "",  # Key-encryption-key (Base64) for credential fallback when no master passphrase is set; auto-generated. See vaf.core.secure_store
+        # SSRF guard for IMAP/SMTP: when False (default), refuse mail hosts resolving to
+        # loopback/RFC-1918/link-local addresses. Admin-only (GLOBAL_CONFIG_KEYS).
+        "email_allow_private_hosts": False,
+        # Agent-facing phishing filter (prompt-injection defense): suspicious mail is hidden
+        # from mail tools while the Web UI still shows it with a warning. Instance-global,
+        # admin-only (email_agent_ prefix in GLOBAL_CONFIG_KEY_PREFIXES). See vaf/tools/mail_utils.py.
+        "email_agent_phishing_filter_enabled": True,
+        "email_agent_phishing_score_threshold": 3,  # 1-10; messages at/above are hidden from the agent
+        "email_agent_trusted_sender_domains": None,  # list[str] of From-domains that bypass the filter
+        # Mail engine v2 (vaf/mail/, docs/integrations/EMAIL_CLIENT.md). Flags and
+        # retention are instance-wide resource/rollout policy: admin-only.
+        "mail_engine_v2_enabled": False,  # serve mail from the v2 store/engine
+        "mail_engine_write_enabled": False,  # allow server-side writes (flags/move/append) - separate switch by design
+        "mail_body_retention_days": 365,  # cached-body retention (headers are kept forever)
+        "mail_store_encryption_key": "",  # AES key (Base64) for mail.db body blobs; auto-generated (PROTECTED)
         # OAuth2: callback base URL must point to this backend (default http://127.0.0.1:8001). Set if behind proxy or different port.
         "email_oauth_callback_base_url": "",
-        # OAuth2 client IDs (register app in Google Cloud Console / Azure / Apple; redirect_uri = {email_oauth_callback_base_url or http://127.0.0.1:PORT}/api/email/oauth/callback)
+        # OAuth2 client IDs (register app in Google Cloud Console / Azure; redirect_uri = {email_oauth_callback_base_url or http://127.0.0.1:PORT}/api/email/oauth/callback)
         "email_oauth_google_client_id": "",
         "email_oauth_google_client_secret": "",
         "email_oauth_microsoft_client_id": "",
         "email_oauth_microsoft_client_secret": "",
-        "email_oauth_apple_client_id": "",
-        "email_oauth_apple_client_secret": "",
     }
 
     # Per-provider model metadata (single source — see module-level PROVIDER_MODELS).
@@ -680,6 +693,7 @@ class Config:
         "email_credentials_key",
         "cloud_credentials_key",
         "secure_store_kek",
+        "mail_store_encryption_key",
     ]
 
     # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
@@ -689,6 +703,10 @@ class Config:
         "api_key_",
         "api_model_",
         "email_oauth_",
+        # Phishing-filter policy is instance-global prompt-injection defense: a
+        # non-admin LAN user must not be able to disable it or trust a domain
+        # for everyone's agent.
+        "email_agent_",
         "cloud_oauth_",
         "github_oauth_",
         "speech_stt_",
@@ -720,6 +738,14 @@ class Config:
         # (soon a metered cloud lane), so it must not be user-writable. The
         # canonical speech_stt_enabled is already covered by the prefix list.
         "stt_enabled",
+        # SSRF guard for mail hosts: flipping it opens IMAP/SMTP connects to
+        # loopback/RFC-1918/metadata addresses for the whole instance - a LAN
+        # user must never be able to do that.
+        "email_allow_private_hosts",
+        # Mail engine v2 rollout/write flags + retention: instance-wide policy.
+        "mail_engine_v2_enabled",
+        "mail_engine_write_enabled",
+        "mail_body_retention_days",
     ])
 
     @classmethod

@@ -347,6 +347,14 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Email routes: {e}")
 
+# Mount Mail engine v2 routes (gated on mail_engine_v2_enabled; EMAIL_CLIENT.md)
+try:
+    from vaf.api.mail_routes import router as mail_v2_router
+    app.include_router(mail_v2_router)
+    log("WebServer", "Mail engine v2 routes mounted at /api/mail")
+except Exception as e:
+    log("WebServer", f"Failed to mount Mail v2 routes: {e}")
+
 # Mount Cloud Storage routes (OAuth2 PKCE + sync + accounts CRUD)
 try:
     from vaf.api.cloud_routes import router as cloud_router
@@ -904,6 +912,17 @@ async def startup_event():
             await asyncio.sleep(EMAIL_AUTO_SYNC_INTERVAL_SEC)
 
     asyncio.create_task(_email_auto_sync_loop())
+
+    # Mail engine v2 supervisor (EMAIL_CLIENT.md): started unconditionally; it
+    # re-reads mail_engine_v2_enabled every cycle and no-ops while the flag is
+    # off, so enabling the engine needs no restart. Legacy auto-sync above
+    # keeps covering Gmail-API/Graph accounts until the phase-3 migration.
+    try:
+        from vaf.mail.supervisor import MailSyncSupervisor
+        asyncio.create_task(MailSyncSupervisor().run())
+        log("WebServer", "Mail v2 sync supervisor task started (flag-gated)")
+    except Exception as e:
+        log("WebServer", f"Mail v2 supervisor start warning: {e}")
 
     # Cloud storage background sync
     if Config.get("cloud_sync_enabled", False):

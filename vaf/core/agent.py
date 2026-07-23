@@ -2842,7 +2842,7 @@ class Agent:
             # message" contains "telegram").
             send_success = any(x in result_lower for x in [
                 "sent to the user", "message sent", "gesendet", "delivered",
-                "email sent", "mail sent",
+                "email sent", "mail sent", "reply sent", "forwarded to",
             ])
             if not send_success and len(result_lower) > 50:
                 return False, f"Send the file as requested. {task_description}"
@@ -6540,6 +6540,8 @@ class Agent:
         if any(kw in u_lower for kw in ["schreib", "send", "antwort", "reply", "compose"]):
             if "send_mail" in self.tools:
                 forced_tools.add("send_mail")
+            if "reply_mail" in self.tools:
+                forced_tools.add("reply_mail")
 
         # Web Search Heuristics
         if any(kw in u_lower for kw in [
@@ -10740,7 +10742,7 @@ class Agent:
                 if name in ("list_contacts", "get_contact", "create_contact", "update_contact", "delete_contact"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
-                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail"):
+                if name in ("mail_inbox", "read_mail", "find_mail", "mark_mail_answered", "label_mail", "list_email_accounts", "send_mail", "reply_mail", "forward_mail", "archive_mail", "delete_mail"):
                     tool_args["username"] = getattr(self, "_current_username", None) or "admin"
                     tool_args["user_scope_id"] = getattr(self, "_current_user_scope_id", None)
                 if name in ("add_automation_note", "add_automation_todo", "list_automation_notes", "list_automation_todos", "delete_automation_note", "delete_automation_todo"):

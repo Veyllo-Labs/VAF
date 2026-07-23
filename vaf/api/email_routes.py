@@ -37,7 +37,12 @@ from vaf.core.email_sync_store import (
     update_message_category as store_update_message_category,
     upsert_messages,
 )
-from vaf.core.email_transport import apply_sender_rules_to_category, fetch_mail, get_message_body_plain
+from vaf.core.email_transport import (
+    _mask_account,
+    apply_sender_rules_to_category,
+    fetch_mail,
+    get_message_body_plain,
+)
 from vaf.tools.mail_utils import annotate_messages_with_agent_visibility, store_candidates_for_mail
 from vaf.core.oauth_pkce import (
     exchange_code_for_tokens,
@@ -104,6 +109,11 @@ IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "yahoo.com": {"imap_host": "imap.mail.yahoo.com", "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com", "smtp_port": 587},
     "icloud.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
     "me.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
+    "outlook.de": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+    "gmx.de": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
+    "gmx.net": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
+    "web.de": {"imap_host": "imap.web.de", "imap_port": 993, "smtp_host": "smtp.web.de", "smtp_port": 587},
+    "t-online.de": {"imap_host": "secureimap.t-online.de", "imap_port": 993, "smtp_host": "securesmtp.t-online.de", "smtp_port": 587},
 }
 
 
@@ -230,6 +240,7 @@ def _add_account(
     enabled: bool = True,
     username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
+    imap_ready: Optional[bool] = None,
 ) -> None:
     ec = _get_email_config(username, user_scope_id=user_scope_id)
     accounts: List[Dict[str, Any]] = list(ec.get("accounts") or [])
@@ -237,6 +248,8 @@ def _add_account(
         if (a.get("account_id") or a.get("email")) == account_id or a.get("email") == email:
             a["provider"] = provider
             a["enabled"] = enabled
+            if imap_ready is not None:
+                a["imap_ready"] = bool(imap_ready)
             _save_email_config(ec, username, user_scope_id=user_scope_id)
             return
     accounts.append({
@@ -245,6 +258,7 @@ def _add_account(
         "email": email or account_id,
         "enabled": enabled,
         "label": "",
+        **({"imap_ready": bool(imap_ready)} if imap_ready is not None else {}),
     })
     ec["accounts"] = accounts
     _save_email_config(ec, username, user_scope_id=user_scope_id)
@@ -281,15 +295,23 @@ async def oauth_start(request: Request, provider: str = "gmail", _user: Dict[str
     Start OAuth2 PKCE flow. Returns authorization_url and state.
     Frontend opens authorization_url in browser; callback will run on this server.
     """
-    if provider not in ("gmail", "microsoft", "apple"):
-        raise HTTPException(status_code=400, detail="provider must be gmail, microsoft, or apple")
+    if provider not in ("gmail", "microsoft"):
+        # Apple has no OAuth mail API; iCloud Mail connects via the IMAP lane
+        # with an app-specific password.
+        raise HTTPException(status_code=400, detail="provider must be gmail or microsoft")
+    # v2 re-consent lane (EMAIL_CLIENT.md, E1): ?imap=true requests IMAP-capable
+    # scopes. Microsoft mail tokens live on a separate resource -> own provider
+    # record; Google uses one union token (calendar survives).
+    imap_lane = str(request.query_params.get("imap") or "").lower() in ("1", "true", "yes")
+    if imap_lane and provider == "microsoft":
+        provider = "microsoft_imap"
     require_oauth_actor_in_network_mode(request)
     base_url = _oauth_callback_base_url()
     redirect_uri = f"{base_url}/api/email/oauth/callback"
     _username = _user.get("username")
     _user_scope_id = _user.get("user_scope_id")
     try:
-        auth_url, state = get_authorization_url(provider, redirect_uri, username=_username, user_scope_id=_user_scope_id)
+        auth_url, state = get_authorization_url(provider, redirect_uri, username=_username, user_scope_id=_user_scope_id, imap=imap_lane)
         return {"authorization_url": auth_url, "state": state, "redirect_uri": redirect_uri}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -318,14 +340,23 @@ async def oauth_callback(
             return _redirect_error("Invalid or expired state. Please start the login again.")
         state_username, state_scope = get_state_user(state)
         enforce_callback_actor_binding(request, state_username, state_scope)
-        data = exchange_code_for_tokens(provider, code, state, redirect_uri)
+        # to_thread: token exchange + provider userinfo are blocking requests.post/get.
+        data = await asyncio.to_thread(exchange_code_for_tokens, provider, code, state, redirect_uri)
         account_id = data.get("account_id") or "unknown"
         # Use retrieved scope/user from OAuth state to add the account
         _username = data.get("username")
         _user_scope_id = data.get("user_scope_id")
-        _add_account(account_id, provider, account_id if "@" in account_id else account_id, enabled=True, username=_username, user_scope_id=_user_scope_id)
+        # v2 re-consent bookkeeping (E1): the config account keeps its display
+        # provider; microsoft_imap tokens live under their own credential record.
+        # imap_ready marks the account as usable by the v2 IMAP engine.
+        _cfg_provider = "microsoft" if provider == "microsoft_imap" else provider
+        _got_imap = provider == "microsoft_imap" or (
+            provider == "gmail" and "mail.google.com" in (data.get("scope") or ""))
+        _add_account(account_id, _cfg_provider, account_id if "@" in account_id else account_id,
+                     enabled=True, username=_username, user_scope_id=_user_scope_id,
+                     imap_ready=True if _got_imap else None)
         # account_id is the user's email (PII) → mask it in logs.
-        masked_account = (account_id[:3] + "***") if account_id else "unknown"
+        masked_account = _mask_account(account_id) if account_id else "unknown"
         logger.info("email oauth callback: account added account_id=%s provider=%s", masked_account, provider)
         try:
             from vaf.core.log_helper import append_domain_log
@@ -397,7 +428,7 @@ async def test_imap_connection(request: Request, body: TestImapRequest, _user: D
     password = (body.password or "").strip()
     if not password:
         raise HTTPException(status_code=400, detail="Password or app password required")
-    ok, err, hint = _test_imap_login(
+    ok, err, hint = await asyncio.to_thread(_test_imap_login,
         email,
         password,
         body.imap_host,
@@ -450,7 +481,7 @@ async def add_account(request: Request, body: AddImapAccountRequest, _user: Dict
             a["imap_port"] = imap_port
             a["smtp_host"] = smtp_host
             a["smtp_port"] = smtp_port
-            ok, _, _ = _test_imap_login(email, password, imap_host, imap_port)
+            ok, _, _ = await asyncio.to_thread(_test_imap_login, email, password, imap_host, imap_port)
             a["last_verified_at"] = now_iso if ok else None
             _save_email_config(ec, _username, user_scope_id=_user_scope_id)
             return {"account_id": email, "email": email, "provider": "imap", "last_verified_at": a.get("last_verified_at")}
@@ -468,7 +499,7 @@ async def add_account(request: Request, body: AddImapAccountRequest, _user: Dict
     })
     ec["accounts"] = accounts
     _save_email_config(ec, _username, user_scope_id=_user_scope_id)
-    ok, _, _ = _test_imap_login(email, password, imap_host, imap_port)
+    ok, _, _ = await asyncio.to_thread(_test_imap_login, email, password, imap_host, imap_port)
     if ok:
         for a in ec.get("accounts") or []:
             if (a.get("email") or "").lower() == email:
@@ -535,7 +566,7 @@ async def verify_account(request: Request, account_id: str, _user: Dict[str, Any
         creds = get_email_credentials(account_id, "imap", cred_username, user_scope_id=_user_scope_id)
         if not creds or "password" not in creds:
             raise HTTPException(status_code=400, detail="No stored password for this account")
-        ok, err, hint = _test_imap_login(
+        ok, err, hint = await asyncio.to_thread(_test_imap_login,
             acc.get("email") or account_id,
             creds["password"],
             acc.get("imap_host"),
@@ -588,7 +619,13 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
     store_username, cred_username = _store_and_cred_from_user(_user)
     for attempt in range(3):
         try:
-            messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=_user_scope_id)
+            # to_thread: fetch_mail does blocking network IO (IMAP/HTTP); calling it
+            # directly stalls the whole uvicorn event loop for the entire sync -
+            # the message-list request then hangs behind it (live finding 2026-07-23).
+            messages = await asyncio.to_thread(
+                fetch_mail, account_id, folder=folder, max_messages=max_messages,
+                username=cred_username, user_scope_id=_user_scope_id,
+            )
             count = upsert_messages(account_id, folder, messages, username=store_username, user_scope_id=_user_scope_id)
             deleted = delete_messages_older_than(username=store_username, user_scope_id=_user_scope_id, days=90)
             acc["last_verified_at"] = datetime.now(timezone.utc).isoformat()
@@ -598,9 +635,9 @@ async def sync_account(request: Request, account_id: str, folder: str = "INBOX",
             err_str = str(e)
             is_locked = "locked" in err_str.lower() or "database is locked" in err_str.lower() or "sqlite_busy" in err_str.lower()
             if is_locked and attempt < 2:
-                time.sleep(0.5 * (attempt + 1))
+                await asyncio.sleep(0.5 * (attempt + 1))
                 continue
-            logger.warning("Sync failed for %s: %s", account_id[:8] + "***", e)
+            logger.warning("Sync failed for %s: %s", _mask_account(account_id), e)
             return {"ok": False, "count": 0, "error": err_str}
 
 
@@ -621,7 +658,10 @@ async def get_message_body(
         _username = _user.get("username", "admin")
         _user_scope_id = _user.get("user_scope_id")
         store_username, _ = _store_and_cred_from_user(_user)
-        body = get_message_body_plain(
+        # to_thread: the body is fetched LIVE from the provider (blocking IMAP/HTTP);
+        # unwrapped it froze the backend on every message open.
+        body = await asyncio.to_thread(
+            get_message_body_plain,
             account_id=account_id,
             message_id=message_id,
             folder=folder,
@@ -650,8 +690,9 @@ async def get_synced_messages(
     _user: Dict[str, Any] = Depends(_get_current_user),
 ):
     """
-    List synced messages from the local store (paginated). Uses same store fallback as mail_inbox
-    (primary → legacy → single-scope) so the dashboard shows mails already in SQLite without waiting for sync.
+    List synced messages from the local store (paginated). Store access is strictly
+    per-user: store_candidates_for_mail returns exactly one (username, scope) candidate,
+    no cross-user fallback (same as mail_inbox).
     account_id: optional; if omitted, returns messages from all accounts for that user.
     category: optional primary|social|promotions (Gmail-style). Spam is never stored or returned.
     """
@@ -871,6 +912,17 @@ async def remove_account(request: Request, account_id: str, _user: Dict[str, Any
     from vaf.core.credential_store import delete_email_credentials
     _username = _user.get("username", "admin")
     _user_scope_id = _user.get("user_scope_id")
+    # v2 engine cascade: removing the account must also drop its rows, blobs
+    # and FTS entries from the per-scope mail.db (review finding). Best-effort.
+    try:
+        if Config.get("mail_engine_v2_enabled", False):
+            from vaf.core.config import get_local_admin_scope_id
+            from vaf.mail.store import MailStore
+            _v2_scope = (_user_scope_id or "").strip() or get_local_admin_scope_id()
+            if _v2_scope:
+                await asyncio.to_thread(lambda: MailStore(_v2_scope).delete_account(account_id))
+    except Exception as _e:
+        logger.warning("v2 store cascade delete failed: %s", _e)
     _, cred_username = _store_and_cred_from_user(_user)
     ec = _get_email_config(_username, user_scope_id=_user_scope_id)
     accounts = [a for a in (ec.get("accounts") or []) if a.get("account_id") != account_id and a.get("email") != account_id]
@@ -960,9 +1012,9 @@ async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
                 user_scope_id=user_scope_id,
             )
         except Exception as e:
-            logger.warning("Auto-sync fetch failed for %s: %s", account_id[:8] + "***", e)
+            logger.warning("Auto-sync fetch failed for %s: %s", _mask_account(account_id), e)
             failed += 1
-            errors.append(f"{account_id[:12]}...: {e}")
+            errors.append(f"{_mask_account(account_id)}: {e}")
             continue
         count = upsert_messages(account_id, "INBOX", messages, username=store_username, user_scope_id=user_scope_id)
         delete_messages_older_than(username=store_username, user_scope_id=user_scope_id, days=90)
@@ -970,5 +1022,5 @@ async def run_auto_sync_all_accounts(max_messages: int = 100) -> Dict[str, Any]:
         _save_email_config(ec, save_username, user_scope_id=user_scope_id)
         synced += 1
         if count > 0:
-            logger.info("Auto-sync completed for %s: %d messages", account_id[:8] + "***", count)
+            logger.info("Auto-sync completed for %s: %d messages", _mask_account(account_id), count)
     return {"synced": synced, "failed": failed, "errors": errors}

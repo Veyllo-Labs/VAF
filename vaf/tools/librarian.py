@@ -209,19 +209,10 @@ You have access to this filesystem map for fast navigation:
 
     def _compute_jail(self, user_scope_id):
         """Librarian jail info. Local admin (no scope OR the local-admin scope) => full access; a remote
-        user => jailed to their own VAF_Projects/<uid8> only (no personal folders). Fail-closed on error."""
-        try:
-            from vaf.core.config import get_local_admin_scope_id
-            from vaf.core.session import get_user_projects_root
-            scope = str(user_scope_id or "")
-            local_admin = str(get_local_admin_scope_id() or "")
-            if (not scope) or (scope == local_admin):
-                return {"is_admin": True, "uid8": None, "allowed_roots": []}
-            own_root = get_user_projects_root(scope)
-            return {"is_admin": False, "uid8": scope.replace("-", "").lower()[:8],
-                    "allowed_roots": [own_root] if own_root else []}
-        except Exception:
-            return {"is_admin": False, "uid8": "", "allowed_roots": []}
+        user => jailed to their own VAF_Projects/<uid8> only (no personal folders). Fail-closed on error.
+        Delegates to the shared computation in filesystem.py (single source for all jailed tools)."""
+        from vaf.tools.filesystem import compute_user_jail
+        return compute_user_jail(user_scope_id)
 
     def _run_impl(self, **kwargs) -> str:
         task = kwargs.get('task', '').strip()

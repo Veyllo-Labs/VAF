@@ -2128,13 +2128,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     />
                                                 </div>
                                             </div>
-                                            <div>
-                                                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('appleProvider')}</h4>
-                                                <div className="grid grid-cols-1 gap-3">
-                                                    <Input label={tGeneral('appleClientId')} value={localConfig.email_oauth_apple_client_id || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_id', v)} type="text" placeholder="iCloud Mail OAuth (if available)" />
-                                                    <Input label={tGeneral('appleClientSecret')} value={localConfig.email_oauth_apple_client_secret || ''} onChange={(v: string) => handleChange('email_oauth_apple_client_secret', v)} type="password" />
-                                                </div>
-                                            </div>
+                                            {/* Apple has no OAuth mail API; iCloud Mail connects via IMAP with an app-specific password. */}
                                             <div>
                                                 <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">{tGeneral('dropboxProvider')}</h4>
                                                 <div className="grid grid-cols-1 gap-3">

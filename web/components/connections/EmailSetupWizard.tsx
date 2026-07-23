@@ -176,9 +176,9 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                 const url = data.authorization_url || '';
                 setAuthUrl(url);
                 setCurrentStep(2);
-                if (url && (url.startsWith('https://accounts.google.com') || url.startsWith('https://login.microsoftonline.com') || url.startsWith('https://appleid.apple.com')) && typeof window !== 'undefined') {
-                    window.open(url, '_blank', 'noopener,noreferrer');
-                } else if (url && typeof window !== 'undefined') {
+                // The backend only ever returns Google/Microsoft authorization URLs
+                // (oauth_pkce PROVIDERS); no client-side host filtering is attempted.
+                if (url && typeof window !== 'undefined') {
                     window.open(url, '_blank', 'noopener,noreferrer');
                 } else if (!url) {
                     setError('No sign-in URL returned. Check OAuth client ID in Settings.');
@@ -674,6 +674,26 @@ export default function EmailSetupWizard({ isOpen, onClose, onComplete, existing
                                                                 className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
                                                             >
                                                                 {verifyLoading === id ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Verify'}
+                                                            </button>
+                                                        )}
+                                                        {(a.provider === 'gmail' || a.provider === 'microsoft') && !(a as any).imap_ready && (
+                                                            <button
+                                                                onClick={async () => {
+                                                                    // v2 engine re-consent: request IMAP-capable OAuth scopes
+                                                                    // (Google keeps calendar via scope union; Microsoft gets a
+                                                                    // separate mail token). See EMAIL_CLIENT.md.
+                                                                    try {
+                                                                        const r = await fetch(api(`api/email/oauth/start?provider=${a.provider}&imap=true`), { credentials: 'include' });
+                                                                        const d = await r.json();
+                                                                        if (d.authorization_url && typeof window !== 'undefined') {
+                                                                            window.open(d.authorization_url, '_blank', 'noopener,noreferrer');
+                                                                        }
+                                                                    } catch { /* surfaced via the account list refresh */ }
+                                                                }}
+                                                                className="text-sm text-amber-600 hover:text-amber-700"
+                                                                title="Grant IMAP access for the v2 mail engine"
+                                                            >
+                                                                Upgrade (IMAP)
                                                             </button>
                                                         )}
                                                         <button onClick={() => handleRemoveAccount(id)} className="text-sm text-red-600 hover:text-red-700">Remove</button>

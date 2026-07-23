@@ -42,6 +42,13 @@ IMAP_TIMEOUT_SEC = 30
 SMTP_TIMEOUT_SEC = 30
 
 
+def _mask_account(account_id: str) -> str:
+    """Mask an account id (usually an email address) for logs: first 3 chars + '***'.
+    Single masking rule for the mail stack (email_routes.py uses the same one).
+    Never log the full account id or full provider response bodies."""
+    return (str(account_id) if account_id else "")[:3] + "***"
+
+
 class MailConnectError(Exception):
     """Raised when connecting/authenticating to a mail server fails, so callers can
     distinguish 'authentication / connection failed' from 'no messages'."""
@@ -377,7 +384,7 @@ def _imap_connect(
     """
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
-        logger.warning("Account not found: %s", account_id[:8] + "***")
+        logger.warning("Account not found: %s", _mask_account(account_id))
         return None
     provider = acc.get("provider") or "imap"
     if provider != "imap":
@@ -388,7 +395,7 @@ def _imap_connect(
     port = int(acc.get("imap_port") or 993)
     creds = get_credentials(account_id, "imap", username, user_scope_id=user_scope_id)
     if not creds or "password" not in creds:
-        logger.warning("No IMAP credentials for account %s", account_id[:8] + "***")
+        logger.warning("No IMAP credentials for account %s", _mask_account(account_id))
         return None
     try:
         _guard_mail_host(host)
@@ -398,17 +405,17 @@ def _imap_connect(
         conn.login(acc.get("email") or account_id, creds["password"])
         return conn
     except imaplib.IMAP4.error as e:
-        logger.warning("IMAP login failed for %s: %s", account_id[:8] + "***", e)
+        logger.warning("IMAP login failed for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(
             "Email authentication failed. Check the account's password / app password "
             "in Settings → Connections → Email."
         ) from e
     except ValueError as e:
         # SSRF guard (assert_safe_remote_host) or bad config.
-        logger.warning("IMAP host rejected for %s: %s", account_id[:8] + "***", e)
+        logger.warning("IMAP host rejected for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(str(e)) from e
     except Exception as e:
-        logger.warning("IMAP connect failed for %s: %s", account_id[:8] + "***", e)
+        logger.warning("IMAP connect failed for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(
             "Could not connect to the mail server. Check the server settings and your network."
         ) from e
@@ -443,16 +450,16 @@ def _smtp_connect(
         conn.login(acc.get("email") or account_id, creds["password"])
         return conn
     except smtplib.SMTPAuthenticationError as e:
-        logger.warning("SMTP auth failed for %s: %s", account_id[:8] + "***", e)
+        logger.warning("SMTP auth failed for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(
             "Email authentication failed (SMTP). Check the account's password / app password in Settings."
         ) from e
     except ValueError as e:
         # SSRF guard (assert_safe_remote_host) or bad config.
-        logger.warning("SMTP host rejected for %s: %s", account_id[:8] + "***", e)
+        logger.warning("SMTP host rejected for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(str(e)) from e
     except Exception as e:
-        logger.warning("SMTP connect failed for %s: %s", account_id[:8] + "***", e)
+        logger.warning("SMTP connect failed for %s: %s", _mask_account(account_id), e)
         raise MailConnectError(
             "Could not connect to the SMTP server. Check the server settings and your network."
         ) from e
@@ -509,7 +516,7 @@ def _fetch_mail_gmail(
     """Fetch mail via Gmail API. Returns list of dicts with subject, from, date, message_id."""
     token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
-        logger.warning("No valid Gmail token for account %s", account_id[:8] + "***")
+        logger.warning("No valid Gmail token for account %s", _mask_account(account_id))
         return []
     label = _gmail_label_from_folder(folder)
     params: Dict[str, Any] = {"maxResults": min(max_messages, 100), "labelIds": label}
@@ -718,13 +725,13 @@ def _send_mail_gmail(
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
-        logger.warning("_send_mail_gmail: account not found: %s", account_id)
-        append_domain_log_always("backend", f"GMAIL_SEND_ERROR account_not_found account={account_id}")
+        logger.warning("_send_mail_gmail: account not found: %s", _mask_account(account_id))
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR account_not_found account={_mask_account(account_id)}")
         return False
     token = get_valid_access_token(account_id, "gmail", username, user_scope_id=user_scope_id)
     if not token:
-        logger.warning("_send_mail_gmail: No valid token for account %s", account_id[:8] + "***")
-        append_domain_log_always("backend", f"GMAIL_SEND_ERROR token_missing account={account_id}")
+        logger.warning("_send_mail_gmail: No valid token for account %s", _mask_account(account_id))
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR token_missing account={_mask_account(account_id)}")
         return False
     from_addr = acc.get("email") or account_id
     # Gmail strips the Bcc header before delivery, so it is safe to include here for blind copies.
@@ -741,13 +748,13 @@ def _send_mail_gmail(
             timeout=30,
         )
         if r.status_code not in (200, 201):
-            logger.warning("Gmail API send failed for %s: %s %s", account_id, r.status_code, r.text[:300])
-            append_domain_log_always("backend", f"GMAIL_SEND_ERROR account={account_id} status={r.status_code} response={r.text}")
+            logger.warning("Gmail API send failed for %s: %s %s", _mask_account(account_id), r.status_code, r.text[:300])
+            append_domain_log_always("backend", f"GMAIL_SEND_ERROR account={_mask_account(account_id)} status={r.status_code} response={r.text[:300]}")
             return False
         return True
     except Exception as e:
-        logger.warning("Gmail API request failed for %s: %s", account_id, e)
-        append_domain_log_always("backend", f"GMAIL_SEND_ERROR request_exception account={account_id} error={e}")
+        logger.warning("Gmail API request failed for %s: %s", _mask_account(account_id), e)
+        append_domain_log_always("backend", f"GMAIL_SEND_ERROR request_exception account={_mask_account(account_id)} error={e}")
         return False
 
 
@@ -778,7 +785,7 @@ def _fetch_mail_microsoft(
     """Fetch mail via Microsoft Graph (GET /me/mailFolders/.../messages)."""
     token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
-        logger.warning("No valid Microsoft token for account %s", account_id[:8] + "***")
+        logger.warning("No valid Microsoft token for account %s", _mask_account(account_id))
         return []
     folder_id = _graph_folder_id(folder)
     url = f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder_id}/messages"
@@ -871,7 +878,7 @@ def _send_mail_microsoft(
         return False
     token = get_valid_access_token(account_id, "microsoft", username, user_scope_id=user_scope_id)
     if not token:
-        logger.warning("No valid Microsoft token for account %s", account_id[:8] + "***")
+        logger.warning("No valid Microsoft token for account %s", _mask_account(account_id))
         return False
     message_obj: Dict[str, Any] = {
         "subject": subject,
@@ -938,7 +945,7 @@ def _get_body_imap(
     try:
         conn = _imap_connect(account_id, username=username, user_scope_id=user_scope_id)
     except MailConnectError as e:
-        logger.warning("IMAP body fetch connect failed for %s: %s", account_id[:8] + "***", e)
+        logger.warning("IMAP body fetch connect failed for %s: %s", _mask_account(account_id), e)
         return None
     if not conn or not message_id:
         return None
@@ -1018,10 +1025,21 @@ def get_message_body_plain(
     Fetch full message body as plain text only (no HTML). Uses provider_message_id for Gmail/Graph when available.
     All return paths go through _ensure_plain_text so fancy HTML/QP never reaches the UI.
     Optional username/user_scope_id for multi-user scope.
+    With mail_engine_v2_enabled, a body cached in the v2 store is served
+    OFFLINE first (no live connection per view); live fetch stays the fallback
+    for uncached/older mail.
     """
+    try:
+        if bool(Config.get("mail_engine_v2_enabled", False)):
+            from vaf.mail.tool_bridge import get_body_text
+            cached = get_body_text(account_id, message_id, username, user_scope_id)
+            if cached:
+                return cached
+    except Exception as e:  # pragma: no cover - availability fallback
+        logger.debug("v2 body cache miss path failed: %s", e)
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
-        append_domain_log_always("backend", f"GET_BODY_ERROR account_not_found account={account_id}")
+        append_domain_log_always("backend", f"GET_BODY_ERROR account_not_found account={_mask_account(account_id)}")
         return None
     provider = (acc.get("provider") or "imap").lower()
     result: Optional[str] = None
@@ -1150,8 +1168,8 @@ def send_mail(
     Optional username/user_scope_id for multi-user scope."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
     if not acc:
-        logger.warning("send_mail: account not found: %s", account_id)
-        append_domain_log_always("backend", f"SEND_MAIL_ERROR account_not_found account={account_id}")
+        logger.warning("send_mail: account not found: %s", _mask_account(account_id))
+        append_domain_log_always("backend", f"SEND_MAIL_ERROR account_not_found account={_mask_account(account_id)}")
         return False
     provider = (acc.get("provider") or "imap").lower()
     if provider == "gmail":
@@ -1166,8 +1184,8 @@ def send_mail(
         )
     conn = _smtp_connect(account_id, username, user_scope_id=user_scope_id)
     if not conn:
-        logger.warning("send_mail: _smtp_connect failed for %s", account_id)
-        append_domain_log_always("backend", f"SEND_MAIL_ERROR smtp_connect_failed account={account_id}")
+        logger.warning("send_mail: _smtp_connect failed for %s", _mask_account(account_id))
+        append_domain_log_always("backend", f"SEND_MAIL_ERROR smtp_connect_failed account={_mask_account(account_id)}")
         return False
     try:
         from_addr = acc.get("email") or account_id
@@ -1178,12 +1196,12 @@ def send_mail(
         )
         envelope = normalize_recipients(to) + normalize_recipients(cc) + normalize_recipients(bcc)
         if not envelope:
-            logger.warning("send_mail: no valid recipients for %s", account_id)
+            logger.warning("send_mail: no valid recipients for %s", _mask_account(account_id))
             return False
         conn.sendmail(from_addr, envelope, msg.as_string())
         return True
     except Exception as e:
-        logger.warning("Send mail failed for %s: %s", account_id, e)
+        logger.warning("Send mail failed for %s: %s", _mask_account(account_id), e)
         return False
     finally:
         try:

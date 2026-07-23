@@ -206,6 +206,7 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
 # delivery step would message the user twice.
 _SEND_STEP_TOOLS = frozenset({
     "send_to_user", "send_telegram", "send_whatsapp", "send_discord", "send_slack", "send_mail",
+    "reply_mail", "forward_mail",
 })
 
 

@@ -109,12 +109,11 @@ To bridge the gap between strict multi-tenant isolation and a low-friction local
 
 **The Solution:**
 - **Read Operations (Lookup):** Tools follow a lookup chain (Scope → Legacy → Single-other-scope). This makes the system "self-healing" against UUID changes in local mode.
-- **Write Operations (Update/Auth):** When tokens are refreshed or new data is synced, the system writes back to the **effective scope** (where the credentials were actually found). This prevents data fragmentation.
+- **Write Operations (Update/Auth):** Refreshed tokens are written back under the **requested scope** (the scope the caller passed in, with the local-admin scope normalized to the legacy bucket); see `get_valid_access_token()` in `vaf/core/oauth_pkce.py`. The lookup chain makes subsequent reads find the fresh entry; a credential found under a legacy fallback key is not migrated or deleted, so a stale legacy entry can linger until the account is removed.
 
 **Best Practices for Developers:**
 1.  **Trust the Fallbacks:** Use helpers like `get_valid_access_token()` or `_get_email_config()` which already implement the fallback logic. Do not implement manual string comparisons with `"admin"`.
 2.  **Propagate the ID:** Always pass the `user_scope_id` down to internal transport functions so they can choose the correct credential bucket.
-3.  **Use Effective Scopes:** If you find data in a fallback scope, ensure any updates (like token refreshes) are saved back to that same fallback scope to maintain consistency.
 
 ## 2. Memory System Isolation
 
@@ -370,7 +369,7 @@ Currently **single-admin only** — one Discord bot per VAF instance. Not multi-
 
 ### Email
 
-Uses **per-user keyring credentials** encrypted with AES-256-GCM. Each user's IMAP/SMTP sessions use their own stored credentials. Credential keys include the `user_scope_id` when set (format: `email:{provider}:{scope_id}:{account_id}`), falling back to username-based keys for legacy data.
+Uses **per-user credential keys** in a two-tier store: the OS keyring when available (entries protected by the OS keyring itself, not by VAF encryption), with an AES-256-GCM envelope-encrypted fallback file (`email_credentials.enc`, shared DEK per file; see `vaf/core/secure_store.py`) when no keyring is usable. Each user's IMAP/SMTP sessions use their own stored credentials. Credential keys include the `user_scope_id` when set (format: `email:{provider}:{scope_id}:{account_id}`), falling back to username-based keys for legacy data; non-admin scopes never fall back to admin/legacy keys.
 
 ### Calendar (Google / Microsoft)
 

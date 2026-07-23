@@ -35,6 +35,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   1.1.16 (exponential-time expansion DoS, dev-only), DOMPurify 3.4.11 to
   3.4.12 (`CUSTOM_ELEMENT_HANDLING` bypass) and protobufjs 7.6.4 to 7.6.5 in
   the WhatsApp bridge (infinite loop in `.proto` option parsing).
+- postcss is now forced to at least 8.5.12 via an override (arbitrary file
+  read through attacker-controlled `sourceMappingURL`): Next.js exact-pins a
+  vulnerable 8.4.31 copy, which the override dedupes away to a single
+  patched node. Build-time tooling only, no runtime exposure.
 - The session token that rides in the WebSocket handshake URL
   (`/ws?token=<jwt>`, unavoidable because WebSockets cannot send an
   Authorization header) is now masked to `token=***` in the server access log

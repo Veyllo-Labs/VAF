@@ -12,7 +12,31 @@ value), and send_discord hid the attachment support its core sender always had.
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from vaf.core.platform import Platform
 from vaf.tools.send_discord import SendDiscordTool
+
+
+@pytest.fixture(autouse=True)
+def _isolate_side_effect_stores(monkeypatch, tmp_path):
+    """SendDiscordTool.run() has REAL post-send bookkeeping (session file,
+    channel-message store, activity notification). Only the network sender is
+    mocked below, so without this isolation every suite run wrote a fake
+    'Message sent via Discord / Hier dein Bericht' entry into the live
+    Activity feed and channel store (268 rows by the time it was noticed -
+    the owner reasonably asked whether we had been hacked)."""
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
+    # SessionManager does NOT go through Platform: it defaults to
+    # Path.home()/.vaf/sessions (session.py), so the outbound-session mirror
+    # needs its own redirect or discord_42.json reappears in the real store.
+    import vaf.core.session as sess
+    real_init = sess.SessionManager.__init__
+
+    def _init(self, storage_dir=None, state_registry=None):
+        real_init(self, storage_dir=str(tmp_path / "sessions"), state_registry=state_registry)
+    monkeypatch.setattr(sess.SessionManager, "__init__", _init)
 
 
 # ── send_discord attachments ──────────────────────────────────────────────────

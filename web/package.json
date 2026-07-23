@@ -30,7 +30,7 @@
     "reactflow": "^11.11.4",
     "remark-gfm": "^4.0.1",
     "styled-jsx": "^5.1.7",
-    "tailwind-merge": "^2.2.0",
+    "tailwind-merge": "^3.6.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

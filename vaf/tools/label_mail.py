@@ -16,7 +16,8 @@ from vaf.core.email_sync_store import (
     list_for_sender_relabel,
     update_message_category as store_update_message_category,
 )
-from vaf.core.email_transport import apply_sender_rules_to_category, get_account
+from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.email_accounts import apply_sender_rules_to_category, get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -107,34 +108,53 @@ class LabelMailTool(BaseTool):
         if not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
             return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
 
+        v2 = bool(Config.get("mail_engine_v2_enabled", False))
         candidates = store_candidates_for_mail(store_username, user_scope_id)
         updated_store_username = None
         updated_scope_id = None
+        set_ok = False  # explicit: a winning username can legitimately be None (admin)
         for try_username, try_scope_id in candidates:
-            init_store(try_username, try_scope_id)
-            ok = store_update_message_category(
-                try_username,
-                account_id,
-                folder,
-                message_id,
-                category,
-                user_scope_id=try_scope_id,
-            )
+            if v2:
+                from vaf.mail.service import MailService
+                ok = MailService(try_scope_id or get_local_admin_scope_id()).set_category(
+                    account_id, message_id, category)
+            else:
+                init_store(try_username, try_scope_id)
+                ok = store_update_message_category(
+                    try_username,
+                    account_id,
+                    folder,
+                    message_id,
+                    category,
+                    user_scope_id=try_scope_id,
+                )
             if ok:
+                set_ok = True
                 updated_store_username = try_username
                 updated_scope_id = try_scope_id
                 break
 
-        if updated_store_username is None:
+        if not set_ok:
             return "Message not found in the synced mailbox. Sync in Settings → Connections → Email and use message_id from mail_inbox."
 
-        from_addr = get_message_from_addr(
-            updated_store_username, account_id, folder, message_id, user_scope_id=updated_scope_id
-        )
+        if v2:
+            from vaf.mail.service import MailService
+            from_addr = MailService(updated_scope_id or get_local_admin_scope_id()).message_from_addr(
+                account_id, message_id)
+        else:
+            from_addr = get_message_from_addr(
+                updated_store_username, account_id, folder, message_id, user_scope_id=updated_scope_id)
         if from_addr:
             pattern = _pattern_from_from_addr(from_addr)
             if pattern:
                 _add_sender_rule(updated_scope_id, pattern, category)
+            if v2:
+                # The rule labels FUTURE mail from this sender on sync (the engine
+                # applies sender rules at ingest). Bulk-relabelling EXISTING mail is
+                # the native category-parity work rebuilt in P5; the legacy store
+                # scan below is skipped on the v2 path.
+                return (f"Label set to '{category}'. A sender rule was added so future mail "
+                        "from this sender gets the same label.")
             rows = list_for_sender_relabel(updated_store_username, user_scope_id=updated_scope_id)
             updated = 1
             for row in rows:

@@ -5,7 +5,9 @@
 is on, and keep the legacy path when it is off (flag-off / not-yet-synced instances
 stay capable until the P7 teardown)."""
 import vaf.tools.find_mail as fm
+import vaf.tools.label_mail as lm
 import vaf.tools.mail_inbox as mi
+import vaf.tools.mark_mail_answered as ma
 import vaf.tools.read_mail as rm
 
 
@@ -52,6 +54,44 @@ def test_mail_inbox_v2_lists_from_engine_store(monkeypatch):
     monkeypatch.setattr("vaf.mail.service.MailService", FakeSvc)
     out = mi.MailInboxTool().run()
     assert "hi there" in out and "read_mail" in out  # listing + next-step hint
+
+
+def test_mark_answered_v2_uses_mailservice(monkeypatch):
+    _flag(monkeypatch, ma, True)
+    monkeypatch.setattr(ma, "get_account", lambda *a, **k: {"provider": "imap"})
+    monkeypatch.setattr(ma, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
+
+    class FakeSvc:
+        def __init__(self, scope):
+            pass
+
+        def mark_answered(self, account_id, message_id, at=None):
+            return True
+
+    monkeypatch.setattr("vaf.mail.service.MailService", FakeSvc)
+    out = ma.MarkMailAnsweredTool().run(account_id="a@x", message_id="<m@x>")
+    assert "marked as answered" in out and "Beantwortet" in out  # typo fixed too
+
+
+def test_label_mail_v2_sets_category_and_rule(monkeypatch):
+    _flag(monkeypatch, lm, True)
+    monkeypatch.setattr(lm, "get_account", lambda *a, **k: {"provider": "imap"})
+    monkeypatch.setattr(lm, "store_candidates_for_mail", lambda u, s: [(None, "scope-x")])
+    monkeypatch.setattr(lm, "_add_sender_rule", lambda scope, pattern, category: None)
+
+    class FakeSvc:
+        def __init__(self, scope):
+            pass
+
+        def set_category(self, account_id, message_id, category):
+            return True
+
+        def message_from_addr(self, account_id, message_id):
+            return "Alice <alice@example.com>"
+
+    monkeypatch.setattr("vaf.mail.service.MailService", FakeSvc)
+    out = lm.LabelMailTool().run(account_id="a@x", message_id="<m@x>", category="social")
+    assert "Label set to 'social'" in out and "sender rule" in out
 
 
 def test_read_mail_v2_uses_mailservice_body_text(monkeypatch):

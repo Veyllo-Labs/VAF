@@ -7,8 +7,9 @@ Mark an email as answered (agent has processed it). Sets answered_at so the UI s
 Scoped to the current user in network mode.
 """
 
+from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.email_accounts import get_account
 from vaf.core.email_sync_store import init_store, update_message_answered
-from vaf.core.email_transport import get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_candidates_for_mail, store_scope_from_kwargs, store_username_from_kwargs
 
@@ -57,22 +58,28 @@ class MarkMailAnsweredTool(BaseTool):
 
         # Try same store/cred fallback as mail_inbox/find_mail/read_mail so we find the message when it lives in legacy/single-scope
         found_account = False
+        v2 = bool(Config.get("mail_engine_v2_enabled", False))
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
             acc = get_account(account_id, username=try_username, user_scope_id=try_scope_id)
             if not acc:
                 continue
             found_account = True
-            init_store(try_username, try_scope_id)
-            ok = update_message_answered(
-                username=try_username,
-                account_id=account_id,
-                folder=folder,
-                message_id=message_id,
-                answered_at=None,  # use now
-                user_scope_id=try_scope_id,
-            )
+            if v2:
+                from vaf.mail.service import MailService
+                ok = MailService(try_scope_id or get_local_admin_scope_id()).mark_answered(
+                    account_id, message_id)
+            else:
+                init_store(try_username, try_scope_id)
+                ok = update_message_answered(
+                    username=try_username,
+                    account_id=account_id,
+                    folder=folder,
+                    message_id=message_id,
+                    answered_at=None,  # use now
+                    user_scope_id=try_scope_id,
+                )
             if ok:
-                return "Message marked as answered. It will show 'Benatwortet am ...' in the Mail UI."
+                return "Message marked as answered. It will show 'Beantwortet am ...' in the Mail UI."
 
         if not found_account:
             accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)

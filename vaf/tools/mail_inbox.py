@@ -11,8 +11,10 @@ Use read_mail to get the full body of a specific message.
 import logging
 from datetime import datetime
 
+from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.email_accounts import get_account
 from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
-from vaf.core.email_transport import fetch_mail, get_account
+from vaf.core.email_transport import fetch_mail
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -165,7 +167,6 @@ class MailInboxTool(BaseTool):
         accounts = list_accounts_for_user(cred_username, user_scope_id=user_scope_id)
         if not accounts:
             # Debug: log full context so we can diagnose why accounts are missing
-            from vaf.core.config import Config
             ec_raw = Config.get("email_config")
             by_user_keys = list((Config.get("email_config_by_user") or {}).keys())
             logger.warning(
@@ -188,17 +189,26 @@ class MailInboxTool(BaseTool):
         messages: list = []
         used_store_username = store_username
         used_scope_id = user_scope_id
+        v2 = bool(Config.get("mail_engine_v2_enabled", False))
         for try_username, try_scope_id in store_candidates:
-            init_store(try_username, try_scope_id)
-            messages = store_list_messages(
-                account_id=account_id or None,
-                folder=folder,
-                limit=max_messages,
-                offset=0,
-                username=try_username,
-                user_scope_id=try_scope_id,
-                category=category,
-            )
+            if v2:
+                # v2: list straight from the engine store. Legacy path kept for
+                # flag-off / not-yet-synced instances until P7.
+                from vaf.mail.service import MailService
+                messages = MailService(try_scope_id or get_local_admin_scope_id()).list_for_agent(
+                    account_id=account_id or None, folder=folder, category=category,
+                    limit=max_messages)
+            else:
+                init_store(try_username, try_scope_id)
+                messages = store_list_messages(
+                    account_id=account_id or None,
+                    folder=folder,
+                    limit=max_messages,
+                    offset=0,
+                    username=try_username,
+                    user_scope_id=try_scope_id,
+                    category=category,
+                )
             if messages:
                 used_store_username = try_username
                 used_scope_id = try_scope_id
@@ -229,6 +239,13 @@ class MailInboxTool(BaseTool):
             return (
                 "No messages in the sync store yet. Ask the user to open Settings → Connections → Email and click Sync on each account, "
                 "or call mail_inbox with a specific account_id to fetch that account."
+            )
+        if v2:
+            # v2 populates the store via the background supervisor/IDLE - do not
+            # live-fetch into the legacy store here (P3.3).
+            return (
+                f"No messages in {folder} in the sync store yet. The mailbox syncs in the "
+                "background; ask the user to click Sync in Settings → Connections → Email, then try again."
             )
         try:
             messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=user_scope_id)

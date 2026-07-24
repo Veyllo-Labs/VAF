@@ -7,6 +7,7 @@ Use when the user asks "what does the X mail say?" or "details about the [sender
 If exactly one match, returns the full body so the agent can answer in one call.
 """
 
+from vaf.core.config import Config, get_local_admin_scope_id
 from vaf.core.email_sync_store import search_messages
 from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
@@ -68,16 +69,22 @@ class FindMailTool(BaseTool):
         if not query:
             return "query is required (e.g. 'Postman' or 'postman.com')."
         # Use same store fallback chain as mail_inbox so we search the same DB as the Mail dashboard
+        v2 = bool(Config.get("mail_engine_v2_enabled", False))
         matches = []
+        used_scope, used_username = user_scope_id, cred_username
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
-            matches = search_messages(
-                query=query,
-                folder=folder,
-                limit=limit,
-                username=try_username,
-                user_scope_id=try_scope_id,
-            )
+            if v2:
+                # v2: FTS search straight from the engine store (subject/from/to/body,
+                # cross-folder). Legacy per-folder LIKE search kept for flag-off.
+                from vaf.mail.service import MailService
+                matches = MailService(try_scope_id or get_local_admin_scope_id()).search_for_agent(
+                    query, limit=limit)
+            else:
+                matches = search_messages(
+                    query=query, folder=folder, limit=limit,
+                    username=try_username, user_scope_id=try_scope_id)
             if matches:
+                used_scope, used_username = try_scope_id, try_username
                 break
         matches, blocked_count = filter_phishing_messages_for_agent(matches)
         if blocked_count and not matches:
@@ -98,14 +105,20 @@ class FindMailTool(BaseTool):
             out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
         if len(matches) == 1:
             m = matches[0]
-            body = get_message_body_plain(
-                account_id=m.get("account_id") or "",
-                message_id=m.get("message_id") or "",
-                folder=m.get("folder") or "INBOX",
-                username=cred_username,
-                user_scope_id=user_scope_id,
-                provider_message_id=(m.get("provider_message_id") or "").strip() or None,
-            )
+            if v2:
+                from vaf.mail.service import MailService
+                body = MailService(used_scope or get_local_admin_scope_id()).body_text(
+                    m.get("message_id") or "", account_id=m.get("account_id") or "",
+                    cred_username=used_username)
+            else:
+                body = get_message_body_plain(
+                    account_id=m.get("account_id") or "",
+                    message_id=m.get("message_id") or "",
+                    folder=m.get("folder") or "INBOX",
+                    username=cred_username,
+                    user_scope_id=user_scope_id,
+                    provider_message_id=(m.get("provider_message_id") or "").strip() or None,
+                )
             if body and body.strip():
                 out += "\n\n--- Full body ---\n" + body.strip()
             else:

@@ -15,7 +15,7 @@ import { useTranslations } from 'next-intl';
 import {
     AlertTriangle, Archive, ChevronRight, CornerUpLeft, CornerUpRight, Inbox, Loader2, Mail,
     MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings, ShieldCheck, Star,
-    Trash2, X,
+    Tag, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 
@@ -35,13 +35,13 @@ interface Folder { id: number; name: string; special_use?: string; total?: numbe
 interface ThreadRow {
     thread_id: number; message_count: number; unread_count: number; last_date_ts?: number;
     acct: string; newest_pk: number; subject: string; from_addr: string; snippet: string;
-    has_attachments: number; flags: string[]; answered?: number;
+    has_attachments: number; flags: string[]; answered?: number; category?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Msg {
     id: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
     internaldate_ts?: number; snippet: string; flags: string[]; folder_name: string;
-    has_attachments: number; answered_at?: string;
+    has_attachments: number; answered_at?: string; category?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Body {
@@ -80,6 +80,14 @@ function fmtDateStr(s?: string): string {
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' })
         + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Gmail-style categories the sync produces + the user can relabel to. Matches the
+// classic dashboard's STANDARD_CATEGORIES; 'primary' is the default and shows no chip.
+const STD_CATEGORIES = ['primary', 'social', 'promotions'] as const;
+function catDisplay(cat?: string): string {
+    const c = (cat || '').trim();
+    return c ? c.charAt(0).toUpperCase() + c.slice(1).replace(/_/g, ' ') : '';
 }
 
 function fmtSize(n?: number): string {
@@ -189,6 +197,16 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
     const [loading, setLoading] = useState(false);
     const [allowRemote, setAllowRemote] = useState(false);
     const [remoteFetched, setRemoteFetched] = useState(false);
+    const [cat, setCat] = useState((msg.category || 'primary').trim() || 'primary');
+    const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
+    const relabel = async (next: string) => {
+        const prev = cat;
+        setCat(next);
+        try {
+            const r = await jpost(`api/mail/messages/${msg.id}/category`, { category: next }, 'PATCH');
+            if (r?.category) setCat(r.category);
+        } catch { setCat(prev); }
+    };
     useEffect(() => {
         if (!expanded) return;
         if (body && !allowRemote) return;          // have the blocked render; user has not opted in
@@ -231,6 +249,18 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
                     <span className="flex-1">{t('suspiciousWarning')}</span>
                 </div>
             )}
+            <div className="px-5 pt-1 pb-1 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-[#9a9a9a]" />
+                <label className="sr-only" htmlFor={`cat-${msg.id}`}>{t('categoryLabel')}</label>
+                <select id={`cat-${msg.id}`} value={(STD_CATEGORIES as readonly string[]).includes(cat) ? cat : '__custom'}
+                    onChange={e => relabel(e.target.value)} title={t('categoryLabel')}
+                    className="bg-[#262626] border border-[#2e2e2e] rounded-md text-[11px] px-1.5 py-0.5 text-[#c8c8c8] hover:border-[#444] focus:outline-none">
+                    {STD_CATEGORIES.map(c => <option key={c} value={c}>{catLabel(c)}</option>)}
+                    {!(STD_CATEGORIES as readonly string[]).includes(cat) && (
+                        <option value={cat}>{catDisplay(cat)}</option>
+                    )}
+                </select>
+            </div>
             {loading && <div className="px-5 py-6"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>}
             {body && body.blocked_remote > 0 && (
                 <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#2b2417] border border-[#4a3b1e] text-[#d4a24e] text-[13px] flex items-center gap-2">
@@ -267,6 +297,7 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
 
 export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => void; onManageAccounts?: () => void }) {
     const t = useTranslations('mailV2');
+    const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
     const [sel, setSel] = useState<{ account: string | null; folder: string }>({ account: null, folder: 'INBOX' });
@@ -571,6 +602,9 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                                 <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
                             </button>
                             <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-[#9a9a9a] group-hover:hidden">
+                                {row.category && row.category !== 'primary' && (
+                                    <span className="px-1.5 rounded-md bg-[#262626] text-[#b0b0b0]">{catLabel(row.category)}</span>
+                                )}
                                 {row.answered ? <Reply className="w-3 h-3 text-[#7bbf7b]" aria-label={t('answered')} /> : null}
                                 {row.has_attachments ? <Paperclip className="w-3 h-3" /> : null}
                                 {row.message_count > 1 && (

@@ -139,6 +139,17 @@ class MailService:
         self.store.set_category(pk, category)
         return True
 
+    def relabel(self, message_pk: int, category: str) -> Optional[str]:
+        """Local-only category relabel by pk (the UI has the message pk). Returns
+        the normalized category, or None if the message does not exist. Category is
+        a local classification (Gmail-style tabs); nothing is written to the server,
+        so this is NOT gated by mail_engine_write_enabled."""
+        cat = re.sub(r"\s+", "_", str(category or "").strip().lower())[:64] or "primary"
+        if self.store.get_message(message_pk) is None:
+            return None
+        self.store.set_category(message_pk, cat)
+        return cat
+
     def mark_answered(self, account_id: str, message_id: str, at: Optional[str] = None) -> bool:
         pk = self.store.pk_by_message_id(message_id, account_id=account_id)
         if pk is None:

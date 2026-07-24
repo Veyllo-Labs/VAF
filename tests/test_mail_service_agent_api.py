@@ -71,6 +71,16 @@ def test_find_pk_from_addr_and_metadata_writes(svc):
     assert not svc.set_category("bob@example.com", "<nope@x>", "x")  # unknown -> False
 
 
+def test_relabel_by_pk_normalizes_and_guards_missing(svc):
+    # P5.3: local-only category relabel by pk (the UI has the pk). Normalizes
+    # (lowercase, spaces->underscore, 64-char cap) and returns None for a missing pk.
+    _apk, _fpk, pk = _seed(svc.store)
+    assert svc.relabel(pk, "  Social Media ") == "social_media"
+    assert svc.store.get_message(pk)["category"] == "social_media"
+    assert svc.relabel(pk, "") == "primary"          # empty -> default
+    assert svc.relabel(999999, "social") is None      # unknown pk -> None
+
+
 def test_body_text_from_cache(svc):
     _seed(svc.store)
     assert "body text here" in (svc.body_text("<a1@example.com>") or "")

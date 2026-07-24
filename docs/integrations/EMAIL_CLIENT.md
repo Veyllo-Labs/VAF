@@ -139,6 +139,17 @@ synced-inbox viewer, not a full mail client.
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
   `_trusted_sender_domains` (all admin-only). Note: scoring sees only
   subject/snippet/sender today; making it body-aware remains open.
+- Answered indicator (P5.2): the store tracks `answered_at` (set when a reply is
+  sent); `store.list_threads` exposes an `answered` count and the v2 client shows
+  a reply marker on answered conversations and "Answered on {date}" in the reader,
+  so a mail is not answered twice.
+- Gmail-style categories (P5.3): the sync maps Gmail's Promotions/Social system
+  labels to a per-message `category` (default `primary`); the v2 client shows a
+  category chip on non-primary conversations and a relabel picker in the reader.
+  Relabel is LOCAL-only (`PATCH /api/mail/messages/{pk}/category` ->
+  `MailService.relabel`, normalizes to lowercase/underscores/64-char cap); nothing
+  is written to the server, so it is gated by the v2 flag only, NOT
+  `mail_engine_write_enabled`.
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in

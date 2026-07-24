@@ -61,6 +61,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - The v2 mail client now shows which mail has already been answered: a reply
   marker with the date in the reader and a marker on answered conversations in
   the list, so a reply is not accidentally sent twice.
+- The v2 mail client now shows Gmail-style categories: a category chip on
+  Promotions/Social conversations and a relabel picker in the reader to move a
+  mail to another category. Relabeling is local only and changes nothing on the
+  mail server.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

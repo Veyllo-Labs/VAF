@@ -1307,6 +1307,12 @@
     "suspiciousWarning": "Diese Nachricht wirkt verdächtig (mögliches Phishing). Prüfe den Absender und öffne keine Links oder Anhänge, denen du nicht vertraust.",
     "answered": "Beantwortet",
     "answeredOn": "Beantwortet am {when}",
+    "categoryLabel": "Kategorie",
+    "cat": {
+      "primary": "Primär",
+      "social": "Soziales",
+      "promotions": "Werbung"
+    },
     "notCached": "Noch nicht lokal synchronisiert - nur Vorschau. Sync ausführen, um die Nachricht offline zu laden.",
     "attachment": "Anhang",
     "flagOffTitle": "Mail-Engine v2 ist nicht aktiviert",

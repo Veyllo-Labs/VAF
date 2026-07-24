@@ -263,6 +263,25 @@ async def trash_message(message_pk: int,
     return out
 
 
+@router.patch("/messages/{message_pk}/category")
+async def set_message_category(message_pk: int, body: Dict[str, Any] = Body(...),
+                               _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Local-only Gmail-style category relabel: {category: str}. Category is a
+    local classification, not a server write, so this needs only the v2 flag (no
+    mail_engine_write_enabled)."""
+    _require_v2()
+    scope = _scope_of(_user)
+
+    def _run():
+        from vaf.mail.service import MailService
+        return MailService(scope).relabel(message_pk, str(body.get("category") or ""))
+
+    cat = await asyncio.to_thread(_run)
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"ok": True, "category": cat}
+
+
 @router.get("/messages/{message_pk}/reply-prefill")
 async def reply_prefill(message_pk: int, reply_all: bool = False, forward: bool = False,
                         _user: Dict[str, Any] = Depends(_get_current_user)):

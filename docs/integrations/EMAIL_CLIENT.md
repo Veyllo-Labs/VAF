@@ -9,6 +9,7 @@ get_account, sender-category rules),
 `label_mail.py` / `mark_mail_answered.py` / `list_email_accounts.py`,
 `web/app/mail/page.tsx` (three-pane `MailClientView`),
 `web/components/connections/MailClient.tsx` (window modal),
+`web/components/connections/MailAccounts.tsx` (in-client account panel),
 `web/components/connections/MailDashboard.tsx`, `EmailSetupWizard.tsx`).
 
 Related docs: [CONNECTIONS.md](CONNECTIONS.md) (connection/channel model,
@@ -158,6 +159,14 @@ synced-inbox viewer, not a full mail client.
   than the one mail. All of it is a LOCAL classification (nothing written to the
   mail server), normalized to lowercase/underscores/64-char cap, and gated by the
   v2 flag only, NOT `mail_engine_write_enabled`.
+- In-client account panel (P5.5, `MailAccounts.tsx`): the mail window's gear opens
+  a native panel (an overlay inside `MailClientView`, no separate wizard) built
+  entirely on the P4.3 `/api/mail/accounts` endpoints - list accounts with their
+  IMAP-ready state, add an IMAP account (test then save), verify a saved account,
+  edit its label, toggle auto-sync, and calendar-safe remove. OAuth sign-in
+  (Gmail/Microsoft add, or "Upgrade to IMAP" re-consent) stays on the shared
+  `/api/email` hub, so those actions delegate to `EmailSetupWizard` via the panel's
+  `onAddOAuth` callback (passed down as `MailClientView`'s `onManageAccounts`).
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in

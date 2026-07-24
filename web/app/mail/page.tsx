@@ -18,6 +18,7 @@ import {
     Tag, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { MailAccounts } from '@/components/connections/MailAccounts';
 
 const api = (p: string) => `${getApiBase()}${p.startsWith('/') ? p : `/${p}`}`;
 const jfetch = async (p: string, init?: RequestInit) => {
@@ -302,6 +303,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const t = useTranslations('mailV2');
     const catLabel = (c: string) => (STD_CATEGORIES as readonly string[]).includes(c) ? t(`cat.${c}`) : catDisplay(c);
     const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
+    const [showAccounts, setShowAccounts] = useState(false);
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
     const [sel, setSel] = useState<{ account: string | null; folder: string }>({ account: null, folder: 'INBOX' });
     const [threads, setThreads] = useState<ThreadRow[]>([]);
@@ -469,7 +471,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const newestMsg = threadMsgs[threadMsgs.length - 1];
 
     return (
-        <div className="h-full flex flex-col bg-[#181818] text-[#e8e8e8]">
+        <div className="relative h-full flex flex-col bg-[#181818] text-[#e8e8e8]">
             <header className="flex items-center gap-3 px-4 py-2.5 border-b border-[#2e2e2e] bg-[#1f1f1f]">
                 <div className="w-8 h-8 rounded-lg bg-[#e05d44] grid place-items-center"><Mail className="w-4 h-4 text-white" /></div>
                 <h1 className="font-semibold text-[15px]">{t('title')}</h1>
@@ -490,12 +492,10 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                         <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin')} /> {t('sync')}
                     </button>
                 </div>
-                {onManageAccounts && (
-                    <button type="button" onClick={onManageAccounts} title={t('manageAccounts')}
-                        className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
-                        <Settings className="w-4 h-4" />
-                    </button>
-                )}
+                <button type="button" onClick={() => setShowAccounts(true)} title={t('manageAccounts')}
+                    className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                    <Settings className="w-4 h-4" />
+                </button>
                 {onClose && (
                     <button type="button" onClick={onClose} title={t('close')}
                         className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
@@ -689,6 +689,11 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                 <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm text-[#9a9a9a]">
                     <Mail className="w-4 h-4" /> {t('alreadySent')}
                 </div>
+            )}
+            {showAccounts && (
+                <MailAccounts
+                    onClose={() => { setShowAccounts(false); loadStatus(); }}
+                    onAddOAuth={onManageAccounts} />
             )}
         </div>
     );

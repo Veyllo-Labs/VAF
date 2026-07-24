@@ -69,6 +69,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   rule for that sender and re-labels every other mail from the same sender (past
   and future), matching the classic mail dashboard. This stays local (nothing is
   changed on the mail server).
+- The v2 mail window's gear now opens a built-in account panel instead of the setup
+  wizard: see your mail accounts, add an IMAP account (with a Test button), verify
+  a connection, rename an account, toggle auto-sync, and remove an account. Removing
+  an account that also powers your Calendar keeps it connected for Calendar. Adding
+  or upgrading a Gmail/Microsoft account still uses the existing sign-in wizard.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

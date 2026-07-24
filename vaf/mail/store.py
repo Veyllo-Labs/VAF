@@ -695,6 +695,8 @@ class MailStore:
             f"SELECT t.id AS thread_id, t.message_count, t.last_date_ts, a.account_id AS acct, "
             f"(SELECT COUNT(*) FROM messages mu WHERE mu.thread_id=t.id "
             f" AND mu.flags NOT LIKE '%\\\\Seen%') AS unread_count, "
+            f"(SELECT COUNT(*) FROM messages ma WHERE ma.thread_id=t.id "
+            f" AND ma.answered_at IS NOT NULL AND ma.answered_at != '') AS answered, "
             f"m.id AS newest_pk, m.subject, m.from_addr, m.snippet, m.has_attachments, m.flags, "
             f"m.category "
             f"FROM threads t JOIN accounts a ON a.id=t.account_id "

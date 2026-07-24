@@ -89,6 +89,22 @@ def test_threading_reply_joins_and_out_of_order_merge(store):
     assert trip and trip[0]["message_count"] == 3
 
 
+def test_list_threads_reports_answered_flag(store):
+    # P5.2: the conversation list surfaces an answered indicator; the flag is 1
+    # when ANY message in the thread has answered_at set.
+    apk, fpk = _setup(store)
+    root = store.ingest_message(apk, fpk, 30, _msg("<q@example.com>", "Question"))
+    other = store.ingest_message(apk, fpk, 31, _msg("<n@example.com>", "News"))
+    assert {t["thread_id"]: t["answered"] for t in store.list_threads()} == {
+        store.get_message(root)["thread_id"]: 0,
+        store.get_message(other)["thread_id"]: 0,
+    }
+    store.set_answered(root)
+    ans = {t["thread_id"]: t["answered"] for t in store.list_threads()}
+    assert ans[store.get_message(root)["thread_id"]] == 1
+    assert ans[store.get_message(other)["thread_id"]] == 0
+
+
 def test_gm_thrid_overrides_threading(store):
     apk, fpk = _setup(store)
     a = store.ingest_message(apk, fpk, 1, _msg("<x1@example.com>", "One"), gm_thrid="777")

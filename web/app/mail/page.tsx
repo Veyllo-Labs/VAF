@@ -35,13 +35,13 @@ interface Folder { id: number; name: string; special_use?: string; total?: numbe
 interface ThreadRow {
     thread_id: number; message_count: number; unread_count: number; last_date_ts?: number;
     acct: string; newest_pk: number; subject: string; from_addr: string; snippet: string;
-    has_attachments: number; flags: string[];
+    has_attachments: number; flags: string[]; answered?: number;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Msg {
     id: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
     internaldate_ts?: number; snippet: string; flags: string[]; folder_name: string;
-    has_attachments: number;
+    has_attachments: number; answered_at?: string;
     suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Body {
@@ -69,6 +69,17 @@ function fmtWhen(ts?: number): string {
         return d.toLocaleDateString([], { weekday: 'short' });
     }
     return d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+// answered_at is stored as an ISO string or a SQLite "YYYY-MM-DD HH:MM:SS" UTC
+// text; normalize both to a local date+time string, '' if unparseable.
+function fmtDateStr(s?: string): string {
+    if (!s) return '';
+    const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s) ? s.replace(' ', 'T') + 'Z' : s;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' })
+        + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtSize(n?: number): string {
@@ -203,9 +214,15 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
     return (
         <div className="border-b border-[#2e2e2e]">
             <button type="button" onClick={onToggle} className="w-full text-left px-5 pt-4 pb-1">
-                <div className="text-sm">
+                <div className="text-sm flex items-center flex-wrap gap-x-1">
                     <span className="font-semibold">{msg.from_addr.split('<')[0].trim() || msg.from_addr}</span>
                     <span className="text-[#9a9a9a]"> · {t('toMe', { name: msg.to_addrs.split('<')[0].trim() || '' })} · {fmtWhen(msg.date_ts || msg.internaldate_ts)} · {msg.folder_name}</span>
+                    {msg.answered_at && (
+                        <span className="inline-flex items-center gap-1 text-[#7bbf7b] font-medium">
+                            · <Reply className="w-3.5 h-3.5" />
+                            {fmtDateStr(msg.answered_at) ? t('answeredOn', { when: fmtDateStr(msg.answered_at) }) : t('answered')}
+                        </span>
+                    )}
                 </div>
             </button>
             {msg.suspicious_for_agent && (
@@ -554,6 +571,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                                 <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
                             </button>
                             <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-[#9a9a9a] group-hover:hidden">
+                                {row.answered ? <Reply className="w-3 h-3 text-[#7bbf7b]" aria-label={t('answered')} /> : null}
                                 {row.has_attachments ? <Paperclip className="w-3 h-3" /> : null}
                                 {row.message_count > 1 && (
                                     <span className={cn('px-1.5 rounded-md', row.unread_count > 0 ? 'bg-[#e05d44] text-white' : 'bg-[#262626]')}>

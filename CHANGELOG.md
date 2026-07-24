@@ -58,6 +58,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   same way the classic dashboard did: the conversation list shows a warning badge
   and the reader a warning banner on mails the agent's phishing filter would hide,
   so nothing dangerous is silently surfaced only to the human.
+- The v2 mail client now shows which mail has already been answered: a reply
+  marker with the date in the reader and a marker on answered conversations in
+  the list, so a reply is not accidentally sent twice.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

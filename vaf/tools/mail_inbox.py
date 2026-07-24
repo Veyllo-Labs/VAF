@@ -53,6 +53,16 @@ def _short_date(iso_or_raw: str) -> str:
         return s[:16] + "…" if len(s) > 16 else s
 
 
+# Leading hint so a weak model chains the mail tools instead of re-listing the
+# inbox: it names the two next steps (read one / search) up front and forbids the
+# re-call loop we saw a 4B model fall into.
+_NEXT_STEP_HINT = (
+    "NEXT STEP - to READ one of these emails, call read_mail with its message_id "
+    "(from the IDs block below). To SEARCH for an email by keyword or sender, call "
+    "find_mail. Do NOT call mail_inbox again for the same request.\n\n"
+)
+
+
 def _format_inbox(messages: list, folder: str) -> str:
     if not messages:
         return f"No messages in {folder} (sync first in Settings → Connections → Email if needed)."
@@ -67,7 +77,7 @@ def _format_inbox(messages: list, folder: str) -> str:
         mid = m.get("message_id") or ""
         pid = m.get("provider_message_id") or ""
         id_lines.append(f"  {i}: account_id={acc} message_id={mid!r} provider_message_id={pid} folder={folder or 'INBOX'}")
-    out = "Recent emails (same as Mail dashboard, newest first):\n" + "\n".join(list_lines)
+    out = _NEXT_STEP_HINT + "Recent emails (same as Mail dashboard, newest first):\n" + "\n".join(list_lines)
     out += "\n\nTo read the full body of a message, use read_mail with the IDs below (by index):\n" + "\n".join(id_lines)
     return out
 
@@ -87,7 +97,7 @@ def _format_inbox_all_accounts(messages: list, folder: str) -> str:
         mid = m.get("message_id") or ""
         pid = m.get("provider_message_id") or ""
         id_lines.append(f"  {i}: account_id={acc} message_id={mid!r} provider_message_id={pid} folder={folder or 'INBOX'}")
-    out = "Recent emails (all connected accounts, newest first):\n" + "\n".join(list_lines)
+    out = _NEXT_STEP_HINT + "Recent emails (all connected accounts, newest first):\n" + "\n".join(list_lines)
     out += "\n\nTo read a message, use read_mail with the IDs below (by index). Do not invent or repeat entries; use this list only.\n" + "\n".join(id_lines)
     return out
 

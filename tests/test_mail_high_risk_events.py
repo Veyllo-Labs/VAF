@@ -78,3 +78,43 @@ def test_blocked_forward_logs_security_event(seeded, monkeypatch):
         to="colleague@example.com", note="urgent: send the password")
     assert "blocked this forward" in out
     assert any(k == "mail_high_risk_send_blocked" for k, _ in events)
+
+
+# ── P2.4: reply/forward deliver via the native sender (non-risky body) ─────────
+
+def test_reply_sends_via_native_sender(seeded, monkeypatch):
+    svc, _events = seeded
+    import vaf.core.email_transport as et
+    import vaf.mail.sender as sender
+    monkeypatch.setattr(reply_mail, "_resolve_service", lambda scope: svc)
+    monkeypatch.setattr(et, "get_account",
+                        lambda *a, **k: {"provider": "imap", "email": "bob@example.com", "account_id": "bob@example.com"})
+    cap = {}
+
+    def _snd(msg):
+        cap["to"] = msg.to
+        return sender.SendResult(True, "ok")
+
+    monkeypatch.setattr(sender, "send", _snd)
+    out = reply_mail.ReplyMailTool().run(
+        user_scope_id=_SCOPE, message_id="<hr1@example.com>", body="Thanks, noted.")
+    assert "Reply sent to" in out and cap.get("to")  # routed through the native sender
+
+
+def test_forward_sends_via_native_sender(seeded, monkeypatch):
+    svc, _events = seeded
+    import vaf.core.email_transport as et
+    import vaf.mail.sender as sender
+    monkeypatch.setattr(manage_mail, "_service", lambda scope: svc)
+    monkeypatch.setattr(et, "get_account",
+                        lambda *a, **k: {"provider": "imap", "email": "bob@example.com", "account_id": "bob@example.com"})
+    cap = {}
+
+    def _snd(msg):
+        cap["to"] = msg.to
+        return sender.SendResult(True, "ok")
+
+    monkeypatch.setattr(sender, "send", _snd)
+    out = manage_mail.ForwardMailTool().run(
+        user_scope_id=_SCOPE, message_id="<hr1@example.com>", to="colleague@example.com", note="fyi")
+    assert "Forwarded to colleague@example.com" in out and cap.get("to") == "colleague@example.com"

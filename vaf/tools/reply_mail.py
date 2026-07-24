@@ -86,17 +86,31 @@ class ReplyMailTool(BaseTool):
             return ("Security check blocked this reply as potentially high-risk. "
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "reply_mail again with confirm_high_risk=true.")
-        from vaf.core.email_transport import send_mail as transport_send
+        from vaf.core.email_transport import get_account
+        from vaf.mail import compose, sender
+        acc = get_account(pre["account_id"], username=cred_username, user_scope_id=user_scope_id)
+        if not acc:
+            return f"Account '{pre['account_id']}' not found."
         try:
-            ok = transport_send(
-                pre["account_id"], to=pre["to"], subject=pre["subject"], body=full_body,
-                cc=pre.get("cc") or None, in_reply_to=pre.get("in_reply_to") or None,
-                references=pre.get("references") or None,
-                username=cred_username, user_scope_id=user_scope_id)
+            from_addr = acc.get("email") or pre["account_id"]
+            mime = compose.build_message(from_addr, pre["to"], pre["subject"], full_body,
+                                         cc=pre.get("cc") or None,
+                                         in_reply_to=pre.get("in_reply_to") or None,
+                                         references=pre.get("references") or None)
+            msg = sender.OutgoingMessage(
+                account=acc, raw_bytes=bytes(mime),
+                to=pre["to"], cc=pre.get("cc") or "",
+                username=cred_username, user_scope_id=user_scope_id,
+                subject=pre["subject"], body=full_body, message_id=mime["Message-ID"],
+                in_reply_to=pre.get("in_reply_to") or None, references=pre.get("references") or None)
+            res = sender.send(msg)
         except Exception as e:
             return f"Failed to send reply: {e}"
-        if not ok:
-            return "Failed to send reply (check the account connection in Settings)."
+        if res.classification == "ambiguous":
+            return ("The reply may already have been delivered but the server did not confirm "
+                    "it - do NOT resend without checking the Sent folder first.")
+        if not res.ok:
+            return f"Failed to send reply (check the account connection in Settings)."
         try:
             svc.store._conn().execute(
                 "UPDATE messages SET answered_at=datetime('now') WHERE id=?", (pk,))

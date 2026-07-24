@@ -103,14 +103,25 @@ class ForwardMailTool(BaseTool):
             return ("Security check blocked this forward as potentially high-risk. "
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "forward_mail again with confirm_high_risk=true.")
-        from vaf.core.email_transport import send_mail as transport_send
+        from vaf.core.email_transport import get_account
+        from vaf.mail import compose, sender
+        acc = get_account(pre["account_id"], username=cred_username, user_scope_id=user_scope_id)
+        if not acc:
+            return f"Account '{pre['account_id']}' not found."
         try:
-            ok = transport_send(pre["account_id"], to=to, subject=pre["subject"],
-                                body=full_body, username=cred_username,
-                                user_scope_id=user_scope_id)
+            from_addr = acc.get("email") or pre["account_id"]
+            mime = compose.build_message(from_addr, to, pre["subject"], full_body)
+            msg = sender.OutgoingMessage(
+                account=acc, raw_bytes=bytes(mime), to=to,
+                username=cred_username, user_scope_id=user_scope_id,
+                subject=pre["subject"], body=full_body, message_id=mime["Message-ID"])
+            res = sender.send(msg)
         except Exception as e:
             return f"Failed to forward: {e}"
-        return (f"Forwarded to {to} (subject: {pre['subject']})." if ok
+        if res.classification == "ambiguous":
+            return ("The forward may already have been delivered but the server did not confirm "
+                    "it - do NOT resend without checking the Sent folder first.")
+        return (f"Forwarded to {to} (subject: {pre['subject']})." if res.ok
                 else "Failed to forward (check the account connection in Settings).")
 
 

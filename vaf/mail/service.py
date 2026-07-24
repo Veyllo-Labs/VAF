@@ -42,6 +42,29 @@ _REMOTE_URL = re.compile(r"^\s*(https?:)?//", re.IGNORECASE)
 _STYLE_URL = re.compile(r"url\s*\(|expression\s*\(|@import|\\\\", re.IGNORECASE)
 
 
+def _agent_row(m: Dict[str, Any]) -> Dict[str, Any]:
+    """The legacy row shape the agent mail tools consume. Single source (P3.2,
+    moved off tool_bridge); the field set matches email_sync_store exactly so the
+    tools' output stays byte-identical when they repoint to MailService."""
+    from datetime import datetime, timezone
+    ts = m.get("date_ts") or m.get("internaldate_ts")
+    iso = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat() if ts else None
+    return {
+        "account_id": m.get("acct") or "",
+        "folder": m.get("folder_name") or "INBOX",
+        "message_id": m.get("message_id") or f"pk-{m.get('id')}",
+        "category": m.get("category") or "primary",
+        "provider_message_id": m.get("gm_msgid") or "",
+        "subject": m.get("subject") or "",
+        "from": m.get("from_addr") or "",
+        "date": iso or "",
+        "message_date_iso": iso,
+        "body_snippet": m.get("snippet") or "",
+        "synced_at": m.get("created_at") or "",
+        "answered_at": (m.get("answered_at") or "").strip() if m.get("answered_at") else "",
+    }
+
+
 class MailService:
     def __init__(self, user_scope_id: str):
         scope = str(user_scope_id or "").strip()
@@ -70,6 +93,84 @@ class MailService:
     def folders(self, account_id: str) -> List[Dict[str, Any]]:
         apk = self.store.account_pk(account_id)
         return self.store.list_folders(apk) if apk else []
+
+    # ── agent-facing API (P3.2): legacy-row lists, on-demand body, metadata.
+    #    The tools repoint onto these in P3.3-P3.5; shipped unused here. ──
+
+    def list_for_agent(self, account_id: Optional[str] = None, folder: Optional[str] = None,
+                       category: Optional[str] = None, limit: int = 50,
+                       offset: int = 0) -> List[Dict[str, Any]]:
+        cat = None if (category or "").strip() in ("", "all") else category
+        rows = self.store.list_messages(account_id=account_id or None, folder=folder or None,
+                                        category=cat, limit=limit, offset=offset)
+        return [_agent_row(m) for m in rows]
+
+    def search_for_agent(self, query: str, account_id: Optional[str] = None,
+                         limit: int = 50) -> List[Dict[str, Any]]:
+        rows = self.store.search(query, account_id=account_id or None, limit=limit)
+        return [_agent_row(m) for m in rows]
+
+    def find_pk_by_message_id(self, message_id: str, account_id: Optional[str] = None) -> Optional[int]:
+        return self.store.pk_by_message_id(message_id, account_id=account_id)
+
+    def message_from_addr(self, account_id: str, message_id: str) -> Optional[str]:
+        pk = self.store.pk_by_message_id(message_id, account_id=account_id)
+        return (self.store.get_message(pk) or {}).get("from_addr") if pk else None
+
+    def set_category(self, account_id: str, message_id: str, category: str) -> bool:
+        pk = self.store.pk_by_message_id(message_id, account_id=account_id)
+        if pk is None:
+            return False
+        self.store.set_category(pk, category)
+        return True
+
+    def mark_answered(self, account_id: str, message_id: str, at: Optional[str] = None) -> bool:
+        pk = self.store.pk_by_message_id(message_id, account_id=account_id)
+        if pk is None:
+            return False
+        self.store.set_answered(pk, at)
+        return True
+
+    def body_text(self, message_id: str, account_id: Optional[str] = None,
+                  cred_username: Optional[str] = None) -> Optional[str]:
+        """Plain-text body by Message-ID: served from the cached raw, else fetched
+        on demand from the server. None when the message is unknown locally."""
+        pk = self.store.pk_by_message_id(message_id, account_id=account_id)
+        return self.ensure_body(pk, cred_username=cred_username) if pk else None
+
+    def ensure_body(self, pk: int, cred_username: Optional[str] = None) -> Optional[str]:
+        """The message's plain-text body, fetching + caching the raw from the server
+        if it is not cached yet (UID FETCH BODY.PEEK[])."""
+        raw = self.store.get_raw(pk)
+        if raw is None:
+            raw = self._fetch_raw_on_demand(pk, cred_username)
+        return (parse_message(raw).body_text or None) if raw else None
+
+    def _fetch_raw_on_demand(self, pk: int, cred_username: Optional[str] = None) -> Optional[bytes]:
+        acct, folder, uid = self.store.message_location(pk)
+        if not acct or not folder or not uid:
+            return None
+        from vaf.core.email_accounts import get_account
+        from vaf.mail.imap_client import _safe_logout, build_imap_client
+        acc = get_account(acct, cred_username, user_scope_id=self.user_scope_id)
+        if not acc:
+            return None
+        client = None
+        try:
+            client = build_imap_client(acc, cred_username, self.user_scope_id)
+            client.select_folder(folder, readonly=True)
+            data = client.fetch([int(uid)], ["BODY.PEEK[]"]).get(int(uid)) or {}
+            raw = data.get(b"BODY[]") or data.get("BODY[]")
+            if raw:
+                self.store.cache_raw(pk, bytes(raw))
+                return bytes(raw)
+            return None
+        except Exception as e:
+            logger.warning("on-demand body fetch failed for pk=%s: %s", pk, e)
+            return None
+        finally:
+            if client is not None:
+                _safe_logout(client)
 
     # ── body rendering ─────────────────────────────────────────────────────
 

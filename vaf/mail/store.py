@@ -593,6 +593,54 @@ class MailStore:
         d["server_flags"] = json.loads(d.get("server_flags") or "[]")
         return d
 
+    # ── agent-facing helpers (P3.2): resolve a Message-ID, cache an on-demand body,
+    #    write category/answered by pk, locate a message for a live fetch ──
+
+    def pk_by_message_id(self, message_id: str, account_id: Optional[str] = None) -> Optional[int]:
+        """Resolve a Message-ID to the best local pk. A self-addressed mail exists
+        in several folders (INBOX + Sent/All-Mail); prefer a copy whose body is
+        cached so read paths do not land on an empty duplicate. Bracket-tolerant."""
+        mid = (message_id or "").strip()
+        variants = {mid, mid.strip("<>"), f"<{mid.strip('<>')}>"}
+        q = ",".join("?" for _ in variants)
+        row = self._conn().execute(
+            f"SELECT m.id FROM messages m JOIN accounts a ON a.id=m.account_id "
+            f"WHERE m.message_id IN ({q}) AND (?='' OR a.account_id=?) "
+            f"ORDER BY (m.body_state='cached') DESC, m.id DESC LIMIT 1",
+            (*variants, account_id or "", account_id or "")).fetchone()
+        return int(row["id"]) if row else None
+
+    def message_location(self, pk: int) -> tuple:
+        """(account_id_str, folder_name, uid) for a pk - drives the on-demand fetch."""
+        row = self._conn().execute(
+            "SELECT a.account_id AS acct, f.name AS folder, m.uid AS uid "
+            "FROM messages m JOIN accounts a ON a.id=m.account_id "
+            "JOIN folders f ON f.id=m.folder_id WHERE m.id=?", (pk,)).fetchone()
+        return (row["acct"], row["folder"], row["uid"]) if row else (None, None, None)
+
+    def cache_raw(self, pk: int, raw: bytes) -> None:
+        """Cache a freshly-fetched raw for an existing message (on-demand body)."""
+        conn = self._conn()
+        if len(raw) <= RAW_CACHE_MAX_BYTES:
+            self._store_raw(conn, pk, raw)
+            conn.execute("UPDATE messages SET body_state='cached' WHERE id=?", (pk,))
+        else:
+            conn.execute("UPDATE messages SET body_state='too_large' WHERE id=?", (pk,))
+        conn.commit()
+
+    def set_category(self, pk: int, category: str) -> None:
+        conn = self._conn()
+        conn.execute("UPDATE messages SET category=? WHERE id=?", (category, pk))
+        conn.commit()
+
+    def set_answered(self, pk: int, at: Optional[str] = None) -> None:
+        conn = self._conn()
+        if at:
+            conn.execute("UPDATE messages SET answered_at=? WHERE id=?", (at, pk))
+        else:
+            conn.execute("UPDATE messages SET answered_at=datetime('now') WHERE id=?", (pk,))
+        conn.commit()
+
     def list_attachments(self, pk: int) -> List[Dict[str, Any]]:
         return [dict(r) for r in self._conn().execute(
             "SELECT * FROM attachments WHERE message_pk=? ORDER BY id", (pk,)).fetchall()]

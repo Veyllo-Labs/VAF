@@ -480,3 +480,129 @@ async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_use
         "Cache-Control": "private, max-age=86400",
         "Content-Security-Policy": "default-src 'none'",
     })
+
+
+# ── account management (P4.3): the /mail account panel (P5) builds on these; OAuth
+#    sign-in stays on the shared /api/email hub (P4.4). All build on the
+#    email_accounts SSOT + credential_store + the P4.2 calendar-safe delete. ──
+
+def _acct_identity(user: Dict[str, Any]):
+    from vaf.tools.mail_utils import cred_username_from_kwargs
+    return (user.get("username") or "admin",
+            cred_username_from_kwargs({"username": user.get("username")}),
+            user.get("user_scope_id"))
+
+
+@router.get("/accounts")
+async def accounts(_user: Dict[str, Any] = Depends(_get_current_user)):
+    """Connected mail accounts (calendar-only leftovers hidden via mail_enabled)."""
+    _require_v2()
+    from vaf.core.email_accounts import list_mail_accounts
+    username, _cred, scope = _acct_identity(_user)
+    rows = await asyncio.to_thread(lambda: list_mail_accounts(username, user_scope_id=scope))
+    return {"accounts": [{
+        "account_id": a.get("account_id") or a.get("email"),
+        "email": a.get("email") or a.get("account_id"),
+        "provider": (a.get("provider") or "imap"),
+        "label": (a.get("label") or "").strip(),
+        "imap_ready": bool(a.get("imap_ready")),
+        "auto_sync_enabled": bool(a.get("auto_sync_enabled")),
+    } for a in rows]}
+
+
+@router.post("/accounts/test")
+async def accounts_test(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Try an IMAP login; nothing is saved."""
+    _require_v2()
+    from vaf.core.email_accounts import test_imap_login
+    email = (body.get("email") or "").strip()
+    password = body.get("password") or ""
+    if not email or not password:
+        raise HTTPException(status_code=422, detail="email and password are required")
+    ok, err, hint = await asyncio.to_thread(
+        lambda: test_imap_login(email, password, body.get("imap_host"), body.get("imap_port")))
+    return {"ok": ok, "error": err, "hint": hint}
+
+
+@router.post("/accounts")
+async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Add an IMAP account: verify the login, store the password, add the config
+    entry with host/port defaulted from the provider presets."""
+    _require_v2()
+    from vaf.core.credential_store import set_email_imap_password
+    from vaf.core.email_accounts import IMAP_SMTP_DEFAULTS, add_account, test_imap_login
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    if not email or not password:
+        raise HTTPException(status_code=422, detail="email and password are required")
+    d = IMAP_SMTP_DEFAULTS.get(email.split("@")[-1] if "@" in email else "", {})
+    imap_host = (body.get("imap_host") or "").strip() or d.get("imap_host")
+    imap_port = int(body.get("imap_port") or d.get("imap_port") or 993)
+    smtp_host = (body.get("smtp_host") or "").strip() or d.get("smtp_host")
+    smtp_port = int(body.get("smtp_port") or d.get("smtp_port") or 587)
+    ok, err, hint = await asyncio.to_thread(lambda: test_imap_login(email, password, imap_host, imap_port))
+    if not ok:
+        return {"ok": False, "error": err, "hint": hint}
+    username, cred_username, scope = _acct_identity(_user)
+    await asyncio.to_thread(lambda: set_email_imap_password(email, password, cred_username, user_scope_id=scope))
+    await asyncio.to_thread(lambda: add_account({
+        "account_id": email, "email": email, "provider": "imap", "enabled": True,
+        "label": (body.get("label") or "").strip(), "imap_host": imap_host, "imap_port": imap_port,
+        "smtp_host": smtp_host, "smtp_port": smtp_port, "auto_sync_enabled": True, "mail_enabled": True,
+    }, username, user_scope_id=scope))
+    return {"ok": True, "account_id": email}
+
+
+@router.post("/accounts/{account_id}/verify")
+async def accounts_verify(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Re-check the connection for a saved account (IMAP password / OAuth token)."""
+    _require_v2()
+    from vaf.core.email_accounts import get_account, test_imap_login
+    username, cred_username, scope = _acct_identity(_user)
+    acc = await asyncio.to_thread(lambda: get_account(account_id, username, user_scope_id=scope))
+    if not acc:
+        raise HTTPException(status_code=404, detail="account not found")
+    provider = (acc.get("provider") or "imap").lower()
+    if provider in ("gmail", "microsoft"):
+        from vaf.core.oauth_pkce import get_valid_access_token
+        lane = "microsoft_imap" if provider == "microsoft" else provider
+        tok = await asyncio.to_thread(lambda: get_valid_access_token(account_id, lane, cred_username, user_scope_id=scope))
+        return {"ok": bool(tok), "error": "" if tok else "no valid token (re-consent may be required)"}
+    from vaf.core.credential_store import get_email_credentials
+    creds = await asyncio.to_thread(lambda: get_email_credentials(account_id, "imap", cred_username, user_scope_id=scope))
+    if not creds or not creds.get("password"):
+        return {"ok": False, "error": "no stored password"}
+    ok, err, _hint = await asyncio.to_thread(
+        lambda: test_imap_login(acc.get("email") or account_id, creds["password"], acc.get("imap_host"), acc.get("imap_port")))
+    return {"ok": ok, "error": err}
+
+
+@router.patch("/accounts/{account_id}")
+async def accounts_patch(account_id: str, body: Dict[str, Any] = Body(...), _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Edit a per-account label or auto-sync toggle."""
+    _require_v2()
+    from vaf.core.email_accounts import patch_account
+    fields: Dict[str, Any] = {}
+    if "label" in body:
+        fields["label"] = (body.get("label") or "").strip()
+    if "auto_sync_enabled" in body:
+        fields["auto_sync_enabled"] = bool(body.get("auto_sync_enabled"))
+    if not fields:
+        raise HTTPException(status_code=422, detail="nothing to patch (label / auto_sync_enabled)")
+    username, _cred, scope = _acct_identity(_user)
+    ok = await asyncio.to_thread(lambda: patch_account(account_id, fields, username, user_scope_id=scope))
+    if not ok:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"ok": True}
+
+
+@router.delete("/accounts/{account_id}")
+async def accounts_delete(account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Calendar-safe delete via the shared email_accounts orchestrator (a
+    gmail/microsoft account keeps its shared OAuth token + entry for Calendar)."""
+    _require_v2()
+    from vaf.core.email_accounts import delete_mail_account
+    username, cred_username, scope = _acct_identity(_user)
+    res = await asyncio.to_thread(lambda: delete_mail_account(
+        account_id, username=username, cred_username=cred_username, user_scope_id=scope))
+    return {"ok": True, **res}

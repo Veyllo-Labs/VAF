@@ -104,7 +104,12 @@ synced-inbox viewer, not a full mail client.
   shared helpers in `mail_utils.py`. The agent stamps `username` +
   `user_scope_id` into tool kwargs at dispatch (`agent.py`) and the workflow
   engine does the same (`workflows/engine.py`); tools never trust
-  model-provided identity.
+  model-provided identity. On the v2 flag the read/write verbs go straight to
+  `MailService` (list/search/on-demand body/category/answered) instead of the
+  tool_bridge; the legacy `email_sync_store`/`email_transport` path is kept behind
+  the flag for flag-off / not-yet-synced instances until the P7 teardown. A guard
+  (`tests/test_mail_tools_import_guard.py`) asserts no tool imports the FastAPI
+  route module `email_routes`.
 - Web UI: `MailDashboard.tsx` (INBOX list, category chips, subject/sender search,
   plain-text detail view) and `EmailSetupWizard.tsx` (OAuth/IMAP connect wizard).
   With the v2 client shipped, the Connections "Email" tile now opens the v2

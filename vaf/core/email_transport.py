@@ -618,20 +618,10 @@ def _get_body_gmail(
         return None
 
 
-def normalize_recipients(value: Any) -> List[str]:
-    """Parse a recipient string ("a@x.com, b@y.com") or list into validated address strings.
-    Invalid/empty entries are dropped; order is preserved and duplicates removed."""
-    if not value:
-        return []
-    items = value if isinstance(value, list) else [value]
-    raw = ", ".join(str(x) for x in items if x)
-    out: List[str] = []
-    from email.utils import getaddresses
-    for _name, addr in getaddresses([raw]):
-        addr = (addr or "").strip()
-        if "@" in addr and "." in addr.rsplit("@", 1)[-1] and addr not in out:
-            out.append(addr)
-    return out
+# normalize_recipients now lives in the route-independent vaf/mail/addressing.py
+# (mail v2-only port, P2). Re-exported here under the historical name so existing
+# callers keep working; a guard test pins them to the same object.
+from vaf.mail.addressing import normalize_recipients  # noqa: E402,F401
 
 
 def _build_mime_message(

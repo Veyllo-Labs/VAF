@@ -211,10 +211,27 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   write the local DB immediately and enqueue idempotent operations (flag,
   move, append, delete) replayed against the server using the `server_flags`
   diff.
-- Libraries: IMAPClient (BSD-3) as the IMAP driver, aiosmtplib (MIT) for
-  SMTP, stdlib `email` with `policy.default` for parsing (per-message error
-  boundary: a malformed message must never abort a folder sync), nh3 (MIT)
-  for HTML sanitization, zstandard for blob compression. aioimaplib is
+- Native send (`vaf/mail/sender.py`, mail v2-only port P2): one delivery core for
+  every account. Dispatch by `(provider, imap_ready)`: `imap` -> SMTP password;
+  `gmail`/`microsoft` AND `imap_ready` -> SMTP SASL XOAUTH2 (Gmail union token,
+  Microsoft `microsoft_imap` token - the same lanes the IMAP client uses); an
+  OAuth account not yet `imap_ready` falls onto a documented
+  `email_transport.send_mail` REST/Graph delegate (a shrinking strangler tail
+  removed in P7; each fall emits a distinct countable log line). Delivery uses
+  stdlib `smtplib` (every caller is synchronous - agent tool run / OpExecutor
+  drain via `asyncio.to_thread` - so no event-loop bridge is needed and the SMTP
+  conversation is driven step by step for honest hand-off classification). A
+  `handed_off` flag flips at the DATA command: a failure before it is
+  transient/permanent, at or after it is ambiguous (parked, never re-sent). Bcc
+  is stripped from the delivered wire and rides the SMTP envelope only;
+  `normalize_recipients` lives in `vaf/mail/addressing.py`. All four senders
+  (send_mail/reply_mail/forward_mail tools + `writeback._op_send`) route here.
+- Libraries: IMAPClient (BSD-3) as the IMAP driver, stdlib `smtplib` for SMTP
+  submission (the native sender; aiosmtplib remains a declared dependency but is
+  unused - a synchronous send path fits every caller), stdlib `email` with
+  `policy.default` for parsing (per-message error boundary: a malformed message
+  must never abort a folder sync), nh3 (MIT) for HTML sanitization, zstandard for
+  blob compression. aioimaplib is
   rejected (GPL-3.0). bleach is EOL - never adopt it.
 - Auth lanes: (1) password / app password (GMX, web.de, T-Online, iCloud,
   Yahoo, consumer Gmail) with provider presets and help texts; (2) Microsoft

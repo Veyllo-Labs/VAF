@@ -50,6 +50,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a privacy proxy: the sender's server never sees the reader's address, SVG
   and non-image responses are refused, and refused hosts are logged to the
   security event log.
+- The v2 mail engine gained a native SMTP send core (SMTP password and OAuth
+  XOAUTH2) so outgoing mail no longer depends on the provider REST/Graph APIs
+  for IMAP-capable accounts; an ambiguous failure after the message is handed to
+  the server is parked, never re-sent, so a mail is never delivered twice.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

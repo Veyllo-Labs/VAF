@@ -57,6 +57,31 @@ def test_list_accounts_with_labels_reads_the_ssot(monkeypatch):
         {"email": "a@x", "label": "Work"}, {"email": "b@y", "label": ""}]
 
 
+def test_imap_presets_and_probe_are_the_one_ssot_object():
+    # P4.1: IMAP presets + the login probe relocated to the SSOT, re-exported.
+    assert email_routes.IMAP_SMTP_DEFAULTS is ea.IMAP_SMTP_DEFAULTS
+    assert email_routes._test_imap_login is ea.test_imap_login
+
+
+def test_account_crud_and_mail_enabled_marker(monkeypatch):
+    # P4.1: add/patch/remove + the mail_enabled marker (calendar-safe delete keeps
+    # the entry but hides it from the mail list).
+    store = {"email_config": {"accounts": [{"account_id": "a@x", "email": "a@x", "provider": "imap"}]}}
+    monkeypatch.setattr(ea, "get_local_admin_username", lambda: "admin")
+    monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: "s")
+    monkeypatch.setattr(ea.Config, "get", staticmethod(lambda k, d=None: store.get(k, d)))
+    monkeypatch.setattr(ea.Config, "load", staticmethod(lambda: dict(store)))
+    monkeypatch.setattr(ea.Config, "save", staticmethod(lambda cfg: store.update(cfg)))
+
+    ea.add_account({"account_id": "b@y", "email": "b@y", "provider": "gmail"})
+    assert [a["account_id"] for a in store["email_config"]["accounts"]] == ["a@x", "b@y"]
+    assert ea.patch_account("b@y", {"label": "Work"}) and not ea.patch_account("nope@z", {"label": "x"})
+    ea.set_mail_enabled("a@x", False)  # calendar-only leftover: keep entry, hide from mail
+    assert [a["account_id"] for a in ea.list_mail_accounts()] == ["b@y"]
+    assert ea.remove_account("b@y") and not ea.remove_account("b@y")
+    assert [a["account_id"] for a in store["email_config"]["accounts"]] == ["a@x"]
+
+
 def _patch_config(monkeypatch, *, email_config, by_scope, by_user,
                   admin_scope="admin-scope", admin_user="admin"):
     monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: admin_scope)

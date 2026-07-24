@@ -153,3 +153,120 @@ def apply_sender_rules_to_category(
         if pattern and pattern in from_lower:
             return r.get("category") or current_category
     return current_category
+
+
+# ── IMAP/SMTP presets + connection probe (relocated from email_routes, P4.1) ──
+
+IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "gmail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
+    "googlemail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
+    "outlook.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+    "hotmail.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+    "live.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+    "yahoo.com": {"imap_host": "imap.mail.yahoo.com", "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com", "smtp_port": 587},
+    "icloud.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
+    "me.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
+    "outlook.de": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+    "gmx.de": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
+    "gmx.net": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
+    "web.de": {"imap_host": "imap.web.de", "imap_port": 993, "smtp_host": "smtp.web.de", "smtp_port": 587},
+    "t-online.de": {"imap_host": "secureimap.t-online.de", "imap_port": 993, "smtp_host": "securesmtp.t-online.de", "smtp_port": 587},
+}
+
+
+def test_imap_login(email: str, password: str, imap_host: Optional[str] = None,
+                    imap_port: Optional[int] = None) -> tuple:
+    """Try an IMAP login with the given credentials; saves nothing. Returns
+    (success, error_message, hint). hint is 2FA/app-password guidance."""
+    import imaplib
+    import ssl as _ssl
+
+    from vaf.network.binding import assert_safe_remote_host
+    email = (email or "").strip().lower()
+    domain = email.split("@")[-1] if "@" in email else ""
+    defaults = IMAP_SMTP_DEFAULTS.get(domain, {})
+    host = (imap_host or "").strip() or defaults.get("imap_host", "imap.gmail.com")
+    port = imap_port if imap_port is not None else defaults.get("imap_port", 993)
+    hint = None
+    if domain in ("gmail.com", "googlemail.com"):
+        hint = "Gmail with 2FA requires an App Password. Create one at: https://myaccount.google.com/apppasswords"
+    elif domain in ("outlook.com", "hotmail.com", "live.com", "live.de", "msn.com", "outlook.de", "office365.com"):
+        hint = ("Outlook.com no longer supports IMAP with app passwords (Microsoft retired Basic auth in 2024). "
+                "Use 'Sign in with Microsoft' instead - an admin must configure the OAuth client first.")
+    try:
+        assert_safe_remote_host(host, allow_private=bool(Config.get("email_allow_private_hosts", False)))
+    except ValueError as e:
+        return False, str(e), hint
+    try:
+        conn = imaplib.IMAP4_SSL(host, port=port, ssl_context=_ssl.create_default_context(), timeout=30)
+        conn.login(email, password)
+        conn.noop()
+        conn.logout()
+        return True, "", None
+    except imaplib.IMAP4.error as e:
+        return False, (str(e).strip() or "IMAP login failed"), hint
+    except Exception as e:
+        return False, (str(e).strip() or "Connection failed"), hint
+
+
+# ── account-config CRUD (P4.1): the /api/mail account endpoints build on these ──
+
+def _acct_key(a: Dict[str, Any]) -> str:
+    return (a.get("account_id") or a.get("email") or "").strip().lower()
+
+
+def add_account(entry: Dict[str, Any], username: Optional[str] = None,
+                user_scope_id: Optional[str] = None) -> None:
+    """Insert or replace an account entry (matched by account_id/email)."""
+    ec = dict(get_email_config(username, user_scope_id=user_scope_id) or {})
+    k = (entry.get("account_id") or entry.get("email") or "").strip().lower()
+    accounts = [a for a in (ec.get("accounts") or []) if _acct_key(a) != k]
+    accounts.append(entry)
+    ec["accounts"] = accounts
+    save_email_config(ec, username, user_scope_id=user_scope_id)
+
+
+def patch_account(account_id: str, fields: Dict[str, Any], username: Optional[str] = None,
+                  user_scope_id: Optional[str] = None) -> bool:
+    ec = dict(get_email_config(username, user_scope_id=user_scope_id) or {})
+    accounts = list(ec.get("accounts") or [])
+    k = (account_id or "").strip().lower()
+    hit = False
+    for a in accounts:
+        if _acct_key(a) == k:
+            a.update(fields)
+            hit = True
+    if hit:
+        ec["accounts"] = accounts
+        save_email_config(ec, username, user_scope_id=user_scope_id)
+    return hit
+
+
+def remove_account(account_id: str, username: Optional[str] = None,
+                   user_scope_id: Optional[str] = None) -> bool:
+    ec = dict(get_email_config(username, user_scope_id=user_scope_id) or {})
+    k = (account_id or "").strip().lower()
+    accounts = list(ec.get("accounts") or [])
+    kept = [a for a in accounts if _acct_key(a) != k]
+    if len(kept) == len(accounts):
+        return False
+    ec["accounts"] = kept
+    save_email_config(ec, username, user_scope_id=user_scope_id)
+    return True
+
+
+def set_mail_enabled(account_id: str, enabled: bool, username: Optional[str] = None,
+                     user_scope_id: Optional[str] = None) -> bool:
+    """Owner decision (2026-07-24): deleting a mail account that ALSO backs Calendar
+    keeps its shared OAuth token AND config entry, but flips mail_enabled=False so
+    the mail account list hides it while Calendar still resolves it. The marker
+    lives in the account dict - no new config key."""
+    return patch_account(account_id, {"mail_enabled": bool(enabled)}, username, user_scope_id=user_scope_id)
+
+
+def list_mail_accounts(username: Optional[str] = None,
+                       user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Accounts to show in the mail UI: everything except mail-disabled entries
+    (calendar-only leftovers). A missing mail_enabled means True (existing accounts)."""
+    ec = get_email_config(username, user_scope_id=user_scope_id)
+    return [a for a in (ec.get("accounts") or []) if a.get("mail_enabled", True) is not False]

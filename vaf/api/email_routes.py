@@ -24,7 +24,12 @@ from datetime import datetime, timezone
 import requests
 
 from vaf.core.config import Config
-from vaf.core.email_accounts import get_email_config, save_email_config
+from vaf.core.email_accounts import (
+    IMAP_SMTP_DEFAULTS,
+    get_email_config,
+    save_email_config,
+    test_imap_login,
+)
 from vaf.core.credential_store import get_email_credentials, set_email_imap_password
 from vaf.core.email_sync_store import (
     delete_messages_older_than,
@@ -100,22 +105,8 @@ def _store_and_cred_from_user(user: Dict[str, Any]) -> tuple[str, Optional[str]]
     return username, username
 
 
-# Default IMAP/SMTP servers by domain (TLS)
-IMAP_SMTP_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "gmail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
-    "googlemail.com": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
-    "outlook.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "hotmail.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "live.com": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "yahoo.com": {"imap_host": "imap.mail.yahoo.com", "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com", "smtp_port": 587},
-    "icloud.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
-    "me.com": {"imap_host": "imap.mail.me.com", "imap_port": 993, "smtp_host": "smtp.mail.me.com", "smtp_port": 587},
-    "outlook.de": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
-    "gmx.de": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
-    "gmx.net": {"imap_host": "imap.gmx.net", "imap_port": 993, "smtp_host": "mail.gmx.net", "smtp_port": 587},
-    "web.de": {"imap_host": "imap.web.de", "imap_port": 993, "smtp_host": "smtp.web.de", "smtp_port": 587},
-    "t-online.de": {"imap_host": "secureimap.t-online.de", "imap_port": 993, "smtp_host": "securesmtp.t-online.de", "smtp_port": 587},
-}
+# IMAP/SMTP presets now live in the route-independent SSOT
+# vaf/core/email_accounts.py (P4.1); imported above and re-exported here.
 
 
 class AddImapAccountRequest(BaseModel):
@@ -143,45 +134,9 @@ _get_email_config = get_email_config
 _save_email_config = save_email_config
 
 
-def _test_imap_login(
-    email: str,
-    password: str,
-    imap_host: Optional[str] = None,
-    imap_port: Optional[int] = None,
-) -> tuple[bool, str, Optional[str]]:
-    """
-    Try IMAP login with the given credentials. Does not save anything.
-    Returns (success, error_message, hint). hint is for 2FA/App-Password (e.g. Gmail).
-    """
-    import imaplib
-    email = (email or "").strip().lower()
-    domain = email.split("@")[-1] if "@" in email else ""
-    defaults = IMAP_SMTP_DEFAULTS.get(domain, {})
-    host = (imap_host or "").strip() or defaults.get("imap_host", "imap.gmail.com")
-    port = imap_port if imap_port is not None else defaults.get("imap_port", 993)
-    hint = None
-    if domain in ("gmail.com", "googlemail.com"):
-        hint = "Gmail with 2FA requires an App Password. Create one at: https://myaccount.google.com/apppasswords"
-    elif domain in ("outlook.com", "hotmail.com", "live.com", "live.de", "msn.com", "outlook.de", "office365.com"):
-        hint = "Outlook.com no longer supports IMAP with app passwords (Microsoft retired Basic auth in 2024). Use 'Sign in with Microsoft' in the wizard instead—an admin must configure the OAuth client first (expand 'For admins' in the email wizard)."
-    try:
-        _guard_mail_host(host)
-    except ValueError as e:
-        return False, str(e), hint
-    try:
-        conn = imaplib.IMAP4_SSL(host, port=port, ssl_context=ssl.create_default_context(), timeout=30)
-        conn.login(email, password)
-        conn.noop()
-        conn.logout()
-        return True, "", None
-    except imaplib.IMAP4.error as e:
-        err = str(e).strip() or "IMAP login failed"
-        if "Authentication failed" in err or "LOGIN failed" in err or "invalid credentials" in err.lower():
-            return False, err, hint
-        return False, err, hint
-    except Exception as e:
-        err = str(e).strip() or "Connection failed"
-        return False, err, hint
+# The IMAP connection probe now lives in vaf/core/email_accounts.py (P4.1);
+# re-exported here under the historical private name.
+_test_imap_login = test_imap_login
 
 
 def _add_account(

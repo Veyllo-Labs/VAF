@@ -270,3 +270,40 @@ def list_mail_accounts(username: Optional[str] = None,
     (calendar-only leftovers). A missing mail_enabled means True (existing accounts)."""
     ec = get_email_config(username, user_scope_id=user_scope_id)
     return [a for a in (ec.get("accounts") or []) if a.get("mail_enabled", True) is not False]
+
+
+def delete_mail_account(account_id: str, username: Optional[str] = None,
+                        cred_username: Optional[str] = None,
+                        user_scope_id: Optional[str] = None) -> Dict[str, Any]:
+    """Calendar-safe account delete (owner decision + EMAIL_CLIENT.md fail-closed
+    lifecycle), centralized so the legacy route and the /api/mail endpoint share
+    ONE cascade. Drops the v2 store rows/blobs/FTS/ops for the account and its
+    MAIL-only IMAP credential lanes. A gmail/microsoft account shares its OAuth
+    token with Calendar (Gmail union token; Microsoft's calendar token) - so the
+    shared token AND the config entry are KEPT, the entry just flagged
+    mail_enabled=False so the mail list hides it while Calendar still resolves it
+    (its `enabled` stays true). A mail-only account (imap/icloud) is fully removed."""
+    cred_username = cred_username if cred_username is not None else username
+    acc = get_account(account_id, username, user_scope_id=user_scope_id) or {}
+    provider = (acc.get("provider") or "imap").lower()
+    backs_calendar = provider in ("gmail", "microsoft")
+    result: Dict[str, Any] = {"ok": True, "backs_calendar": backs_calendar, "kept_for_calendar": False}
+    # v2 store cascade (best-effort: the store may not exist on a flag-off instance)
+    try:
+        if Config.get("mail_engine_v2_enabled", False):
+            from vaf.mail.store import MailStore
+            scope = (user_scope_id or "").strip() or get_local_admin_scope_id()
+            MailStore(scope).delete_account(account_id)
+    except Exception as e:  # pragma: no cover - defensive
+        result["store_error"] = str(e)
+    from vaf.core.credential_store import delete_email_credentials
+    if backs_calendar:
+        # NEVER revoke the shared OAuth token; drop only the mail-only IMAP lanes.
+        for lane in ("imap", "microsoft_imap", "apple", "icloud"):
+            delete_email_credentials(account_id, lane, cred_username, user_scope_id=user_scope_id)
+        set_mail_enabled(account_id, False, username, user_scope_id=user_scope_id)
+        result["kept_for_calendar"] = True
+    else:
+        delete_email_credentials(account_id, provider=None, username=cred_username, user_scope_id=user_scope_id)
+        remove_account(account_id, username, user_scope_id=user_scope_id)
+    return result

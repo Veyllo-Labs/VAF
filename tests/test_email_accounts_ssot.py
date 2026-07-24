@@ -82,6 +82,43 @@ def test_account_crud_and_mail_enabled_marker(monkeypatch):
     assert [a["account_id"] for a in store["email_config"]["accounts"]] == ["a@x"]
 
 
+def _patch_store(monkeypatch, store):
+    monkeypatch.setattr(ea, "get_local_admin_username", lambda: "admin")
+    monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: "s")
+    monkeypatch.setattr(ea.Config, "get", staticmethod(lambda k, d=None: store.get(k, d)))
+    monkeypatch.setattr(ea.Config, "load", staticmethod(lambda: dict(store)))
+    monkeypatch.setattr(ea.Config, "save", staticmethod(lambda cfg: store.update(cfg)))
+    lanes = []
+    import vaf.core.credential_store as cs
+    monkeypatch.setattr(cs, "delete_email_credentials",
+                        lambda aid, provider=None, username=None, user_scope_id=None: lanes.append(provider))
+    return lanes
+
+
+def test_delete_mail_account_keeps_shared_token_for_calendar(monkeypatch):
+    # gmail also backs Calendar: keep the shared OAuth token AND the entry, just
+    # hide it from the mail list. The shared gmail/microsoft lane is NEVER revoked.
+    store = {"email_config": {"accounts": [
+        {"account_id": "g@x", "email": "g@x", "provider": "gmail", "enabled": True}]}}
+    lanes = _patch_store(monkeypatch, store)
+    res = ea.delete_mail_account("g@x", username="admin", user_scope_id="s")
+    assert res["kept_for_calendar"] is True
+    acc = store["email_config"]["accounts"][0]
+    assert acc["account_id"] == "g@x" and acc["mail_enabled"] is False and acc["enabled"] is True
+    assert ea.list_mail_accounts(username="admin", user_scope_id="s") == []  # hidden from mail
+    assert "gmail" not in lanes and "microsoft" not in lanes and None not in lanes  # token kept
+    assert "microsoft_imap" in lanes and "imap" in lanes  # only mail-only lanes dropped
+
+
+def test_delete_mail_account_fully_removes_mail_only_account(monkeypatch):
+    store = {"email_config": {"accounts": [{"account_id": "i@x", "email": "i@x", "provider": "imap"}]}}
+    lanes = _patch_store(monkeypatch, store)
+    res = ea.delete_mail_account("i@x", username="admin", user_scope_id="s")
+    assert res["kept_for_calendar"] is False
+    assert store["email_config"]["accounts"] == []  # fully removed
+    assert None in lanes  # provider=None -> all credential lanes swept
+
+
 def _patch_config(monkeypatch, *, email_config, by_scope, by_user,
                   admin_scope="admin-scope", admin_user="admin"):
     monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: admin_scope)

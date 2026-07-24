@@ -814,28 +814,18 @@ async def patch_account(request: Request, account_id: str, body: PatchAccountBod
 
 @router.delete("/accounts/{account_id}")
 async def remove_account(request: Request, account_id: str, _user: Dict[str, Any] = Depends(_get_current_user)):
-    """Remove account from config and delete credentials from keyring. Scoped to current user."""
-    from vaf.core.credential_store import delete_email_credentials
+    """Calendar-safe account delete via the shared email_accounts cascade: drops the
+    v2 store rows + the mail-only credential lanes; a gmail/microsoft account keeps
+    its shared OAuth token AND config entry (flagged mail_enabled=False) so Calendar
+    stays connected, a mail-only account is fully removed. Scoped to current user."""
+    from vaf.core.email_accounts import delete_mail_account
     _username = _user.get("username", "admin")
     _user_scope_id = _user.get("user_scope_id")
-    # v2 engine cascade: removing the account must also drop its rows, blobs
-    # and FTS entries from the per-scope mail.db (review finding). Best-effort.
-    try:
-        if Config.get("mail_engine_v2_enabled", False):
-            from vaf.core.config import get_local_admin_scope_id
-            from vaf.mail.store import MailStore
-            _v2_scope = (_user_scope_id or "").strip() or get_local_admin_scope_id()
-            if _v2_scope:
-                await asyncio.to_thread(lambda: MailStore(_v2_scope).delete_account(account_id))
-    except Exception as _e:
-        logger.warning("v2 store cascade delete failed: %s", _e)
     _, cred_username = _store_and_cred_from_user(_user)
-    ec = _get_email_config(_username, user_scope_id=_user_scope_id)
-    accounts = [a for a in (ec.get("accounts") or []) if a.get("account_id") != account_id and a.get("email") != account_id]
-    ec["accounts"] = accounts
-    _save_email_config(ec, _username, user_scope_id=_user_scope_id)
-    delete_email_credentials(account_id, provider=None, username=cred_username, user_scope_id=_user_scope_id)
-    return {"ok": True}
+    res = await asyncio.to_thread(
+        lambda: delete_mail_account(account_id, username=_username,
+                                    cred_username=cred_username, user_scope_id=_user_scope_id))
+    return {"ok": True, **res}
 
 
 # Interval for background auto-sync (must match frontend AUTO_SYNC_INTERVAL_MS / 1000)

@@ -18,6 +18,7 @@ copy): a user_scope_id resolves email_config_by_scope FIRST and never falls back
 across scopes; the local admin uses the legacy email_config blob; a non-admin
 username without a scope resolves email_config_by_user.
 """
+import re
 from typing import Any, Dict, List, Optional
 
 from vaf.core.config import (
@@ -153,6 +154,43 @@ def apply_sender_rules_to_category(
         if pattern and pattern in from_lower:
             return r.get("category") or current_category
     return current_category
+
+
+def pattern_from_from_addr(from_addr: str) -> str:
+    """Derive a sender-rule pattern from a From header
+    ('Twitch <no-reply@twitch.tv>' -> 'no-reply@twitch.tv'). Relocated from
+    email_routes (P5.4); re-exported there to keep one implementation."""
+    s = (from_addr or "").strip()
+    if not s:
+        return s
+    m = re.search(r"<([^>]+@[^>]+)>", s)
+    if m:
+        return m.group(1).strip().lower()
+    if "@" in s:
+        return s.lower()
+    return s
+
+
+def upsert_sender_rule(
+    pattern: str,
+    category: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> bool:
+    """Add or replace a sender->category rule in the config blob for the given
+    identity (last write for a pattern wins). Returns False for an empty pattern.
+    Category is normalized like the readers (lowercase/underscores/64-char cap)."""
+    pat = (pattern or "").strip().lower()
+    if not pat:
+        return False
+    cat = re.sub(r"\s+", "_", str(category or "").strip().lower())[:64] or "primary"
+    ec = get_email_config(username, user_scope_id=user_scope_id)
+    rules = [r for r in (ec.get("sender_category_rules") or [])
+             if isinstance(r, dict) and (r.get("pattern") or "").strip().lower() != pat]
+    rules.append({"pattern": pat, "category": cat})
+    ec["sender_category_rules"] = rules
+    save_email_config(ec, username, user_scope_id=user_scope_id)
+    return True
 
 
 # ── IMAP/SMTP presets + connection probe (relocated from email_routes, P4.1) ──

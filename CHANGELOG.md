@@ -65,6 +65,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Promotions/Social conversations and a relabel picker in the reader to move a
   mail to another category. Relabeling is local only and changes nothing on the
   mail server.
+- Relabeling a mail in the v2 client now also teaches the category: it remembers a
+  rule for that sender and re-labels every other mail from the same sender (past
+  and future), matching the classic mail dashboard. This stays local (nothing is
+  changed on the mail server).
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

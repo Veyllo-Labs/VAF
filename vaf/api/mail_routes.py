@@ -266,20 +266,39 @@ async def trash_message(message_pk: int,
 @router.patch("/messages/{message_pk}/category")
 async def set_message_category(message_pk: int, body: Dict[str, Any] = Body(...),
                                _user: Dict[str, Any] = Depends(_get_current_user)):
-    """Local-only Gmail-style category relabel: {category: str}. Category is a
-    local classification, not a server write, so this needs only the v2 flag (no
-    mail_engine_write_enabled)."""
+    """Gmail-style category relabel: {category: str}. Per the owner decision (P5.4)
+    this ALSO learns a sender rule for the message's From address and backfills every
+    stored mail from that sender. All of it is a LOCAL classification (nothing is
+    written to the mail server), so it needs only the v2 flag, not
+    mail_engine_write_enabled. Returns {ok, category, updated}."""
     _require_v2()
     scope = _scope_of(_user)
+    username = _user.get("username")
 
     def _run():
         from vaf.mail.service import MailService
-        return MailService(scope).relabel(message_pk, str(body.get("category") or ""))
+        return MailService(scope).relabel_and_learn(
+            message_pk, str(body.get("category") or ""), username=username)
 
-    cat = await asyncio.to_thread(_run)
-    if cat is None:
+    out = await asyncio.to_thread(_run)
+    if out is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    return {"ok": True, "category": cat}
+    return {"ok": True, **out}
+
+
+@router.post("/messages/apply-sender-rules")
+async def apply_sender_rules(_user: Dict[str, Any] = Depends(_get_current_user)):
+    """Re-apply the sender->category rules to every stored message (backfill).
+    Local classification only; gated by the v2 flag. Returns {ok, updated}."""
+    _require_v2()
+    scope = _scope_of(_user)
+    username = _user.get("username")
+
+    def _run():
+        from vaf.mail.service import MailService
+        return MailService(scope).apply_sender_rules_backfill(username=username)
+
+    return {"ok": True, "updated": await asyncio.to_thread(_run)}
 
 
 @router.get("/messages/{message_pk}/reply-prefill")

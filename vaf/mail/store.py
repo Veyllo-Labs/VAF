@@ -633,6 +633,13 @@ class MailStore:
         conn.execute("UPDATE messages SET category=? WHERE id=?", (category, pk))
         conn.commit()
 
+    def list_for_relabel(self) -> List[Dict[str, Any]]:
+        """Every message as {pk, from_addr, category} for a sender-rule backfill
+        (uncapped, unlike list_messages)."""
+        rows = self._conn().execute(
+            "SELECT id AS pk, from_addr, category FROM messages").fetchall()
+        return [dict(r) for r in rows]
+
     def set_answered(self, pk: int, at: Optional[str] = None) -> None:
         conn = self._conn()
         if at:

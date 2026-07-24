@@ -150,6 +150,39 @@ class MailService:
         self.store.set_category(message_pk, cat)
         return cat
 
+    def apply_sender_rules_backfill(self, username: Optional[str] = None) -> int:
+        """Re-apply the sender->category rules (config blob, SSOT) to EVERY stored
+        message; returns the count whose category changed. This is the backfill the
+        classic dashboard ran so a relabel reaches existing mail of the same sender."""
+        from vaf.core.email_accounts import apply_sender_rules_to_category
+        updated = 0
+        for row in self.store.list_for_relabel():
+            cur = row.get("category") or "primary"
+            new = apply_sender_rules_to_category(
+                row.get("from_addr") or "", cur, username, self.user_scope_id)
+            new = re.sub(r"\s+", "_", str(new or "primary").strip().lower())[:64] or "primary"
+            if new != cur:
+                self.store.set_category(int(row["pk"]), new)
+                updated += 1
+        return updated
+
+    def relabel_and_learn(self, message_pk: int, category: str,
+                          username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Relabel one message, then (legacy parity, owner decision P5.4) add a
+        sender rule for its From address and backfill every mail from that sender.
+        Returns {category, updated} or None if the message is unknown."""
+        from vaf.core.email_accounts import pattern_from_from_addr, upsert_sender_rule
+        cat = self.relabel(message_pk, category)
+        if cat is None:
+            return None
+        msg = self.store.get_message(message_pk) or {}
+        updated = 1
+        pattern = pattern_from_from_addr(msg.get("from_addr") or "")
+        if pattern:
+            upsert_sender_rule(pattern, cat, username=username, user_scope_id=self.user_scope_id)
+            updated += self.apply_sender_rules_backfill(username=username)
+        return {"category": cat, "updated": updated}
+
     def mark_answered(self, account_id: str, message_id: str, at: Optional[str] = None) -> bool:
         pk = self.store.pk_by_message_id(message_id, account_id=account_id)
         if pk is None:

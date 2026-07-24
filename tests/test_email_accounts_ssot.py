@@ -63,6 +63,12 @@ def test_imap_presets_and_probe_are_the_one_ssot_object():
     assert email_routes._test_imap_login is ea.test_imap_login
 
 
+def test_sender_rule_pattern_helper_is_the_one_ssot_object():
+    # P5.4: the sender-rule pattern derivation moved to the SSOT; email_routes
+    # keeps the historical private alias pointing at it (no fork).
+    assert email_routes._pattern_from_from_addr is ea.pattern_from_from_addr
+
+
 def test_account_crud_and_mail_enabled_marker(monkeypatch):
     # P4.1: add/patch/remove + the mail_enabled marker (calendar-safe delete keeps
     # the entry but hides it from the mail list).

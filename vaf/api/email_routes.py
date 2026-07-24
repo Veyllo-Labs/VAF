@@ -10,7 +10,6 @@ config holds only account metadata.
 import asyncio
 import html
 import logging
-import re
 import ssl
 import time
 from typing import Any, Dict, List, Optional
@@ -27,6 +26,7 @@ from vaf.core.config import Config
 from vaf.core.email_accounts import (
     IMAP_SMTP_DEFAULTS,
     get_email_config,
+    pattern_from_from_addr,
     save_email_config,
     test_imap_login,
 )
@@ -674,17 +674,9 @@ class PatchMessageBody(BaseModel):
     answered_at: Optional[str] = None  # ISO timestamp when agent answered; set to mark "Benatwortet am ..."
 
 
-def _pattern_from_from_addr(from_addr: str) -> str:
-    """Derive a sender rule pattern from From header (e.g. 'Twitch <no-reply@twitch.tv>' -> 'no-reply@twitch.tv')."""
-    s = (from_addr or "").strip()
-    if not s:
-        return s
-    m = re.search(r"<([^>]+@[^>]+)>", s)
-    if m:
-        return m.group(1).strip().lower()
-    if "@" in s:
-        return s.lower()
-    return s
+# Re-export: the sender-rule pattern derivation now lives in the email_accounts
+# SSOT (P5.4). Kept as a module alias so existing call sites stay unchanged.
+_pattern_from_from_addr = pattern_from_from_addr
 
 
 @router.patch("/messages")

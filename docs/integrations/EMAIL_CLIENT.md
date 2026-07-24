@@ -146,10 +146,18 @@ synced-inbox viewer, not a full mail client.
 - Gmail-style categories (P5.3): the sync maps Gmail's Promotions/Social system
   labels to a per-message `category` (default `primary`); the v2 client shows a
   category chip on non-primary conversations and a relabel picker in the reader.
-  Relabel is LOCAL-only (`PATCH /api/mail/messages/{pk}/category` ->
-  `MailService.relabel`, normalizes to lowercase/underscores/64-char cap); nothing
-  is written to the server, so it is gated by the v2 flag only, NOT
-  `mail_engine_write_enabled`.
+- Sender-rule learning on relabel (P5.4, owner decision = classic-dashboard
+  parity): `PATCH /api/mail/messages/{pk}/category` runs `relabel_and_learn` ->
+  it relabels the one message, derives a sender pattern from its From header
+  (`email_accounts.pattern_from_from_addr`, the one SSOT copy re-exported by
+  email_routes), upserts a `sender_category_rules` entry
+  (`email_accounts.upsert_sender_rule`), then backfills EVERY stored mail from that
+  sender (`MailService.apply_sender_rules_backfill`, also exposed standalone at
+  `POST /api/mail/messages/apply-sender-rules`). The response carries `updated`
+  (count changed) so the client refreshes the list when the backfill touched more
+  than the one mail. All of it is a LOCAL classification (nothing written to the
+  mail server), normalized to lowercase/underscores/64-char cap, and gated by the
+  v2 flag only, NOT `mail_engine_write_enabled`.
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in

@@ -191,7 +191,10 @@ function ComposeModal({ prefill, accounts, onClose, onQueued }: {
     );
 }
 
-function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean; onToggle: () => void }) {
+function MessageView({ msg, expanded, onToggle, onRelabeled }: {
+    msg: Msg; expanded: boolean; onToggle: () => void;
+    onRelabeled?: (category: string, updated: number) => void;
+}) {
     const t = useTranslations('mailV2');
     const [body, setBody] = useState<Body | null>(null);
     const [loading, setLoading] = useState(false);
@@ -204,7 +207,7 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
         setCat(next);
         try {
             const r = await jpost(`api/mail/messages/${msg.id}/category`, { category: next }, 'PATCH');
-            if (r?.category) setCat(r.category);
+            if (r?.category) { setCat(r.category); onRelabeled?.(r.category, r.updated ?? 1); }
         } catch { setCat(prev); }
     };
     useEffect(() => {
@@ -655,7 +658,12 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                                         const next = new Set(prev);
                                         if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
                                         return next;
-                                    })} />
+                                    })}
+                                    onRelabeled={(category, updated) => {
+                                        setThreadMsgs(prev => prev.map(x => x.id === m.id ? { ...x, category } : x));
+                                        // backfill relabeled other senders' mail too -> refresh the list
+                                        if (updated > 1) loadThreads();
+                                    }} />
                             ))}
                         </>
                     )}

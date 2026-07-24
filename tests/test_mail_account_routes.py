@@ -52,20 +52,36 @@ def test_accounts_endpoint_requires_v2(monkeypatch):
     assert e.value.status_code == 404
 
 
-def test_set_category_route_returns_normalized_category(monkeypatch):
-    # P5.3: relabel route is local-only (v2 flag only, no write flag); 404 on miss.
+def test_set_category_route_relabels_learns_and_backfills(monkeypatch):
+    # P5.3/P5.4: relabel route is local-only (v2 flag only, no write flag); learns
+    # a sender rule + backfills (updated count passthrough); 404 on a missing pk.
     _v2(monkeypatch)
     monkeypatch.setattr(mr, "_scope_of", lambda u: "s")
 
     class _Svc:
         def __init__(self, scope):
             self.scope = scope
-        def relabel(self, pk, cat):
-            return "social" if pk == 7 else None
+        def relabel_and_learn(self, pk, cat, username=None):
+            return {"category": "social", "updated": 3} if pk == 7 else None
 
     monkeypatch.setattr("vaf.mail.service.MailService", _Svc)
     out = asyncio.run(mr.set_message_category(7, {"category": "Social"}, _USER))
-    assert out == {"ok": True, "category": "social"}
+    assert out == {"ok": True, "category": "social", "updated": 3}
     with pytest.raises(HTTPException) as e:
         asyncio.run(mr.set_message_category(8, {"category": "social"}, _USER))
     assert e.value.status_code == 404
+
+
+def test_apply_sender_rules_route_returns_updated_count(monkeypatch):
+    # P5.4: standalone backfill endpoint, local classification, v2-gated.
+    _v2(monkeypatch)
+    monkeypatch.setattr(mr, "_scope_of", lambda u: "s")
+
+    class _Svc:
+        def __init__(self, scope):
+            pass
+        def apply_sender_rules_backfill(self, username=None):
+            return 4
+
+    monkeypatch.setattr("vaf.mail.service.MailService", _Svc)
+    assert asyncio.run(mr.apply_sender_rules(_USER)) == {"ok": True, "updated": 4}

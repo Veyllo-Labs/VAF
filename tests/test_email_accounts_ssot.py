@@ -45,6 +45,18 @@ def test_get_account_and_sender_rules_behavior(monkeypatch):
     assert ea.apply_sender_rules_to_category("n@other.com", "primary") == "primary"
 
 
+def test_list_accounts_with_labels_reads_the_ssot(monkeypatch):
+    # P3.5: mail_utils.list_accounts_with_labels_for_user resolves via the SSOT
+    # get_email_config instead of duplicating the scope branches.
+    import vaf.tools.mail_utils as mu
+    monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: "admin-scope")
+    monkeypatch.setattr(ea, "get_local_admin_username", lambda: "admin")
+    ec = {"accounts": [{"email": "a@x", "label": "Work"}, {"account_id": "b@y"}]}
+    monkeypatch.setattr(ea.Config, "get", staticmethod(lambda k, d=None: ec if k == "email_config" else d))
+    assert mu.list_accounts_with_labels_for_user() == [
+        {"email": "a@x", "label": "Work"}, {"email": "b@y", "label": ""}]
+
+
 def _patch_config(monkeypatch, *, email_config, by_scope, by_user,
                   admin_scope="admin-scope", admin_user="admin"):
     monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: admin_scope)

@@ -62,28 +62,12 @@ def list_accounts_with_labels_for_user(
     cred_username: Optional[str] = None,
     user_scope_id: Optional[str] = None,
 ) -> List[dict]:
-    """Connected email accounts with labels. Strict per-user isolation (no cross-user fallback)."""
-    local_admin_scope = get_local_admin_scope_id()
-    if user_scope_id:
-        by_scope = Config.get("email_config_by_scope") or {}
-        if isinstance(by_scope, dict):
-            ec = by_scope.get(str(user_scope_id).strip(), {})
-            if isinstance(ec, dict) and ec.get("accounts") is not None:
-                accounts = ec.get("accounts") or []
-                return [
-                    {"email": a.get("email") or a.get("account_id"), "label": (a.get("label") or "").strip()}
-                    for a in accounts
-                    if a.get("email") or a.get("account_id")
-                ]
-        if str(user_scope_id).strip() == str(local_admin_scope).strip():
-            ec = Config.get("email_config") or {}
-        else:
-            ec = {}
-    elif cred_username is None:
-        ec = Config.get("email_config") or {}
-    else:
-        by_user = Config.get("email_config_by_user") or {}
-        ec = by_user.get(cred_username, {}) if isinstance(by_user, dict) else {}
+    """Connected email accounts with labels, resolved through the single
+    account-config SSOT (email_accounts.get_email_config) so this matches every
+    other reader instead of duplicating the scope-resolution. Strict per-user
+    isolation, no cross-user fallback (P3.5)."""
+    from vaf.core.email_accounts import get_email_config
+    ec = get_email_config(cred_username, user_scope_id=user_scope_id)
     accounts = ec.get("accounts") or []
     return [
         {

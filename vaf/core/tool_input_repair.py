@@ -44,7 +44,20 @@ def _looks_like_json_array(s: str) -> bool:
 def _localize(err) -> str:
     """Turn a jsonschema ValidationError into a short, model-readable line."""
     if err.validator == "required":
-        # err.message reads e.g. "'attachment_paths' is a required property"
+        # err.message reads e.g. "'body' is a required property" - too thin for a
+        # weak model, which then re-sends the SAME incomplete call. Name each missing
+        # field AND what it is (its description) and tell the model to retry with it.
+        inst = err.instance if isinstance(err.instance, dict) else {}
+        props = err.schema.get("properties", {}) if isinstance(err.schema, dict) else {}
+        missing = [f for f in (err.validator_value or []) if f not in inst]
+        hints = []
+        for f in missing:
+            desc = ((props.get(f) or {}).get("description") or "").strip().rstrip(".")
+            hints.append(f"'{f}'" + (f" = {desc}" if desc else ""))
+        if hints:
+            noun = "fields" if len(hints) > 1 else "field"
+            it = "them" if len(hints) > 1 else "it"
+            return f"missing required {noun}: {'; '.join(hints)}. Retry the SAME call and include {it}."
         return err.message
     path = ".".join(str(p) for p in err.absolute_path)
     # The expects/got wording ONLY fits actual type failures. Rendering every

@@ -45,6 +45,24 @@ def test_missing_required_surfaces_error():
     assert errors and any("required" in e.lower() for e in errors)
 
 
+def test_missing_required_names_field_description_and_retry():
+    # A weak model that omits a required field must get an ACTIONABLE error: the
+    # field name, what it is (its description) and a retry instruction - not the
+    # bare "'body' is a required property" it re-sends the same call against.
+    schema = {
+        "type": "object",
+        "properties": {
+            "message_id": {"type": "string", "description": "Message-ID of the mail to answer."},
+            "body": {"type": "string", "description": "Reply text (plain text, without the quote)."},
+        },
+        "required": ["message_id", "body"],
+    }
+    _out, _applied, errors = repair_tool_input(schema, {"message_id": "<x@y>"})  # body missing
+    assert len(errors) == 1
+    e = errors[0].lower()
+    assert "body" in e and "reply text" in e and "retry" in e and "required" in e
+
+
 def test_protected_content_field_never_coerced():
     sch = {
         "type": "object",

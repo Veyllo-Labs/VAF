@@ -128,11 +128,17 @@ synced-inbox viewer, not a full mail client.
   masked in logs (`_mask_account`: first 3 chars + `***`; never log full
   provider response bodies).
 - Phishing visibility split (inbound prompt-injection defense): suspicious
-  messages are hidden from agent mail tools while the dashboard still shows
-  them with a warning (`mail_utils.py`; config keys
+  messages are hidden from agent mail tools while the human mail client still
+  shows them with a warning. The v2 client re-surfaces this via
+  `MailService.annotate_visibility` (P5.1), which shims the v2 row fields
+  (`from_addr`->`from`, `snippet`->`body_snippet`, `category`) into the SSOT
+  scorer `mail_utils.annotate_messages_with_agent_visibility` and stamps
+  `suspicious_for_agent` / `suspicious_reasons` onto every `/api/mail` read
+  response (threads, thread detail, messages, search); the reader renders a
+  warning banner and the conversation list a warning badge. Config keys
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
-  `_trusted_sender_domains`, all admin-only). Note: scoring sees only
-  subject/snippet/sender today; v2 must make it body-aware.
+  `_trusted_sender_domains` (all admin-only). Note: scoring sees only
+  subject/snippet/sender today; making it body-aware remains open.
 - High-risk outbound gate in `send_mail` (exec-impersonation to free-mail,
   high-risk request language, attachment-exfiltration wording, coercive
   urgency) requiring an explicit confirm re-call. Word lists live ONLY in

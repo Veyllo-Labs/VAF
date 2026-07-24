@@ -1303,6 +1303,8 @@
     "noContent": "(kein Inhalt)",
     "toMe": "an {name}",
     "remoteBlocked": "Externe Bilder blockiert ({count}) - Tracking-Schutz",
+    "suspiciousBadge": "Als verdächtig markiert",
+    "suspiciousWarning": "Diese Nachricht wirkt verdächtig (mögliches Phishing). Prüfe den Absender und öffne keine Links oder Anhänge, denen du nicht vertraust.",
     "notCached": "Noch nicht lokal synchronisiert - nur Vorschau. Sync ausführen, um die Nachricht offline zu laden.",
     "attachment": "Anhang",
     "flagOffTitle": "Mail-Engine v2 ist nicht aktiviert",

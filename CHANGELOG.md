@@ -54,6 +54,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   XOAUTH2) so outgoing mail no longer depends on the provider REST/Graph APIs
   for IMAP-capable accounts; an ambiguous failure after the message is handed to
   the server is parked, never re-sent, so a mail is never delivered twice.
+- The v2 mail client now warns about suspicious (possible phishing) messages the
+  same way the classic dashboard did: the conversation list shows a warning badge
+  and the reader a warning banner on mails the agent's phishing filter would hide,
+  so nothing dangerous is silently surfaced only to the human.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

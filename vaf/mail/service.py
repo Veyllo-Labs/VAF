@@ -87,6 +87,21 @@ class MailService:
     def search(self, query: str, **kw) -> List[Dict[str, Any]]:
         return self.store.search(query, **kw)
 
+    def annotate_visibility(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add suspicious_for_agent / suspicious_reasons to UI rows using the SSOT
+        phishing scorer (field shim: v2 from_addr->from, snippet->body_snippet). The
+        reader surfaces this as a warning banner; the agent tools hide these mails
+        entirely - re-surfacing it here is the safety layer MailDashboard had (P5.1)."""
+        from vaf.tools.mail_utils import annotate_messages_with_agent_visibility
+        shimmed = [{"from": r.get("from_addr") or r.get("from") or "",
+                    "subject": r.get("subject") or "",
+                    "body_snippet": r.get("snippet") or r.get("body_snippet") or "",
+                    "category": r.get("category") or ""} for r in rows]
+        for r, a in zip(rows, annotate_messages_with_agent_visibility(shimmed)):
+            r["suspicious_for_agent"] = a.get("suspicious_for_agent", False)
+            r["suspicious_reasons"] = a.get("suspicious_reasons", [])
+        return rows
+
     def counts(self, **kw) -> Dict[str, int]:
         return self.store.counts(**kw)
 

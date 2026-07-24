@@ -73,7 +73,7 @@ async def list_threads(account_id: Optional[str] = None, folder: Optional[str] =
     svc = _service(_user)
     items = await asyncio.to_thread(
         svc.list_threads, account_id=account_id, folder=folder, limit=limit, offset=offset)
-    return {"threads": items}
+    return {"threads": svc.annotate_visibility(items)}
 
 
 @router.get("/threads/{thread_id}")
@@ -83,7 +83,7 @@ async def thread_detail(thread_id: int, _user: Dict[str, Any] = Depends(_get_cur
     msgs = await asyncio.to_thread(svc.thread_messages, thread_id)
     if not msgs:
         raise HTTPException(status_code=404, detail="Thread not found")
-    return {"messages": msgs}
+    return {"messages": svc.annotate_visibility(msgs)}
 
 
 @router.get("/messages")
@@ -96,7 +96,7 @@ async def list_messages(account_id: Optional[str] = None, folder: Optional[str] 
     items = await asyncio.to_thread(
         svc.list_messages, account_id=account_id, folder=folder, category=category,
         limit=limit, offset=offset, unread_only=unread_only)
-    return {"messages": items}
+    return {"messages": svc.annotate_visibility(items)}
 
 
 @router.get("/messages/{message_pk}/body")
@@ -139,7 +139,7 @@ async def search(q: str, account_id: Optional[str] = None, limit: int = 50,
     _require_v2()
     svc = _service(_user)
     items = await asyncio.to_thread(svc.search, q, account_id=account_id, limit=limit)
-    return {"messages": items}
+    return {"messages": svc.annotate_visibility(items)}
 
 
 @router.get("/folders")

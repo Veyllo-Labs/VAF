@@ -1303,6 +1303,8 @@
     "noContent": "(no content)",
     "toMe": "to {name}",
     "remoteBlocked": "External images blocked ({count}) - tracking protection",
+    "suspiciousBadge": "Flagged as suspicious",
+    "suspiciousWarning": "This message looks suspicious (possible phishing). Check the sender and do not open links or attachments unless you trust them.",
     "notCached": "Not synced locally yet - preview only. Run Sync to load this message offline.",
     "attachment": "Attachment",
     "flagOffTitle": "Mail engine v2 is not enabled",

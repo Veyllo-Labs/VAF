@@ -36,11 +36,13 @@ interface ThreadRow {
     thread_id: number; message_count: number; unread_count: number; last_date_ts?: number;
     acct: string; newest_pk: number; subject: string; from_addr: string; snippet: string;
     has_attachments: number; flags: string[];
+    suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Msg {
     id: number; subject: string; from_addr: string; to_addrs: string; date_ts?: number;
     internaldate_ts?: number; snippet: string; flags: string[]; folder_name: string;
     has_attachments: number;
+    suspicious_for_agent?: boolean; suspicious_reasons?: string[];
 }
 interface Body {
     html: string | null; text: string; blocked_remote: number; cached: boolean;
@@ -206,6 +208,12 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
                     <span className="text-[#9a9a9a]"> · {t('toMe', { name: msg.to_addrs.split('<')[0].trim() || '' })} · {fmtWhen(msg.date_ts || msg.internaldate_ts)} · {msg.folder_name}</span>
                 </div>
             </button>
+            {msg.suspicious_for_agent && (
+                <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#2b1a1a] border border-[#5a2b2b] text-[#e08c8c] text-[13px] flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                    <span className="flex-1">{t('suspiciousWarning')}</span>
+                </div>
+            )}
             {loading && <div className="px-5 py-6"><Loader2 className="w-5 h-5 animate-spin text-[#9a9a9a]" /></div>}
             {body && body.blocked_remote > 0 && (
                 <div className="mx-5 my-2 px-3 py-2 rounded-lg bg-[#2b2417] border border-[#4a3b1e] text-[#d4a24e] text-[13px] flex items-center gap-2">
@@ -537,7 +545,12 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                                     </span>
                                     <span className="text-[#9a9a9a] flex-shrink-0">{fmtWhen(row.last_date_ts)}</span>
                                 </div>
-                                <div className={cn('text-[13px] truncate', row.unread_count > 0 && 'text-white')}>{row.subject || t('noSubject')}</div>
+                                <div className={cn('text-[13px] truncate flex items-center gap-1', row.unread_count > 0 && 'text-white')}>
+                                    {row.suspicious_for_agent && (
+                                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-[#e08c8c]" aria-label={t('suspiciousBadge')} />
+                                    )}
+                                    <span className="truncate">{row.subject || t('noSubject')}</span>
+                                </div>
                                 <div className="text-xs text-[#9a9a9a] truncate pr-14">{row.snippet}</div>
                             </button>
                             <div className="absolute right-3 bottom-2 flex items-center gap-1.5 text-[11px] text-[#9a9a9a] group-hover:hidden">

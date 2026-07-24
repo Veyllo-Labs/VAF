@@ -160,3 +160,31 @@ def test_ssrf_refusal_is_permanent(patched, monkeypatch):
     monkeypatch.setattr(sender, "assert_safe_remote_host", _deny)
     res = sender.send(_msg(provider="imap"))
     assert not res.ok and res.classification == "permanent"
+
+
+# ── P2.3: the send_mail tool routes through the native sender ─────────────────
+
+def test_send_mail_tool_routes_through_native_sender(monkeypatch):
+    import vaf.tools.send_mail as sm
+    monkeypatch.setattr(sm, "get_account",
+                        lambda *a, **k: {"provider": "imap", "email": "u@example.com", "account_id": "u@example.com"})
+    cap = {}
+
+    def _snd(msg):
+        cap["raw"] = msg.raw_bytes
+        return sm.sender.SendResult(True, "ok")
+
+    monkeypatch.setattr(sm.sender, "send", _snd)
+    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b")
+    assert "sent to a@b.com" in out
+    assert b"a@b.com" in cap["raw"]  # native path received the built MIME bytes
+
+
+def test_send_mail_tool_ambiguous_says_possibly_delivered(monkeypatch):
+    import vaf.tools.send_mail as sm
+    monkeypatch.setattr(sm, "get_account",
+                        lambda *a, **k: {"provider": "imap", "email": "u@example.com", "account_id": "u@example.com"})
+    monkeypatch.setattr(sm.sender, "send",
+                        lambda msg: sm.sender.SendResult(False, "ambiguous", handed_off=True))
+    out = sm.SendMailTool().run(account_id="u@example.com", to="a@b.com", subject="s", body="b")
+    assert "do NOT resend" in out  # never a false 'failed' for a possibly-delivered mail

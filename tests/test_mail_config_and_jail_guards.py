@@ -81,15 +81,11 @@ def test_send_mail_attachment_outside_user_data_is_refused(monkeypatch, tmp_path
     outside_file = tmp_path / "report.txt"
     outside_file.write_text("not yours")
 
-    sent = {}
-
-    def _fake_send(account_id, **kw):
-        sent["attachments"] = kw.get("attachments")
-        return True
-
+    calls = {"n": 0}
     monkeypatch.setattr(sm, "list_accounts_for_user", lambda *a, **k: ["user@example.com"])
     monkeypatch.setattr(sm, "get_account", lambda *a, **k: {"provider": "imap", "email": "user@example.com"})
-    monkeypatch.setattr(sm, "send_mail", _fake_send)
+    monkeypatch.setattr(sm.sender, "send",
+                        lambda msg: calls.__setitem__("n", calls["n"] + 1) or sm.sender.SendResult(True, "ok"))
 
     out = sm.SendMailTool().run(
         to="rcpt@example.com",
@@ -100,7 +96,7 @@ def test_send_mail_attachment_outside_user_data_is_refused(monkeypatch, tmp_path
         user_scope_id=_USER_SCOPE,
     )
     assert "outside your own data" in out
-    assert "attachments" not in sent, "transport must not be reached with a jailed path"
+    assert calls["n"] == 0, "the sender must not be reached with a jailed path"
 
 
 def test_send_mail_attachment_inside_own_root_is_allowed(monkeypatch, tmp_path):
@@ -117,13 +113,14 @@ def test_send_mail_attachment_inside_own_root_is_allowed(monkeypatch, tmp_path):
 
     sent = {}
 
-    def _fake_send(account_id, **kw):
-        sent["attachments"] = kw.get("attachments")
-        return True
+    def _snd(msg):
+        sent["attachments"] = msg.attachments      # {path, filename} - delegate tail only
+        sent["raw"] = msg.raw_bytes                # native path: bytes read INSIDE the jail
+        return sm.sender.SendResult(True, "ok")
 
     monkeypatch.setattr(sm, "list_accounts_for_user", lambda *a, **k: ["user@example.com"])
     monkeypatch.setattr(sm, "get_account", lambda *a, **k: {"provider": "imap", "email": "user@example.com"})
-    monkeypatch.setattr(sm, "send_mail", _fake_send)
+    monkeypatch.setattr(sm.sender, "send", _snd)
 
     out = sm.SendMailTool().run(
         to="rcpt@example.com",
@@ -135,6 +132,7 @@ def test_send_mail_attachment_inside_own_root_is_allowed(monkeypatch, tmp_path):
     )
     assert "sent to rcpt@example.com" in out
     assert sent["attachments"] == [{"path": str(attachment), "filename": "invoice.pdf"}]
+    assert b"invoice.pdf" in sent["raw"]           # attachment embedded in the delivered MIME
 
 
 def test_mail_tool_registry_copies_stay_in_sync():

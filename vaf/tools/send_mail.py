@@ -7,12 +7,14 @@ Only available when at least one email account is configured in Settings → Con
 Supports optional file attachments (e.g. invoices, documents).
 """
 
+import mimetypes
 import re
 from email.utils import parseaddr
 from pathlib import Path
 
 from vaf.core.config import Config
-from vaf.core.email_transport import send_mail, get_account
+from vaf.core.email_transport import get_account
+from vaf.mail import compose, sender
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import (
     compute_user_jail,
@@ -218,7 +220,8 @@ class SendMailTool(BaseTool):
         # user's agent must not be able to attach (= exfiltrate) files outside
         # their own data. Same mechanism as LibrarianTool/WriteFileTool; the
         # contextvar must be set here in the tool's own worker thread.
-        attachments = []
+        attachments = []      # {path, filename} - for the high-risk gate + delegate tail
+        att_bytes = []        # {filename, content_type, payload} - read INSIDE the jail
         if attachment_paths:
             _jail_token = None
             _jail_info = compute_user_jail(user_scope_id)
@@ -232,7 +235,19 @@ class SendMailTool(BaseTool):
                     if path_error:
                         return path_error
                     if resolved and resolved.is_file():
+                        # Read the bytes NOW, while the jail is active, so the file
+                        # cannot be swapped between the safety check and the send
+                        # (closes the documented check-vs-read race).
+                        try:
+                            payload = resolved.read_bytes()
+                        except Exception as e:
+                            return f"Could not read attachment {resolved.name}: {e}"
                         attachments.append({"path": str(resolved), "filename": resolved.name})
+                        att_bytes.append({
+                            "filename": resolved.name,
+                            "content_type": mimetypes.guess_type(resolved.name)[0] or "application/octet-stream",
+                            "payload": payload,
+                        })
             finally:
                 if _jail_token is not None:
                     reset_librarian_scope(_jail_token)
@@ -256,33 +271,35 @@ class SendMailTool(BaseTool):
             )
 
         try:
-            ok = send_mail(
-                account_id,
-                to=to,
-                subject=subject,
-                body=body or "",
-                attachments=attachments if attachments else None,
-                cc=cc,
-                bcc=bcc,
-                in_reply_to=in_reply_to,
-                username=cred_username,
-                user_scope_id=user_scope_id,
+            from_addr = acc.get("email") or account_id
+            mime = compose.build_message(from_addr, to, subject, body or "", cc=cc,
+                                         bcc=bcc, in_reply_to=in_reply_to,
+                                         attachments=att_bytes or None)
+            msg = sender.OutgoingMessage(
+                account=acc,
+                raw_bytes=bytes(mime),
+                to=to, cc=cc or "", bcc=bcc or "",
+                username=cred_username, user_scope_id=user_scope_id,
+                subject=subject, body=body or "",
+                message_id=mime["Message-ID"], in_reply_to=in_reply_to,
+                attachments=attachments or None,  # paths - only the delegate tail uses these
             )
+            res = sender.send(msg)
         except Exception as e:
             return f"Failed to send email: {e}"
-        if ok:
+        if res.ok:
             suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
             cc_suffix = f", cc {cc}" if cc else ""
             return f"Email{suffix} sent to {to}{cc_suffix} from {account_id}."
-        
-        # Determine provider for better error hint
-        prov_hint = ""
-        acc = get_account(account_id, username=cred_username, user_scope_id=user_scope_id)
-        if acc:
-            prov = (acc.get("provider") or "imap").lower()
-            if prov in ("gmail", "microsoft"):
-                prov_hint = f" ({prov.upper()} API failed - check connection in Settings -> Connections -> Email)"
-            else:
-                prov_hint = " (check SMTP settings and credentials in Settings)"
-        
-        return f"Failed to send email{prov_hint}."
+        if res.classification == "ambiguous":
+            # Handed to the server but not confirmed: it MAY have been delivered.
+            # Tell the model NOT to resend (locked decision: no false 'failed').
+            return ("The email may already have been delivered but the server did not "
+                    "confirm it - do NOT resend without checking the Sent folder first."
+                    + (f" Detail: {res.error}" if res.error else ""))
+        prov = (acc.get("provider") or "imap").lower()
+        if prov in ("gmail", "microsoft"):
+            prov_hint = f" ({prov.upper()} submission failed - check connection in Settings -> Connections -> Email)"
+        else:
+            prov_hint = " (check SMTP settings and credentials in Settings)"
+        return f"Failed to send email{prov_hint}." + (f" Detail: {res.error}" if res.error else "")

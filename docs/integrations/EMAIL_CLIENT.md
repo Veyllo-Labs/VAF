@@ -136,10 +136,11 @@ synced-inbox viewer, not a full mail client.
   jail (`compute_user_jail` in `vaf/tools/filesystem.py`, same mechanism as
   LibrarianTool/WriteFileTool): a non-admin user cannot attach files outside
   their own data. Symlinks are resolved at check time and the real path is
-  re-checked. Known residual seam: the transport reads the file bytes after
-  the jail window; a race that swaps the path between check and read is not
-  covered until v2 serves attachments from the per-user store. Guarded by
-  `tests/test_mail_config_and_jail_guards.py`.
+  re-checked. The native sender (send_mail tool, P2.3) reads the attachment BYTES
+  inside the jail window and embeds them in the MIME, so the check-vs-read swap
+  race is closed for every imap_ready account; only the shrinking non-imap_ready
+  OAuth delegate tail still reads paths in the transport (removed in P7). Guarded
+  by `tests/test_mail_config_and_jail_guards.py`.
 - Rate limiting: failed IMAP credential tests feed the per-IP login limiter.
 
 ### User isolation (v1 rules, unchanged in v2)

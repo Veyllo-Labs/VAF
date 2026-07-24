@@ -28,6 +28,13 @@ logger = logging.getLogger("vaf.mail.writeback")
 MAX_ATTEMPTS = 5
 
 
+class _SendRetry(RuntimeError):
+    """Raised by _op_send for a PRE-hand-off transient send failure (connect / 4xx
+    before the DATA command): safe to retry, so process() re-pends it (still
+    attempt-capped). Any other send failure (permanent, or post-hand-off ambiguous)
+    raises a plain RuntimeError and is parked, never re-sent."""
+
+
 def _b(v) -> str:
     return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
 
@@ -101,10 +108,14 @@ class OpExecutor:
             except Exception as e:
                 logger.warning("op %s (%s) failed: %s", op["id"], kind, e)
                 if kind == "send":
-                    # SMTP has no idempotency key: a failure may be a post-accept
-                    # drop. Never auto-retry a send - park it (visible via GET /ops).
-                    self.store.mark_op(op["id"], "failed", error=str(e),
-                                       expect_state="sending")
+                    # A pre-hand-off transient failure (connect / 4xx before DATA)
+                    # is safe to retry; the sender proved delivery had not started.
+                    # Anything else (permanent, or post-hand-off ambiguous where the
+                    # server may already have accepted) is parked - SMTP has no
+                    # idempotency key, so a possibly-delivered mail is never re-sent.
+                    retry = isinstance(e, _SendRetry)
+                    self.store.mark_op(op["id"], "pending" if retry else "failed",
+                                       error=str(e), expect_state="sending")
                 else:
                     self.store.mark_op(op["id"], "pending", error=str(e),
                                        expect_state="sending")
@@ -188,26 +199,35 @@ class OpExecutor:
         self.client.append(folder, raw, flags=flags)
 
     def _op_send(self, payload: Dict[str, Any], write_enabled: bool) -> None:
-        """Outbox delivery through the v1 transport (provider-correct Bcc and
-        auth live there). On success: optional Sent-APPEND for plain IMAP
-        accounts (Gmail/Graph file Sent server-side) when writes are enabled."""
-        from vaf.core.email_transport import send_mail as transport_send
-        ok = transport_send(
-            payload["account_id"],
+        """Outbox delivery through the native sender (vaf/mail/sender.py). The
+        stored RFC822 bytes are sent verbatim, so the delivered Message-ID matches
+        the Sent copy byte-for-byte. A pre-hand-off transient failure raises
+        _SendRetry (re-pend, capped); any permanent or post-hand-off ambiguous
+        failure raises RuntimeError (park, never re-sent). On success: optional
+        Sent-APPEND for plain IMAP accounts (Gmail/Graph file Sent server-side)
+        when writes are enabled."""
+        from vaf.mail import sender
+        raw = base64.b64decode(payload["raw_b64"]) if payload.get("raw_b64") else b""
+        msg = sender.OutgoingMessage(
+            account=self.account,
+            raw_bytes=raw,
             to=payload.get("to") or "",
-            subject=payload.get("subject") or "",
-            body=payload.get("body") or "",
-            attachments=payload.get("attachments") or None,
-            cc=payload.get("cc") or None,
-            bcc=payload.get("bcc") or None,
-            in_reply_to=payload.get("in_reply_to") or None,
-            references=payload.get("references") or None,
-            message_id=payload.get("message_id") or None,
+            cc=payload.get("cc") or "",
+            bcc=payload.get("bcc") or "",
             username=self.cred_username,
             user_scope_id=self.scope,
+            subject=payload.get("subject") or "",
+            body=payload.get("body") or "",
+            message_id=payload.get("message_id") or None,
+            in_reply_to=payload.get("in_reply_to") or None,
+            references=payload.get("references") or None,
+            attachments=payload.get("attachments") or None,
         )
-        if not ok:
-            raise RuntimeError("transport send failed")
+        res = sender.send(msg)
+        if not res.ok:
+            if res.classification == "transient" and not res.handed_off:
+                raise _SendRetry(res.error or "transient send failure")
+            raise RuntimeError(res.error or f"send failed ({res.classification})")
         # Everything after a successful send is best-effort and MUST NOT raise
         # out of the handler - otherwise process() would treat the (already
         # delivered) mail as failed and, without an atomic claim, re-send it.

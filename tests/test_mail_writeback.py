@@ -3,9 +3,9 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Phase-2 write-path tests: local-first verbs, op-queue replay (flags, move
 with and without MOVE capability, trash-only semantics), undo-send outbox
-(cancel window, delayed delivery via the v1 transport, Sent-APPEND gating),
+(cancel window, delayed delivery via the native sender, Sent-APPEND gating),
 write-flag deferral and the attempts cap. Isolated: tmp store, pinned crypto
-key, transport monkeypatched - no real servers, no real config."""
+key, the native sender monkeypatched - no real servers, no real config."""
 import os
 import time
 
@@ -92,7 +92,8 @@ def _seed(svc, uid=1, folder="INBOX", special=None):
 
 
 def _exec(svc, apk, client, write=True, v2=True, now_ts=None):
-    ex = OpExecutor(svc.store, apk, client, {"provider": "imap"}, _SCOPE)
+    account = {"provider": "imap", "account_id": "bob@example.com", "email": "bob@example.com"}
+    ex = OpExecutor(svc.store, apk, client, account, _SCOPE)
     return ex.process(write_enabled=write, v2_enabled=v2, now_ts=now_ts)
 
 
@@ -153,12 +154,13 @@ def test_undo_send_cancel_and_delayed_delivery(svc, monkeypatch):
     svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
     sent_calls = []
 
-    def _fake_send(account_id, **kw):
-        sent_calls.append((account_id, kw.get("to")))
-        return True
+    import vaf.mail.sender as sender
 
-    import vaf.core.email_transport as transport
-    monkeypatch.setattr(transport, "send_mail", _fake_send)
+    def _fake_send(msg):
+        sent_calls.append((msg.account.get("account_id"), msg.to))
+        return sender.SendResult(True, "ok", handed_off=True)
+
+    monkeypatch.setattr(sender, "send", _fake_send)
 
     # cancel inside the undo window: nothing is ever delivered
     out = svc.queue_send("bob@example.com", "rcpt@example.com", "Hi", "Body", undo_seconds=15)
@@ -182,8 +184,8 @@ def test_undo_send_cancel_and_delayed_delivery(svc, monkeypatch):
 def test_send_runs_without_write_flag_but_skips_sent_append(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
-    import vaf.core.email_transport as transport
-    monkeypatch.setattr(transport, "send_mail", lambda a, **k: True)
+    import vaf.mail.sender as sender
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok", handed_off=True))
     svc.queue_send("bob@example.com", "x@example.com", "S", "B", undo_seconds=0)
     client = FakeWriteImap()
     stats = _exec(svc, apk, client, write=False, now_ts=int(time.time()) + 5)
@@ -264,8 +266,10 @@ def test_cancel_is_rejected_once_sending(svc):
 def test_send_failure_is_parked_not_retried(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     calls = []
-    import vaf.core.email_transport as transport
-    monkeypatch.setattr(transport, "send_mail", lambda a, **k: calls.append(a) or False)
+    import vaf.mail.sender as sender
+    # ambiguous: the server may already have accepted -> park, never re-send.
+    monkeypatch.setattr(sender, "send", lambda msg: calls.append(msg.account.get("account_id"))
+                        or sender.SendResult(False, "ambiguous", handed_off=True))
     svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
     client = FakeWriteImap()
     now = int(time.time()) + 5
@@ -275,6 +279,20 @@ def test_send_failure_is_parked_not_retried(svc, monkeypatch):
     assert states == ["failed"] and len(calls) == 1        # parked, sent exactly once (the failure)
     _exec(svc, apk, client, now_ts=now)                    # second pass must not re-send
     assert len(calls) == 1
+
+
+def test_send_transient_failure_repends_for_retry(svc, monkeypatch):
+    apk, fpk, pk = _seed(svc)
+    import vaf.mail.sender as sender
+    calls = []
+    # pre-hand-off transient (connect / 4xx before DATA): safe to retry -> re-pended.
+    monkeypatch.setattr(sender, "send", lambda msg: calls.append(1)
+                        or sender.SendResult(False, "transient", handed_off=False))
+    svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
+    client = FakeWriteImap()
+    _exec(svc, apk, client, now_ts=int(time.time()) + 5)
+    st = svc.store._conn().execute("SELECT state FROM ops WHERE kind='send'").fetchone()["state"]
+    assert st == "pending" and len(calls) == 1              # re-pended for retry, not parked
 
 
 def test_reclaim_stale_ops_parks_send_rearms_idempotent(svc):
@@ -300,12 +318,14 @@ def test_process_allowed_kinds_only_touches_that_kind(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     svc.store.enqueue_op(apk, "flags",
                          {"folder": "INBOX", "uid": 1, "add": ["\\Seen"], "remove": []})
-    import vaf.core.email_transport as transport
+    import vaf.mail.sender as sender
     sent = []
-    monkeypatch.setattr(transport, "send_mail", lambda a, **k: sent.append(a) or True)
+    monkeypatch.setattr(sender, "send", lambda msg: sent.append(msg.account.get("account_id"))
+                        or sender.SendResult(True, "ok"))
     svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
     from vaf.mail.imap_client import NullImapClient
-    ex = OpExecutor(svc.store, apk, NullImapClient(), {"provider": "gmail"}, _SCOPE)
+    ex = OpExecutor(svc.store, apk, NullImapClient(),
+                    {"provider": "gmail", "account_id": "bob@example.com", "email": "bob@example.com"}, _SCOPE)
     stats = ex.process(write_enabled=False, now_ts=int(time.time()) + 5, allowed_kinds={"send"})
     assert stats["done"] == 1 and sent == ["bob@example.com"]        # send delivered
     pending_kinds = [r["kind"] for r in svc.store._conn().execute(
@@ -316,12 +336,14 @@ def test_process_allowed_kinds_only_touches_that_kind(svc, monkeypatch):
 def test_send_drain_with_null_client_delivers_and_skips_sent_append(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
-    import vaf.core.email_transport as transport
+    import vaf.mail.sender as sender
     sent = []
-    monkeypatch.setattr(transport, "send_mail", lambda a, **k: sent.append(a) or True)
+    monkeypatch.setattr(sender, "send", lambda msg: sent.append(msg.account.get("account_id"))
+                        or sender.SendResult(True, "ok"))
     svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
     from vaf.mail.imap_client import NullImapClient
-    ex = OpExecutor(svc.store, apk, NullImapClient(), {"provider": "imap"}, _SCOPE)
+    ex = OpExecutor(svc.store, apk, NullImapClient(),
+                    {"provider": "imap", "account_id": "bob@example.com", "email": "bob@example.com"}, _SCOPE)
     # IMAP account but no session: send still delivers; the Sent-APPEND raises on
     # the null client and is swallowed by the post-send tail (mail WAS sent).
     stats = ex.process(write_enabled=True, now_ts=int(time.time()) + 5, allowed_kinds={"send"})
@@ -447,24 +469,29 @@ def test_send_delivers_with_same_message_id_as_sent_copy(svc, monkeypatch):
     apk, fpk, pk = _seed(svc)
     svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
     captured = {}
-    import vaf.core.email_transport as transport
-    monkeypatch.setattr(transport, "send_mail",
-                        lambda a, **k: captured.update(message_id=k.get("message_id")) or True)
+    import re
+    import vaf.mail.sender as sender
+    # native send transmits the stored RFC822 bytes verbatim -> the delivered
+    # Message-ID is byte-exact to the Sent copy (no re-serialize, no transport id=).
+    monkeypatch.setattr(sender, "send",
+                        lambda msg: captured.update(raw=msg.raw_bytes) or sender.SendResult(True, "ok"))
     svc.queue_send("bob@example.com", "x@example.com", "Hi", "Body", undo_seconds=0)
     client = FakeWriteImap()
     _exec(svc, apk, client, now_ts=int(time.time()) + 5)
-    assert captured["message_id"]                                # delivered with an explicit id
-    assert captured["message_id"].encode() in client.appended[0][1]   # SAME id in the Sent copy
+    m = re.search(rb"Message-ID:\s*(<[^>]+>)", captured["raw"], re.I)
+    assert m                                                     # delivered bytes carry the id
+    assert m.group(1) in client.appended[0][1]                  # SAME id in the Sent copy
 
 
 def test_gmail_over_imap_skips_sent_append(svc, monkeypatch):
     apk = svc.store.upsert_account("me@gmail.com", "imap", "me@gmail.com")
     svc.store.upsert_folder(apk, "INBOX", special_use="\\Inbox")
     svc.store.upsert_folder(apk, "[Gmail]/Sent Mail", special_use="\\Sent")
-    import vaf.core.email_transport as transport
-    monkeypatch.setattr(transport, "send_mail", lambda a, **k: True)
+    import vaf.mail.sender as sender
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
     svc.queue_send("me@gmail.com", "x@example.com", "Hi", "Body", undo_seconds=0)
     client = FakeWriteImap()
-    ex = OpExecutor(svc.store, apk, client, {"provider": "imap", "email": "me@gmail.com"}, _SCOPE)
+    ex = OpExecutor(svc.store, apk, client,
+                    {"provider": "imap", "email": "me@gmail.com", "account_id": "me@gmail.com"}, _SCOPE)
     ex.process(write_enabled=True, now_ts=int(time.time()) + 5)
     assert client.appended == []                                 # Gmail files Sent itself, no duplicate

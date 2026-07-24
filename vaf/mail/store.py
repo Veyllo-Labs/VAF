@@ -23,7 +23,7 @@ import json
 import re
 import sqlite3
 import threading as _threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -270,8 +270,14 @@ class MailStore:
         return dict(row) if row else None
 
     def list_folders(self, account_pk: int) -> List[Dict[str, Any]]:
+        # total + unread per folder for the sidebar (unread = flags without \Seen,
+        # same predicate as list_threads). Cheap: one indexed COUNT per folder.
         return [dict(r) for r in self._conn().execute(
-            "SELECT * FROM folders WHERE account_id=? ORDER BY name", (account_pk,)).fetchall()]
+            "SELECT f.*, "
+            "(SELECT COUNT(*) FROM messages m WHERE m.folder_id=f.id) AS total, "
+            "(SELECT COUNT(*) FROM messages m WHERE m.folder_id=f.id "
+            " AND m.flags NOT LIKE '%\\\\Seen%') AS unread "
+            "FROM folders f WHERE f.account_id=? ORDER BY f.name", (account_pk,)).fetchall()]
 
     def set_folder_state(self, folder_pk: int, *, uidvalidity: Optional[int] = None,
                          uidnext: Optional[int] = None, highestmodseq: Optional[int] = None,
@@ -332,17 +338,36 @@ class MailStore:
         flags_json = json.dumps(sorted(set(server_flags or [])))
         snippet = re.sub(r"\s+", " ", parsed.body_text or "")[:SNIPPET_CHARS]
         existing = None
+        adopted_ghost = False
         if uid is not None:
             existing = conn.execute(
                 "SELECT id FROM messages WHERE folder_id=? AND uid=?",
                 (folder_pk, uid)).fetchone()
+            if existing is None and parsed.message_id:
+                # A local move re-parented a row into this folder with uid=NULL
+                # (move_message_local). When the server copy arrives under its new
+                # uid, ADOPT the uid-NULL ghost instead of inserting a second row -
+                # otherwise every archive/trash leaves a permanent visible duplicate.
+                existing = conn.execute(
+                    "SELECT id FROM messages WHERE folder_id=? AND uid IS NULL AND message_id=?",
+                    (folder_pk, parsed.message_id)).fetchone()
+                adopted_ghost = existing is not None
         try:
             if existing:
                 pk = int(existing["id"])
-                conn.execute(
-                    "UPDATE messages SET server_flags=?, flags=?, size_bytes=COALESCE(?, size_bytes) "
-                    "WHERE id=?",
-                    (flags_json, flags_json, size_bytes, pk))
+                if adopted_ghost:
+                    # Take the server uid, refresh the server shadow, and KEEP the
+                    # ghost's local flags (its pending local intent must not be
+                    # stomped by the server truth on adoption).
+                    conn.execute(
+                        "UPDATE messages SET uid=?, server_flags=?, size_bytes=COALESCE(?, size_bytes) "
+                        "WHERE id=?",
+                        (uid, flags_json, size_bytes, pk))
+                else:
+                    conn.execute(
+                        "UPDATE messages SET server_flags=?, flags=?, size_bytes=COALESCE(?, size_bytes) "
+                        "WHERE id=?",
+                        (flags_json, flags_json, size_bytes, pk))
             else:
                 cur = conn.execute(
                     "INSERT INTO messages(account_id, folder_id, uid, message_id, gm_msgid, gm_thrid, "
@@ -486,18 +511,51 @@ class MailStore:
     # ── messages: flags / expunge / queries ────────────────────────────────
 
     def apply_server_flags(self, folder_pk: int, uid_flags: Dict[int, Iterable[str]]) -> int:
-        """RFC 4549 flag resync: server truth updates server_flags AND flags
-        (phase 1 is read-only, so local == server; the op-queue diff lands in
-        phase 2). Returns number of updated rows."""
+        """RFC 4549 flag resync: the server is authoritative for a message's
+        flags UNLESS a local flag change is still queued for it. For a message
+        with a pending/sending flags op, only the server shadow (server_flags)
+        is updated - the local `flags` (the user's not-yet-pushed intent, e.g. a
+        star) is preserved until the op replays. The `AND server_flags != ?`
+        guard keeps a no-change resync a no-op (protects the refuted #13 case).
+        Returns the number of updated rows."""
         conn = self._conn()
         n = 0
         for uid, flags in uid_flags.items():
             fj = json.dumps(sorted(set(flags)))
-            n += conn.execute(
-                "UPDATE messages SET server_flags=?, flags=? WHERE folder_id=? AND uid=? "
-                "AND server_flags != ?", (fj, fj, folder_pk, int(uid), fj)).rowcount
+            row = conn.execute("SELECT id FROM messages WHERE folder_id=? AND uid=?",
+                               (folder_pk, int(uid))).fetchone()
+            has_pending = row is not None and conn.execute(
+                "SELECT 1 FROM ops WHERE kind='flags' AND state IN ('pending','sending') "
+                "AND json_extract(payload, '$.message_pk')=? LIMIT 1",
+                (int(row["id"]),)).fetchone() is not None
+            if has_pending:
+                n += conn.execute(
+                    "UPDATE messages SET server_flags=? WHERE folder_id=? AND uid=? "
+                    "AND server_flags != ?", (fj, folder_pk, int(uid), fj)).rowcount
+            else:
+                n += conn.execute(
+                    "UPDATE messages SET server_flags=?, flags=? WHERE folder_id=? AND uid=? "
+                    "AND server_flags != ?", (fj, fj, folder_pk, int(uid), fj)).rowcount
         conn.commit()
         return n
+
+    def apply_server_flags_delta(self, folder_pk: int, uid: int,
+                                 add: Iterable[str] = (), remove: Iterable[str] = ()) -> bool:
+        """Update ONLY the server shadow by the delta we actually pushed to the
+        server (add/remove), not the full local flag list. The shadow must
+        reflect what the server received, so a later resync diffs correctly."""
+        conn = self._conn()
+        row = conn.execute("SELECT id, server_flags FROM messages WHERE folder_id=? AND uid=?",
+                           (folder_pk, int(uid))).fetchone()
+        if not row:
+            return False
+        sf = set(json.loads(row["server_flags"] or "[]"))
+        sf |= set(add)
+        sf -= set(remove)
+        conn.execute("UPDATE messages SET server_flags=? WHERE id=?",
+                     (json.dumps(sorted(sf)), int(row["id"])))
+        conn.commit()
+        return True
 
     def remove_vanished(self, folder_pk: int, present_uids: Iterable[int],
                         max_uid: Optional[int] = None) -> int:
@@ -704,7 +762,25 @@ class MailStore:
         d["payload"] = json.loads(d["payload"] or "{}")
         return d
 
-    def mark_op(self, op_id: int, state: str, error: Optional[str] = None) -> bool:
+    def claim_op(self, op_id: int) -> bool:
+        """Atomically move a pending op to 'sending'. Exactly one racing worker
+        wins under SQLite's single-writer lock (the loser gets rowcount 0 and
+        must skip), so a non-idempotent side effect (send) runs at most once.
+        attempts is incremented HERE (at claim), so even a worker that crashes
+        before mark_op still counts toward MAX_ATTEMPTS."""
+        conn = self._conn()
+        cur = conn.execute(
+            "UPDATE ops SET state='sending', attempts=attempts+1, updated_at=? "
+            "WHERE id=? AND state='pending'", (_now(), op_id))
+        conn.commit()
+        return cur.rowcount == 1
+
+    def mark_op(self, op_id: int, state: str, error: Optional[str] = None,
+                expect_state: Optional[str] = None) -> bool:
+        """Transition an op's state. With expect_state set, the UPDATE only
+        applies when the op is still in that state (guards against clobbering a
+        row another actor changed meanwhile, e.g. overwriting 'cancelled' with
+        'done'). attempts is NOT incremented here - that happens at claim_op."""
         conn = self._conn()
         payload_patch = ""
         args: List[Any] = [state, _now()]
@@ -712,11 +788,39 @@ class MailStore:
             payload_patch = ", payload=json_set(payload, '$.last_error', ?)"
             args.append(error[:500])
         args.append(op_id)
+        guard = ""
+        if expect_state is not None:
+            guard = " AND state=?"
+            args.append(expect_state)
         cur = conn.execute(
-            f"UPDATE ops SET state=?, attempts=attempts+1, updated_at=?{payload_patch} "
-            f"WHERE id=?", args)
+            f"UPDATE ops SET state=?, updated_at=?{payload_patch} "
+            f"WHERE id=?{guard}", args)
         conn.commit()
         return cur.rowcount > 0
+
+    def reclaim_stale_ops(self, account_pk: int, lease_seconds: int = 300) -> int:
+        """Re-arm ops stranded in 'sending' by a crashed/interrupted worker
+        (updated_at older than the lease). Idempotent kinds (flags/move/append)
+        go back to 'pending' for a safe retry; 'send' is PARKED as 'failed'
+        (SMTP has no idempotency key - an interrupted send may already have been
+        delivered, so it must never be auto-retried). Returns reclaimed count."""
+        conn = self._conn()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
+        rows = conn.execute(
+            "SELECT id, kind FROM ops WHERE account_id=? AND state='sending' "
+            "AND updated_at IS NOT NULL AND updated_at < ?",
+            (account_pk, cutoff)).fetchall()
+        for r in rows:
+            if r["kind"] == "send":
+                conn.execute(
+                    "UPDATE ops SET state='failed', updated_at=?, "
+                    "payload=json_set(payload, '$.last_error', ?) WHERE id=?",
+                    (_now(), "interrupted mid-send; not auto-retried", int(r["id"])))
+            else:
+                conn.execute("UPDATE ops SET state='pending', updated_at=? WHERE id=?",
+                             (_now(), int(r["id"])))
+        conn.commit()
+        return len(rows)
 
     def cancel_op(self, op_id: int, account_pk: Optional[int] = None) -> bool:
         """Cancel a pending op (undo-send). Only pending ops can be cancelled."""

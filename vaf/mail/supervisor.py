@@ -10,8 +10,11 @@ thread with per-account crash isolation - one broken account never stalls the
 others. One IDLE watcher thread per eager account gives near-instant new-mail
 pickup on INBOX (re-issued before the 29-minute server limit; a dead IDLE
 socket means "sync now", per RFC 2177 practice); folders beyond INBOX ride the
-periodic sweep. Phase 1 scope: only accounts whose credentials work over IMAP
-(password lane); OAuth accounts join in phase 3 after re-consent.
+periodic sweep. The sync lane covers every account reachable over IMAP - the
+password lane plus OAuth accounts once they are imap_ready (re-consented). After
+each sweep a provider-agnostic send drain delivers queued outbox sends for EVERY
+account (including non-imap_ready Gmail/Microsoft, or accounts whose IMAP was
+down), so a queued send is never stranded behind IMAP availability.
 
 New-mail hook (decision E3): observers registered via on_new_mail() are called
 with (user_scope_id, account_id, stats) after any sync that ingested mail -
@@ -119,6 +122,44 @@ def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> 
         _safe_logout(client)
 
 
+def _drain_sends(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> Dict[str, Any]:
+    """Deliver queued SEND ops for one account regardless of IMAP availability -
+    sends go through the SMTP/API transport and need no IMAP session. Runs AFTER
+    the IMAP sync in the sweep, so imap accounts keep their Sent-APPEND (their
+    sends already drained in _sync_one); only sends the IMAP sync could not
+    handle (non-imap_ready accounts, or accounts whose IMAP client failed to
+    build) land here. The atomic op claim makes running both passes safe."""
+    from vaf.core.config import Config
+    from vaf.mail.imap_client import MailAuthError, NullImapClient, _safe_logout, build_imap_client
+    from vaf.mail.service import MailService
+    from vaf.mail.writeback import OpExecutor
+    account_id = acc.get("account_id") or acc.get("email") or ""
+    svc = MailService(scope)
+    apk = svc.store.account_pk(account_id)
+    if apk is None:
+        return {"ok": True, "drained": 0}
+    # Only do work when a send is actually queued (avoid opening IMAP for nothing).
+    if not any(o["kind"] == "send" for o in svc.store.pending_ops(apk)):
+        return {"ok": True, "drained": 0}
+    client = None
+    try:
+        try:
+            client = build_imap_client(acc, cred_username, scope)
+        except (MailAuthError, ValueError):
+            client = None  # send still works; Sent-APPEND is skipped for this pass
+        stats = OpExecutor(svc.store, apk, client or NullImapClient(), acc, scope,
+                           cred_username=cred_username).process(
+            write_enabled=bool(Config.get("mail_engine_write_enabled", False)) and client is not None,
+            allowed_kinds={"send"})
+        return {"ok": True, "drained": int(stats.get("done", 0))}
+    except Exception as e:
+        logger.warning("send drain failed for %s: %s", (account_id or "")[:3] + "***", e)
+        return {"ok": False, "error": str(e)}
+    finally:
+        if client is not None:
+            _safe_logout(client)
+
+
 class _IdleWatcher(threading.Thread):
     """One IDLE connection pinned to INBOX. On server activity (or a dead
     socket) it requests an immediate account sync via the callback. Restarted
@@ -213,6 +254,19 @@ class MailSyncSupervisor:
                     ok = sum(1 for r in results if isinstance(r, dict) and r.get("ok"))
                     if imap_accounts:
                         logger.info("mail v2 sweep: %d/%d accounts ok", ok, len(imap_accounts))
+
+                    # Provider-agnostic send drain AFTER the sync: delivers queued
+                    # sends for EVERY account (incl. non-imap_ready gmail/microsoft
+                    # and accounts whose IMAP was down), so a queued send is never
+                    # stranded. imap accounts already drained their sends above, so
+                    # this is a cheap no-op for them (guarded by a pending-send check).
+                    async def _bounded_drain(s, u, a):
+                        async with sem:
+                            return await asyncio.to_thread(_drain_sends, s, u, a)
+
+                    await asyncio.gather(*[_bounded_drain(s, u, a) for s, u, a in accounts],
+                                         return_exceptions=True)
+
                     self._ensure_idle_watchers(imap_accounts)
                 else:
                     self._stop_idle_watchers()

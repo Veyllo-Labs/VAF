@@ -128,7 +128,7 @@ import { useLocaleStore } from '@/lib/localeStore';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, EmailSetupWizard, MailDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import TrainingDashboard from './TrainingDashboard';
@@ -689,6 +689,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
     const [showDiscordDashboard, setShowDiscordDashboard] = useState(false);
     const [showMailDashboard, setShowMailDashboard] = useState(false);
+    const [showMailClient, setShowMailClient] = useState(false);
     const [showEmailWizard, setShowEmailWizard] = useState(false);
     const [showCloudWizard, setShowCloudWizard] = useState(false);
     const [showCloudDashboard, setShowCloudDashboard] = useState(false);
@@ -3229,7 +3230,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 onOpenWhatsAppWizard={() => setShowWhatsAppWizard(true)}
                                 onOpenWhatsAppDashboard={() => setShowWhatsAppDashboard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
-                                onOpenEmailDashboard={() => setShowMailDashboard(true)}
+                                onOpenEmailDashboard={() => setShowMailClient(true)}
                                 onOpenEmailWizard={() => setShowEmailWizard(true)}
                                 onOpenCloudDashboard={() => setShowCloudDashboard(true)}
                                 onOpenCloudWizard={(provider?: string) => {
@@ -6459,7 +6460,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onConfigChange={handleChange}
             />
 
-            {/* Mail Dashboard (same size as Telegram Dashboard) */}
+            {/* v2 mail client (the three-pane window opened from the Email tile).
+                Its "Accounts" gear opens the account WIZARD directly (add/connect),
+                NOT the old mail dashboard - the wizard is the account surface until a
+                native account panel is built into the client. */}
+            <MailClient
+                isOpen={showMailClient}
+                onClose={() => setShowMailClient(false)}
+                onManageAccounts={() => setShowEmailWizard(true)}
+            />
+
+            {/* Legacy Mail Dashboard: no longer opened from the mail flow (Phase 7
+                removes it); kept mounted only for the account-remove path until the
+                client gets a native account panel. */}
             <MailDashboard
                 isOpen={showMailDashboard}
                 onClose={() => {

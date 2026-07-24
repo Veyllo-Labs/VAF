@@ -18,20 +18,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   conversations, encrypted-at-rest cached bodies, configurable retention with
   headers kept forever), an RFC 4549 incremental IMAP sync engine (UID-based,
   UIDVALIDITY-safe, batched fetches, IMAP IDLE push on the inbox plus periodic
-  sweeps, Gmail thread/label capture), a new `/mail` page (three-pane layout,
-  conversation view, HTML mail rendered sanitized in a sandboxed frame with
+  sweeps, Gmail thread/label capture), a new in-app mail client window (three-pane
+  layout, conversation view, HTML mail rendered sanitized in a sandboxed frame with
   remote images blocked by default for tracking protection, attachment
   download), and new `/api/mail` endpoints. With the flag on, the existing
   agent mail tools and the Mail dashboard transparently serve from the new
   store (search gains body search; opening messages works offline from the
   local cache). The engine is strictly read-only against mailboxes in this
   phase; server-side writes stay behind a separate `mail_engine_write_enabled`
-  flag that ships later. New permissive-licensed dependencies (in the `mail`
+  flag (documented in the next entry). New permissive-licensed dependencies (in the `mail`
   extra): IMAPClient (BSD-3-Clause), aiosmtplib (MIT), nh3 (MIT), zstandard
   (BSD-3-Clause) - listed in `THIRD_PARTY.md` and the About tab's third-party
   license list.
 - Mail client v2 write path (still behind the same opt-in flags): read/unread,
-  star, archive and trash directly in the new `/mail` page (trash-only delete
+  star, archive and trash directly in the new mail client window (trash-only delete
   semantics - nothing is ever expunged), reply/reply-all/forward with proper
   quoting and threading, compose with a 15-second undo window (the mail is
   held locally and can be withdrawn before it leaves the machine), and

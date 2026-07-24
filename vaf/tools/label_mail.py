@@ -43,7 +43,10 @@ def _pattern_from_from_addr(from_addr: str) -> str:
 
 def _add_sender_rule(user_scope_id, pattern: str, category: str) -> None:
     """Add a sender rule to the user's email config (by scope). Same behaviour as Mail dashboard."""
-    from vaf.api.email_routes import _get_email_config, _save_email_config
+    from vaf.core.email_accounts import (
+        get_email_config as _get_email_config,
+        save_email_config as _save_email_config,
+    )
 
     ec = _get_email_config(None, user_scope_id=user_scope_id)
     rules = list(ec.get("sender_category_rules") or [])

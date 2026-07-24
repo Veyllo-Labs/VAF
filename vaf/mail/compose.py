@@ -42,7 +42,12 @@ def quote_reply(orig_from: str, orig_date_ts: Optional[int], orig_text: str) -> 
             "%Y-%m-%d %H:%M UTC")
     attribution = f"On {when}, {_display_name(orig_from)} wrote:" if when else \
         f"{_display_name(orig_from)} wrote:"
-    quoted = "\n".join("> " + line for line in (orig_text or "").splitlines())
+    # Empty source lines become a bare '>' (NOT '> ') so the blank quoted line
+    # stays a hard break and paragraphs are not flowed together; content lines
+    # are rstripped for the same reason (see _flow_encode).
+    quoted_lines = [f"> {s}" if (s := line.rstrip()) else ">"
+                    for line in (orig_text or "").splitlines()]
+    quoted = "\n".join(quoted_lines)
     return f"{attribution}\n{quoted}"
 
 
@@ -95,11 +100,22 @@ def reply_reference_headers(orig_message_id: str, orig_refs: Iterable[str]) -> D
 
 
 def _flow_encode(text: str) -> str:
-    """format=flowed body encoding (RFC 3676): space-stuff dangerous line
-    starts. Soft-wrapping long lines is left to the recipient's rewrap."""
+    """format=flowed body encoding (RFC 3676). Two rules matter here:
+
+    - A trailing space is the *flowed* (soft line-break) signal, so we rstrip
+      every line first: we never soft-wrap, so each line is a HARD line and a
+      stray trailing space would otherwise make the recipient glue it to the
+      next line (words run together).
+    - Space-stuffing re-adds ONE leading space to a line that would otherwise be
+      misread as a quote or the 'From ' envelope boundary. A line that is only
+      quote markers ('>', '> >', an empty quoted paragraph) is structural and is
+      emitted verbatim - stuffing it would demote the quote to plain text."""
     out = []
-    for line in (text or "").splitlines():
-        if line.startswith((" ", "From ")) or line.startswith(">") and not line.startswith("> "):
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if line and line.replace(" ", "").strip(">") == "":
+            out.append(line)  # pure quote-marker line (empty quoted paragraph)
+        elif line.startswith((" ", "From ")) or (line.startswith(">") and not line.startswith("> ")):
             out.append(" " + line)
         else:
             out.append(line)
@@ -118,6 +134,10 @@ def build_message(from_addr: str, to: str, subject: str, body_text: str,
     msg["To"] = to
     if cc:
         msg["Cc"] = cc
+    if bcc:
+        # The Sent copy records the Bcc so the sender keeps the blind-copy list;
+        # the delivered message (built by the transport) never carries it.
+        msg["Bcc"] = bcc
     msg["Subject"] = subject or "(No subject)"
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid()

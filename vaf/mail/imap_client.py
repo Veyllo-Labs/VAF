@@ -85,3 +85,24 @@ def _safe_logout(client) -> None:
             client.shutdown()
         except Exception:
             pass
+
+
+class NullImapClient:
+    """No-op IMAP client for SEND-ONLY op processing when no IMAP session can be
+    built (send goes through the SMTP/API transport and needs no IMAP). Any
+    mailbox operation raises so it is left for a real session; capability probes
+    return False. Used by the supervisor send-drain and the /send fast path."""
+
+    def has_capability(self, cap: str) -> bool:
+        return False
+
+    def _no_session(self, *args, **kwargs):
+        raise RuntimeError("no imap session")
+
+    select_folder = add_flags = remove_flags = move = copy = expunge = append = _no_session
+
+    def logout(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass

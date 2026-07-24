@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from vaf.core.email_transport import _get_email_config
+from vaf.core.email_accounts import get_email_config as _get_email_config
 from vaf.core.oauth_pkce import get_valid_access_token
 
 logger = logging.getLogger("vaf.core.calendar_client")

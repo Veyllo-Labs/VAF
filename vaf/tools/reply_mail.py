@@ -76,6 +76,13 @@ class ReplyMailTool(BaseTool):
         full_body = f"{body}{pre['body']}"
         reasons = _high_risk_send_reasons(pre["to"], pre["subject"], full_body, [])
         if reasons and not bool(kwargs.get("confirm_high_risk", False)):
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("mail_high_risk_send_blocked",
+                                   username=cred_username or "",
+                                   detail=f"reply blocked, reasons: {', '.join(reasons)}")
+            except Exception:
+                pass
             return ("Security check blocked this reply as potentially high-risk. "
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "reply_mail again with confirm_high_risk=true.")

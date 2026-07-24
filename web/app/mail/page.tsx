@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl';
 import {
     AlertTriangle, Archive, ChevronRight, CornerUpLeft, CornerUpRight, Inbox, Loader2, Mail,
-    MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, ShieldCheck, Star,
+    MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, Settings, ShieldCheck, Star,
     Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
@@ -31,7 +31,7 @@ const jpost = (p: string, body?: unknown, method = 'POST') => jfetch(p, {
 });
 
 interface Account { account_id: string; provider: string; email: string; last_sync_at?: string }
-interface Folder { id: number; name: string; special_use?: string }
+interface Folder { id: number; name: string; special_use?: string; total?: number; unread?: number }
 interface ThreadRow {
     thread_id: number; message_count: number; unread_count: number; last_date_ts?: number;
     acct: string; newest_pk: number; subject: string; from_addr: string; snippet: string;
@@ -52,6 +52,9 @@ const SPECIAL_KEYS: Record<string, string> = {
     '\\Inbox': 'inbox', '\\Sent': 'sent', '\\Drafts': 'drafts',
     '\\Trash': 'trash', '\\Junk': 'junk', '\\Archive': 'archive', '\\All': 'all',
 };
+// Display order for the special-use folders shown at the top of each account;
+// everything else (Gmail labels, custom folders) collapses under "Labels".
+const SPECIAL_ORDER = ['\\Inbox', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash', '\\All'];
 
 function fmtWhen(ts?: number): string {
     if (!ts) return '';
@@ -100,7 +103,7 @@ function BodyFrame({ html }: { html: string }) {
 
 function ComposeModal({ prefill, accounts, onClose, onQueued }: {
     prefill: Partial<Prefill> | null; accounts: Account[];
-    onClose: () => void; onQueued: (opId: number, undoUntil: number) => void;
+    onClose: () => void; onQueued: (opId: number, undoSeconds: number) => void;
 }) {
     const t = useTranslations('mailV2');
     const [account, setAccount] = useState(prefill?.account_id || accounts[0]?.account_id || '');
@@ -119,17 +122,23 @@ function ComposeModal({ prefill, accounts, onClose, onQueued }: {
                 in_reply_to: prefill?.in_reply_to || '', references: prefill?.references || '',
                 undo_seconds: 15,
             });
-            onQueued(out.op_id, out.undo_until_ts);
+            onQueued(out.op_id, out.undo_seconds ?? 15);
             onClose();
         } catch { setError(t('compose.sendFailed')); }
         finally { setSending(false); }
     }, [account, to, cc, subject, body, prefill, onClose, onQueued, t]);
+    // Guard an accidental close of a half-written draft (X / Cancel only; a
+    // successful send calls onClose directly and must NOT prompt).
+    const requestClose = useCallback(() => {
+        if ((to.trim() || body.trim()) && !window.confirm(t('compose.discardConfirm'))) return;
+        onClose();
+    }, [to, body, onClose, t]);
     return (
         <div className="fixed inset-0 z-50 bg-black/50 grid place-items-center p-4">
             <div className="w-full max-w-2xl bg-[#1f1f1f] border border-[#2e2e2e] rounded-xl shadow-2xl flex flex-col max-h-[90vh]">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[#2e2e2e]">
                     <h2 className="font-semibold text-[15px]">{t('compose.title')}</h2>
-                    <button type="button" onClick={onClose} className="text-[#9a9a9a] hover:text-white"><X className="w-4 h-4" /></button>
+                    <button type="button" onClick={requestClose} className="text-[#9a9a9a] hover:text-white"><X className="w-4 h-4" /></button>
                 </div>
                 <div className="p-4 space-y-2.5 overflow-y-auto">
                     {accounts.length > 1 && (
@@ -149,7 +158,7 @@ function ComposeModal({ prefill, accounts, onClose, onQueued }: {
                     {error && <div className="text-[#e08c8c] text-sm">{error}</div>}
                 </div>
                 <div className="flex justify-end gap-2 px-4 py-3 border-t border-[#2e2e2e]">
-                    <button type="button" onClick={onClose}
+                    <button type="button" onClick={requestClose}
                         className="px-3 py-1.5 rounded-lg text-sm text-[#9a9a9a] hover:text-white">{t('compose.cancel')}</button>
                     <button type="button" onClick={send} disabled={sending || !to.trim() || !account}
                         className="px-4 py-1.5 rounded-lg text-sm bg-[#e05d44] text-white disabled:opacity-50">
@@ -166,14 +175,16 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
     const [body, setBody] = useState<Body | null>(null);
     const [loading, setLoading] = useState(false);
     const [allowRemote, setAllowRemote] = useState(false);
+    const [remoteFetched, setRemoteFetched] = useState(false);
     useEffect(() => {
         if (!expanded) return;
-        if (body && !allowRemote) return;
-        if (body && allowRemote && body.blocked_remote === 0) return;
-        setLoading(true);
+        if (body && !allowRemote) return;          // have the blocked render; user has not opted in
+        if (allowRemote && remoteFetched) return;  // opted-in render already fetched: never re-loop
+        setLoading(true);                          // (blocked_remote can stay > 0 if some hosts fail)
         jfetch(`api/mail/messages/${msg.id}/body${allowRemote ? '?allow_remote=true' : ''}`)
-            .then(setBody).catch(() => setBody(null)).finally(() => setLoading(false));
-    }, [expanded, body, allowRemote, msg.id]);
+            .then(b => { setBody(b); if (allowRemote) setRemoteFetched(true); })
+            .catch(() => setBody(null)).finally(() => setLoading(false));
+    }, [expanded, body, allowRemote, remoteFetched, msg.id]);
 
     if (!expanded) {
         return (
@@ -229,7 +240,7 @@ function MessageView({ msg, expanded, onToggle }: { msg: Msg; expanded: boolean;
     );
 }
 
-export default function MailPage() {
+export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => void; onManageAccounts?: () => void }) {
     const t = useTranslations('mailV2');
     const [status, setStatus] = useState<{ v2_enabled: boolean; accounts?: Account[] } | null>(null);
     const [folders, setFolders] = useState<Record<string, Folder[]>>({});
@@ -245,7 +256,9 @@ export default function MailPage() {
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState('');
     const [compose, setCompose] = useState<Partial<Prefill> | null | false>(false);
-    const [undoState, setUndoState] = useState<{ opId: number; until: number } | null>(null);
+    const [undoState, setUndoState] = useState<{ opId: number; seconds: number } | null>(null);
+    const [sentNotice, setSentNotice] = useState(false);
+    const [labelsOpen, setLabelsOpen] = useState<Set<string>>(new Set());
 
     const loadStatus = useCallback(async () => {
         try {
@@ -304,7 +317,12 @@ export default function MailPage() {
         setThreads(prev => prev.filter(tr => tr.thread_id !== row.thread_id));
         if (activeThread === row.thread_id) { setActiveThread(null); setThreadMsgs([]); }
         try {
-            await jpost(`api/mail/messages/${row.newest_pk}/${action}`);
+            // Move EVERY message of the conversation, not just the newest, so a
+            // multi-message thread leaves no stragglers behind in the folder.
+            const data = await jfetch(`api/mail/threads/${row.thread_id}`);
+            const ids = ((data.messages || []) as Msg[]).map(m => m.id);
+            await Promise.all((ids.length ? ids : [row.newest_pk])
+                .map(id => jpost(`api/mail/messages/${id}/${action}`)));
         } catch { setError(t('actionFailed')); loadThreads(); }
     }, [activeThread, loadThreads, t]);
 
@@ -348,24 +366,36 @@ export default function MailPage() {
 
     const undoSend = useCallback(async () => {
         if (!undoState) return;
+        const opId = undoState.opId;
         try {
-            await jpost(`api/mail/send/${undoState.opId}`, undefined, 'DELETE');
-            setUndoState(null);
-        } catch { setUndoState(null); }
-    }, [undoState]);
+            await jpost(`api/mail/send/${opId}`, undefined, 'DELETE');
+            setUndoState(null);                 // withdrawn before delivery
+        } catch (e) {
+            // 409 = the transport already delivered it: say so, instead of
+            // pretending undo worked. Other errors are transient - keep the bar.
+            if (e instanceof Error && e.message === '409') { setUndoState(null); setSentNotice(true); }
+            else setError(t('actionFailed'));
+        }
+    }, [undoState, t]);
     useEffect(() => {
         if (!undoState) return;
-        const timer = setTimeout(() => setUndoState(null),
-            Math.max(1000, undoState.until * 1000 - Date.now()));
+        // Server-relative DURATION (see queue_send), never an absolute timestamp
+        // measured against a possibly-skewed browser clock.
+        const timer = setTimeout(() => setUndoState(null), Math.max(1000, undoState.seconds * 1000));
         return () => clearTimeout(timer);
     }, [undoState]);
+    useEffect(() => {
+        if (!sentNotice) return;
+        const timer = setTimeout(() => setSentNotice(false), 4000);
+        return () => clearTimeout(timer);
+    }, [sentNotice]);
 
     if (status === null) {
-        return <div className="h-screen grid place-items-center bg-[#181818] text-[#9a9a9a]"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+        return <div className="h-full grid place-items-center bg-[#181818] text-[#9a9a9a]"><Loader2 className="w-6 h-6 animate-spin" /></div>;
     }
     if (!status.v2_enabled) {
         return (
-            <div className="h-screen grid place-items-center bg-[#181818] text-[#e8e8e8]">
+            <div className="h-full grid place-items-center bg-[#181818] text-[#e8e8e8]">
                 <div className="max-w-md text-center space-y-3 p-6">
                     <Mail className="w-10 h-10 mx-auto text-[#e05d44]" />
                     <h1 className="text-lg font-semibold">{t('flagOffTitle')}</h1>
@@ -380,11 +410,10 @@ export default function MailPage() {
     const newestMsg = threadMsgs[threadMsgs.length - 1];
 
     return (
-        <div className="h-screen flex flex-col bg-[#181818] text-[#e8e8e8]">
+        <div className="h-full flex flex-col bg-[#181818] text-[#e8e8e8]">
             <header className="flex items-center gap-3 px-4 py-2.5 border-b border-[#2e2e2e] bg-[#1f1f1f]">
                 <div className="w-8 h-8 rounded-lg bg-[#e05d44] grid place-items-center"><Mail className="w-4 h-4 text-white" /></div>
                 <h1 className="font-semibold text-[15px]">{t('title')}</h1>
-                <span className="text-xs text-[#9a9a9a]">{t('engineBadge', { count: (status.accounts || []).length })}</span>
                 <button type="button" onClick={() => openCompose('new')}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#e05d44] text-white text-sm">
                     <PenSquare className="w-4 h-4" /> {t('compose.title')}
@@ -402,6 +431,18 @@ export default function MailPage() {
                         <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin')} /> {t('sync')}
                     </button>
                 </div>
+                {onManageAccounts && (
+                    <button type="button" onClick={onManageAccounts} title={t('manageAccounts')}
+                        className="p-2 rounded-lg bg-[#262626] border border-[#2e2e2e] hover:border-[#444]">
+                        <Settings className="w-4 h-4" />
+                    </button>
+                )}
+                {onClose && (
+                    <button type="button" onClick={onClose} title={t('close')}
+                        className="p-2 rounded-lg hover:bg-[#262626] text-[#9a9a9a] hover:text-white">
+                        <X className="w-4 h-4" />
+                    </button>
+                )}
             </header>
 
             <main className="flex-1 grid min-h-0" style={{ gridTemplateColumns: '220px 380px 1fr' }}>
@@ -411,20 +452,51 @@ export default function MailPage() {
                             sel.account === null ? 'bg-[#2a2a2a] font-semibold' : 'hover:bg-[#262626]')}>
                         <Inbox className="w-4 h-4" /> {t('allInboxes')}
                     </button>
-                    {(status.accounts || []).map(a => (
-                        <div key={a.account_id} className="mt-3">
-                            <div className="px-3 text-xs text-[#9a9a9a] truncate">{a.email} ({a.provider})</div>
-                            {(folders[a.account_id] || [{ id: 0, name: 'INBOX', special_use: '\\Inbox' } as Folder]).map(f => (
-                                <button key={`${a.account_id}:${f.name}`} type="button"
-                                    onClick={() => setSel({ account: a.account_id, folder: f.name })}
-                                    className={cn('w-full text-left px-3 py-1.5 rounded-lg text-sm truncate',
-                                        sel.account === a.account_id && sel.folder === f.name
-                                            ? 'bg-[#2a2a2a] font-semibold' : 'hover:bg-[#262626]')}>
+                    {(status.accounts || []).map(a => {
+                        const all = folders[a.account_id] || [{ id: 0, name: 'INBOX', special_use: '\\Inbox' } as Folder];
+                        const special = SPECIAL_ORDER
+                            .map(su => all.find(f => f.special_use === su))
+                            .filter((f): f is Folder => !!f);
+                        const labels = all.filter(f => !SPECIAL_ORDER.includes(f.special_use || ''));
+                        const open = labelsOpen.has(a.account_id);
+                        const folderBtn = (f: Folder) => (
+                            <button key={`${a.account_id}:${f.name}`} type="button"
+                                onClick={() => setSel({ account: a.account_id, folder: f.name })}
+                                className={cn('w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm',
+                                    sel.account === a.account_id && sel.folder === f.name
+                                        ? 'bg-[#2a2a2a] font-semibold' : 'hover:bg-[#262626]')}>
+                                <span className="truncate flex-1 text-left">
                                     {SPECIAL_KEYS[f.special_use || ''] ? t(`folders.${SPECIAL_KEYS[f.special_use || '']}`) : f.name}
-                                </button>
-                            ))}
-                        </div>
-                    ))}
+                                </span>
+                                {f.unread ? (
+                                    <span className="flex-shrink-0 text-[11px] leading-[18px] px-1.5 rounded-full bg-[#e05d44] text-white">{f.unread}</span>
+                                ) : f.total ? (
+                                    <span className="flex-shrink-0 text-[11px] text-[#9a9a9a]">{f.total.toLocaleString()}</span>
+                                ) : null}
+                            </button>
+                        );
+                        return (
+                            <div key={a.account_id} className="mt-3">
+                                <div className="px-3 text-xs text-[#9a9a9a] truncate">{a.email} ({a.provider})</div>
+                                {special.map(folderBtn)}
+                                {labels.length > 0 && (
+                                    <>
+                                        <button type="button"
+                                            onClick={() => setLabelsOpen(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(a.account_id)) next.delete(a.account_id); else next.add(a.account_id);
+                                                return next;
+                                            })}
+                                            className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[#9a9a9a] hover:bg-[#262626]">
+                                            <ChevronRight className={cn('w-3.5 h-3.5 transition-transform flex-shrink-0', open && 'rotate-90')} />
+                                            <span className="truncate">{t('labelsSection', { count: labels.length })}</span>
+                                        </button>
+                                        {open && labels.map(folderBtn)}
+                                    </>
+                                )}
+                            </div>
+                        );
+                    })}
                 </nav>
 
                 <section className="border-r border-[#2e2e2e] overflow-y-auto">
@@ -528,7 +600,7 @@ export default function MailPage() {
             {compose !== false && (
                 <ComposeModal prefill={compose} accounts={status.accounts || []}
                     onClose={() => setCompose(false)}
-                    onQueued={(opId, until) => setUndoState({ opId, until })} />
+                    onQueued={(opId, seconds) => setUndoState({ opId, seconds })} />
             )}
             {undoState && (
                 <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm">
@@ -540,6 +612,18 @@ export default function MailPage() {
                     </button>
                 </div>
             )}
+            {sentNotice && (
+                <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#262626] border border-[#2e2e2e] shadow-xl text-sm text-[#9a9a9a]">
+                    <Mail className="w-4 h-4" /> {t('alreadySent')}
+                </div>
+            )}
         </div>
     );
+}
+
+// Standalone route wrapper: the client normally opens as an in-app modal
+// (MailClient.tsx), but the /mail URL still renders it full-height for direct
+// access. The modal supplies onClose/onManageAccounts; the route does not.
+export default function MailPage() {
+    return <div className="h-screen"><MailClientView /></div>;
 }

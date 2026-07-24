@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import requests
 
 from vaf.core.config import Config
+from vaf.core.email_accounts import get_email_config, save_email_config
 from vaf.core.credential_store import get_email_credentials, set_email_imap_password
 from vaf.core.email_sync_store import (
     delete_messages_older_than,
@@ -134,62 +135,12 @@ class TestImapRequest(BaseModel):
     imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
-def _get_email_config(
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Return email config for the given user. When username is None or local admin, use legacy email_config.
-    If user_scope_id is set, email_config_by_scope is tried first (Phase 2); otherwise username-based lookup."""
-    local_admin_scope = get_local_admin_scope_id()
-    if user_scope_id:
-        by_scope = Config.get("email_config_by_scope") or {}
-        if isinstance(by_scope, dict):
-            ec = by_scope.get(str(user_scope_id).strip())
-            if isinstance(ec, dict) and ec.get("accounts") is not None:
-                return ec
-        if str(user_scope_id).strip() == str(local_admin_scope).strip():
-            raw = Config.get("email_config")
-            if isinstance(raw, dict):
-                return raw
-            return {"accounts": []}
-    local_admin = get_local_admin_username().lower()
-    if not username or username.strip().lower() == local_admin:
-        raw = Config.get("email_config")
-        if isinstance(raw, dict):
-            return raw
-        return {"accounts": []}
-    by_user = Config.get("email_config_by_user") or {}
-    ec = by_user.get(username.strip(), {}) if isinstance(by_user, dict) else {}
-    return ec if isinstance(ec, dict) else {"accounts": []}
-
-
-def _save_email_config(
-    ec: Dict[str, Any],
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> None:
-    """Save email config for the given user. When username is None or local admin, write to legacy email_config.
-    If user_scope_id is set, write to email_config_by_scope (Phase 2); otherwise username-based."""
-    config = Config.load()
-    local_admin_scope = get_local_admin_scope_id()
-    if user_scope_id and str(user_scope_id).strip() != str(local_admin_scope).strip():
-        by_scope = config.get("email_config_by_scope") or {}
-        if not isinstance(by_scope, dict):
-            by_scope = {}
-        by_scope[str(user_scope_id).strip()] = ec
-        config["email_config_by_scope"] = by_scope
-        Config.save(config)
-        return
-    local_admin = get_local_admin_username().lower()
-    if not username or username.strip().lower() == local_admin:
-        config["email_config"] = ec
-    else:
-        by_user = config.get("email_config_by_user") or {}
-        if not isinstance(by_user, dict):
-            by_user = {}
-        by_user[username.strip()] = ec
-        config["email_config_by_user"] = by_user
-    Config.save(config)
+# Account-config get/save now live in the route-independent SSOT
+# vaf/core/email_accounts.py (Phase 1 of the mail v2-only port: no FastAPI route
+# module on the config import path). Re-exported here under the historical private
+# names so existing importers keep working; a guard test pins them to one object.
+_get_email_config = get_email_config
+_save_email_config = save_email_config
 
 
 def _test_imap_login(

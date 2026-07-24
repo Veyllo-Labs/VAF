@@ -59,6 +59,18 @@ def test_email_imap_roundtrip(fallback_env):
     assert creds == {"password": "hunter2", "type": "imap"}
 
 
+def test_delete_removes_microsoft_imap_token(fallback_env):
+    # An OAuth Microsoft account upgraded to IMAP stores its XOAUTH2 token under
+    # the microsoft_imap lane. delete_email_credentials(provider=None) must sweep
+    # it too, or a deleted account leaves an orphaned IMAP token (fail-closed
+    # lifecycle). Regression for the mail v2-only Phase-1 credential fix.
+    acct = "user@outlook.com"
+    cs.set_email_oauth_tokens(acct, "microsoft_imap", "acc", "ref", expires_at=time.time() + 3600)
+    assert cs.get_email_credentials(acct, "microsoft_imap") is not None
+    cs.delete_email_credentials(acct)  # provider=None -> sweep every lane
+    assert cs.get_email_credentials(acct, "microsoft_imap") is None
+
+
 def test_cloud_oauth_roundtrip(fallback_env):
     cc.set_cloud_oauth_tokens("user@gmail.com", "google_drive", "acc", "ref", time.time() + 3600)
     creds = cc.get_cloud_credentials("user@gmail.com", "google_drive")

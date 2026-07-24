@@ -93,6 +93,13 @@ class ForwardMailTool(BaseTool):
         from vaf.tools.send_mail import _high_risk_send_reasons
         reasons = _high_risk_send_reasons(to, pre["subject"], full_body, [])
         if reasons and not bool(kwargs.get("confirm_high_risk", False)):
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("mail_high_risk_send_blocked",
+                                   username=cred_username or "",
+                                   detail=f"forward blocked, reasons: {', '.join(reasons)}")
+            except Exception:
+                pass
             return ("Security check blocked this forward as potentially high-risk. "
                     f"Reasons: {', '.join(reasons)}. If the user confirms, call "
                     "forward_mail again with confirm_high_risk=true.")

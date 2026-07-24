@@ -13,6 +13,7 @@ client ID so users never open Google Cloud Console. Set env vars:
 User override in Settings (config) takes precedence over env.
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -119,8 +120,32 @@ def _pkce_verifier_and_challenge() -> Tuple[str, str]:
 
 
 # Provider endpoints and scopes
+def _email_from_id_token(id_token: Optional[str]) -> str:
+    """Read the address from an OIDC id_token's claims (email / preferred_username
+    / upn) WITHOUT signature verification - the token was just returned by the
+    provider's token endpoint over TLS, so it is trustworthy for identity. Used
+    for the Microsoft IMAP lane, whose outlook.office.com-audience access token
+    cannot call Graph /me. Returns '' when no email-shaped claim is present."""
+    if not id_token or not isinstance(id_token, str):
+        return ""
+    try:
+        parts = id_token.split(".")
+        if len(parts) < 2:
+            return ""
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)  # restore base64url padding
+        claims = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+        email = (claims.get("email") or claims.get("preferred_username")
+                 or claims.get("upn") or "").strip().lower()
+        return email if "@" in email else ""
+    except Exception as e:
+        logger.debug("id_token claim parse failed: %s", e)
+        return ""
+
+
 def _get_account_id_from_tokens(provider: str, access_token: str, token_data: Dict[str, Any]) -> str:
-    """Resolve stable account_id (email) from provider userinfo. Falls back to id_token sub or random."""
+    """Resolve stable account_id (email) from provider userinfo / id_token claims.
+    Falls back to a random id only when nothing usable is present."""
     if provider == "gmail":
         try:
             r = requests.get(
@@ -135,21 +160,28 @@ def _get_account_id_from_tokens(provider: str, access_token: str, token_data: Di
                     return email
         except Exception as e:
             logger.debug("Google userinfo failed: %s", e)
-    if provider == "microsoft":
-        try:
-            r = requests.get(
-                "https://graph.microsoft.com/v1.0/me",
-                params={"$select": "mail,userPrincipalName"},
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                info = r.json()
-                email = (info.get("mail") or info.get("userPrincipalName") or "").strip().lower()
-                if email:
-                    return email
-        except Exception as e:
-            logger.debug("Microsoft me failed: %s", e)
+    if provider in ("microsoft", "microsoft_imap"):
+        # id_token claims first: the IMAP lane's outlook.office.com token cannot
+        # call Graph /me (audience mismatch -> 401), so the id_token is the only
+        # reliable source there. The Graph lane can still fall back to /me.
+        email = _email_from_id_token(token_data.get("id_token"))
+        if email:
+            return email
+        if provider == "microsoft":
+            try:
+                r = requests.get(
+                    "https://graph.microsoft.com/v1.0/me",
+                    params={"$select": "mail,userPrincipalName"},
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    info = r.json()
+                    email = (info.get("mail") or info.get("userPrincipalName") or "").strip().lower()
+                    if email:
+                        return email
+            except Exception as e:
+                logger.debug("Microsoft me failed: %s", e)
     return "unknown_" + secrets.token_hex(4)
 
 
@@ -219,7 +251,10 @@ def _get_oauth_client_credential(provider: str, key_kind: str) -> str:
     value = (Config.get(config_key) or "").strip()
     if value:
         return value
-    env_map = _ENV_OAUTH_KEYS.get(provider, {})
+    # The IMAP lane shares Microsoft's client registration, so its env-configured
+    # client id/secret live under the 'microsoft' env keys (T19).
+    env_provider = "microsoft" if provider == "microsoft_imap" else provider
+    env_map = _ENV_OAUTH_KEYS.get(env_provider, {})
     env_key = env_map.get(key_kind)
     if env_key:
         value = (os.environ.get(env_key) or "").strip()

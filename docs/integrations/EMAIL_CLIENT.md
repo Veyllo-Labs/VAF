@@ -2,9 +2,12 @@
 
 Design doc for VAF's email subsystem. Read this BEFORE changing any mail-related
 file (`vaf/core/email_transport.py`, `vaf/core/email_sync_store.py`,
+`vaf/core/email_accounts.py` (route-independent account-config SSOT),
 `vaf/api/email_routes.py`, `vaf/core/oauth_pkce.py`, `vaf/core/credential_store.py`,
 `vaf/tools/mail_*.py` / `send_mail.py` / `read_mail.py` / `find_mail.py` /
 `label_mail.py` / `mark_mail_answered.py` / `list_email_accounts.py`,
+`web/app/mail/page.tsx` (three-pane `MailClientView`),
+`web/components/connections/MailClient.tsx` (window modal),
 `web/components/connections/MailDashboard.tsx`, `EmailSetupWizard.tsx`).
 
 Related docs: [CONNECTIONS.md](CONNECTIONS.md) (connection/channel model,
@@ -19,9 +22,12 @@ phase ships. SHIPPED so far (phase 1, read-only, default-off behind
 blobs), parser.py, RFC 4549 sync engine (sync.py) with Gmail X-GM capture,
 imap_client.py factory, service.py (nh3 sanitizer + attachment serving),
 supervisor.py (sweep + IDLE watchers + E3 new-mail hook + legacy artifact
-import via migrate.py), /api/mail routes (mail_routes.py), the /mail web page
-(three-pane, conversation view, sandboxed-iframe HTML with remote-image
-blocking), and the legacy-shape bridge (tool_bridge.py) that switches the
+import via migrate.py), /api/mail routes (mail_routes.py), the three-pane mail
+client (conversation view, sandboxed-iframe HTML with remote-image blocking) -
+rendered as an in-app WINDOW MODAL (`MailClient.tsx`, same 95vw x 90vh chrome as
+the other connection dashboards) opened from the Connections "Email" tile; the
+`/mail` route renders the same `MailClientView` full-height as a direct-URL
+fallback -, and the legacy-shape bridge (tool_bridge.py) that switches the
 seven agent tools, the legacy /api/email message routes and MailDashboard to
 the v2 store with the same flag.
 Phase 2 SHIPPED (write path): local-first verbs (read/unread, star, archive,
@@ -98,10 +104,13 @@ synced-inbox viewer, not a full mail client.
   `user_scope_id` into tool kwargs at dispatch (`agent.py`) and the workflow
   engine does the same (`workflows/engine.py`); tools never trust
   model-provided identity.
-- Web UI: `MailDashboard.tsx` (modal opened from Settings/Connections;
-  INBOX list, category chips, subject/sender search, plain-text detail view)
-  and `EmailSetupWizard.tsx` (OAuth/IMAP connect wizard). All requests ride
-  the Next.js catch-all proxy with cookie/authorization forwarding.
+- Web UI: `MailDashboard.tsx` (INBOX list, category chips, subject/sender search,
+  plain-text detail view) and `EmailSetupWizard.tsx` (OAuth/IMAP connect wizard).
+  With the v2 client shipped, the Connections "Email" tile now opens the v2
+  `MailClient` window; `MailDashboard` is reached from that window's "Accounts"
+  button and serves as the account-management surface until account CRUD is ported
+  into the client. All requests ride the Next.js catch-all proxy with
+  cookie/authorization forwarding.
 
 ### Safety layers (must survive any rebuild)
 
@@ -238,13 +247,16 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   Remote images blocked by default; per-sender opt-in loads them through a
   server-side image proxy (reusing the SSRF guard). Blocked trackers and
   quarantined phishing mails are logged to the security event log.
-- UI: the mail client becomes a real page (three-pane responsive layout,
-  conversation view, quick actions, search with operators and
+- UI: the mail client is an in-app window modal (`MailClient`, three-pane
+  responsive layout, conversation view, quick actions, search with operators and
   folder/everywhere scope, compose with reply/reply-all/forward quoting,
   server-synced drafts, undo-send via a client-side outbox delay that
-  survives restarts). Desktop and mobile per
-  [WEB_UI.md](../web-ui/WEB_UI.md) / [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
-  MailDashboard remains until parity, then is removed.
+  survives restarts) opened from the Connections "Email" tile - same window chrome
+  as the other dashboards, NOT a standalone full-screen route (the `/mail` URL is
+  only a direct-access fallback rendering the same `MailClientView`). Desktop and
+  mobile per [WEB_UI.md](../web-ui/WEB_UI.md) / [MOBILE_UI.md](../web-ui/MOBILE_UI.md).
+  MailDashboard remains as the account-management surface until account CRUD is
+  ported into the client, then is removed.
 
 ### Agent tools contract
 

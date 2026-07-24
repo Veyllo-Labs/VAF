@@ -33,19 +33,28 @@ class FakeWriteImap:
         self.caps = set(caps)
         self.calls = []
         self.appended = []
+        self.flags = {}  # uid -> set of flags (for get_flags-based idempotency)
+        self.uidvalidity = None  # when set, returned from select_folder (UIDVALIDITY pin tests)
 
     def has_capability(self, cap):
         return cap in self.caps
 
     def select_folder(self, name, readonly=True):
         self.calls.append(("select", name, readonly))
-        return {}
+        return {b"UIDVALIDITY": self.uidvalidity} if self.uidvalidity is not None else {}
 
     def add_flags(self, uids, flags):
         self.calls.append(("add_flags", tuple(uids), tuple(flags)))
+        for u in uids:
+            self.flags.setdefault(u, set()).update(flags)
 
     def remove_flags(self, uids, flags):
         self.calls.append(("remove_flags", tuple(uids), tuple(flags)))
+        for u in uids:
+            self.flags.setdefault(u, set()).difference_update(flags)
+
+    def get_flags(self, uids):
+        return {u: sorted(self.flags.get(u, set())) for u in uids}
 
     def move(self, uids, dest):
         self.calls.append(("move", tuple(uids), dest))
@@ -120,7 +129,7 @@ def test_trash_is_move_only_and_uses_fallback_without_move_cap(svc):
     # local-first: message already lives in trash folder
     msg = svc.store.get_message(pk)
     assert svc.store.get_folder(apk, "Papierkorb")["id"] == msg["folder_id"]
-    client = FakeWriteImap(caps=("IMAP4REV1",))  # no MOVE capability
+    client = FakeWriteImap(caps=("IMAP4REV1", "UIDPLUS"))  # no MOVE, but UIDPLUS present
     stats = _exec(svc, apk, client)
     assert stats["done"] == 1
     assert ("copy", (1,), "Papierkorb") in client.calls
@@ -209,3 +218,253 @@ def test_reply_prefill_quotes_and_threads(svc):
     # reply-all excludes own address
     pre2 = svc.reply_prefill(pk, reply_all=True)
     assert "bob@example.com" not in (pre2["cc"] or "")
+
+
+# ── C1: op-queue exactly-once + honest undo (T1/T2/T23) ──────────────────────
+
+
+def test_claim_op_is_atomic_exactly_once(svc):
+    apk, fpk, pk = _seed(svc)
+    op_id = svc.store.enqueue_op(apk, "flags",
+                                 {"folder": "INBOX", "uid": 1, "add": ["\\Seen"], "remove": []})
+    assert svc.store.claim_op(op_id) is True    # first executor wins pending->sending
+    assert svc.store.claim_op(op_id) is False   # second loses (already 'sending') -> no double-run
+
+
+def test_a_sending_op_is_invisible_to_a_second_executor(svc):
+    apk, fpk, pk = _seed(svc)
+    import time as _t
+    svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
+    op_id = svc.store._conn().execute("SELECT id FROM ops WHERE kind='send'").fetchone()["id"]
+    svc.store.claim_op(int(op_id))  # executor A claims it (now 'sending', mid-delivery)
+    # executor B must not pick up the in-flight op
+    assert svc.store.pending_ops(apk, now_ts=int(_t.time()) + 999) == []
+
+
+def test_cancel_cannot_clobber_a_cancelled_op(svc):
+    apk, fpk, pk = _seed(svc)
+    op_id = svc.store.enqueue_op(apk, "send",
+                                 {"account_id": "bob@example.com", "to": "x@example.com",
+                                  "subject": "s", "body": "b"})
+    assert svc.store.cancel_op(op_id) is True                        # cancelled while pending
+    # a late executor's mark_op must not flip 'cancelled' -> 'done'
+    assert svc.store.mark_op(op_id, "done", expect_state="sending") is False
+    assert svc.store.get_op(op_id)["state"] == "cancelled"
+
+
+def test_cancel_is_rejected_once_sending(svc):
+    apk, fpk, pk = _seed(svc)
+    op_id = svc.store.enqueue_op(apk, "send",
+                                 {"account_id": "bob@example.com", "to": "x@example.com",
+                                  "subject": "s", "body": "b"})
+    svc.store.claim_op(op_id)                                        # now 'sending' (delivering)
+    assert svc.store.cancel_op(op_id) is False                      # undo is honest: too late
+
+
+def test_send_failure_is_parked_not_retried(svc, monkeypatch):
+    apk, fpk, pk = _seed(svc)
+    calls = []
+    import vaf.core.email_transport as transport
+    monkeypatch.setattr(transport, "send_mail", lambda a, **k: calls.append(a) or False)
+    svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
+    client = FakeWriteImap()
+    now = int(time.time()) + 5
+    _exec(svc, apk, client, now_ts=now)
+    states = [r["state"] for r in
+              svc.store._conn().execute("SELECT state FROM ops WHERE kind='send'").fetchall()]
+    assert states == ["failed"] and len(calls) == 1        # parked, sent exactly once (the failure)
+    _exec(svc, apk, client, now_ts=now)                    # second pass must not re-send
+    assert len(calls) == 1
+
+
+def test_reclaim_stale_ops_parks_send_rearms_idempotent(svc):
+    apk, fpk, pk = _seed(svc)
+    send_id = svc.store.enqueue_op(apk, "send",
+                                   {"account_id": "bob@example.com", "to": "x@example.com",
+                                    "subject": "s", "body": "b"})
+    flag_id = svc.store.enqueue_op(apk, "flags",
+                                   {"folder": "INBOX", "uid": 1, "add": ["\\Seen"], "remove": []})
+    assert svc.store.claim_op(send_id) and svc.store.claim_op(flag_id)  # both 'sending'
+    svc.store._conn().execute("UPDATE ops SET updated_at='2000-01-01T00:00:00+00:00' "
+                              "WHERE id IN (?,?)", (send_id, flag_id))
+    svc.store._conn().commit()
+    assert svc.store.reclaim_stale_ops(apk, lease_seconds=300) == 2
+    assert svc.store.get_op(send_id)["state"] == "failed"      # ambiguous send never auto-retried
+    assert svc.store.get_op(flag_id)["state"] == "pending"     # idempotent op re-armed
+
+
+# ── C2: provider-agnostic, restart-safe send drain (T3) ──────────────────────
+
+
+def test_process_allowed_kinds_only_touches_that_kind(svc, monkeypatch):
+    apk, fpk, pk = _seed(svc)
+    svc.store.enqueue_op(apk, "flags",
+                         {"folder": "INBOX", "uid": 1, "add": ["\\Seen"], "remove": []})
+    import vaf.core.email_transport as transport
+    sent = []
+    monkeypatch.setattr(transport, "send_mail", lambda a, **k: sent.append(a) or True)
+    svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
+    from vaf.mail.imap_client import NullImapClient
+    ex = OpExecutor(svc.store, apk, NullImapClient(), {"provider": "gmail"}, _SCOPE)
+    stats = ex.process(write_enabled=False, now_ts=int(time.time()) + 5, allowed_kinds={"send"})
+    assert stats["done"] == 1 and sent == ["bob@example.com"]        # send delivered
+    pending_kinds = [r["kind"] for r in svc.store._conn().execute(
+        "SELECT kind FROM ops WHERE state='pending'").fetchall()]
+    assert "flags" in pending_kinds and "send" not in pending_kinds  # flags op untouched
+
+
+def test_send_drain_with_null_client_delivers_and_skips_sent_append(svc, monkeypatch):
+    apk, fpk, pk = _seed(svc)
+    svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
+    import vaf.core.email_transport as transport
+    sent = []
+    monkeypatch.setattr(transport, "send_mail", lambda a, **k: sent.append(a) or True)
+    svc.queue_send("bob@example.com", "x@example.com", "s", "b", undo_seconds=0)
+    from vaf.mail.imap_client import NullImapClient
+    ex = OpExecutor(svc.store, apk, NullImapClient(), {"provider": "imap"}, _SCOPE)
+    # IMAP account but no session: send still delivers; the Sent-APPEND raises on
+    # the null client and is swallowed by the post-send tail (mail WAS sent).
+    stats = ex.process(write_enabled=True, now_ts=int(time.time()) + 5, allowed_kinds={"send"})
+    assert stats["done"] == 1 and sent == ["bob@example.com"]
+
+
+# ── C3: uid-NULL move reconciliation (T4) ────────────────────────────────────
+
+
+def test_flag_op_on_moved_message_defers_then_applies(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.set_star(pk, True)                                        # flags op carries message_pk
+    svc.store._conn().execute("UPDATE messages SET uid=NULL WHERE id=?", (pk,))  # simulate move
+    svc.store._conn().commit()
+    client = FakeWriteImap()
+    stats = _exec(svc, apk, client)
+    assert not any(c[0] == "add_flags" for c in client.calls)     # deferred, not applied
+    assert stats["failed"] == 1                                   # op re-armed pending (not lost)
+    svc.store._conn().execute("UPDATE messages SET uid=9 WHERE id=?", (pk,))     # sync adopted a uid
+    svc.store._conn().commit()
+    _exec(svc, apk, client)
+    assert ("add_flags", (9,), ("\\Flagged",)) in client.calls    # now applies on the new uid
+
+
+# ── C4: MOVE fallback UIDPLUS gate + idempotency (T5) ────────────────────────
+
+
+def test_move_fallback_without_uidplus_is_parked_never_expunges(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.store.upsert_folder(apk, "Papierkorb", special_use="\\Trash")
+    svc.trash(pk)
+    client = FakeWriteImap(caps=("IMAP4REV1",))  # no MOVE AND no UIDPLUS
+    _exec(svc, apk, client)
+    # trash-only invariant: without UIDPLUS we never COPY or EXPUNGE - the op parks
+    assert not any(c[0] in ("copy", "expunge") for c in client.calls)
+    for _ in range(6):
+        _exec(svc, apk, client)
+    st = svc.store._conn().execute("SELECT state FROM ops WHERE kind='move'").fetchone()["state"]
+    assert st == "failed"                     # parked, no mailbox corruption
+
+
+def test_move_fallback_retry_does_not_copy_twice(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.store.upsert_folder(apk, "Papierkorb", special_use="\\Trash")
+    svc.trash(pk)
+
+    class ExpungeFailsOnce(FakeWriteImap):
+        def __init__(self):
+            super().__init__(caps=("IMAP4REV1", "UIDPLUS"))
+            self._expunge_fail = True
+
+        def expunge(self, uids=None):
+            if self._expunge_fail:
+                self._expunge_fail = False
+                raise OSError("expunge dropped")
+            super().expunge(uids)
+
+    client = ExpungeFailsOnce()
+    _exec(svc, apk, client)                   # copy + \Deleted done, expunge fails -> op re-armed
+    _exec(svc, apk, client)                   # retry: source already \Deleted -> NO second copy
+    copies = [c for c in client.calls if c[0] == "copy"]
+    assert len(copies) == 1                   # idempotent: exactly one COPY
+    assert any(c[0] == "expunge" for c in client.calls)
+
+
+# ── C5: UIDVALIDITY pin on flag/move ops (T10) ───────────────────────────────
+
+
+def test_flag_op_dropped_on_uidvalidity_rotation(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.store.set_folder_state(fpk, uidvalidity=100)     # pin the source folder
+    svc.set_star(pk, True)                               # flags op pins uidvalidity=100
+    client = FakeWriteImap()
+    client.uidvalidity = 999                             # server rotated since enqueue
+    stats = _exec(svc, apk, client)
+    assert stats["done"] == 1                            # op consumed (dropped), not retried
+    assert not any(c[0] == "add_flags" for c in client.calls)  # wrong-message write avoided
+
+
+def test_move_op_dropped_on_uidvalidity_rotation(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.store.set_folder_state(fpk, uidvalidity=100)
+    svc.store.upsert_folder(apk, "Archiv", special_use="\\Archive")
+    svc.archive(pk)                                      # move op pins uidvalidity=100
+    client = FakeWriteImap()
+    client.uidvalidity = 999
+    stats = _exec(svc, apk, client)
+    assert stats["done"] == 1
+    assert not any(c[0] in ("move", "copy", "expunge") for c in client.calls)
+
+
+# ── C6: flag resync is pending-op aware; shadow uses the delta (T6) ──────────
+
+
+def test_flag_resync_preserves_local_star_with_pending_op(svc):
+    apk, fpk, pk = _seed(svc)
+    svc.set_star(pk, True)                                   # local \Flagged, flags op pending
+    # server independently marks it \Seen (another client) while our op is pending
+    svc.store.apply_server_flags(fpk, {1: ["\\Seen"]})
+    m = svc.store.get_message(pk)
+    assert m["flags"] == ["\\Flagged"]                       # local star NOT stomped
+    assert m["server_flags"] == ["\\Seen"]                   # shadow tracks server truth
+
+
+def test_op_flags_shadow_uses_delta_not_full_local_list(svc):
+    import json as _json
+    apk, fpk, pk = _seed(svc)
+    # a pre-existing local flag the server never received
+    svc.store._conn().execute("UPDATE messages SET flags=?, server_flags=? WHERE id=?",
+                              (_json.dumps(["\\Flagged"]), _json.dumps([]), pk))
+    svc.store._conn().commit()
+    svc.mark_read(pk)                                        # push only \Seen
+    _exec(svc, apk, FakeWriteImap())
+    m = svc.store.get_message(pk)
+    # shadow reflects ONLY the pushed delta (\Seen), not the untouched local \Flagged
+    assert m["server_flags"] == ["\\Seen"]
+
+
+# ── C7: Sent copy == delivered message (T7) + Gmail Sent dedup (T22) ─────────
+
+
+def test_send_delivers_with_same_message_id_as_sent_copy(svc, monkeypatch):
+    apk, fpk, pk = _seed(svc)
+    svc.store.upsert_folder(apk, "Gesendet", special_use="\\Sent")
+    captured = {}
+    import vaf.core.email_transport as transport
+    monkeypatch.setattr(transport, "send_mail",
+                        lambda a, **k: captured.update(message_id=k.get("message_id")) or True)
+    svc.queue_send("bob@example.com", "x@example.com", "Hi", "Body", undo_seconds=0)
+    client = FakeWriteImap()
+    _exec(svc, apk, client, now_ts=int(time.time()) + 5)
+    assert captured["message_id"]                                # delivered with an explicit id
+    assert captured["message_id"].encode() in client.appended[0][1]   # SAME id in the Sent copy
+
+
+def test_gmail_over_imap_skips_sent_append(svc, monkeypatch):
+    apk = svc.store.upsert_account("me@gmail.com", "imap", "me@gmail.com")
+    svc.store.upsert_folder(apk, "INBOX", special_use="\\Inbox")
+    svc.store.upsert_folder(apk, "[Gmail]/Sent Mail", special_use="\\Sent")
+    import vaf.core.email_transport as transport
+    monkeypatch.setattr(transport, "send_mail", lambda a, **k: True)
+    svc.queue_send("me@gmail.com", "x@example.com", "Hi", "Body", undo_seconds=0)
+    client = FakeWriteImap()
+    ex = OpExecutor(svc.store, apk, client, {"provider": "imap", "email": "me@gmail.com"}, _SCOPE)
+    ex.process(write_enabled=True, now_ts=int(time.time()) + 5)
+    assert client.appended == []                                 # Gmail files Sent itself, no duplicate

@@ -1288,6 +1288,9 @@
     "engineBadge": "{count} Konto/Konten - Engine v2",
     "searchPlaceholder": "Suchen in Betreff, Absender und Inhalt",
     "sync": "Sync",
+    "manageAccounts": "Konten",
+    "close": "Schließen",
+    "labelsSection": "Labels ({count})",
     "allInboxes": "Alle Posteingänge",
     "selectConversation": "Konversation auswählen",
     "noMessages": "Noch nichts synchronisiert. Oben rechts auf Sync klicken.",
@@ -1322,11 +1325,13 @@
       "send": "Senden",
       "cancel": "Abbrechen",
       "sending": "Wird gesendet...",
-      "sendFailed": "Senden fehlgeschlagen."
+      "sendFailed": "Senden fehlgeschlagen.",
+      "discardConfirm": "Nachricht verwerfen?"
     },
     "undoSent": "Nachricht wird gesendet",
     "undo": "Rückgängig",
     "undone": "Senden abgebrochen.",
+    "alreadySent": "Bereits gesendet - Rückgängig nicht mehr möglich.",
     "actionFailed": "Aktion fehlgeschlagen.",
     "folders": {
       "inbox": "Posteingang",

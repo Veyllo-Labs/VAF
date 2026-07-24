@@ -7,8 +7,11 @@ Rules:
 - Every endpoint resolves the caller via _get_current_user and builds a
   MailService for that scope only (fail-closed; the local admin's identity
   fallback resolves to the admin's REAL scope UUID, never to "no scope").
-- The whole router is gated on mail_engine_v2_enabled (404 while off) so the
-  legacy /api/email lane keeps serving until the rollout flips.
+- Every endpoint is gated on mail_engine_v2_enabled via _require_v2 (404 while
+  off) so the legacy /api/email lane keeps serving until the rollout flips. The
+  ONE deliberate exception is GET /status: it answers even while the flag is off
+  (v2_enabled=false) so the /mail page can render its flag-off screen instead of
+  a bare 404.
 - Attachments are served with Content-Disposition: attachment and nosniff;
   only image/* (except SVG) keeps its real content type so cid: inline images
   render - everything else is application/octet-stream.
@@ -26,6 +29,10 @@ from vaf.core.config import Config, get_local_admin_scope_id
 logger = logging.getLogger("vaf.api.mail_routes")
 
 router = APIRouter(prefix="/api/mail", tags=["mail-v2"])
+
+# Strong references to in-flight undo-send delivery tasks so the event loop's
+# weak task references cannot GC them mid-delivery (see /send fast path).
+_INFLIGHT_SEND_TASKS: set = set()
 
 
 def _require_v2() -> None:
@@ -152,7 +159,7 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
     username = _user.get("username")
 
     def _run() -> Dict[str, Any]:
-        from vaf.api.email_routes import _get_email_config
+        from vaf.core.email_accounts import get_email_config as _get_email_config
         from vaf.mail.imap_client import MailAuthError, _safe_logout, build_imap_client
         from vaf.mail.service import MailService
         from vaf.mail.sync import ImapSyncEngine
@@ -188,7 +195,7 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
 
 def _account_ctx(user: Dict[str, Any], account_id: str):
     """(scope, cred_username, account_cfg) for the caller's own account only."""
-    from vaf.api.email_routes import _get_email_config
+    from vaf.core.email_accounts import get_email_config as _get_email_config
     from vaf.tools.mail_utils import cred_username_from_kwargs
     scope = _scope_of(user)
     username = user.get("username") or ""
@@ -320,10 +327,15 @@ async def send_message(body: Dict[str, Any] = Body(...),
                     client = build_imap_client(acc, cred_username, scope)
                 except (MailAuthError, ValueError):
                     client = None  # send still works; Sent-APPEND is skipped
+                # send-only: the fast path exists to deliver THIS queued send;
+                # other write ops (which may need a real IMAP session that this
+                # path might lack) are left for the sweep, so their attempts are
+                # not burned against a session-less client.
                 OpExecutor(svc.store, apk, client or _NoImap(), acc, scope,
                            cred_username=cred_username).process(
                     write_enabled=bool(Config.get("mail_engine_write_enabled", False))
-                    and client is not None)
+                    and client is not None,
+                    allowed_kinds={"send"})
             finally:
                 if client is not None:
                     _safe_logout(client)
@@ -332,7 +344,12 @@ async def send_message(body: Dict[str, Any] = Body(...),
         except Exception as e:
             logger.warning("outbox fast-path delivery failed (sweep retries): %s", e)
 
-    asyncio.create_task(_deliver_later())
+    # Hold a strong reference: a bare create_task can be garbage-collected before
+    # it runs, silently dropping the delivery (asyncio hazard). The sweep is the
+    # restart-safe fallback, but the fast path must not vanish under GC.
+    _task = asyncio.create_task(_deliver_later())
+    _INFLIGHT_SEND_TASKS.add(_task)
+    _task.add_done_callback(_INFLIGHT_SEND_TASKS.discard)
     return out
 
 
@@ -386,39 +403,78 @@ async def list_ops(_user: Dict[str, Any] = Depends(_get_current_user)):
 async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Remote-image proxy for explicit opt-in loading (tracking protection:
     the reader's IP/cookies never reach the sender's server). SSRF-guarded,
-    image-only, size-capped, no redirects followed off-host."""
+    image-only, size-capped, no redirects followed off-host.
+
+    DNS-rebinding hardening: the host is resolved ONCE and the socket is pinned to
+    that validated IP (assert_ip_safe rejects private/loopback/metadata), while the
+    TLS cert is still checked against the original hostname - so a rebind between a
+    validating lookup and the connect cannot reach an internal address. Only the
+    standard web ports (80/443) are reachable, blocking port-scan style abuse."""
     _require_v2()
     from urllib.parse import urlparse
     parsed = urlparse(url or "")
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="invalid url")
-    from vaf.network.binding import assert_safe_remote_host
-    try:
-        # mail images NEVER get the private-host exemption
-        assert_safe_remote_host(parsed.hostname, allow_private=False)
-    except ValueError as e:
+    hostname = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if port not in (80, 443):
+        raise HTTPException(status_code=400, detail="only standard web ports are allowed")
+
+    def _fetch():
+        import urllib3
+        import requests as _rq
+        from vaf.network.binding import resolve_pinned_target
+        try:
+            # mail image URLs are attacker-controlled: resolve ONCE, validate, pin.
+            pinned_ip = resolve_pinned_target(hostname, port, allow_private=False)
+        except ValueError:
+            return ("blocked", None)          # resolved to a non-routable address
+        except OSError:
+            return ("error", None)            # host does not resolve
+
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        headers = {"Host": hostname, "User-Agent": "VAF-Mail-ImageProxy", "Accept": "image/*"}
+        timeout = urllib3.Timeout(connect=5, read=10)
+        if parsed.scheme == "https":
+            pool = urllib3.HTTPSConnectionPool(
+                pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout,
+                cert_reqs="CERT_REQUIRED", ca_certs=_rq.certs.where(),
+                # connect to the pinned IP but verify the cert against the hostname
+                server_hostname=hostname, assert_hostname=hostname)
+        else:
+            pool = urllib3.HTTPConnectionPool(
+                pinned_ip, port=port, maxsize=1, retries=False, timeout=timeout)
+        try:
+            r = pool.request("GET", path, headers=headers, redirect=False,
+                             preload_content=False, decode_content=False)
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if r.status != 200 or not ctype.startswith("image/") or ctype == "image/svg+xml":
+                return ("error", None)
+            data = r.read(5 * 1024 * 1024 + 1)
+            if len(data) > 5 * 1024 * 1024:
+                return ("error", None)
+            return ("ok", ctype, data)
+        except Exception:
+            return ("error", None)
+        finally:
+            try:
+                pool.close()
+            except Exception:
+                pass
+
+    result = await asyncio.to_thread(_fetch)
+    kind = result[0]
+    if kind == "blocked":
         from vaf.core.security_events import log_security_event
         log_security_event("mail_image_proxy_blocked",
                            username=_user.get("username") or "",
-                           detail=f"host refused: {parsed.hostname}")
-        raise HTTPException(status_code=403, detail=str(e))
-
-    def _fetch():
-        import requests as _rq
-        r = _rq.get(url, timeout=10, stream=True, allow_redirects=False,
-                    headers={"User-Agent": "VAF-Mail-ImageProxy"})
-        ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if r.status_code != 200 or not ctype.startswith("image/") or ctype == "image/svg+xml":
-            return None
-        data = r.raw.read(5 * 1024 * 1024 + 1)
-        if len(data) > 5 * 1024 * 1024:
-            return None
-        return ctype, data
-
-    out = await asyncio.to_thread(_fetch)
-    if out is None:
+                           detail=f"host refused: {hostname}")
+        raise HTTPException(status_code=403, detail="host refused")
+    if kind != "ok":
         raise HTTPException(status_code=502, detail="image not loadable")
-    ctype, data = out
+    _, ctype, data = result
     return Response(content=data, media_type=ctype, headers={
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=86400",

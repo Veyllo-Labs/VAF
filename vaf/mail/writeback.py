@@ -32,6 +32,20 @@ def _b(v) -> str:
     return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
 
 
+def _uidvalidity_ok(select_info: Any, pinned: Any) -> bool:
+    """True unless there is a POSITIVELY KNOWN UIDVALIDITY mismatch between the
+    op's pinned value and the SELECT response. If either is missing we cannot
+    verify and proceed (backward compatible with ops enqueued without a pin)."""
+    if pinned is None:
+        return True
+    got = None
+    if isinstance(select_info, dict):
+        got = select_info.get(b"UIDVALIDITY", select_info.get("UIDVALIDITY"))
+    if got is None:
+        return True
+    return int(got) == int(pinned)
+
+
 class OpExecutor:
     """Executes pending ops for one account over a duck-typed IMAP client
     (subset used: has_capability, select_folder, add_flags, remove_flags,
@@ -48,64 +62,124 @@ class OpExecutor:
         self.cred_username = cred_username
 
     def process(self, write_enabled: bool, v2_enabled: bool = True,
-                now_ts: Optional[int] = None) -> Dict[str, int]:
+                now_ts: Optional[int] = None, allowed_kinds: Optional[set] = None) -> Dict[str, int]:
+        """Drain pending ops. allowed_kinds (optional) restricts the pass to a
+        subset of kinds and leaves the rest UNTOUCHED - used for a send-only
+        drain over a session-less (Null) client, where flags/move/append must
+        not be attempted (and their attempts not burned)."""
         stats = {"done": 0, "failed": 0, "deferred": 0}
+        # Re-arm ops stranded in 'sending' by a crashed worker before this pass
+        # (idempotent kinds retry; interrupted sends are parked, never re-sent).
+        self.store.reclaim_stale_ops(self.account_pk)
         for op in self.store.pending_ops(self.account_pk, now_ts=now_ts):
             kind = op["kind"]
+            if allowed_kinds is not None and kind not in allowed_kinds:
+                continue  # not this pass - leave the op untouched
             needs_write = kind in ("flags", "move", "append")
             if (needs_write and not write_enabled) or not v2_enabled:
                 stats["deferred"] += 1
                 continue
+            # Cap BEFORE claiming so a capped op is parked without burning a claim.
             if int(op.get("attempts") or 0) >= MAX_ATTEMPTS:
                 self.store.mark_op(op["id"], "failed", error="max attempts reached")
                 stats["failed"] += 1
                 continue
+            handler = getattr(self, f"_op_{kind}", None)
+            if handler is None:
+                self.store.mark_op(op["id"], "failed", error=f"unknown kind {kind}")
+                stats["failed"] += 1
+                continue
+            # Atomic claim: exactly ONE executor runs this op. The loser (another
+            # process/thread, or a meanwhile-cancelled op) gets False and skips,
+            # so a non-idempotent send can never be delivered twice.
+            if not self.store.claim_op(op["id"]):
+                continue
             try:
-                handler = getattr(self, f"_op_{kind}", None)
-                if handler is None:
-                    self.store.mark_op(op["id"], "failed", error=f"unknown kind {kind}")
-                    stats["failed"] += 1
-                    continue
                 handler(op["payload"], write_enabled)
-                self.store.mark_op(op["id"], "done")
+                self.store.mark_op(op["id"], "done", expect_state="sending")
                 stats["done"] += 1
             except Exception as e:
                 logger.warning("op %s (%s) failed: %s", op["id"], kind, e)
-                self.store.mark_op(op["id"], "pending", error=str(e))
+                if kind == "send":
+                    # SMTP has no idempotency key: a failure may be a post-accept
+                    # drop. Never auto-retry a send - park it (visible via GET /ops).
+                    self.store.mark_op(op["id"], "failed", error=str(e),
+                                       expect_state="sending")
+                else:
+                    self.store.mark_op(op["id"], "pending", error=str(e),
+                                       expect_state="sending")
                 stats["failed"] += 1
         return stats
 
     # ── op handlers ────────────────────────────────────────────────────────
 
     def _op_flags(self, payload: Dict[str, Any], write_enabled: bool) -> None:
-        folder, uid = payload["folder"], int(payload["uid"])
+        folder = payload["folder"]
+        uid = payload.get("uid")
+        # Resolve the CURRENT server coordinates from the stable local pk when
+        # present (a move may have changed folder/uid since enqueue). If the uid
+        # is still unknown (the move has not been reconciled by a sync yet), defer
+        # by raising - the op stays pending and retries on a later pass.
+        mpk = payload.get("message_pk")
+        if mpk is not None:
+            cur = self.store.get_message(int(mpk))
+            if cur is not None:
+                frow = self.store._conn().execute(
+                    "SELECT name FROM folders WHERE id=?", (cur["folder_id"],)).fetchone()
+                if frow:
+                    folder = frow["name"]
+                uid = cur.get("uid")
+        if uid is None:
+            raise RuntimeError("flag op deferred: message has no server uid yet")
+        uid = int(uid)
         add = [str(f) for f in payload.get("add") or []]
         remove = [str(f) for f in payload.get("remove") or []]
-        self.client.select_folder(folder, readonly=False)
+        info = self.client.select_folder(folder, readonly=False)
+        if not _uidvalidity_ok(info, payload.get("uidvalidity")):
+            # UIDVALIDITY rotated since enqueue: this uid now denotes a DIFFERENT
+            # message. Drop the op (the resync already reconciled the folder).
+            logger.warning("flag op dropped: UIDVALIDITY rotated in %s", folder)
+            return
         if add:
             self.client.add_flags([uid], add)
         if remove:
             self.client.remove_flags([uid], remove)
-        # shadow copy: server now matches local for these flags
+        # Update the server shadow by the DELTA we actually pushed (add/remove),
+        # not the full local flag list - the server only received this delta, so
+        # asserting it matches every local flag would widen the resync stomp.
         fpk_row = self.store.get_folder(self.account_pk, folder)
         if fpk_row:
-            uid_map = self.store.message_uid_map(int(fpk_row["id"]))
-            pk = uid_map.get(uid)
-            if pk:
-                msg = self.store.get_message(pk)
-                if msg:
-                    self.store.apply_server_flags(int(fpk_row["id"]), {uid: msg["flags"]})
+            self.store.apply_server_flags_delta(int(fpk_row["id"]), uid,
+                                                add=add, remove=remove)
 
     def _op_move(self, payload: Dict[str, Any], write_enabled: bool) -> None:
         src, dest, uid = payload["folder"], payload["dest"], int(payload["uid"])
-        self.client.select_folder(src, readonly=False)
+        info = self.client.select_folder(src, readonly=False)
+        if not _uidvalidity_ok(info, payload.get("uidvalidity")):
+            # UIDVALIDITY rotated since enqueue: uid now denotes a DIFFERENT
+            # message - dropping the op avoids moving the wrong mail to Trash.
+            logger.warning("move op dropped: UIDVALIDITY rotated in %s", src)
+            return
         if self.client.has_capability("MOVE"):
-            self.client.move([uid], dest)
-        else:
-            # RFC 6851 fallback: COPY + \Deleted + UID EXPUNGE of the source copy
+            self.client.move([uid], dest)  # RFC 6851, atomic
+            return
+        # Fallback for servers without MOVE: COPY + \Deleted + UID EXPUNGE of the
+        # SOURCE copy. UID EXPUNGE is RFC 4315 UIDPLUS - without it we must NOT
+        # fall back to a plain EXPUNGE (that would expunge unrelated \Deleted mail
+        # and break the trash-only invariant). Park the op instead.
+        if not self.client.has_capability("UIDPLUS"):
+            raise RuntimeError("MOVE fallback needs UIDPLUS (UID EXPUNGE); parking op")
+        # Idempotency: a retry (e.g. after EXPUNGE failed) must not COPY twice.
+        # If a prior attempt already flagged the source \Deleted, the COPY has
+        # happened - skip it and just (re)issue the UID EXPUNGE.
+        try:
+            src_flags = self.client.get_flags([uid]).get(uid, [])
+        except Exception:
+            src_flags = []
+        if not any(_b(f) == "\\Deleted" for f in src_flags):
             self.client.copy([uid], dest)
             self.client.add_flags([uid], ["\\Deleted"])
-            self.client.expunge([uid])
+        self.client.expunge([uid])
 
     def _op_append(self, payload: Dict[str, Any], write_enabled: bool) -> None:
         folder = payload["folder"]
@@ -128,17 +202,31 @@ class OpExecutor:
             bcc=payload.get("bcc") or None,
             in_reply_to=payload.get("in_reply_to") or None,
             references=payload.get("references") or None,
+            message_id=payload.get("message_id") or None,
             username=self.cred_username,
             user_scope_id=self.scope,
         )
         if not ok:
             raise RuntimeError("transport send failed")
-        provider = (self.account.get("provider") or "imap").lower()
-        if provider == "imap" and write_enabled and payload.get("raw_b64"):
-            sent = self.store.find_special_folder(self.account_pk, "\\Sent")
-            if sent:
-                try:
+        # Everything after a successful send is best-effort and MUST NOT raise
+        # out of the handler - otherwise process() would treat the (already
+        # delivered) mail as failed and, without an atomic claim, re-send it.
+        # The whole tail (find_special_folder + b64decode + append) is wrapped.
+        try:
+            provider = (self.account.get("provider") or "imap").lower()
+            if (provider == "imap" and write_enabled and payload.get("raw_b64")
+                    and not self._server_files_sent()):
+                sent = self.store.find_special_folder(self.account_pk, "\\Sent")
+                if sent:
                     self.client.append(sent["name"], base64.b64decode(payload["raw_b64"]),
                                        flags=["\\Seen"])
-                except Exception as e:
-                    logger.warning("sent-append failed (mail WAS sent): %s", e)
+        except Exception as e:
+            logger.warning("post-send tail failed (mail WAS sent): %s", e)
+
+    def _server_files_sent(self) -> bool:
+        """True when the account's own SMTP files the Sent copy automatically
+        (Gmail), so a client APPEND would create a duplicate in Sent."""
+        host = (self.account.get("smtp_host") or self.account.get("imap_host") or "").lower()
+        email = (self.account.get("email") or self.account.get("account_id") or "").lower()
+        return ("gmail.com" in host or "googlemail.com" in host or "google" in host
+                or email.endswith("@gmail.com") or email.endswith("@googlemail.com"))

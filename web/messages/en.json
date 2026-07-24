@@ -1288,6 +1288,9 @@
     "engineBadge": "{count} account(s) - engine v2",
     "searchPlaceholder": "Search subject, sender and content",
     "sync": "Sync",
+    "manageAccounts": "Accounts",
+    "close": "Close",
+    "labelsSection": "Labels ({count})",
     "allInboxes": "All inboxes",
     "selectConversation": "Select a conversation",
     "noMessages": "Nothing synced yet. Click Sync in the top right.",
@@ -1322,11 +1325,13 @@
       "send": "Send",
       "cancel": "Cancel",
       "sending": "Sending...",
-      "sendFailed": "Send failed."
+      "sendFailed": "Send failed.",
+      "discardConfirm": "Discard this message?"
     },
     "undoSent": "Message queued",
     "undo": "Undo",
     "undone": "Send cancelled.",
+    "alreadySent": "Already sent - too late to undo.",
     "actionFailed": "Action failed.",
     "folders": {
       "inbox": "Inbox",

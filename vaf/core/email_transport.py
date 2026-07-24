@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from vaf.core.config import Config
+from vaf.core.email_accounts import get_email_config
 from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
 from vaf.core.log_helper import append_domain_log_always
@@ -278,37 +279,14 @@ def apply_sender_rules_to_category(
     return current_category
 
 
-def _get_email_config(
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Return email config for the given user with strict scope isolation."""
-    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-    local_admin_scope = get_local_admin_scope_id()
-    if user_scope_id:
-        by_scope = Config.get("email_config_by_scope") or {}
-        if isinstance(by_scope, dict):
-            ec = by_scope.get(str(user_scope_id).strip())
-            if isinstance(ec, dict) and ec.get("accounts") is not None:
-                return ec
-
-        if str(user_scope_id).strip() == str(local_admin_scope).strip():
-            raw = Config.get("email_config")
-            if isinstance(raw, dict):
-                return raw
-            return {"accounts": []}
-
-    local_admin = get_local_admin_username().lower()
-    if not username or username.strip().lower() == local_admin:
-        raw = Config.get("email_config")
-        if isinstance(raw, dict):
-            return raw
-        return {"accounts": []}
-    by_user = Config.get("email_config_by_user") or {}
-    ec = by_user.get(username.strip()) if isinstance(by_user, dict) else {}
-    if isinstance(ec, dict) and ec.get("accounts") is not None:
-        return ec
-    return {"accounts": []}
+# Account-config reader now lives in the route-independent SSOT
+# vaf/core/email_accounts.py (Phase 1 of the mail v2-only port). Re-exported here
+# under the historical private name so this module's own callers
+# (_email_config_candidates / get_account) and external importers keep working; a
+# guard test pins it to the SSOT object. (This replaces a near-duplicate that
+# differed only in normalizing an accountless by_user entry - all consumers read
+# `.get("accounts") or []`, so the SSOT behavior is equivalent.)
+_get_email_config = get_email_config
 
 
 def _email_config_candidates(
@@ -668,14 +646,19 @@ def _build_mime_message(
     in_reply_to: Optional[str] = None,
     references: Optional[str] = None,
     include_bcc_header: bool = False,
+    message_id: Optional[str] = None,
 ) -> Any:
     """Build MIME message, with optional attachments, Cc and reply-threading headers.
     Bcc is added as a header only when include_bcc_header=True (Gmail raw send, which strips
-    it before delivery); for SMTP the Bcc goes in the envelope, never the headers."""
+    it before delivery); for SMTP the Bcc goes in the envelope, never the headers.
+    message_id: when given, set as the outgoing Message-ID so the delivered mail and
+    the locally-stored Sent copy share one id (threading stays intact)."""
     def _apply_headers(m: Any) -> None:
         m["Subject"] = subject
         m["From"] = from_addr
         m["To"] = to
+        if message_id:
+            m["Message-ID"] = message_id
         if cc:
             m["Cc"] = cc
         if include_bcc_header and bcc:
@@ -721,6 +704,7 @@ def _send_mail_gmail(
     bcc: Optional[str] = None,
     in_reply_to: Optional[str] = None,
     references: Optional[str] = None,
+    message_id: Optional[str] = None,
 ) -> bool:
     """Send mail via Gmail API (users.messages.send with raw RFC 2822)."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
@@ -738,6 +722,7 @@ def _send_mail_gmail(
     msg = _build_mime_message(
         from_addr, to, subject, body, subtype, attachments,
         cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references, include_bcc_header=True,
+        message_id=message_id,
     )
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
     try:
@@ -1160,10 +1145,13 @@ def send_mail(
     bcc: Optional[str] = None,
     in_reply_to: Optional[str] = None,
     references: Optional[str] = None,
+    message_id: Optional[str] = None,
 ) -> bool:
     """Send one email. Returns True on success. Dispatches to Gmail API, Graph, or SMTP by provider.
     attachments: optional list of [{"path": "/full/path/to/file", "filename": "optional_name.pdf"}].
     cc/bcc: optional recipient strings. in_reply_to/references: original Message-ID(s) for reply threading.
+    message_id: when given, the delivered mail carries this exact Message-ID so it matches the locally
+    stored Sent copy (keeps replies threaded). Graph assigns its own id and ignores this (known limit).
     Raises MailConnectError on SMTP connect/auth failure so callers can surface the reason.
     Optional username/user_scope_id for multi-user scope."""
     acc = get_account(account_id, username, user_scope_id=user_scope_id)
@@ -1176,6 +1164,7 @@ def send_mail(
         return _send_mail_gmail(
             account_id, to, subject, body, subtype, username, user_scope_id=user_scope_id,
             attachments=attachments, cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references,
+            message_id=message_id,
         )
     if provider == "microsoft":
         return _send_mail_microsoft(
@@ -1193,6 +1182,7 @@ def send_mail(
         msg = _build_mime_message(
             from_addr, to, subject, body, subtype, attachments,
             cc=cc, bcc=bcc, in_reply_to=in_reply_to, references=references, include_bcc_header=False,
+            message_id=message_id,
         )
         envelope = normalize_recipients(to) + normalize_recipients(cc) + normalize_recipients(bcc)
         if not envelope:

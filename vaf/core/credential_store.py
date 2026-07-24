@@ -216,8 +216,11 @@ def delete_email_credentials(
         if safe_username is None: # Add legacy admin fallback for deletion
             base_keys.append((account_id, provider, "admin", safe_scope))
     else:
-        # Default providers to check
-        for p in ("email", "imap", "gmail", "microsoft", "outlook", "apple", "icloud"):
+        # Default providers to check. microsoft_imap is the token lane an OAuth
+        # Microsoft account gets after the IMAP re-consent/upgrade (imap_client uses
+        # it for XOAUTH2); it MUST be in this set or a deleted account leaves an
+        # orphaned IMAP token behind (fail-closed lifecycle, EMAIL_CLIENT.md).
+        for p in ("email", "imap", "gmail", "microsoft", "microsoft_imap", "outlook", "apple", "icloud"):
             base_keys.append((account_id, p, safe_username, safe_scope))
             if safe_username is None:
                 base_keys.append((account_id, p, "admin", safe_scope))

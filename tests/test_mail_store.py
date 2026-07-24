@@ -189,3 +189,19 @@ def test_parser_error_boundary_and_charset_lies():
 def test_normalize_subject_strips_reply_prefixes():
     assert normalize_subject("Re: Re: AW: Fwd: Plan  B") == "plan b"
     assert normalize_subject("WG: Überweisung") == "überweisung"
+
+
+def test_move_ghost_row_is_adopted_not_duplicated(store):
+    """C3/T4: after a local move the row is uid-NULL in the destination; when the
+    server copy arrives under a new uid, it must ADOPT the ghost (one row), not
+    insert a duplicate."""
+    apk, fpk = _setup(store)
+    arch = store.upsert_folder(apk, "Archive", special_use="\\Archive")
+    store.ingest_message(apk, fpk, 1, _msg("<g@example.com>", "Hi"))
+    m = store.list_messages()[0]
+    store.move_message_local(m["id"], arch)                       # -> uid NULL in Archive
+    store.ingest_message(apk, arch, 55, _msg("<g@example.com>", "Hi"))   # server copy, new uid
+    rows = store._conn().execute(
+        "SELECT id, uid, folder_id FROM messages WHERE message_id='<g@example.com>'").fetchall()
+    assert len(rows) == 1                                         # adopted, not duplicated
+    assert rows[0]["uid"] == 55 and rows[0]["folder_id"] == arch

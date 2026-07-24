@@ -142,9 +142,18 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `read_mail` | read | Read the full body of one email. |
 | `find_mail` | read | Search the mailbox by subject/sender. |
 | `send_mail` | write | Send an email (irreversible). |
+| `reply_mail` | write | Reply (quoted, correctly threaded) to an email; v2 engine (irreversible). |
+| `forward_mail` | write | Forward an email to new recipients; v2 engine (irreversible). |
+| `archive_mail` | write | Move an email out of the inbox into Archive; v2 engine. |
+| `delete_mail` | write | Move an email to Trash (trash-only, never expunged); v2 engine. |
 | `label_mail` | write | Set an email's label/category. |
 | `mark_mail_answered` | write | Mark an email as answered. |
 | `list_email_accounts` | read | List connected email accounts. |
+
+`reply_mail`, `forward_mail`, `archive_mail` and `delete_mail` require the v2
+mail engine (`mail_engine_v2_enabled`); their mailbox writes apply locally first
+and replay through the durable op queue once `mail_engine_write_enabled` is on.
+All four are excluded from the front-office contact lane by design.
 
 ## Messaging
 

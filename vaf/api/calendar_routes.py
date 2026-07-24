@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from vaf.core.calendar_client import list_events, resolve_calendar_account
 
-# Use the same _get_email_config as the email API so calendar status sees the same accounts as Email
-from vaf.api.email_routes import _get_email_config
+# Use the same account-config SSOT as mail so calendar status sees the same accounts as Email
+from vaf.core.email_accounts import get_email_config as _get_email_config
 
 logger = logging.getLogger("vaf.api.calendar")
 

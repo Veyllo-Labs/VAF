@@ -132,6 +132,44 @@ def assert_safe_remote_host(host: str, *, allow_private: bool = False) -> None:
         raise ValueError(f"Refusing to connect to non-public address ({ip}) for host {h}")
 
 
+def assert_ip_safe(ip: str, *, allow_private: bool = False) -> None:
+    """SSRF guard on an ALREADY-RESOLVED address. Same policy as
+    assert_safe_remote_host, but the caller resolves the host once and then pins
+    the connection to this exact IP - closing the resolve-vs-connect (DNS
+    rebinding) TOCTOU that assert_safe_remote_host cannot. Raises ValueError if
+    the address is not a safe outbound target."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError as e:
+        raise ValueError(f"Invalid address: {ip}") from e
+    if addr.is_global:
+        return
+    if addr.is_multicast or addr.is_reserved or addr.is_unspecified or addr.is_link_local:
+        raise ValueError(f"Refusing to connect to non-routable address ({ip})")
+    if addr.is_loopback or addr.is_private:
+        if allow_private:
+            return
+        raise ValueError(f"Refusing to connect to private address ({ip})")
+    raise ValueError(f"Refusing to connect to non-public address ({ip})")
+
+
+def resolve_pinned_target(host: str, port: int, *, allow_private: bool = False) -> str:
+    """Resolve `host` ONCE and validate EVERY resolved address, returning a single
+    pinned IP the caller must connect to. Pinning the socket to this exact IP (and
+    validating the TLS cert against the original hostname) closes the
+    resolve-vs-connect (DNS rebinding) TOCTOU that assert_safe_remote_host cannot:
+    there is no second lookup for an attacker to swap. Raises ValueError if ANY
+    resolved address is unsafe; propagates socket.gaierror if `host` does not
+    resolve (the caller distinguishes 'blocked' from 'unresolvable')."""
+    infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    ips = [info[4][0] for info in infos]
+    if not ips:
+        raise ValueError(f"Cannot resolve host: {host}")
+    for ip in dict.fromkeys(ips):
+        assert_ip_safe(ip, allow_private=allow_private)
+    return ips[0]
+
+
 def pick_bindable_port(host: str, preferred: int, fallback: int = 8443) -> Optional[int]:
     """Return the first port from [preferred, fallback] that `host` can ACTUALLY bind, or None if
     neither is bindable. A privileged port (<1024, e.g. 443) raises PermissionError for a non-root

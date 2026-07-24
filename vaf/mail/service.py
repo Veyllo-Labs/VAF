@@ -165,11 +165,17 @@ class MailService:
         return msg, (dict(folder) if folder else None), (dict(account) if account else None)
 
     def _enqueue_flag_op(self, msg, folder, add=(), remove=()) -> None:
-        if msg.get("uid") is None or not folder:
-            return  # server coordinates unknown (e.g. just moved locally); the
-            # regular resync reconciles once the move replayed
+        if not folder:
+            return
+        # Carry the stable local pk so the replay resolves the CURRENT server
+        # coordinates even if the row moved since enqueue. Right after a local
+        # move the uid is NULL; the op then defers until a sync adopts a uid,
+        # instead of being silently dropped (the flag intent is not lost).
         self.store.enqueue_op(int(msg["account_id"]), "flags", {
-            "folder": folder["name"], "uid": int(msg["uid"]),
+            "folder": folder["name"],
+            "message_pk": int(msg["id"]),
+            "uid": int(msg["uid"]) if msg.get("uid") is not None else None,
+            "uidvalidity": folder.get("uidvalidity"),
             "add": list(add), "remove": list(remove)})
 
     def mark_read(self, message_pk: int, read: bool = True) -> Optional[List[str]]:
@@ -210,8 +216,12 @@ class MailService:
         uid = msg.get("uid")
         self.store.move_message_local(message_pk, int(dest["id"]))
         if uid is not None:
+            # Pin the source folder's UIDVALIDITY so the replay can detect a
+            # server-side rotation between enqueue and replay (uid would then
+            # denote a DIFFERENT message).
             self.store.enqueue_op(int(msg["account_id"]), "move", {
-                "folder": folder["name"], "dest": dest["name"], "uid": int(uid)})
+                "folder": folder["name"], "dest": dest["name"], "uid": int(uid),
+                "uidvalidity": folder.get("uidvalidity")})
         return {"ok": True, "dest": dest["name"]}
 
     def archive(self, message_pk: int) -> Dict[str, Any]:
@@ -277,18 +287,33 @@ class MailService:
         apk = self.store.account_pk(account_id)
         if apk is None:
             apk = self.store.upsert_account(account_id, "imap", account_id)
-        msg = compose.build_message(account_id, to, subject, body, cc=cc or None,
+        # From = the account's real address (not the account_id identifier); the
+        # Bcc goes into the stored Sent copy so the sender keeps the record.
+        acc = next((a for a in self.store.list_accounts()
+                    if a.get("account_id") == account_id), None)
+        from_addr = (acc or {}).get("email") or account_id
+        msg = compose.build_message(from_addr, to, subject, body, cc=cc or None,
+                                    bcc=bcc or None,
                                     in_reply_to=in_reply_to or None,
                                     references=references or None)
+        # Carry the compose Message-ID so the DELIVERED mail is sent with this
+        # exact id (transport message_id=), making the delivered mail and the
+        # Sent copy one RFC822 entity - replies then thread correctly.
+        message_id = msg["Message-ID"]
         import base64 as _b64
         not_before = int(datetime.now(timezone.utc).timestamp()) + max(0, int(undo_seconds))
         op_id = self.store.enqueue_op(apk, "send", {
             "account_id": account_id, "to": to, "cc": cc, "bcc": bcc,
             "subject": subject, "body": body,
             "in_reply_to": in_reply_to, "references": references,
+            "message_id": message_id,
             "raw_b64": _b64.b64encode(bytes(msg)).decode("ascii"),
         }, not_before_ts=not_before)
-        return {"ok": True, "op_id": op_id, "undo_until_ts": not_before}
+        # undo_seconds is the DURATION the client counts down (server-relative);
+        # the client uses it instead of (undo_until_ts - client_now) so a skewed
+        # browser clock cannot make the undo snackbar vanish early or linger.
+        return {"ok": True, "op_id": op_id, "undo_until_ts": not_before,
+                "undo_seconds": max(0, int(undo_seconds))}
 
     def cancel_send(self, op_id: int) -> bool:
         op = self.store.get_op(int(op_id))

@@ -86,3 +86,26 @@ def test_body_served_offline_from_v2_cache(tmp_path):
     assert get_body_text("bob@example.com", "b1@example.com", None, _SCOPE)
     # unknown message -> None so callers fall back to live fetch
     assert get_body_text("bob@example.com", "<nope@example.com>", None, _SCOPE) is None
+
+
+def test_body_prefers_cached_copy_over_uncached_duplicate(tmp_path):
+    # A self-addressed mail exists as an INBOX copy (body cached) AND a Sent copy
+    # (no body). The Sent copy has the higher row id, so a naive id-DESC pick would
+    # return it and read_mail would wrongly report "message not found or empty".
+    store = MailStore(_SCOPE, base_dir=tmp_path)
+    apk = store.upsert_account("bob@example.com", "imap", "bob@example.com")
+    inbox = store.upsert_folder(apk, "INBOX")
+    sent = store.upsert_folder(apk, "[Gmail]/Sent", special_use="\\Sent")
+    raw = (b"Message-ID: <dup@example.com>\r\nSubject: test - vaf\r\n"
+           b"From: Bob <bob@example.com>\r\n\r\nThe real body text")
+    store.ingest_message(apk, inbox, 1, ParsedMessage(
+        message_id="<dup@example.com>", subject="test - vaf", from_addr="Bob <bob@example.com>",
+        date_ts=1_700_000_000, body_text="The real body text"), raw=raw, server_flags=[])
+    # Sent copy: no raw -> uncached, and a HIGHER row id (ingested second)
+    store.ingest_message(apk, sent, 2, ParsedMessage(
+        message_id="<dup@example.com>", subject="test - vaf", from_addr="Bob <bob@example.com>",
+        date_ts=1_700_000_000, body_text=""), server_flags=[])
+    store.close()
+    from vaf.mail.tool_bridge import get_body_text
+    body = get_body_text("bob@example.com", "<dup@example.com>", None, _SCOPE)
+    assert body is not None and "The real body text" in body

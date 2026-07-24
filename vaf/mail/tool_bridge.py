@@ -72,18 +72,24 @@ def get_body_text(account_id: str, message_id: str, username: Optional[str],
     mid = (message_id or "").strip()
     variants = {mid, mid.strip("<>"), f"<{mid.strip('<>')}>"}
     q = ",".join("?" for _ in variants)
-    row = store._conn().execute(
+    # A Message-ID can exist in several folders (e.g. an INBOX copy AND a Sent /
+    # All-Mail copy of a self-addressed mail). Prefer a copy whose body is cached
+    # and return the first candidate that actually yields a body - otherwise the
+    # bare id-DESC pick lands on an uncached duplicate and read_mail wrongly reports
+    # "message not found or empty".
+    rows = store._conn().execute(
         f"SELECT m.id FROM messages m JOIN accounts a ON a.id=m.account_id "
         f"WHERE m.message_id IN ({q}) AND (?='' OR a.account_id=?) "
-        f"ORDER BY m.id DESC LIMIT 1",
-        (*variants, account_id or "", account_id or "")).fetchone()
-    if not row:
-        return None
-    raw = store.get_raw(int(row["id"]))
-    if raw is None:
-        return None
-    parsed = parse_message(raw)
-    return parsed.body_text or None
+        f"ORDER BY (m.body_state='cached') DESC, m.id DESC",
+        (*variants, account_id or "", account_id or "")).fetchall()
+    for row in rows:
+        raw = store.get_raw(int(row["id"]))
+        if raw is None:
+            continue
+        body = parse_message(raw).body_text
+        if body:
+            return body
+    return None
 
 
 def _v2_account_ids(store) -> set:

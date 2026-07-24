@@ -83,7 +83,10 @@ def test_imap_password_dispatch(patched):
 def test_gmail_uses_gmail_token_lane(patched):
     r = sender.send(_msg(provider="gmail", imap_ready=True))
     assert r.ok and patched["token_provider"] == "gmail"
-    assert any(isinstance(c, tuple) and c[0] == "auth" for c in FakeSMTP.last.calls)
+    auth = next(c for c in FakeSMTP.last.calls if isinstance(c, tuple) and c[0] == "auth")
+    # RAW SASL string (smtplib base64-encodes it itself) - NOT pre-encoded, or Gmail
+    # rejects the double-encoded blob with "501 5.5.2 Cannot Decode response".
+    assert auth[2] == "user=u@example.com\x01auth=Bearer tok\x01\x01"
 
 
 def test_microsoft_uses_microsoft_imap_token_lane(patched):

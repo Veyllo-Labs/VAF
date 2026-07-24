@@ -28,11 +28,10 @@ parks it and never re-sends.
 TLS is always verified (ssl.create_default_context, never disableable) and the
 SMTP host passes the shared SSRF guard, exactly like the IMAP client.
 """
-import base64
 import logging
 import smtplib
 import ssl
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from email import message_from_bytes
 from typing import Any, Dict, List, Optional
 
@@ -119,9 +118,11 @@ def _smtp_target(acc: Dict[str, Any]) -> tuple:
     return host, port
 
 
-def _xoauth2_b64(user: str, token: str) -> str:
-    return base64.b64encode(
-        f"user={user}\x01auth=Bearer {token}\x01\x01".encode()).decode()
+def _xoauth2_string(user: str, token: str) -> str:
+    """RAW SASL XOAUTH2 initial-response string. smtplib.SMTP.auth() base64-encodes
+    the authobject's return value ITSELF, so returning base64 here would double-encode
+    it and the server rejects it (Gmail: '501 5.5.2 Cannot Decode response')."""
+    return f"user={user}\x01auth=Bearer {token}\x01\x01"
 
 
 def send(msg: OutgoingMessage) -> SendResult:
@@ -193,7 +194,7 @@ def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:
             token = get_valid_access_token(_account_id(msg), token_provider, msg.username, user_scope_id=msg.user_scope_id)
             if not token:
                 return SendResult(False, "permanent", error="no valid OAuth token (IMAP re-consent required?)")
-            ir = _xoauth2_b64(from_addr, token)
+            ir = _xoauth2_string(from_addr, token)
             conn.auth("XOAUTH2", lambda challenge=None: ir if challenge is None else "", initial_response_ok=True)
 
         conn.mail(from_addr)

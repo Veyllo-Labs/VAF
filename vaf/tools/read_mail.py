@@ -7,7 +7,9 @@ Use after mail_inbox when the user asks what a specific email says. Token-effici
 Scoped to the current user in network mode (only that user's connected accounts).
 """
 
-from vaf.core.email_transport import get_account, get_message_body_plain
+from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.email_accounts import get_account
+from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
@@ -69,19 +71,25 @@ class ReadMailTool(BaseTool):
         # Try same store/cred fallback as mail_inbox/find_mail so we find account and body when they live in legacy/single-scope
         body = None
         found_account = False
+        v2 = bool(Config.get("mail_engine_v2_enabled", False))
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
             acc = get_account(account_id, username=try_username, user_scope_id=try_scope_id)
             if not acc:
                 continue
             found_account = True
-            body = get_message_body_plain(
-                account_id=account_id,
-                message_id=message_id,
-                folder=folder,
-                username=try_username,
-                user_scope_id=try_scope_id,
-                provider_message_id=provider_message_id,
-            )
+            if v2:
+                # v2: resolve the Message-ID and serve the body straight from the
+                # engine store - MailService.body_text prefers the copy whose body is
+                # cached and fetches an uncached body from the server itself. The
+                # legacy path stays for flag-off / not-yet-synced instances until P7.
+                from vaf.mail.service import MailService
+                body = MailService(try_scope_id or get_local_admin_scope_id()).body_text(
+                    message_id, account_id=account_id, cred_username=try_username)
+            else:
+                body = get_message_body_plain(
+                    account_id=account_id, message_id=message_id, folder=folder,
+                    username=try_username, user_scope_id=try_scope_id,
+                    provider_message_id=provider_message_id)
             if body and body.strip():
                 return body.strip()
         if not found_account:

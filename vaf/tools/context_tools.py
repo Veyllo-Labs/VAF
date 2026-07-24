@@ -456,6 +456,8 @@ class MemorySearchTool(BaseTool):
         "🔍 SEARCH your long-term memory database (RAG) for stored facts, notes, preferences, or past conversations. "
         "USE THIS when user asks: 'who am I?', 'what do you know about me?', 'what have you saved about me?', 'what have I told you?'. "
         "This is like searching a personal knowledge base - it retrieves previously saved information. "
+        "It does NOT hold live data: to read the user's actual EMAILS use mail_inbox (NEVER memory_search), "
+        "for TELEGRAM use telegram_inbox, for the CALENDAR use the calendar tools. Never call memory_search to look up emails or messages. "
         "Returns matching snippets from the vector database. If nothing found, tell user you have no stored info yet."
     )
     parameters = {

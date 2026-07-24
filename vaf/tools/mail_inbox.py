@@ -112,6 +112,9 @@ class MailInboxTool(BaseTool):
     permission_level = "read"
     side_effect_class = "none"
     description = (
+        "THE tool to read the user's emails. Call it the MOMENT the user asks to check, read, show, look at, "
+        "or answer their emails / inbox / Mails / Postfach - it is the ONLY source of their real emails "
+        "(memory_search does NOT contain emails; do not search memory for mail). "
         "Show the inbox (list of recent emails). Same mailbox as the Mail dashboard (Settings → Connections → Email). "
         "When the user asks for a specific number (e.g. 'list 15 mails', 'show 20 emails', 'die letzten 50'), you MUST call mail_inbox with max_messages set to that number (e.g. max_messages=15) and then present the tool output to the user as-is. "
         "Use the 'label' parameter to filter for specific categories like 'primary', 'social', 'promotions' or custom labels like 'invoice', 'rechnung', 'newsletter', 'work'. "

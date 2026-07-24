@@ -2,7 +2,8 @@
 
 Design doc for VAF's email subsystem. Read this BEFORE changing any mail-related
 file (`vaf/core/email_transport.py`, `vaf/core/email_sync_store.py`,
-`vaf/core/email_accounts.py` (route-independent account-config SSOT),
+`vaf/core/email_accounts.py` (route-independent account-config SSOT: get/save config,
+get_account, sender-category rules),
 `vaf/api/email_routes.py`, `vaf/core/oauth_pkce.py`, `vaf/core/credential_store.py`,
 `vaf/tools/mail_*.py` / `send_mail.py` / `read_mail.py` / `find_mail.py` /
 `label_mail.py` / `mark_mail_answered.py` / `list_email_accounts.py`,

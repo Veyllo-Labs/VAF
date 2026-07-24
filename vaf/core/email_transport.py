@@ -30,7 +30,13 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from vaf.core.config import Config
-from vaf.core.email_accounts import get_email_config
+from vaf.core.email_accounts import (
+    apply_sender_rules_to_category,
+    get_account,
+    get_email_config,
+    get_sender_rules,
+    _email_config_candidates,
+)
 from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
 from vaf.core.log_helper import append_domain_log_always
@@ -244,74 +250,14 @@ def _ensure_plain_text(body: Optional[str]) -> Optional[str]:
     return s if s else body.strip()
 
 
-def _get_sender_rules(
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> List[Dict[str, str]]:
-    """Return sender→category rules from config. Each rule: {"pattern": "twitch.tv", "category": "social"}. First match wins."""
-    ec = _get_email_config(username, user_scope_id=user_scope_id)
-    rules = ec.get("sender_category_rules")
-    if not isinstance(rules, list):
-        return []
-    out: List[Dict[str, str]] = []
-    for r in rules:
-        if isinstance(r, dict) and r.get("pattern") and r.get("category"):
-            out.append({"pattern": str(r["pattern"]).strip(), "category": str(r["category"]).strip().lower().replace(" ", "_")[:64] or "primary"})
-    return out
-
-
-def apply_sender_rules_to_category(
-    from_str: str,
-    current_category: str,
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> str:
-    """
-    Apply sender rules: if any rule's pattern is contained in from_str (case-insensitive), return that category.
-    Used on sync (new mails) and on backfill (existing mails). Returns current_category if no rule matches.
-    """
-    rules = _get_sender_rules(username, user_scope_id=user_scope_id)
-    from_lower = (from_str or "").lower()
-    for r in rules:
-        pattern = (r.get("pattern") or "").lower()
-        if pattern and pattern in from_lower:
-            return r.get("category") or current_category
-    return current_category
-
-
-# Account-config reader now lives in the route-independent SSOT
-# vaf/core/email_accounts.py (Phase 1 of the mail v2-only port). Re-exported here
-# under the historical private name so this module's own callers
-# (_email_config_candidates / get_account) and external importers keep working; a
-# guard test pins it to the SSOT object. (This replaces a near-duplicate that
-# differed only in normalizing an accountless by_user entry - all consumers read
-# `.get("accounts") or []`, so the SSOT behavior is equivalent.)
+# Account lookup + sender-category rules now live in the route-independent SSOT
+# vaf/core/email_accounts.py (P3.1 of the mail v2-only port). get_account,
+# apply_sender_rules_to_category and _email_config_candidates are imported at the
+# top and re-exported by name; the historical private aliases below keep this
+# module's own callers (sync/fetch categorization) and any importer working. Guard
+# tests pin them to the SSOT objects.
 _get_email_config = get_email_config
-
-
-def _email_config_candidates(
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> List[tuple]:
-    """Return only the current user's config candidate (no cross-scope fallback)."""
-    ec = _get_email_config(username, user_scope_id=user_scope_id)
-    if isinstance(ec, dict) and (ec.get("accounts") or []):
-        return [(ec, user_scope_id)]
-    return []
-
-
-def get_account(
-    account_id: str,
-    username: Optional[str] = None,
-    user_scope_id: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Return account metadata for account_id (email or account_id). Optional username/user_scope_id for multi-user scope. Uses fallback config (legacy + single-scope) so account is found when scope mismatches."""
-    want = (account_id or "").strip().lower()
-    for ec, _ in _email_config_candidates(username, user_scope_id):
-        for a in ec.get("accounts") or []:
-            if (a.get("account_id") or a.get("email") or "").strip().lower() == want:
-                return a
-    return None
+_get_sender_rules = get_sender_rules
 
 
 def _get_credentials_with_fallback(

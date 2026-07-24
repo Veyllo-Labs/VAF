@@ -18,7 +18,7 @@ copy): a user_scope_id resolves email_config_by_scope FIRST and never falls back
 across scopes; the local admin uses the legacy email_config blob; a non-admin
 username without a scope resolves email_config_by_user.
 """
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from vaf.core.config import (
     Config,
@@ -85,3 +85,71 @@ def save_email_config(
         by_user[username.strip()] = ec
         config["email_config_by_user"] = by_user
     Config.save(config)
+
+
+# ── account lookup + sender-category rules (relocated from email_transport, P3.1) ──
+# These read only the account-config blob this module already owns, so the agent
+# tools and the sync path can resolve accounts/rules without importing the heavy
+# email_transport module. email_transport re-exports them under their old names.
+
+def _email_config_candidates(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> List[tuple]:
+    """The current user's config candidate only (no cross-scope fallback)."""
+    ec = get_email_config(username, user_scope_id=user_scope_id)
+    if isinstance(ec, dict) and (ec.get("accounts") or []):
+        return [(ec, user_scope_id)]
+    return []
+
+
+def get_account(
+    account_id: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return account metadata for account_id (email or account_id). Optional
+    username/user_scope_id for multi-user scope."""
+    want = (account_id or "").strip().lower()
+    for ec, _ in _email_config_candidates(username, user_scope_id):
+        for a in ec.get("accounts") or []:
+            if (a.get("account_id") or a.get("email") or "").strip().lower() == want:
+                return a
+    return None
+
+
+def get_sender_rules(
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """Sender->category rules from config. Each: {"pattern": "twitch.tv",
+    "category": "social"}. First match wins."""
+    ec = get_email_config(username, user_scope_id=user_scope_id)
+    rules = ec.get("sender_category_rules")
+    if not isinstance(rules, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for r in rules:
+        if isinstance(r, dict) and r.get("pattern") and r.get("category"):
+            out.append({
+                "pattern": str(r["pattern"]).strip(),
+                "category": str(r["category"]).strip().lower().replace(" ", "_")[:64] or "primary",
+            })
+    return out
+
+
+def apply_sender_rules_to_category(
+    from_str: str,
+    current_category: str,
+    username: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
+) -> str:
+    """If any rule's pattern is contained in from_str (case-insensitive), return
+    that category; else current_category. Used on sync and on backfill."""
+    rules = get_sender_rules(username, user_scope_id=user_scope_id)
+    from_lower = (from_str or "").lower()
+    for r in rules:
+        pattern = (r.get("pattern") or "").lower()
+        if pattern and pattern in from_lower:
+            return r.get("category") or current_category
+    return current_category

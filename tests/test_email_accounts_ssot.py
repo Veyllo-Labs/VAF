@@ -22,6 +22,29 @@ def test_all_historical_names_are_the_one_ssot_object():
     assert calendar_routes._get_email_config is ea.get_email_config
 
 
+def test_account_and_sender_rule_helpers_are_the_one_ssot_object():
+    # P3.1: get_account + the sender-category-rule readers relocated to the SSOT;
+    # email_transport (and its importers) re-export them. Identity, not a fork.
+    assert email_transport.get_account is ea.get_account
+    assert email_transport.apply_sender_rules_to_category is ea.apply_sender_rules_to_category
+    assert email_transport._email_config_candidates is ea._email_config_candidates
+    assert email_transport.get_sender_rules is ea.get_sender_rules
+    assert email_transport._get_sender_rules is ea.get_sender_rules  # historical private alias
+    assert email_routes.apply_sender_rules_to_category is ea.apply_sender_rules_to_category
+
+
+def test_get_account_and_sender_rules_behavior(monkeypatch):
+    monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: "admin-scope")
+    monkeypatch.setattr(ea, "get_local_admin_username", lambda: "admin")
+    ec = {"accounts": [{"account_id": "a@x", "email": "a@x", "provider": "imap"}],
+          "sender_category_rules": [{"pattern": "twitch.tv", "category": "social"}]}
+    monkeypatch.setattr(ea.Config, "get", staticmethod(lambda k, d=None: ec if k == "email_config" else d))
+    assert ea.get_account("a@x")["provider"] == "imap"
+    assert ea.get_account("nope@x") is None
+    assert ea.apply_sender_rules_to_category("News <n@twitch.tv>", "primary") == "social"
+    assert ea.apply_sender_rules_to_category("n@other.com", "primary") == "primary"
+
+
 def _patch_config(monkeypatch, *, email_config, by_scope, by_user,
                   admin_scope="admin-scope", admin_user="admin"):
     monkeypatch.setattr(ea, "get_local_admin_scope_id", lambda: admin_scope)

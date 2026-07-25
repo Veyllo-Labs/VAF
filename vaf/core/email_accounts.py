@@ -270,6 +270,22 @@ def add_account(entry: Dict[str, Any], username: Optional[str] = None,
     save_email_config(ec, username, user_scope_id=user_scope_id)
 
 
+def oauth_provider_for(account_id: str, username: Optional[str] = None,
+                       user_scope_id: Optional[str] = None) -> Optional[str]:
+    """The OAuth provider already connected for this address, if any.
+
+    Adding a password/IMAP account for an address that is ALREADY connected as
+    gmail/microsoft would REPLACE that entry, and `calendar_client` resolves
+    calendars by exactly that provider - so the calendar would silently lose the
+    account. Callers use this to refuse the overwrite and point the user at the
+    sign-in instead (which, since the connect flow requests engine scopes, needs
+    no app password at all)."""
+    acc = get_account(account_id, username, user_scope_id=user_scope_id)
+    provider = (acc or {}).get("provider", "")
+    provider = str(provider).lower()
+    return provider if provider in ("gmail", "microsoft") else None
+
+
 def patch_account(account_id: str, fields: Dict[str, Any], username: Optional[str] = None,
                   user_scope_id: Optional[str] = None) -> bool:
     ec = dict(get_email_config(username, user_scope_id=user_scope_id) or {})

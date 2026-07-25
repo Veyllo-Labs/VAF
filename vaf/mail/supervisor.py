@@ -129,7 +129,8 @@ def _sync_one(scope: str, cred_username: Optional[str], acc: Dict[str, Any]) -> 
             _notify_new_mail(scope, account_id, {"new": new_total, "folders": stats})
         try:
             from vaf.mail.migrate import import_legacy_artifacts
-            import_legacy_artifacts(svc.store, cred_username or "", scope)
+            import_legacy_artifacts(svc.store, cred_username or "", scope,
+                                    account_id=account_id)
         except Exception as e:
             logger.info("legacy artifact import skipped: %s", e)
         try:

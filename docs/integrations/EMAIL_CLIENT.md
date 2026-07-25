@@ -210,6 +210,27 @@ synced-inbox viewer, not a full mail client.
   system browser, so the panel polls and re-checks on window focus. A
   password/app-password account is IMAP-capable by definition and never carries
   `imap_ready`, so the UI gates that badge on the provider too.
+- Teardown prerequisites (P6.5), all three of which fail SILENTLY and would become
+  permanent once the legacy lane is gone:
+  - A send with no usable lane is classified `permanent`, not `transient`. A
+    transient verdict is retried five times and then parked, and nothing read that
+    state - the compose dialog reported success and the mail never left. The client
+    now polls `GET /api/mail/ops` (which also returns `last_error` and the subject)
+    and shows a banner for parked sends that links to the account panel.
+  - `import_legacy_artifacts` is keyed PER ACCOUNT (`legacy_import_done:<id>`, JSON
+    value carrying `attempts`; a bare-timestamp marker from the store-wide era still
+    counts as done). It ran once per account but marked itself done store-wide, so
+    the first account to sync consumed the marker and every later account lost its
+    labels and answered markers. It is also NOT marked done while legacy rows have
+    no counterpart in the store yet - the first sync is UID-bounded, so an older
+    mail deserves another try - with `_MAX_ATTEMPTS` bounding rows that never
+    arrive. It now also runs on the manual `POST /api/mail/sync/{id}`, not only on
+    the supervisor sweep (a user with auto-sync off never got it).
+  - Adding a password account for an address already connected via OAuth is
+    REFUSED (`email_accounts.oauth_provider_for`): it would replace the entry, and
+    `calendar_client` resolves calendars by exactly that provider, so the calendar
+    lost the account without a word. The error points at Reconnect, which grants
+    everything the engine needs.
 - Lazy folders (P6.3): `sync_account` covers the eager/headers tiers only; other
   folders sync ON OPEN. Nothing was requesting them, so every label stayed
   permanently empty - the client now issues a one-time

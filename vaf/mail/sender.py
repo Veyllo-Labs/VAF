@@ -144,7 +144,19 @@ def _delegate(msg: OutgoingMessage) -> SendResult:
         msg.account.get("provider"), _account_id(msg)[:3] + "***")
     try:
         from vaf.core import email_transport
-        ok = email_transport.send_mail(
+        _send = email_transport.send_mail
+    except (ImportError, AttributeError):
+        # No delegate at all (the legacy transport is gone, P7). Retrying cannot
+        # help, and calling this 'transient' is the worst possible answer: the op
+        # would be retried five times and then parked with nothing on screen, so
+        # the user keeps believing the mail was sent. Fail PERMANENTLY with a
+        # reason that names the fix.
+        return SendResult(
+            False, "permanent", used_delegate=True,
+            error="account cannot send: it has not been connected for the mail engine yet - "
+                  "reconnect it in the mail account panel")
+    try:
+        ok = _send(
             _account_id(msg), msg.to, msg.subject, msg.body,
             subtype=msg.subtype, username=msg.username, user_scope_id=msg.user_scope_id,
             attachments=msg.attachments, cc=msg.cc, bcc=msg.bcc,

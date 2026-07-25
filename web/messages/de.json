@@ -1314,6 +1314,7 @@
       "promotions": "Werbung"
     },
     "accountNeedsReconsent": "IMAP-Freigabe nötig - Konten öffnen",
+    "sendFailedBanner": "{count, plural, =1 {Eine Nachricht konnte nicht gesendet werden und wartet im Postausgang.} other {# Nachrichten konnten nicht gesendet werden und warten im Postausgang.}} Prüfe die Kontoverbindung.",
     "accountsTitle": "Mail-Konten",
     "accountsEmpty": "Noch keine Mail-Konten. Unten eines hinzufügen.",
     "accountsLoadFailed": "Konten konnten nicht geladen werden.",

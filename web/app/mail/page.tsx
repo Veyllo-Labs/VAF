@@ -325,6 +325,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const [compose, setCompose] = useState<Partial<Prefill> | null | false>(false);
     const [undoState, setUndoState] = useState<{ opId: number; seconds: number } | null>(null);
     const [sentNotice, setSentNotice] = useState(false);
+    const [failedSends, setFailedSends] = useState(0);
     const [labelsOpen, setLabelsOpen] = useState<Set<string>>(new Set());
 
     const loadStatus = useCallback(async () => {
@@ -372,6 +373,21 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
         const timer = setInterval(loadThreads, 60_000);
         return () => clearInterval(timer);
     }, [status?.v2_enabled, loadThreads]);
+
+    // A send that exhausted its retries is parked in the outbox. Nothing used to
+    // read that state, so the compose dialog reported success and the mail simply
+    // never left - the one failure mode that must never be silent.
+    useEffect(() => {
+        if (!status?.v2_enabled) return;
+        const check = () => jfetch('api/mail/ops')
+            .then(d => setFailedSends(
+                ((d.ops || []) as { kind: string; state: string }[])
+                    .filter(o => o.kind === 'send' && o.state === 'failed').length))
+            .catch(() => undefined);
+        check();
+        const timer = setInterval(check, 60_000);
+        return () => clearInterval(timer);
+    }, [status?.v2_enabled]);
 
     const openThread = useCallback(async (row: ThreadRow) => {
         setActiveThread(row.thread_id);
@@ -522,6 +538,17 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                     </button>
                 )}
             </header>
+
+            {failedSends > 0 && (
+                <div className="px-4 py-2 bg-[#3a1d1d] border-b border-[#5a2b2b] text-[#e08c8c] text-[13px] flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                    <span className="flex-1">{t('sendFailedBanner', { count: failedSends })}</span>
+                    <button type="button" onClick={() => setShowAccounts(true)}
+                        className="px-2 py-1 rounded-md border border-[#5a2b2b] hover:bg-[#452020] flex-shrink-0">
+                        {t('manageAccounts')}
+                    </button>
+                </div>
+            )}
 
             <main className="flex-1 grid min-h-0" style={{ gridTemplateColumns: '220px 380px 1fr' }}>
                 <nav className="border-r border-[#2e2e2e] bg-[#1f1f1f] overflow-y-auto p-2">

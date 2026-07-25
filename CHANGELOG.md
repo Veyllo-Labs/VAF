@@ -118,6 +118,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Mail: opening a label or other non-inbox folder now fetches it on first open.
   Those folders sync on demand by design, but nothing ever requested them, so they
   stayed permanently empty.
+- Mail: a message that could not be sent is no longer reported as sent. Such a
+  message is held in the outbox and the mail client now shows a warning about it
+  instead of leaving you to believe it went out.
+- Mail: with several accounts, only the first one kept its labels and "answered"
+  markers when moving to the new mail engine. Every account now carries its own
+  over, including labels belonging to mail that only arrives on a later sync, and
+  it also happens when you sync manually rather than waiting for the background
+  sync.
+- Mail: adding an account with a password for an address that is already connected
+  through sign-in is now refused with an explanation, instead of silently replacing
+  the connection and disconnecting that account's calendar.
 - The Logs page no longer dead-ends when debug logging is off. Three fixes
   from a live incident on a macOS install where a legacy config had
   `debug_logs_enabled: false`: the chain badge no longer claims "Chain

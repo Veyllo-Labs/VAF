@@ -209,6 +209,16 @@ async def sync_account(account_id: str, folder: Optional[str] = None,
                                  acc.get("provider") or "imap",
                                  acc.get("email") or account_id, client)
             stats = (eng.sync_folder(folder) if folder else eng.sync_account())
+            # Carry the user's legacy labels/answered markers over here too: the
+            # import used to run ONLY on the supervisor sweep, so a user with
+            # auto-sync off never got them even though pressing Sync did surface
+            # the mail itself.
+            try:
+                from vaf.mail.migrate import import_legacy_artifacts
+                import_legacy_artifacts(svc.store, cred_username or "", scope,
+                                        account_id=acc.get("account_id") or account_id)
+            except Exception as e:
+                logger.info("legacy artifact import skipped on manual sync: %s", e)
             return {"ok": True, "stats": stats}
         finally:
             _safe_logout(client)
@@ -456,7 +466,9 @@ async def list_ops(_user: Dict[str, Any] = Depends(_get_current_user)):
         from vaf.mail.service import MailService
         svc = MailService(scope)
         rows = svc.store._conn().execute(
-            "SELECT id, account_id, kind, state, attempts, created_at, updated_at "
+            "SELECT id, account_id, kind, state, attempts, created_at, updated_at, "
+            "json_extract(payload, '$.last_error') AS last_error, "
+            "json_extract(payload, '$.subject') AS subject "
             "FROM ops WHERE state IN ('pending', 'failed') ORDER BY id DESC LIMIT 100").fetchall()
         return [dict(r) for r in rows]
 
@@ -594,11 +606,25 @@ async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] =
     entry with host/port defaulted from the provider presets."""
     _require_v2()
     from vaf.core.credential_store import set_email_imap_password
-    from vaf.core.email_accounts import IMAP_SMTP_DEFAULTS, add_account, test_imap_login
+    from vaf.core.email_accounts import (
+        IMAP_SMTP_DEFAULTS, add_account, oauth_provider_for, test_imap_login,
+    )
     email = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
     if not email or not password:
         raise HTTPException(status_code=422, detail="email and password are required")
+    username, cred_username, scope = _acct_identity(_user)
+    # Adding a password account for an address that is already connected via OAuth
+    # would REPLACE that entry, and the calendar resolves its accounts by exactly
+    # that provider - so it would lose the account without saying so. Refuse and
+    # point at the sign-in, which grants everything the engine needs anyway.
+    connected = await asyncio.to_thread(
+        lambda: oauth_provider_for(email, username, user_scope_id=scope))
+    if connected:
+        return {"ok": False,
+                "error": f"This address is already connected via {connected}.",
+                "hint": "Use Reconnect on that account instead - signing in grants the "
+                        "mail access the engine needs and keeps your calendar connected."}
     d = IMAP_SMTP_DEFAULTS.get(email.split("@")[-1] if "@" in email else "", {})
     imap_host = (body.get("imap_host") or "").strip() or d.get("imap_host")
     imap_port = int(body.get("imap_port") or d.get("imap_port") or 993)
@@ -607,7 +633,6 @@ async def accounts_add(body: Dict[str, Any] = Body(...), _user: Dict[str, Any] =
     ok, err, hint = await asyncio.to_thread(lambda: test_imap_login(email, password, imap_host, imap_port))
     if not ok:
         return {"ok": False, "error": err, "hint": hint}
-    username, cred_username, scope = _acct_identity(_user)
     await asyncio.to_thread(lambda: set_email_imap_password(email, password, cred_username, user_scope_id=scope))
     await asyncio.to_thread(lambda: add_account({
         "account_id": email, "email": email, "provider": "imap", "enabled": True,

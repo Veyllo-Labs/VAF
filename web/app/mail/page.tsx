@@ -328,16 +328,27 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const [failedSends, setFailedSends] = useState<{ id: number; subject?: string }[]>([]);
     const [labelsOpen, setLabelsOpen] = useState<Set<string>>(new Set());
 
+    // Folder rows carry the unread/total badges. They used to be fetched ONCE with
+    // the status on mount, so every badge froze at whatever it was when the client
+    // opened - no new mail, no read marking and no sync ever moved it. Split out so
+    // the periodic refresh and every action that changes read state can re-read it
+    // (48 folders cost well under a millisecond).
+    const loadFolders = useCallback(async (accounts?: Account[]) => {
+        const list = accounts || status?.accounts || [];
+        await Promise.all(list.map(a =>
+            jfetch(`api/mail/folders?account_id=${encodeURIComponent(a.account_id)}`)
+                .then(f => setFolders(prev => ({ ...prev, [a.account_id]: f.folders })))
+                .catch(() => undefined)));
+    }, [status?.accounts]);
+
     const loadStatus = useCallback(async () => {
         try {
             const s = await jfetch('api/mail/status');
             setStatus(s);
-            for (const a of s.accounts || []) {
-                jfetch(`api/mail/folders?account_id=${encodeURIComponent(a.account_id)}`)
-                    .then(f => setFolders(prev => ({ ...prev, [a.account_id]: f.folders })))
-                    .catch(() => undefined);
-            }
+            loadFolders(s.accounts || []);
         } catch { setStatus({ v2_enabled: false }); }
+    // loadFolders is only used to fan out here; keep loadStatus stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     useEffect(() => { loadStatus(); }, [loadStatus]);
 
@@ -371,12 +382,14 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
         } finally { setListLoading(false); }
     }, [sel, t]);
     useEffect(() => { if (status?.v2_enabled) loadThreads(); }, [status?.v2_enabled, loadThreads]);
-    // light refresh so new mail appears without manual sync (WS deltas: phase 2.5)
+    // light refresh so new mail appears without manual sync (WS deltas: phase 2.5).
+    // The folder badges ride along - otherwise the list shows new mail while the
+    // unread counts next to it stay stale.
     useEffect(() => {
         if (!status?.v2_enabled) return;
-        const timer = setInterval(loadThreads, 60_000);
+        const timer = setInterval(() => { loadThreads(); loadFolders(); }, 60_000);
         return () => clearInterval(timer);
-    }, [status?.v2_enabled, loadThreads]);
+    }, [status?.v2_enabled, loadThreads, loadFolders]);
 
     // A send that exhausted its retries is parked in the outbox. Nothing used to
     // read that state, so the compose dialog reported success and the mail simply
@@ -419,9 +432,10 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
             }
             if (unread.length) {
                 setThreads(prev => prev.map(tr => tr.thread_id === row.thread_id ? { ...tr, unread_count: 0 } : tr));
+                loadFolders();   // the folder badge must drop along with the row
             }
         } catch { setThreadMsgs([]); }
-    }, []);
+    }, [loadFolders]);
 
     const threadAction = useCallback(async (row: ThreadRow, action: 'archive' | 'trash') => {
         setThreads(prev => prev.filter(tr => tr.thread_id !== row.thread_id));
@@ -433,8 +447,9 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
             const ids = ((data.messages || []) as Msg[]).map(m => m.id);
             await Promise.all((ids.length ? ids : [row.newest_pk])
                 .map(id => jpost(`api/mail/messages/${id}/${action}`)));
+            loadFolders();       // the conversation left this folder for another
         } catch { setError(t('actionFailed')); loadThreads(); }
-    }, [activeThread, loadThreads, t]);
+    }, [activeThread, loadThreads, loadFolders, t]);
 
     const openCompose = useCallback(async (mode: 'new' | 'reply' | 'replyAll' | 'forward') => {
         if (mode === 'new') { setCompose(null); return; }
@@ -465,11 +480,18 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
         if (!accounts.length) return;
         setSyncing(true);
         try {
+            // The route answers 200 with {ok:false} when an account has no usable
+            // connection, and jpost does not throw on that - so a failed sync used
+            // to be a spinner and nothing else. Count the refusals and say so.
+            let failed = 0;
             for (const a of (sel.account ? accounts.filter(x => x.account_id === sel.account) : accounts)) {
-                await jpost(`api/mail/sync/${encodeURIComponent(a.account_id)}`);
+                const r = await jpost(`api/mail/sync/${encodeURIComponent(a.account_id)}`)
+                    .catch(() => ({ ok: false }));
+                if (r && r.ok === false) failed++;
             }
             await loadThreads();
             await loadStatus();
+            setError(failed ? t('syncError') : '');
         } catch { setError(t('syncError')); }
         finally { setSyncing(false); }
     }, [status?.accounts, sel.account, loadThreads, loadStatus, t]);

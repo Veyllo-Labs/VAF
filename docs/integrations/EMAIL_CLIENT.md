@@ -225,6 +225,13 @@ synced-inbox viewer, not a full mail client.
     it belongs to. Keeping the previous rows made a failed reload indistinguishable
     from the selected folder's real content (live test: the drafts folder appeared
     to contain inbox mail).
+  - Folder unread/total badges are re-read on the 60-second refresh and after every
+    action that changes them (opening a thread, archive/trash, sync). They were
+    fetched ONCE with the status on mount, so every badge froze at whatever it was
+    when the client opened - `list_folders` costs well under a millisecond for ~50
+    folders, so there is no reason to fetch it only once. The Sync button also
+    reports a refusal: the route answers 200 with `{ok: false}` for an account with
+    no usable connection, which used to produce a spinner and nothing else.
   - `import_legacy_artifacts` is keyed PER ACCOUNT (`legacy_import_done:<id>`, JSON
     value carrying `attempts`; a bare-timestamp marker from the store-wide era still
     counts as done). It ran once per account but marked itself done store-wide, so

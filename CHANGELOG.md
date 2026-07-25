@@ -124,6 +124,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cause is fixed.
 - Mail: the message list no longer keeps showing another folder's mail when a
   folder fails to load, and the list now names the folder it belongs to.
+- Mail: the unread counts next to the folders update again. They were read once
+  when the mail window opened and then never changed, so new mail, reading a
+  message and syncing all left them stale.
+- Mail: pressing Sync now reports when an account could not be synced, instead of
+  spinning briefly and saying nothing.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

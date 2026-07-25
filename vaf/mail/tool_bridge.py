@@ -96,6 +96,24 @@ def _v2_account_ids(store) -> set:
     return {a.get("account_id") for a in store.list_accounts()}
 
 
+def v2_syncs_account(account_id: Optional[str], user_scope_id: Optional[str]) -> bool:
+    """True when the v2 engine actually has this account in its store.
+
+    An account row is created only by the sync engine, which the supervisor runs
+    solely for provider=='imap' or imap_ready accounts. Callers use this to tell
+    "synced, just empty" apart from "the engine never covered this account", so
+    the second case can still fall back to the legacy lane instead of reporting
+    an empty mailbox."""
+    if not account_id:
+        return False
+    try:
+        from vaf.mail.store import MailStore
+        return str(account_id) in _v2_account_ids(MailStore(_scope(user_scope_id)))
+    except Exception as e:  # pragma: no cover - availability fallback
+        logger.warning("v2 account-set check failed, assuming not synced: %s", e)
+        return False
+
+
 def _merge(v2_rows, legacy_rows, v2_accounts, limit: int, offset: int):
     """v2 rows win for accounts the engine syncs; accounts unknown to v2 (e.g.
     Gmail-API/Graph until the phase-3 re-consent) keep their legacy rows, so

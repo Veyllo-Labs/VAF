@@ -54,15 +54,41 @@ def _service(user: Dict[str, Any]):
 
 @router.get("/status")
 async def status(_user: Dict[str, Any] = Depends(_get_current_user)) -> Dict[str, Any]:
-    """Engine status for the UI: flag state + per-scope counts (cheap)."""
+    """Engine status for the UI: flag state + per-scope counts (cheap).
+
+    The account list is the UNION of the engine store and the configured mail
+    accounts: an account the engine does not sync yet (an OAuth account still
+    awaiting the IMAP re-consent) has no store row, and listing only the store
+    would silently drop it from the client - which reads as "my account is
+    gone" rather than "this account needs re-consent". Config-only entries are
+    marked synced=False so the UI can show that state instead."""
     enabled = bool(Config.get("mail_engine_v2_enabled", False))
     out: Dict[str, Any] = {"v2_enabled": enabled,
                            "write_enabled": bool(Config.get("mail_engine_write_enabled", False))}
     if enabled:
         svc = _service(_user)
         out["counts"] = await asyncio.to_thread(svc.counts)
-        out["accounts"] = await asyncio.to_thread(svc.store.list_accounts)
+        synced = await asyncio.to_thread(svc.store.list_accounts)
+        out["accounts"] = await asyncio.to_thread(_union_config_accounts, synced, _user)
     return out
+
+
+def _union_config_accounts(synced: list, user: Dict[str, Any]) -> list:
+    """Append configured mail accounts the engine store does not know yet."""
+    rows = [{**a, "synced": True} for a in (synced or [])]
+    known = {a.get("account_id") for a in rows}
+    try:
+        from vaf.core.email_accounts import list_mail_accounts
+        username, _cred, scope = _acct_identity(user)
+        for a in list_mail_accounts(username, user_scope_id=scope) or []:
+            aid = a.get("account_id") or a.get("email")
+            if aid and aid not in known:
+                rows.append({"account_id": aid, "email": a.get("email") or aid,
+                             "provider": a.get("provider") or "imap",
+                             "imap_ready": bool(a.get("imap_ready")), "synced": False})
+    except Exception as e:  # pragma: no cover - the store list stays usable alone
+        logger.warning("config account union failed, showing synced accounts only: %s", e)
+    return rows
 
 
 @router.get("/threads")

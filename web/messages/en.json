@@ -1313,6 +1313,7 @@
       "social": "Social",
       "promotions": "Promotions"
     },
+    "accountNeedsReconsent": "Needs IMAP re-consent - open accounts",
     "accountsTitle": "Mail accounts",
     "accountsEmpty": "No mail accounts yet. Add one below.",
     "accountsLoadFailed": "Could not load accounts.",

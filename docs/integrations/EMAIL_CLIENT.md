@@ -105,18 +105,34 @@ synced-inbox viewer, not a full mail client.
   shared helpers in `mail_utils.py`. The agent stamps `username` +
   `user_scope_id` into tool kwargs at dispatch (`agent.py`) and the workflow
   engine does the same (`workflows/engine.py`); tools never trust
-  model-provided identity. On the v2 flag the read/write verbs go straight to
-  `MailService` (list/search/on-demand body/category/answered) instead of the
-  tool_bridge; the legacy `email_sync_store`/`email_transport` path is kept behind
-  the flag for flag-off / not-yet-synced instances until the P7 teardown. A guard
-  (`tests/test_mail_tools_import_guard.py`) asserts no tool imports the FastAPI
-  route module `email_routes`.
+  model-provided identity. Whether a caller is served from v2 is decided in ONE
+  place, `mail_utils.mail_v2_active(store_username, user_scope_id)` (P6.0): the
+  flag alone is not sufficient, because the v2 store is scope-keyed and a legacy
+  per-username caller (username set, no `user_scope_id`) has no store of its own -
+  resolving it to the local admin scope would commingle mailboxes. That caller
+  class stays on the legacy lane, matching the two layers that already refuse it
+  (`email_sync_store`'s `_legacy_user` branch and
+  `MailSyncSupervisor._collect_accounts`, which never syncs `email_config_by_user`
+  accounts). On the v2 path the verbs read through `MailService`, but the LIST and
+  SEARCH verbs go through `tool_bridge.list_messages_merged` /
+  `search_messages_merged`, and `read_mail`/`find_mail` fall through to the legacy
+  body fetch on a v2 miss: an account the engine does not sync (an OAuth account
+  still awaiting the IMAP re-consent) keeps its legacy rows, so turning the flag on
+  can never blank a mailbox. `mail_inbox` distinguishes the two empty cases via
+  `tool_bridge.v2_syncs_account` - "synced, genuinely empty" gets the background-sync
+  hint, "never covered" falls through to the live fetch instead of telling the user
+  to press a Sync that would fail for that account. The legacy
+  `email_sync_store`/`email_transport` path is kept behind the flag until the P7
+  teardown. A guard (`tests/test_mail_tools_import_guard.py`) asserts no tool imports
+  the FastAPI route module `email_routes`; `tests/test_mail_tools_v2.py` locks both
+  properties above.
 - Web UI: `MailDashboard.tsx` (INBOX list, category chips, subject/sender search,
   plain-text detail view) and `EmailSetupWizard.tsx` (OAuth/IMAP connect wizard).
   With the v2 client shipped, the Connections "Email" tile now opens the v2
-  `MailClient` window; `MailDashboard` is reached from that window's "Accounts"
-  button and serves as the account-management surface until account CRUD is ported
-  into the client. All requests ride the Next.js catch-all proxy with
+  `MailClient` window, whose gear opens the native in-client account panel
+  (`MailAccounts.tsx`, P5.5). `MailDashboard` is no longer on the mail flow and is
+  removed in P7.1; `EmailSetupWizard` stays reachable for OAuth sign-in until the
+  callback move in P7.2. All requests ride the Next.js catch-all proxy with
   cookie/authorization forwarding.
 
 ### Safety layers (must survive any rebuild)
@@ -159,6 +175,11 @@ synced-inbox viewer, not a full mail client.
   than the one mail. All of it is a LOCAL classification (nothing written to the
   mail server), normalized to lowercase/underscores/64-char cap, and gated by the
   v2 flag only, NOT `mail_engine_write_enabled`.
+- Account list in the client (P6.0): `GET /api/mail/status` returns the UNION of the
+  engine store's accounts and the configured mail accounts, with config-only entries
+  marked `synced: false`. The client renders those with a "needs IMAP re-consent"
+  hint that opens the account panel, instead of dropping them - listing only the
+  store would make an account still awaiting re-consent look deleted.
 - In-client account panel (P5.5, `MailAccounts.tsx`): the mail window's gear opens
   a native panel (an overlay inside `MailClientView`, no separate wizard) built
   entirely on the P4.3 `/api/mail/accounts` endpoints - list accounts with their
@@ -244,14 +265,25 @@ at rest via the secure_store DEK; body-cache retention defaults to 12 months
   Maximum two connections per account. Folder tiering: INBOX eager
   (headers+bodies), Sent/Drafts/Archive headers eager + bodies lazy, other
   folders on open.
-- Workers: a MailSyncSupervisor asyncio task in the web backend replaces the
-  30-minute loop; one crash-isolated worker per account (synchronous
-  IMAPClient driven via asyncio.to_thread), restartable individually so one
-  broken account never stalls others. CLI-only mode runs no workers
-  (on-demand sync remains). Writes go through the durable op queue: UI/tools
-  write the local DB immediately and enqueue idempotent operations (flag,
-  move, append, delete) replayed against the server using the `server_flags`
-  diff.
+- Workers: a MailSyncSupervisor asyncio task in the web backend, started
+  unconditionally and re-reading the flag every cycle (so enabling the engine needs
+  no restart); one crash-isolated worker per account (synchronous IMAPClient driven
+  via asyncio.to_thread), restartable individually so one broken account never
+  stalls others. It does NOT replace the legacy 30-minute auto-sync loop: both run
+  while the flag is on, because the legacy loop keeps covering Gmail-API/Graph
+  accounts that are not `imap_ready` yet. The legacy loop is deleted in P7.2, once
+  the P6 re-consent has made every account `imap_ready`. The two loops write to
+  separate stores (`email_sync.db` vs the per-scope `mail.db`), so the overlap costs
+  duplicate fetches, not consistency. CLI-only mode runs no workers (on-demand sync
+  remains). Account selection (P6.0): the sweep and the IDLE watchers poll only
+  accounts passing `_wants_sync` - `enabled` AND `mail_enabled` (a calendar-safe
+  mail delete clears it, and re-syncing would resurrect the messages the delete just
+  purged) AND `auto_sync_enabled` (the per-account panel toggle; ignoring it would
+  make switching auto-sync OFF raise the polling rate). The send drain deliberately
+  runs over the wider `enabled`-only set so a queued mail still leaves an account
+  whose mailbox is no longer polled. Writes go through the durable op queue:
+  UI/tools write the local DB immediately and enqueue idempotent operations (flag,
+  move, append, delete) replayed against the server using the `server_flags` diff.
 - Native send (`vaf/mail/sender.py`, mail v2-only port P2): one delivery core for
   every account. Dispatch by `(provider, imap_ready)`: `imap` -> SMTP password;
   `gmail`/`microsoft` AND `imap_ready` -> SMTP SASL XOAUTH2 (Gmail union token,

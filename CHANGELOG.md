@@ -74,6 +74,25 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a connection, rename an account, toggle auto-sync, and remove an account. Removing
   an account that also powers your Calendar keeps it connected for Calendar. Adding
   or upgrading a Gmail/Microsoft account still uses the existing sign-in wizard.
+
+### Fixed
+- Mail: an account the new mail engine does not sync yet (a Gmail or Microsoft
+  account that has not completed the IMAP re-consent) is no longer reported as an
+  empty mailbox with the engine enabled. Its mail keeps being served from the
+  existing lane, and the account stays visible in the mail client with a
+  "needs IMAP re-consent" hint instead of silently disappearing from the list.
+- Mail: turning a per-account "Auto-sync" toggle off now actually stops that
+  account from being polled by the new engine. It previously kept syncing (in fact
+  more often than before), so the switch did the opposite of what it said.
+- Mail: removing an account from Mail while keeping it connected for Calendar no
+  longer resurrects itself - the background sync used to re-import the messages the
+  removal had just deleted.
+
+### Security
+- Mail: a request carrying a user name but no user scope could be served from the
+  local administrator's mailbox by the new mail engine (read and write). Such
+  callers now stay on their own mail store, matching the isolation rule the other
+  two layers already enforced.
 - Library embedders can now set the agent's persona directly:
   `Agent(system_prompt="...")` replaces the on-disk "Soul" in the system prompt
   for that instance only, while the engine's technical instructions are kept.

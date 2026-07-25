@@ -31,7 +31,12 @@ const jpost = (p: string, body?: unknown, method = 'POST') => jfetch(p, {
     body: body === undefined ? undefined : JSON.stringify(body),
 });
 
-interface Account { account_id: string; provider: string; email: string; last_sync_at?: string }
+interface Account {
+    account_id: string; provider: string; email: string; last_sync_at?: string;
+    // false for a configured account the engine does not sync yet (OAuth account
+    // still awaiting the IMAP re-consent) - shown with a re-consent hint, never dropped.
+    synced?: boolean; imap_ready?: boolean;
+}
 interface Folder { id: number; name: string; special_use?: string; total?: number; unread?: number }
 interface ThreadRow {
     thread_id: number; message_count: number; unread_count: number; last_date_ts?: number;
@@ -512,6 +517,20 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                         <Inbox className="w-4 h-4" /> {t('allInboxes')}
                     </button>
                     {(status.accounts || []).map(a => {
+                        if (a.synced === false) {
+                            // Configured but not covered by the engine yet: show it with the
+                            // re-consent hint so it never looks like a deleted account.
+                            return (
+                                <div key={a.account_id} className="mt-3">
+                                    <div className="px-3 text-xs text-[#9a9a9a] truncate">{a.email} ({a.provider})</div>
+                                    <button type="button" onClick={() => setShowAccounts(true)}
+                                        className="mt-1 w-full text-left px-3 py-1.5 rounded-lg text-xs text-[#d4a24e] hover:bg-[#262626] flex items-center gap-1.5">
+                                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                                        <span className="truncate">{t('accountNeedsReconsent')}</span>
+                                    </button>
+                                </div>
+                            );
+                        }
                         const all = folders[a.account_id] || [{ id: 0, name: 'INBOX', special_use: '\\Inbox' } as Folder];
                         const special = SPECIAL_ORDER
                             .map(su => all.find(f => f.special_use === su))

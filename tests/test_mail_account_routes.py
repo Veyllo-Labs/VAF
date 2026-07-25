@@ -72,6 +72,37 @@ def test_set_category_route_relabels_learns_and_backfills(monkeypatch):
     assert e.value.status_code == 404
 
 
+def test_status_accounts_union_keeps_a_not_yet_synced_account_visible(monkeypatch):
+    """P6.0/B2 (UI half): the client's sidebar comes from /status. Listing only the
+    engine store would drop an account still awaiting the IMAP re-consent, which
+    reads as "my account was deleted" rather than "this needs re-consent"."""
+    _v2(monkeypatch)
+    monkeypatch.setattr(mr, "_acct_identity", lambda u: ("admin", None, "s"))
+    monkeypatch.setattr(ea, "list_mail_accounts", lambda u, user_scope_id=None: [
+        {"account_id": "i@x", "email": "i@x", "provider": "imap", "imap_ready": True},
+        {"account_id": "g@x", "email": "g@x", "provider": "gmail", "imap_ready": False},
+    ])
+    synced = [{"account_id": "i@x", "email": "i@x", "provider": "imap"}]
+    rows = mr._union_config_accounts(synced, _USER)
+    by_id = {r["account_id"]: r for r in rows}
+    assert by_id["i@x"]["synced"] is True
+    assert by_id["g@x"]["synced"] is False and by_id["g@x"]["imap_ready"] is False
+    assert len(rows) == 2  # no duplicate for the account present in both
+
+
+def test_status_accounts_union_survives_a_config_read_failure(monkeypatch):
+    """The store list must stay usable on its own - a config error may not blank
+    the whole sidebar."""
+    _v2(monkeypatch)
+
+    def _boom(*a, **k):
+        raise RuntimeError("config unavailable")
+
+    monkeypatch.setattr(ea, "list_mail_accounts", _boom)
+    rows = mr._union_config_accounts([{"account_id": "i@x", "email": "i@x"}], _USER)
+    assert [r["account_id"] for r in rows] == ["i@x"] and rows[0]["synced"] is True
+
+
 def test_apply_sender_rules_route_returns_updated_count(monkeypatch):
     # P5.4: standalone backfill endpoint, local classification, v2-gated.
     _v2(monkeypatch)

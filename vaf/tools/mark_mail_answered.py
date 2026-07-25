@@ -7,11 +7,11 @@ Mark an email as answered (agent has processed it). Sets answered_at so the UI s
 Scoped to the current user in network mode.
 """
 
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import get_local_admin_scope_id
 from vaf.core.email_accounts import get_account
 from vaf.core.email_sync_store import init_store, update_message_answered
 from vaf.tools.base import BaseTool
-from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, store_candidates_for_mail, store_scope_from_kwargs, store_username_from_kwargs
+from vaf.tools.mail_utils import cred_scope_from_kwargs, cred_username_from_kwargs, list_accounts_for_user, mail_v2_active, store_candidates_for_mail, store_scope_from_kwargs, store_username_from_kwargs
 
 
 class MarkMailAnsweredTool(BaseTool):
@@ -58,7 +58,7 @@ class MarkMailAnsweredTool(BaseTool):
 
         # Try same store/cred fallback as mail_inbox/find_mail/read_mail so we find the message when it lives in legacy/single-scope
         found_account = False
-        v2 = bool(Config.get("mail_engine_v2_enabled", False))
+        v2 = mail_v2_active(store_username, user_scope_id)
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
             acc = get_account(account_id, username=try_username, user_scope_id=try_scope_id)
             if not acc:

@@ -58,6 +58,24 @@ def store_candidates_for_mail(
     return [(store_username or "", user_scope_id)]
 
 
+def mail_v2_active(store_username: str, user_scope_id: Optional[str]) -> bool:
+    """Whether the v2 mail engine may serve THIS caller.
+
+    The flag alone is not enough: the v2 store is scope-keyed with no username
+    dimension, so a legacy per-username caller (username set, no scope) has no
+    store of its own. Falling back to the local admin scope for those callers
+    would commingle different users' mail - a user-isolation violation the two
+    other layers already refuse (email_sync_store's `_legacy_user` branch and
+    MailSyncSupervisor._collect_accounts, which never syncs email_config_by_user
+    accounts). This is the ONE place the tools ask, so the rule cannot drift
+    across the five call sites (Rule 2).
+    """
+    if not bool(Config.get("mail_engine_v2_enabled", False)):
+        return False
+    legacy_user = bool((store_username or "").strip()) and not (user_scope_id or "").strip()
+    return not legacy_user
+
+
 def list_accounts_with_labels_for_user(
     cred_username: Optional[str] = None,
     user_scope_id: Optional[str] = None,

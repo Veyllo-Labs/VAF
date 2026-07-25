@@ -49,10 +49,33 @@ def _notify_new_mail(scope: str, account_id: str, stats: Dict[str, Any]) -> None
             logger.warning("new-mail observer failed: %s", e)
 
 
+def _wants_sync(acc: Dict[str, Any]) -> bool:
+    """Whether this account may be synced by the engine.
+
+    Three separate user intents, all of which the sweep must honor:
+    - `enabled`: the account itself is active.
+    - `mail_enabled`: a calendar-safe mail delete sets this False and KEEPS the
+      config entry (plus the shared OAuth token) so Calendar keeps working. Without
+      this check the sweep re-creates the account row and re-ingests the messages
+      the delete just purged - a delete that resurrects its own data.
+    - `auto_sync_enabled`: the per-account toggle in the account panel. The legacy
+      lane honors it; ignoring it here would make switching auto-sync OFF *raise*
+      the sync rate (from every 30 min to a 5-min sweep plus a permanent IDLE
+      connection), i.e. a switch that does the opposite of what it says.
+    Send draining is deliberately NOT gated by this - a queued mail must still
+    leave even when the mailbox is not being polled.
+    """
+    return (acc.get("enabled", True)
+            and acc.get("mail_enabled", True)
+            and acc.get("auto_sync_enabled", True))
+
+
 def _collect_accounts() -> List[Tuple[str, Optional[str], Dict[str, Any]]]:
     """(user_scope_id, cred_username, account) for every enabled account in
     every config lane. Scope-explicit by construction: the admin lane uses the
-    admin's real scope UUID."""
+    admin's real scope UUID. This is the SEND-DRAIN set - deliberately wider than
+    the sync set (see _wants_sync), so a queued mail still leaves even for an
+    account whose mailbox is no longer polled."""
     from vaf.core.config import Config, get_local_admin_scope_id
     out: List[Tuple[str, Optional[str], Dict[str, Any]]] = []
     admin_scope = get_local_admin_scope_id()
@@ -241,8 +264,9 @@ class MailSyncSupervisor:
                 if bool(Config.get("mail_engine_v2_enabled", False)):
                     accounts = _collect_accounts()
                     imap_accounts = [(s, u, a) for s, u, a in accounts
-                                     if (a.get("provider") or "imap").lower() == "imap"
-                                     or a.get("imap_ready")]
+                                     if _wants_sync(a)
+                                     and ((a.get("provider") or "imap").lower() == "imap"
+                                          or a.get("imap_ready"))]
 
                     async def _bounded(s, u, a):
                         async with sem:

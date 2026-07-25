@@ -16,13 +16,14 @@ from vaf.core.email_sync_store import (
     list_for_sender_relabel,
     update_message_category as store_update_message_category,
 )
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import get_local_admin_scope_id
 from vaf.core.email_accounts import apply_sender_rules_to_category, get_account
 from vaf.tools.base import BaseTool
 from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
     cred_username_from_kwargs,
     list_accounts_for_user,
+    mail_v2_active,
     store_candidates_for_mail,
     store_scope_from_kwargs,
     store_username_from_kwargs,
@@ -108,7 +109,7 @@ class LabelMailTool(BaseTool):
         if not get_account(account_id, username=cred_username, user_scope_id=user_scope_id):
             return f"Account '{account_id}' not found. Connected: {', '.join(list_accounts_for_user(cred_username, user_scope_id=user_scope_id))}."
 
-        v2 = bool(Config.get("mail_engine_v2_enabled", False))
+        v2 = mail_v2_active(store_username, user_scope_id)
         candidates = store_candidates_for_mail(store_username, user_scope_id)
         updated_store_username = None
         updated_scope_id = None

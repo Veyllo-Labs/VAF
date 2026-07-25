@@ -1313,6 +1313,7 @@
       "social": "Soziales",
       "promotions": "Werbung"
     },
+    "accountNeedsReconsent": "IMAP-Freigabe nötig - Konten öffnen",
     "accountsTitle": "Mail-Konten",
     "accountsEmpty": "Noch keine Mail-Konten. Unten eines hinzufügen.",
     "accountsLoadFailed": "Konten konnten nicht geladen werden.",

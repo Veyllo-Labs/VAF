@@ -11,7 +11,7 @@ Use read_mail to get the full body of a specific message.
 import logging
 from datetime import datetime
 
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import Config
 from vaf.core.email_accounts import get_account
 from vaf.core.email_sync_store import init_store, list_messages as store_list_messages, upsert_messages
 from vaf.core.email_transport import fetch_mail
@@ -21,6 +21,7 @@ from vaf.tools.mail_utils import (
     cred_username_from_kwargs,
     filter_phishing_messages_for_agent,
     list_accounts_for_user,
+    mail_v2_active,
     store_candidates_for_mail,
     store_scope_from_kwargs,
     store_username_from_kwargs,
@@ -189,15 +190,17 @@ class MailInboxTool(BaseTool):
         messages: list = []
         used_store_username = store_username
         used_scope_id = user_scope_id
-        v2 = bool(Config.get("mail_engine_v2_enabled", False))
+        v2 = mail_v2_active(store_username, user_scope_id)
         for try_username, try_scope_id in store_candidates:
             if v2:
-                # v2: list straight from the engine store. Legacy path kept for
-                # flag-off / not-yet-synced instances until P7.
-                from vaf.mail.service import MailService
-                messages = MailService(try_scope_id or get_local_admin_scope_id()).list_for_agent(
-                    account_id=account_id or None, folder=folder, category=category,
-                    limit=max_messages)
+                # v2 rows win, but accounts the engine does not sync (an OAuth
+                # account still awaiting the IMAP re-consent) keep their legacy
+                # rows - enabling the flag must never blank a mailbox. Legacy
+                # path below stays for flag-off instances until P7.
+                from vaf.mail.tool_bridge import list_messages_merged
+                messages = list_messages_merged(
+                    account_id or None, folder, max_messages, 0,
+                    try_username, try_scope_id, category=category)
             else:
                 init_store(try_username, try_scope_id)
                 messages = store_list_messages(
@@ -241,12 +244,18 @@ class MailInboxTool(BaseTool):
                 "or call mail_inbox with a specific account_id to fetch that account."
             )
         if v2:
-            # v2 populates the store via the background supervisor/IDLE - do not
-            # live-fetch into the legacy store here (P3.3).
-            return (
-                f"No messages in {folder} in the sync store yet. The mailbox syncs in the "
-                "background; ask the user to click Sync in Settings → Connections → Email, then try again."
-            )
+            from vaf.mail.tool_bridge import v2_syncs_account
+            if v2_syncs_account(account_id, user_scope_id):
+                # The engine owns this account and populates it via the background
+                # supervisor/IDLE - do not live-fetch into the legacy store (P3.3).
+                return (
+                    f"No messages in {folder} in the sync store yet. The mailbox syncs in the "
+                    "background; ask the user to click Sync in Settings → Connections → Email, then try again."
+                )
+            # The engine never covered this account (an OAuth account still
+            # awaiting the IMAP re-consent): fall through to the legacy live
+            # fetch instead of reporting an empty mailbox, and do not tell the
+            # user to press Sync - that would fail for exactly this account.
         try:
             messages = fetch_mail(account_id, folder=folder, max_messages=max_messages, username=cred_username, user_scope_id=user_scope_id)
         except Exception as e:

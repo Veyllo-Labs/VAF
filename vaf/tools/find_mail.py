@@ -7,7 +7,7 @@ Use when the user asks "what does the X mail say?" or "details about the [sender
 If exactly one match, returns the full body so the agent can answer in one call.
 """
 
-from vaf.core.config import Config, get_local_admin_scope_id
+from vaf.core.config import get_local_admin_scope_id
 from vaf.core.email_sync_store import search_messages
 from vaf.core.email_transport import get_message_body_plain
 from vaf.tools.base import BaseTool
@@ -15,6 +15,7 @@ from vaf.tools.mail_utils import (
     cred_scope_from_kwargs,
     cred_username_from_kwargs,
     filter_phishing_messages_for_agent,
+    mail_v2_active,
     store_candidates_for_mail,
     store_scope_from_kwargs,
     store_username_from_kwargs,
@@ -69,16 +70,17 @@ class FindMailTool(BaseTool):
         if not query:
             return "query is required (e.g. 'Postman' or 'postman.com')."
         # Use same store fallback chain as mail_inbox so we search the same DB as the Mail dashboard
-        v2 = bool(Config.get("mail_engine_v2_enabled", False))
+        v2 = mail_v2_active(store_username, user_scope_id)
         matches = []
         used_scope, used_username = user_scope_id, cred_username
         for try_username, try_scope_id in store_candidates_for_mail(store_username, user_scope_id):
             if v2:
-                # v2: FTS search straight from the engine store (subject/from/to/body,
-                # cross-folder). Legacy per-folder LIKE search kept for flag-off.
-                from vaf.mail.service import MailService
-                matches = MailService(try_scope_id or get_local_admin_scope_id()).search_for_agent(
-                    query, limit=limit)
+                # v2 FTS (subject/from/to/body) merged with the legacy rows of any
+                # account the engine does not sync, so a not-yet-re-consented
+                # account stays searchable. Legacy-only path kept for flag-off.
+                from vaf.mail.tool_bridge import search_messages_merged
+                matches = search_messages_merged(
+                    query, folder, limit, try_username, try_scope_id)
             else:
                 matches = search_messages(
                     query=query, folder=folder, limit=limit,
@@ -105,12 +107,15 @@ class FindMailTool(BaseTool):
             out += f"\n\n(Security) Hidden {blocked_count} suspicious message(s) by phishing filter."
         if len(matches) == 1:
             m = matches[0]
+            body = None
             if v2:
                 from vaf.mail.service import MailService
                 body = MailService(used_scope or get_local_admin_scope_id()).body_text(
                     m.get("message_id") or "", account_id=m.get("account_id") or "",
                     cred_username=used_username)
-            else:
+            # A match served from the legacy lane (account the engine does not
+            # sync) has no v2 body - fall through instead of claiming failure.
+            if not (body and body.strip()):
                 body = get_message_body_plain(
                     account_id=m.get("account_id") or "",
                     message_id=m.get("message_id") or "",

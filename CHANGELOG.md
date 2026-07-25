@@ -119,8 +119,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Those folders sync on demand by design, but nothing ever requested them, so they
   stayed permanently empty.
 - Mail: a message that could not be sent is no longer reported as sent. Such a
-  message is held in the outbox and the mail client now shows a warning about it
-  instead of leaving you to believe it went out.
+  message is held in the outbox and the mail client now shows a warning about it,
+  with "Try again" and "Discard" so the warning can actually be cleared once the
+  cause is fixed.
+- Mail: the message list no longer keeps showing another folder's mail when a
+  folder fails to load, and the list now names the folder it belongs to.
 - Mail: with several accounts, only the first one kept its labels and "answered"
   markers when moving to the new mail engine. Every account now carries its own
   over, including labels belonging to mail that only arrives on a later sync, and

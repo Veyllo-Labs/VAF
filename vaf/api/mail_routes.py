@@ -475,6 +475,43 @@ async def list_ops(_user: Dict[str, Any] = Depends(_get_current_user)):
     return {"ops": await asyncio.to_thread(_run)}
 
 
+@router.post("/ops/{op_id}/retry")
+async def retry_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Re-arm a parked (failed) op so the outbox tries it again.
+
+    Without this a parked send is a dead end: the banner reports it forever and
+    nothing in the app can clear it, even after the cause was fixed (a
+    re-connected account, a corrected credential)."""
+    _require_v2()
+    scope = _scope_of(_user)
+
+    def _run():
+        from vaf.mail.service import MailService
+        store = MailService(scope).store
+        return store.mark_op(op_id, "pending", expect_state="failed")
+
+    if not await asyncio.to_thread(_run):
+        raise HTTPException(status_code=404, detail="no parked op with that id")
+    return {"ok": True}
+
+
+@router.delete("/ops/{op_id}")
+async def discard_op(op_id: int, _user: Dict[str, Any] = Depends(_get_current_user)):
+    """Drop a parked op the user does not want retried (the message stays in the
+    store; only the queued delivery attempt is abandoned)."""
+    _require_v2()
+    scope = _scope_of(_user)
+
+    def _run():
+        from vaf.mail.service import MailService
+        store = MailService(scope).store
+        return store.mark_op(op_id, "cancelled", expect_state="failed")
+
+    if not await asyncio.to_thread(_run):
+        raise HTTPException(status_code=404, detail="no parked op with that id")
+    return {"ok": True}
+
+
 @router.get("/image-proxy")
 async def image_proxy(url: str, _user: Dict[str, Any] = Depends(_get_current_user)):
     """Remote-image proxy for explicit opt-in loading (tracking protection:

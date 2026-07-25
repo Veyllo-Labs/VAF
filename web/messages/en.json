@@ -1314,6 +1314,9 @@
       "promotions": "Promotions"
     },
     "accountNeedsReconsent": "Needs IMAP re-consent - open accounts",
+    "sendRetry": "Try again",
+    "sendDiscard": "Discard",
+    "searchResults": "Search results",
     "sendFailedBanner": "{count, plural, =1 {A message could not be sent and is waiting in the outbox.} other {# messages could not be sent and are waiting in the outbox.}} Check the account connection.",
     "accountsTitle": "Mail accounts",
     "accountsEmpty": "No mail accounts yet. Add one below.",

@@ -93,6 +93,48 @@ def test_ops_endpoint_exposes_the_reason_a_send_was_parked(monkeypatch, tmp_path
     assert row["subject"] == "hello there"
 
 
+def test_a_parked_send_can_be_retried_and_discarded(monkeypatch, tmp_path):
+    """Making the failure visible is only half the job: a parked send that cannot
+    be retried or dismissed is a banner the user can never clear - which is what
+    the first live test hit (the parked op predated the XOAUTH2 fix, so a retry
+    would now succeed)."""
+    monkeypatch.setattr(mr.Config, "get",
+                        staticmethod(lambda k, d=None: True if k == "mail_engine_v2_enabled" else d))
+    monkeypatch.setattr(mr, "_scope_of", lambda u: _SCOPE)
+    store = MailStore(_SCOPE, base_dir=tmp_path)
+    apk = store.upsert_account("a@x", "gmail", "a@x")
+
+    def _park() -> int:
+        store.enqueue_op(apk, "send", {"subject": "s"})
+        op = store.pending_ops(apk)[-1]
+        store.claim_op(op["id"])
+        store.mark_op(op["id"], "failed", error="boom", expect_state="sending")
+        return int(op["id"])
+
+    class _Svc:
+        def __init__(self, scope):
+            self.store = store
+
+    monkeypatch.setattr("vaf.mail.service.MailService", _Svc)
+
+    op_id = _park()
+    assert asyncio.run(mr.retry_op(op_id, _USER)) == {"ok": True}
+    assert [o["id"] for o in store.pending_ops(apk)] == [op_id]   # armed again
+
+    op2 = _park()
+    assert asyncio.run(mr.discard_op(op2, _USER)) == {"ok": True}
+    assert op2 not in [o["id"] for o in store.pending_ops(apk)]   # gone for good
+
+    # a healthy op must not be retryable/discardable through these routes
+    store.enqueue_op(apk, "send", {"subject": "live"})
+    live = store.pending_ops(apk)[-1]["id"]
+    for call in (mr.retry_op, mr.discard_op):
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(call(live, _USER))
+        assert e.value.status_code == 404
+    store.close()
+
+
 # ── 2. the legacy import is per account and retries what it could not place ───
 
 def _legacy_db(path, rows):

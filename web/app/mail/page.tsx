@@ -325,7 +325,7 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     const [compose, setCompose] = useState<Partial<Prefill> | null | false>(false);
     const [undoState, setUndoState] = useState<{ opId: number; seconds: number } | null>(null);
     const [sentNotice, setSentNotice] = useState(false);
-    const [failedSends, setFailedSends] = useState(0);
+    const [failedSends, setFailedSends] = useState<{ id: number; subject?: string }[]>([]);
     const [labelsOpen, setLabelsOpen] = useState<Set<string>>(new Set());
 
     const loadStatus = useCallback(async () => {
@@ -363,8 +363,12 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
             }
             setThreads(rows);
             setError('');
-        } catch { setError(t('loadError')); }
-        finally { setListLoading(false); }
+        } catch {
+            // Never leave another folder's mail on screen: keeping the previous
+            // rows made a failed load look like the selected folder's content.
+            setThreads([]);
+            setError(t('loadError'));
+        } finally { setListLoading(false); }
     }, [sel, t]);
     useEffect(() => { if (status?.v2_enabled) loadThreads(); }, [status?.v2_enabled, loadThreads]);
     // light refresh so new mail appears without manual sync (WS deltas: phase 2.5)
@@ -377,17 +381,27 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     // A send that exhausted its retries is parked in the outbox. Nothing used to
     // read that state, so the compose dialog reported success and the mail simply
     // never left - the one failure mode that must never be silent.
+    const checkOutbox = useCallback(() => jfetch('api/mail/ops')
+        .then(d => setFailedSends(
+            ((d.ops || []) as { id: number; kind: string; state: string; subject?: string }[])
+                .filter(o => o.kind === 'send' && o.state === 'failed')
+                .map(o => ({ id: o.id, subject: o.subject }))))
+        .catch(() => undefined), []);
     useEffect(() => {
         if (!status?.v2_enabled) return;
-        const check = () => jfetch('api/mail/ops')
-            .then(d => setFailedSends(
-                ((d.ops || []) as { kind: string; state: string }[])
-                    .filter(o => o.kind === 'send' && o.state === 'failed').length))
-            .catch(() => undefined);
-        check();
-        const timer = setInterval(check, 60_000);
+        checkOutbox();
+        const timer = setInterval(checkOutbox, 60_000);
         return () => clearInterval(timer);
-    }, [status?.v2_enabled]);
+    }, [status?.v2_enabled, checkOutbox]);
+
+    const resolveOutbox = useCallback(async (action: 'retry' | 'discard') => {
+        const ops = failedSends;
+        setFailedSends([]);                       // optimistic; re-checked below
+        await Promise.all(ops.map(o => (action === 'retry'
+            ? jpost(`api/mail/ops/${o.id}/retry`)
+            : jpost(`api/mail/ops/${o.id}`, undefined, 'DELETE')).catch(() => undefined)));
+        checkOutbox();
+    }, [failedSends, checkOutbox]);
 
     const openThread = useCallback(async (row: ThreadRow) => {
         setActiveThread(row.thread_id);
@@ -502,6 +516,14 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
     }
 
     const visibleMsgs = showOlder ? threadMsgs : threadMsgs.slice(Math.max(0, threadMsgs.length - 6));
+    // Localized name of the folder currently listed (special folders keep their
+    // translated label; a Gmail label shows its own name).
+    const folderLabel = (() => {
+        if (!sel.account) return t('allInboxes');
+        const f = (folders[sel.account] || []).find(x => x.name === sel.folder);
+        const key = SPECIAL_KEYS[f?.special_use || ''];
+        return key ? t(`folders.${key}`) : (f?.name || sel.folder);
+    })();
     const hiddenCount = threadMsgs.length - visibleMsgs.length;
     const newestMsg = threadMsgs[threadMsgs.length - 1];
 
@@ -539,12 +561,23 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                 )}
             </header>
 
-            {failedSends > 0 && (
+            {failedSends.length > 0 && (
                 <div className="px-4 py-2 bg-[#3a1d1d] border-b border-[#5a2b2b] text-[#e08c8c] text-[13px] flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                    <span className="flex-1">{t('sendFailedBanner', { count: failedSends })}</span>
-                    <button type="button" onClick={() => setShowAccounts(true)}
+                    <span className="flex-1 truncate">
+                        {t('sendFailedBanner', { count: failedSends.length })}
+                        {failedSends[0]?.subject ? ` (${failedSends[0].subject})` : ''}
+                    </span>
+                    <button type="button" onClick={() => resolveOutbox('retry')}
                         className="px-2 py-1 rounded-md border border-[#5a2b2b] hover:bg-[#452020] flex-shrink-0">
+                        {t('sendRetry')}
+                    </button>
+                    <button type="button" onClick={() => resolveOutbox('discard')}
+                        className="px-2 py-1 rounded-md hover:bg-[#452020] flex-shrink-0">
+                        {t('sendDiscard')}
+                    </button>
+                    <button type="button" onClick={() => setShowAccounts(true)}
+                        className="px-2 py-1 rounded-md hover:bg-[#452020] flex-shrink-0">
                         {t('manageAccounts')}
                     </button>
                 </div>
@@ -619,6 +652,12 @@ export function MailClientView({ onClose, onManageAccounts }: { onClose?: () => 
                 </nav>
 
                 <section className="border-r border-[#2e2e2e] overflow-y-auto">
+                    {/* Name the folder the list belongs to: without it a list that
+                        failed to reload is indistinguishable from the selected
+                        folder's real content. */}
+                    <div className="sticky top-0 z-10 px-4 py-2 bg-[#181818] border-b border-[#2e2e2e] text-xs text-[#9a9a9a] truncate">
+                        {searchRows !== null ? t('searchResults') : folderLabel}
+                    </div>
                     {error && (
                         <div className="m-3 px-3 py-2 rounded-lg bg-[#2b1a1a] border border-[#4a2222] text-[#e08c8c] text-[13px] flex items-center gap-2">
                             <AlertTriangle className="w-4 h-4" /> {error}

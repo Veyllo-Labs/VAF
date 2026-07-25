@@ -216,7 +216,15 @@ synced-inbox viewer, not a full mail client.
     transient verdict is retried five times and then parked, and nothing read that
     state - the compose dialog reported success and the mail never left. The client
     now polls `GET /api/mail/ops` (which also returns `last_error` and the subject)
-    and shows a banner for parked sends that links to the account panel.
+    and shows a banner for parked sends. The banner is ACTIONABLE
+    (`POST /api/mail/ops/{id}/retry`, `DELETE /api/mail/ops/{id}`, both only valid
+    on a `failed` op): a parked send that can be neither retried nor dismissed is a
+    warning the user can never clear, which is exactly what the first live test hit
+    - the parked op predated the XOAUTH2 fix, so a retry succeeds now.
+  - The message list clears on a failed load and carries a header naming the folder
+    it belongs to. Keeping the previous rows made a failed reload indistinguishable
+    from the selected folder's real content (live test: the drafts folder appeared
+    to contain inbox mail).
   - `import_legacy_artifacts` is keyed PER ACCOUNT (`legacy_import_done:<id>`, JSON
     value carrying `attempts`; a bare-timestamp marker from the store-wide era still
     counts as done). It ran once per account but marked itself done store-wide, so
